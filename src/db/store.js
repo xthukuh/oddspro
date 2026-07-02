@@ -54,6 +54,18 @@ function _marketRows(match_id, markets) {
     return rows;
 }
 
+// Provider match ids already marked completed (from `from_start_time` onward).
+// Scrapers use this to skip per-game detail requests for matches whose odds
+// refreshes would be discarded anyway (fetch throttle rule).
+export async function completedMatchIds(provider, from_start_time = null) {
+    const query = db('matches')
+        .select('provider_match_id')
+        .where('provider', provider)
+        .whereNotNull('completed_at');
+    if (from_start_time) query.where('start_time', '>=', from_start_time);
+    return new Set((await query).map(r => Number(r.provider_match_id)));
+}
+
 // Persist fetched provider games: upsert `matches` by (provider, provider_match_id),
 // then replace each match's `odds_markets` rows (delete + insert - latest snapshot only).
 // Matches already marked completed are skipped entirely (fetch throttle rule).

@@ -6,6 +6,7 @@ Project goals, standards, and hard-won lessons. Keep updated when major issues a
 
 - MySQL data warehouse: bookmaker odds (BetPawa, Betika) + API-Football canonical fixtures/results/stats, correlated via fuzzy matching with learned aliases. Spec: `README.md`; progress: `implementation-plan.md`.
 - Phases 1–6 built, verified, committed. Phase 6 (visualization): `src/markets.js` canonical market registry → `export [date]` temp CSV → `src/server.js` API :3001 → `web/` React 19/Vite 6/Tailwind 4 datatable with settings modal + filter builder.
+- Phase 7 (2026-07-02): `npm run start` = default full pipeline (`src/pipeline.js`), today..+3 days (override `npm run start -- N`), ordered for fewest server hits: fixtures/date → results → odds/provider/date (completed-match exclusion skips detail requests) → link once → stats → standings. Live-verified end-to-end.
 - Pending verification: full stats path (statistics/lineups/events rows) — run `node src/index.js results` then `stats` after today's correlated matches finish; new stat columns should then appear in the web settings modal automatically.
 - Alias fast-path exercise pends the next day's fresh matches.
 
@@ -20,6 +21,9 @@ Project goals, standards, and hard-won lessons. Keep updated when major issues a
 7. **`_date()` Date-instance bug (src/utils.js):** a valid `Date` argument short-circuited the single boolean chain and fell through to `new Date()` — every value became "now". Latent until Phase 6 because all earlier callers passed strings; mysql2 returns DATETIME columns as `Date` objects. Fixed 2026-07-02 with a dedicated ternary arm for valid Dates.
 8. **Market identity:** map provider odds to canonical columns by `type_name`, never `type_id` — betika reuses `type_id` 19 across different team-total markets ("Z.PSV TOTAL" vs "ZWC.BELGIUM TOTAL"). Verified spellings live in `src/markets.js`.
 9. **Pre-match bookmaker scores are garbage:** BetPawa reports 0-0 and Betika null for upcoming games — visualization/export only surface score/goals when the fixture status is final (`FT/AET/PEN/AWD/WO`).
+10. **`Number(null) === 0` coercion trap:** a `param = null` default made the start pipeline sweep 1 date instead of 4 — `Number(null)` is `0` (valid integer), so the "invalid → default" fallback never fired. Rule: strict-parse optional CLI/config args with `parseInt(v, 10)` (null/undefined → NaN). Caught only by a live run; `node --check` and review both passed.
+11. **Standings placeholder rows:** live `/standings` data can contain rows with `team.id = null` (TBD playoff/bracket slots) — crashed zod at 60/71 leagues once the 4-day sweep widened league coverage. Skipped pre-parse (no FK target to store). Same family as lesson 5: live data keeps finding new nulls.
+12. **`cmd | tee log` masks exit codes:** the first pipeline verification "passed" (exit 0) while node had actually crashed — the pipeline exit is tee's. Verify long runs by reading the output tail, or use `set -o pipefail`.
 
 ## Environment facts
 

@@ -14,6 +14,8 @@ Source spec and progress tracking live in `implementation-plan.md` (phases 1–6
 npm install
 npm run migrate                     # knex migrate:latest (forward-only migrations)
 
+npm run start [-- days]             # DEFAULT full pipeline (src/pipeline.js): fixtures + odds for today..+3 days
+                                    # (`npm run start -- 5` overrides the sweep), then results, link once, stats, standings
 node src/index.js betpawa [date]    # scrape BetPawa odds → DB, then auto-link
 node src/index.js betika [date]     # scrape Betika odds → DB, then auto-link
 node src/index.js fixtures [date]   # API-Football fixtures for date → DB, then auto-link
@@ -36,7 +38,8 @@ cd web && npm run dev               # frontend dev server on :5173 (proxies /api
 
 Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker correlates → results settle → deep stats accumulate**.
 
-- `src/index.js` — CLI dispatcher; every action closes the shared knex pool on exit.
+- `src/index.js` — CLI dispatcher; every action closes the shared knex pool on exit. No action (or `start`/a bare day count) runs `src/pipeline.js`.
+- `src/pipeline.js` — default full sweep (`npm run start`), ordered for fewest server hits: fixtures per date first (a date fetch also refreshes today's statuses, shrinking the results refresh set), then results (completes matches so scrapers skip their per-game detail requests via the `completedMatchIds()` exclusion set), then odds per provider per date, then a single link pass, then stats + standings.
 - `src/betpawa.js` / `src/betika.js` — bookmaker scrapers (browser-mimicking axios clients against undocumented public APIs). Both emit the same standardized game record consumed by `store.saveMatches()`.
 - `src/apisports.js` — API-Football client + all its fetchers. Quota-guarded (`x-ratelimit-requests-remaining` header, halts at `APISPORTS_MIN_REMAINING` floor), paginated, zod-validated. Fixtures are fetched with `timezone=Africa/Nairobi` so kickoffs align with bookmaker wall-clock times.
 - `src/link.js` — correlation. API-Football fixtures are the **canonical base record**; `matches.fixture_id` is the link. Provider order matters: betpawa first, betika last (betika lacks identifier attributes and additionally scores against betpawa matches already linked to a candidate fixture). Fuzzy scorer = best of bigram-Dice / token-set / overlap-coefficient / initialism over normalized names; competition similarity is a bonus (+0.1×sim), never a veto; acceptance needs `LINK_MIN_CONFIDENCE` (default 0.85) plus a 0.05 margin over the runner-up. Confident links cache `team_aliases` / `league_aliases` for instant future correlation.

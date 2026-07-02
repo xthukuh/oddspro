@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { _date, _dtime, _batch } from './utils.js';
+import { _date, _dtime, _batch, _progress } from './utils.js';
 
 // Get axios client instance
 const BetpawaClient = axios.create({
@@ -127,8 +127,10 @@ function parseBetpawaGame(game) {
     return result;
 }
 
-// Fetch games with their available odds markets
-export async function fetchBetpawaGames(date_=null) {
+// Fetch games with their available odds markets.
+// `exclude_` (optional Set of provider match ids) skips already-completed
+// matches before their per-game detail requests - fewer server hits.
+export async function fetchBetpawaGames(date_=null, exclude_=null) {
     const date = _date(date_), dt = _dtime(date).substring(0, 10), take = 50, limit = 0;
     if (date.getTime() < new Date(_dtime(new Date()).substring(0, 10) + ' 00:00:00').getTime()) {
         console.warn(`Unsupported date period: ${dt}`);
@@ -166,13 +168,20 @@ export async function fetchBetpawaGames(date_=null) {
         return buffer;
     };
     
-    const items = await _next();
+    let items = await _next();
     console.debug(`BetPawa ${lt.substring(0, 10)} - Found ${items.length} games...`);
-    
+    if (exclude_ instanceof Set && exclude_.size) {
+        const before = items.length;
+        items = items.filter(g => !exclude_.has(Number(g.id)));
+        if (items.length < before) console.debug(`BetPawa ${lt.substring(0, 10)} - Skipped ${before - items.length} completed games (no detail requests).`);
+    }
+
     const games = [];
-    await _batch(items, async (g, i) => {
+    const tick = _progress(`BetPawa ${lt.substring(0, 10)} - details`);
+    await _batch(items, async (g, i, len) => {
         const { data } = await BetpawaClient.get('https://www.betpawa.co.ke/api/sportsbook/v4/events/' + g.id);
         games[i] = parseBetpawaGame(data);
+        tick(len);
     }, 10);
     return games;
 }

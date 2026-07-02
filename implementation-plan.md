@@ -63,6 +63,18 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Verify: export 55 correlated records with odds+rank/form columns; API multi-sort on `O 2.5` + filters (`1 lte 1.5 AND provider eq betika` → 7) + 400 on bad keys; browser-verified datatable/settings/filters/multi-sort via Playwright, 0 console errors
 - [x] Commit
 
+## Phase 7 — Default `npm run start` pipeline (added 2026-07-02)
+- [x] `src/pipeline.js` — `runStartPipeline(days)`: full sweep today..+N days (default 3), ordered for fewest server hits: fixtures per date → results → betpawa/betika odds per date → link once → stats → standings; `[start k/7]` step banners
+- [x] `src/index.js` — no action / `start [days]` / bare number (`npm run start -- 5`) dispatches the pipeline
+- [x] `src/db/store.js` — `completedMatchIds(provider, from)`: exclusion set so scrapers skip per-game detail requests for completed matches (saveMatches would discard them anyway); wired into pipeline AND single betpawa/betika actions
+- [x] `src/utils.js` `_progress()` helper — periodic `n/total` logs in the scraper detail batches and the deep-stats batch
+- [x] Fewer-hits ordering: date-scoped fixtures fetch refreshes today's statuses first (shrinks results' per-id refresh set); results completes matches BEFORE odds scrapes; link runs once instead of 12 auto-link passes
+- [x] BUGFIX (caught in live run 1): `Number(null) === 0` made the default sweep 1 date instead of 4 — switched to `parseInt` (null/undefined → NaN)
+- [x] BUGFIX (caught in live run 2): standings rows with `team.id = null` (TBD playoff/bracket placeholder slots) crashed zod validation at 60/71 leagues — such rows are now skipped pre-parse (no FK target to store anyway)
+- [x] Verify: live `npm run start` end-to-end — 4-date sweep (fixtures 111/203/570/276), results settled 6, betpawa 37+126+161+104 games, betika 168+138+244+108, single link pass (betpawa 268 + betika 319 fuzzy-linked), stats fetch-once, standings 71 league/seasons → 1116 rows; quota-guarded throughout (~149.8k remaining)
+- [x] Update `CLAUDE.md` (commands + architecture entry for `src/pipeline.js`)
+- [x] Commit
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).
