@@ -32,7 +32,10 @@ export async function fetchRecords({ date, page, perPage, sort, filters }) {
 // Start refreshing a date's data. A 409 (refresh already running) also
 // resolves to the in-flight job state - callers just track it.
 export async function startRefresh(date) {
-    const res = await fetch(`/api/refresh?date=${encodeURIComponent(date)}`, { method: 'POST' });
+    const res = await fetch(`/api/refresh?date=${encodeURIComponent(date)}`, {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch' }, // CSRF guard (see server.js)
+    });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
     return body;

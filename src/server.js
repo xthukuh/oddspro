@@ -68,6 +68,11 @@ const refreshJob = {
 // (fixtures, results, odds, link, stats). 409 with the in-flight job when one
 // is already running; the response is always the current job state.
 app.post('/api/refresh', (req, res) => {
+    // CSRF guard: custom headers force a CORS preflight cross-origin, which
+    // this server never approves - only same-origin callers can set this.
+    if (!req.get('x-requested-with')) {
+        return res.status(403).json({ error: 'Missing X-Requested-With header.' });
+    }
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
         return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
@@ -116,8 +121,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     res.status(status).json({ error: String(err?.message ?? err) });
 });
 
-const server = app.listen(config.API_PORT, () => {
-    console.debug(`[+] oddspro API listening on http://localhost:${config.API_PORT}`);
+const server = app.listen(config.API_PORT, config.API_HOST, () => {
+    console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
 });
 
 // Graceful shutdown - close the HTTP server and the knex pool

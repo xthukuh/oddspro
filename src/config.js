@@ -17,6 +17,9 @@ const EnvSchema = z.object({
     APISPORTS_MIN_REMAINING: z.coerce.number().int().min(0).default(5),
     LINK_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.85),
     API_PORT: z.coerce.number().int().positive().default(3001),
+    // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
+    // (the refresh endpoint triggers scrapes; don't expose it unknowingly)
+    API_HOST: z.string().default('127.0.0.1'),
 });
 
 export const config = EnvSchema.parse(process.env);

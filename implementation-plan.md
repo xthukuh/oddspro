@@ -83,6 +83,7 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Verify: endpoints via curl (idle/400/202/409); live browser flow via Playwright — click → "Refreshing 2026-07-02 — betika odds…" → idle + table reload in ~45s, 0 console errors; empty date disables the button; today-refresh cost only 9 betpawa + 127 betika detail hits (completed games pre-excluded), settled 14, stats for 8 fixtures
 - [x] NOTE: stale pre-change `node src/server.js` (PID 19088) held :3001 and 404'd the new endpoints — killed and restarted with new code; server restart required after pulling these changes
 - [x] Commit
+- [x] Security hardening (post-review finding: CSRF/unauthenticated state-changing endpoint): `POST /api/refresh` requires `X-Requested-With` header (custom headers force a CORS preflight the server never approves — kills cross-site POSTs); server binds `API_HOST` (default `127.0.0.1`, LAN exposure now opt-in). Verified: 403 without header, 400 with header+bad date (no scrape burned), loopback-only bind via netstat, button flow re-verified in browser (31s refresh, 0 console errors)
 
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
