@@ -43,11 +43,13 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Commit
 
 ## Phase 5 — Deep stats & standings
-- [ ] `stats` action — statistics + lineups + events per final fixture (fetch-once flags, low concurrency)
-- [ ] `standings` action — per league/season seen in fixtures; replace rows
-- [ ] Verify: completed matchday populated; re-run = 0 API hits
-- [ ] Update `CLAUDE.md` (new actions, env vars, utils no longer duplicated)
-- [ ] Commit
+- [x] `stats` action — statistics + lineups + events per final correlated fixture (fetch-once flags; empty responses only flagged 48h post-kickoff; serial DB writes)
+- [x] `standings` action — per league/season on correlated fixtures; delete+replace rows; teams upserted for FK safety
+- [x] Deadlock fix: `_batch` concurrency 1 for delete+insert transaction workloads (parallel workers deadlocked on InnoDB index gap locks)
+- [x] Verify: standings 204 rows / 15 league-seasons, re-run idempotent (204 again), 3 table-less comps skipped; stats action correctly targets 0 fixtures at 6:45 AM (nothing final+correlated yet) with 0 API calls
+- [ ] PENDING: full stats-path live check (statistics/lineups/events rows landing) once today's correlated matches finish — run `results` then `stats` this afternoon
+- [x] Update `CLAUDE.md` (rewritten: pipeline architecture, key invariants, all 7 actions, env names)
+- [x] Commit
 
 ## Phase 6 — Visualization (added per 2026-07-02 README revision)
 - [ ] Market mapping layer: provider market type/name → canonical columns (1, X, 2, 1X, X2, 12, U/O 1.5–4.5)

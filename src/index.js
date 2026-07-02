@@ -1,6 +1,6 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
-import { fetchApisportsFixtures, settleApisportsResults } from './apisports.js';
+import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings } from './apisports.js';
 import { saveMatches } from './db/store.js';
 import { linkMatches } from './link.js';
 import { closeDb } from './db/connection.js';
@@ -29,6 +29,18 @@ import { closeDb } from './db/connection.js';
 
     if (action === 'link') {
         await linkMatches(value === 'betpawa' || value === 'betika' ? value : null);
+        return;
+    }
+
+    if (action === 'stats') {
+        const c = await fetchApisportsStats();
+        console.debug(`[+] stats: ${c.fixtures} fixtures processed - ${c.statistics} statistics, ${c.lineups} lineups (${c.players} players), ${c.events} events (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'standings') {
+        const c = await fetchApisportsStandings();
+        console.debug(`[+] standings: ${c.leagues} league/seasons, ${c.rows} rows saved, ${c.empty} without tables (quota remaining: ${c.quota_remaining}).`);
         return;
     }
 

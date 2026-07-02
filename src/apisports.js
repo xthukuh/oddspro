@@ -238,3 +238,223 @@ export async function settleApisportsResults() {
         quota_remaining: apisportsQuotaRemaining(),
     };
 }
+
+// --- deep stats (statistics / lineups / events, fetch-once per final fixture) ---
+
+// Stats for minor leagues may never be published; stop retrying empty
+// responses this long after kickoff and mark the fixture fetched.
+const STATS_GIVEUP_HOURS = 48;
+
+const _PlayerObj = z.object({
+    id: z.number().nullable(),
+    name: z.string().nullable(),
+    number: z.number().nullable().optional(),
+    pos: z.string().nullable().optional(),
+    grid: z.string().nullable().optional(),
+});
+
+const StatisticsItem = z.object({
+    team: z.object({ id: z.number() }),
+    statistics: z.array(z.object({
+        type: z.string(),
+        value: z.union([z.string(), z.number()]).nullable(),
+    })),
+});
+
+const LineupItem = z.object({
+    team: z.object({ id: z.number() }),
+    formation: z.string().nullable().optional(),
+    coach: z.object({
+        id: z.number().nullable().optional(),
+        name: z.string().nullable().optional(),
+    }).partial().nullable().optional(),
+    startXI: z.array(z.object({ player: _PlayerObj })).nullable().optional(),
+    substitutes: z.array(z.object({ player: _PlayerObj })).nullable().optional(),
+});
+
+const EventItem = z.object({
+    time: z.object({ elapsed: z.number(), extra: z.number().nullable().optional() }),
+    team: z.object({ id: z.number().nullable().optional() }).partial().nullable().optional(),
+    player: z.object({ id: z.number().nullable().optional(), name: z.string().nullable().optional() }).partial().nullable().optional(),
+    assist: z.object({ id: z.number().nullable().optional(), name: z.string().nullable().optional() }).partial().nullable().optional(),
+    type: z.string(),
+    detail: z.string().nullable().optional(),
+    comments: z.string().nullable().optional(),
+});
+
+// Replace + flag one fixture's team statistics. Returns row count.
+async function _fetchFixtureStatistics(fixture_id, giveup) {
+    const items = (await _get('/fixtures/statistics', { fixture: fixture_id })).map(i => StatisticsItem.parse(i));
+    const rows = [];
+    for (const item of items) {
+        for (const s of item.statistics) {
+            rows.push({
+                fixture_id,
+                team_id: item.team.id,
+                type: s.type,
+                value: s.value === null ? null : String(s.value),
+            });
+        }
+    }
+    if (!rows.length && !giveup) return 0;
+    await db.transaction(async trx => {
+        await trx('fixture_statistics').where('fixture_id', fixture_id).del();
+        if (rows.length) await db.batchInsert('fixture_statistics', rows, 200).transacting(trx);
+        await trx('fixtures').where('id', fixture_id).update({ stats_fetched_at: db.fn.now() });
+    });
+    return rows.length;
+}
+
+// Replace + flag one fixture's lineups + players. Returns counts.
+async function _fetchFixtureLineups(fixture_id, giveup) {
+    const items = (await _get('/fixtures/lineups', { fixture: fixture_id })).map(i => LineupItem.parse(i));
+    const lineups = [], players = [];
+    for (const item of items) {
+        lineups.push({
+            fixture_id,
+            team_id: item.team.id,
+            formation: item.formation ?? null,
+            coach_id: item.coach?.id ?? null,
+            coach_name: item.coach?.name ?? null,
+        });
+        for (const [list, is_starter] of [[item.startXI, true], [item.substitutes, false]]) {
+            for (const { player } of list ?? []) {
+                if (!player?.name) continue; // player_name is required
+                players.push({
+                    fixture_id,
+                    team_id: item.team.id,
+                    player_id: player.id,
+                    player_name: player.name,
+                    number: player.number ?? null,
+                    position: player.pos ?? null,
+                    grid: player.grid ?? null,
+                    is_starter,
+                });
+            }
+        }
+    }
+    if (!lineups.length && !giveup) return { lineups: 0, players: 0 };
+    await db.transaction(async trx => {
+        await trx('fixture_players').where('fixture_id', fixture_id).del();
+        await trx('fixture_lineups').where('fixture_id', fixture_id).del();
+        if (lineups.length) await trx('fixture_lineups').insert(lineups);
+        if (players.length) await db.batchInsert('fixture_players', players, 200).transacting(trx);
+        await trx('fixtures').where('id', fixture_id).update({ lineups_fetched_at: db.fn.now() });
+    });
+    return { lineups: lineups.length, players: players.length };
+}
+
+// Replace + flag one fixture's events. Returns row count.
+async function _fetchFixtureEvents(fixture_id, giveup) {
+    const items = (await _get('/fixtures/events', { fixture: fixture_id })).map(i => EventItem.parse(i));
+    const rows = items.map(item => ({
+        fixture_id,
+        team_id: item.team?.id ?? null,
+        elapsed: item.time.elapsed,
+        extra: item.time.extra ?? null,
+        type: item.type,
+        detail: item.detail ?? null,
+        comments: item.comments ?? null,
+        player_id: item.player?.id ?? null,
+        player_name: item.player?.name ?? null,
+        assist_id: item.assist?.id ?? null,
+        assist_name: item.assist?.name ?? null,
+    }));
+    if (!rows.length && !giveup) return 0;
+    await db.transaction(async trx => {
+        await trx('fixture_events').where('fixture_id', fixture_id).del();
+        if (rows.length) await db.batchInsert('fixture_events', rows, 200).transacting(trx);
+        await trx('fixtures').where('id', fixture_id).update({ events_fetched_at: db.fn.now() });
+    });
+    return rows.length;
+}
+
+// Fetch deep stats for final fixtures correlated to at least one bookmaker
+// match, skipping whatever each fixture already has (fetch-once flags).
+export async function fetchApisportsStats() {
+    const targets = await db('fixtures as f')
+        .whereIn('f.status', FINAL_STATUSES)
+        .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
+        .where(q => q.whereNull('f.stats_fetched_at').orWhereNull('f.lineups_fetched_at').orWhereNull('f.events_fetched_at'))
+        .select('f.id', 'f.kickoff', 'f.stats_fetched_at', 'f.lineups_fetched_at', 'f.events_fetched_at');
+    console.debug(`API-Football - ${targets.length} final correlated fixtures need deep stats...`);
+    const counts = { fixtures: targets.length, statistics: 0, lineups: 0, players: 0, events: 0 };
+    await _batch(targets, async f => {
+        const giveup = (Date.now() - new Date(f.kickoff).getTime()) > STATS_GIVEUP_HOURS * 3600_000;
+        if (!f.stats_fetched_at) counts.statistics += await _fetchFixtureStatistics(f.id, giveup);
+        if (!f.lineups_fetched_at) {
+            const r = await _fetchFixtureLineups(f.id, giveup);
+            counts.lineups += r.lineups;
+            counts.players += r.players;
+        }
+        if (!f.events_fetched_at) counts.events += await _fetchFixtureEvents(f.id, giveup);
+    }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
+    return { ...counts, quota_remaining: apisportsQuotaRemaining() };
+}
+
+// --- standings (replace per league+season) ---
+
+const StandingRow = z.object({
+    rank: z.number(),
+    team: z.object({ id: z.number(), name: z.string(), logo: z.string().nullable().optional() }),
+    points: z.number(),
+    goalsDiff: z.number(),
+    group: z.string().nullable().optional(),
+    form: z.string().nullable().optional(),
+    description: z.string().nullable().optional(),
+    all: z.object({
+        played: z.number(), win: z.number(), draw: z.number(), lose: z.number(),
+        goals: z.object({ for: z.number(), against: z.number() }),
+    }),
+});
+
+// Refresh standings for every league+season pair seen on correlated fixtures.
+export async function fetchApisportsStandings() {
+    const pairs = await db('fixtures as f')
+        .join('matches as m', 'm.fixture_id', 'f.id')
+        .distinct('f.league_id', 'f.season');
+    console.debug(`API-Football - ${pairs.length} league/season standings to refresh...`);
+    const counts = { leagues: pairs.length, rows: 0, empty: 0 };
+    await _batch(pairs, async ({ league_id, season }) => {
+        const items = await _get('/standings', { league: league_id, season });
+        const groups = items?.[0]?.league?.standings ?? [];
+        const rows = [], teams = new Map();
+        for (const group of groups) {
+            for (const raw of group) {
+                const r = StandingRow.parse(raw);
+                teams.set(r.team.id, { id: r.team.id, name: r.team.name, logo: r.team.logo ?? null });
+                rows.push({
+                    league_id,
+                    season,
+                    team_id: r.team.id,
+                    group_name: r.group ?? '',
+                    rank: r.rank,
+                    points: r.points,
+                    goals_diff: r.goalsDiff,
+                    form: r.form ?? null,
+                    description: r.description ?? null,
+                    played: r.all.played,
+                    win: r.all.win,
+                    draw: r.all.draw,
+                    lose: r.all.lose,
+                    goals_for: r.all.goals.for,
+                    goals_against: r.all.goals.against,
+                    metadata: JSON.stringify(raw),
+                });
+            }
+        }
+        if (!rows.length) {
+            counts.empty++; // cups/friendlies have no table
+            return;
+        }
+        if (teams.size) {
+            await db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']);
+        }
+        await db.transaction(async trx => {
+            await trx('standings').where({ league_id, season }).del();
+            await db.batchInsert('standings', rows, 200).transacting(trx);
+        });
+        counts.rows += rows.length;
+    }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
+    return { ...counts, quota_remaining: apisportsQuotaRemaining() };
+}

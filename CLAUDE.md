@@ -4,49 +4,51 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-oddspro fetches football bookmaker odds and stats from Kenyan bookmakers (BetPawa, Betika) via their public web APIs and normalizes them into a common record format. Plain Node.js (ES modules) with axios as the only dependency — no build step, no framework, no test suite.
+oddspro is a MySQL data warehouse for football bookmaker odds and stats. It scrapes odds from two Kenyan bookmakers (BetPawa, Betika), ingests canonical fixture/result/stats data from API-Football (api-sports.io), and correlates bookmaker matches to canonical fixtures via fuzzy matching with learned aliases. Plain Node.js (ES modules); knex/mysql2 for the DB layer; zod validates all external data.
+
+Source spec and progress tracking live in `implementation-plan.md` (phases 1–5 done; Phase 6 visualization pending).
 
 ## Commands
 
 ```sh
-npm install                       # install dependencies (axios)
-node src/index.js betpawa [date]  # fetch BetPawa games → x-betpawa-output.xx.json
-node src/index.js betika [date]   # fetch Betika games → x-betika-output.xx.json
+npm install
+npm run migrate                     # knex migrate:latest (forward-only migrations)
+
+node src/index.js betpawa [date]    # scrape BetPawa odds → DB, then auto-link
+node src/index.js betika [date]     # scrape Betika odds → DB, then auto-link
+node src/index.js fixtures [date]   # API-Football fixtures for date → DB, then auto-link
+node src/index.js results           # refresh unfinished past-kickoff fixtures; settle scores; mark matches completed
+node src/index.js link [provider]   # correlate bookmaker matches ↔ canonical fixtures
+node src/index.js stats             # statistics + lineups + events for final correlated fixtures (fetch-once)
+node src/index.js standings         # refresh league tables for correlated leagues
 ```
 
-`[date]` is optional (defaults to today) and accepts anything `new Date()` parses, or `today`/`now`. `npm start` runs `src/index.js` with no action argument, which only prints "Unsupported action" — always pass an action directly.
+`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able. There is no test suite and no linter.
 
-There is no test suite (`npm test` exits 1) and no linter.
+`.env` (gitignored, see `.env.example`) holds MySQL credentials (`DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD/DB_CHARSET/DB_COLLATION` — Laravel-style names) and API-Football credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY`). Validated in `src/config.js` (zod).
 
 ## Architecture
 
-- `src/index.js` — CLI dispatcher: selects the provider by `process.argv[2]`, writes results as pretty-printed JSON to `x-<provider>-output.xx.json` at the repo root.
-- `src/betpawa.js` / `src/betika.js` — one self-contained module per bookmaker. Each exports a single `fetch<Provider>Games(date)` function and deliberately follows the same internal layout:
-  1. Shared helpers (`_pint`, `_date`, `_dtime`, `_batch`) — intentionally duplicated in both files; keep them in sync when editing.
-  2. An axios client (`<Provider>Client`) preconfigured with browser-mimicking headers; base URL overridable via `BETPAWA_BASE_URL` / `BETIKA_BASE_URL` env vars.
-  3. `parse<Provider>Game(game)` — maps the raw API payload to the standardized record (below).
-  4. `fetch<Provider>Games(date)` — pages through the provider's list endpoint, then fetches per-match detail via `_batch` (10 concurrent requests, ~50ms delay between pages).
+Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker correlates → results settle → deep stats accumulate**.
 
-Adding a provider means creating a new `src/<provider>.js` that matches this layout and record shape, then wiring it into `src/index.js`.
+- `src/index.js` — CLI dispatcher; every action closes the shared knex pool on exit.
+- `src/betpawa.js` / `src/betika.js` — bookmaker scrapers (browser-mimicking axios clients against undocumented public APIs). Both emit the same standardized game record consumed by `store.saveMatches()`.
+- `src/apisports.js` — API-Football client + all its fetchers. Quota-guarded (`x-ratelimit-requests-remaining` header, halts at `APISPORTS_MIN_REMAINING` floor), paginated, zod-validated. Fixtures are fetched with `timezone=Africa/Nairobi` so kickoffs align with bookmaker wall-clock times.
+- `src/link.js` — correlation. API-Football fixtures are the **canonical base record**; `matches.fixture_id` is the link. Provider order matters: betpawa first, betika last (betika lacks identifier attributes and additionally scores against betpawa matches already linked to a candidate fixture). Fuzzy scorer = best of bigram-Dice / token-set / overlap-coefficient / initialism over normalized names; competition similarity is a bonus (+0.1×sim), never a veto; acceptance needs `LINK_MIN_CONFIDENCE` (default 0.85) plus a 0.05 margin over the runner-up. Confident links cache `team_aliases` / `league_aliases` for instant future correlation.
+- `src/db/connection.js` — the only knex instance (never use raw mysql2). Session `time_zone` is pinned to +03:00 in `knexfile.js` so SQL `NOW()` compares correctly against stored EAT wall-clock datetimes.
+- `src/db/store.js` — odds persistence: upsert `matches` by `(provider, provider_match_id)`, then delete+insert `odds_markets` (latest snapshot only, no history). Never touches `completed_at`/`fixture_id` (owned by results/link).
+- `src/utils.js` — shared helpers (`_date`, `_dtime`, `_batch`). `_batch` runs promises with bounded concurrency; keep DB-writing batches at concurrency 1 — parallel delete+insert transactions deadlock on InnoDB index gap locks.
 
-### Standardized game record
+### Key invariants
 
-Both parsers emit the same shape so downstream consumers are provider-agnostic:
-
-`provider, match_id, match_url, start_time (YYYY-MM-DD HH:mm local), home/away team id+name, home/away scores (first half / second half / fulltime), region/category/competition id+name, markets[], metadata (raw provider JSON as a string)`
-
-Each `markets[]` entry: `{type_id, type_name, type_explainer, name, price, handicap, probability}`.
-
-Betika's API does not expose `home_team_id`, `away_team_id`, `region_id`, `region_name`, `category_id`, or `competition_id` — those are always `null` in Betika records.
-
-### Date constraints
-
-- BetPawa: rejects dates before today (returns `[]` with a warning).
-- Betika: only today through +7 days (limited by the API's `period_id` mapping); anything else returns `[]`.
+- **Fetch throttling:** `matches.completed_at` set ⇒ odds refreshes skip the match. Fixtures reaching a terminal status (`FT/AET/PEN/AWD/WO/CANC/ABD`) complete their linked matches; unlinked matches complete 4h after start (fallback).
+- **Fetch-once stats:** `fixtures.stats_fetched_at`/`lineups_fetched_at`/`events_fetched_at` guarantee each final fixture costs at most 3 detail requests ever. Empty responses only set the flag after 48h post-kickoff (minor leagues may never publish stats). Never delete or refetch immutable API data.
+- **Results are canonical:** the `results` action copies authoritative scores from final fixtures into linked matches (bookmaker-parsed scores are unreliable for upcoming games — BetPawa reports 0-0, Betika null).
+- **Betika null fields:** `home_team_id, away_team_id, region_id, region_name, category_id, competition_id` are always null (not exposed by its API).
+- Migrations are forward-only; never edit an applied migration.
 
 ## Conventions
 
-- ES modules only (`"type": "module"`); `async/await` throughout.
-- 4-space indentation (set in `oddspro.code-workspace` — overrides the usual 2-space Node default), single quotes, semicolons.
-- `x-*-output.xx.json` files are fetched API data snapshots — do not delete or regenerate them unnecessarily to avoid redundant API hits.
-- `.env` is gitignored and holds API credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY` for api-sports.io — not yet referenced in code).
+- ES modules, `async/await`, 4-space indentation (workspace setting — overrides the usual 2-space Node default), single quotes, semicolons.
+- All external data (API responses, env) through zod schemas; keep field schemas tolerant (`nullable().optional()`) — live data has taught this (`league.round` can be null).
+- `x-*-output.xx.json` files at the root are legacy fetched-data snapshots — do not delete.
