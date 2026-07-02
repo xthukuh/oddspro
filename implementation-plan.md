@@ -97,6 +97,20 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] NOTE: stale pre-change `node src/server.js` (PID 17244) held :3001 — killed and restarted with new code (recurring: restart server after backend changes)
 - [x] Commits: `test:` harness → `feat:` stale retention (store) → `feat:` read layer → `feat:` frontend → `docs:` this update
 
+## Phase 10 — Historical pre-match snapshots + rolling-goals columns (added 2026-07-02)
+- [x] TDD first: `tests/prematch-calc.test.js` (11 tests, offline) written and watched fail before the module existed — h2hSummary parity (orientation both venues, strict kickoff cutoff, null-score skip), computePrematch (window caps, opponent exclusion, venue-oriented gf/ga, h2h_count beyond window, empty history), formatGoals
+- [x] `src/db/prematch-calc.js` (pure, zero imports) — `h2hSummary` moved verbatim from records.js `_h2hSummary`; `computePrematch` (pair-level H2H window + per-side vs-others window); `formatGoals` → `"8/5 (2.6)"`
+- [x] Migration `20260702000003_prematch.js` — `fixtures.history_fetched_at` (fetch-once flag) + `fixture_prematch` table (typed columns keyed by fixture_id, FK CASCADE)
+- [x] Config: `PREMATCH_TEAM_WINDOW` / `PREMATCH_H2H_WINDOW` (default 5/5) in `src/config.js` + `.env.example`
+- [x] `fetchApisportsHistory()` (apisports.js) — per upcoming correlated fixture: 2× `/fixtures?team=&last=` + 1× `/fixtures/headtohead` (no `last` → true all-time meeting count); items filtered to FINAL_STATUSES pre-save (future h2h meetings must not leak into the results refresh set); saved via `_saveFixtureItems` upserts (never deletes); per-run team dedupe Set; serial batch
+- [x] `src/prematch.js` `updatePrematchSnapshots()` — upsert `fixture_prematch` for upcoming correlated fixtures; `kickoff > NOW()` selection IS the freeze; single-statement chunked `onConflict().merge()` (no delete+insert)
+- [x] Pipeline: `runStartPipeline` steps 8 (history) + 9 (prematch) after standings (snapshot needs local history + fresh rank/form); `runDateRefresh` gains both for today/future dates; CLI actions `history` / `prematch`
+- [x] Read layer (records.js): snapshot-preferred merge (presence of row wins wholesale — null snapshot rank ≠ fall back to live standings); live derivation fallback for pre-feature fixtures; new STAT_COLUMNS `h2h_count`, `home/away_goals_h2h`, `home/away_goals_oth` (display-only, snapshot-only); zero frontend changes (catalog-driven)
+- [x] Verify: `npm test` 25/25; migration on populated DB; live `history` run — 332 fixtures, 9,417 historical fixtures backfilled (~1,150 requests, quota 148,846 left); `prematch` — 332 snapshots, re-run idempotent; spot-check (332/332 full 5-game windows, 295 with H2H, e.g. Trans Narva–Levadia 65 meetings "5W-14D-46L"); read layer serves compact strings per provider pair; 0 snapshots on past fixtures
+- [ ] Live freeze check (after fixtures conclude): a concluded fixture's snapshot rank/form stays put while live standings move on
+- [x] Docs: CLAUDE.md (commands, architecture, invariants) + this checklist
+- [x] Commit
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).
