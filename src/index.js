@@ -1,8 +1,9 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
-import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings } from './apisports.js';
+import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings, fetchApisportsHistory } from './apisports.js';
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
+import { updatePrematchSnapshots } from './prematch.js';
 import { exportRecords } from './export.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
@@ -52,6 +53,18 @@ import { _date, _dtime } from './utils.js';
     if (action === 'standings') {
         const c = await fetchApisportsStandings();
         console.debug(`[+] standings: ${c.leagues} league/seasons, ${c.rows} rows saved, ${c.empty} without tables (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'history') {
+        const c = await fetchApisportsHistory();
+        console.debug(`[+] history: ${c.fixtures} fixtures processed, ${c.saved} historical fixtures saved (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'prematch') {
+        const c = await updatePrematchSnapshots();
+        console.debug(`[+] prematch: ${c.written} snapshots upserted (${c.fixtures} upcoming correlated fixtures).`);
         return;
     }
 

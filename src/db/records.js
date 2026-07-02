@@ -1,5 +1,6 @@
 import { db } from './connection.js';
 import { MARKET_COLUMNS, isMarketKey, marketKey, whereMarket } from '../markets.js';
+import { h2hSummary, formatGoals } from './prematch-calc.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -36,6 +37,14 @@ const STAT_COLUMNS = [
     { key: 'away_rank', label: 'Away Rank', default: true },
     { key: 'away_form', label: 'Away Form', default: true },
     { key: 'h2h', label: 'H2H (W-D-L)', default: true },
+    // Rolling-goals aggregates - snapshot-only (null without a fixture_prematch
+    // row): live-deriving them from pre-backfill local history would show
+    // misleading lows. Rendered compact: "gf/ga (avg total per game)".
+    { key: 'h2h_count', label: 'Meetings', default: true },
+    { key: 'home_goals_h2h', label: 'H Goals vs Opp', default: true },
+    { key: 'away_goals_h2h', label: 'A Goals vs Opp', default: true },
+    { key: 'home_goals_oth', label: 'H Goals vs Others', default: true },
+    { key: 'away_goals_oth', label: 'A Goals vs Others', default: true },
 ];
 
 const FILTER_OPS = {
@@ -141,7 +150,8 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     return { data, total: Number(total), page, per_page, pages: Math.max(1, Math.ceil(Number(total) / per_page)) };
 }
 
-// Attach odds pivot, standings pre-match stats, H2H and fixture statistics.
+// Attach odds pivot, pre-match stats (frozen fixture_prematch snapshot when
+// present, live standings/H2H derivation otherwise) and fixture statistics.
 async function _hydrate(rows) {
     if (!rows.length) return [];
     const matchIds = rows.map(r => r.match_id);
@@ -165,7 +175,12 @@ async function _hydrate(rows) {
         obj[key] = Number(o.price);
     }
 
-    // Standings (rank/form) per league+season+team
+    // Frozen pre-match snapshots (preferred over live derivation when present)
+    const snapshots = await db('fixture_prematch').whereIn('fixture_id', fixtureIds);
+    const snapshot = new Map(snapshots.map(p => [p.fixture_id, p]));
+
+    // Standings (rank/form) per league+season+team - live fallback for
+    // fixtures that predate the snapshot feature
     const standings = await db('standings').whereIn('team_id', teamIds)
         .select('league_id', 'season', 'team_id', 'rank', 'form');
     const standing = new Map(standings.map(s => [`${s.league_id}:${s.season}:${s.team_id}`, s]));
@@ -193,6 +208,10 @@ async function _hydrate(rows) {
         // (BetPawa reports 0-0), so only surface them once the fixture is final.
         const settled = RESULT_STATUSES.includes(r.status);
         const hs = settled ? r.home_score_fulltime : null, as = settled ? r.away_score_fulltime : null;
+        // Snapshot rows win wholesale (presence of the row, not per-field ??):
+        // a null snapshot rank means "no rank at kickoff" and must not drift
+        // back to today's live standings.
+        const p = snapshot.get(r.api_id);
         const sh = standing.get(`${r.league_id}:${r.season}:${r.home_team_id}`);
         const sa = standing.get(`${r.league_id}:${r.season}:${r.away_team_id}`);
         const stats = {};
@@ -222,11 +241,16 @@ async function _hydrate(rows) {
             goals: hs != null && as != null ? hs + as : null,
             league: r.league_country ? `${r.league_country} - ${r.league_name}` : r.league_name,
             status: r.status,
-            home_rank: sh?.rank ?? null,
-            home_form: sh?.form ?? null,
-            away_rank: sa?.rank ?? null,
-            away_form: sa?.form ?? null,
-            h2h: _h2hSummary(h2h, r),
+            home_rank: p ? p.home_rank : sh?.rank ?? null,
+            home_form: p ? p.home_form : sh?.form ?? null,
+            away_rank: p ? p.away_rank : sa?.rank ?? null,
+            away_form: p ? p.away_form : sa?.form ?? null,
+            h2h: p ? p.h2h : h2hSummary(h2h, r),
+            h2h_count: p?.h2h_count ?? null,
+            home_goals_h2h: p ? formatGoals(p.h2h_home_goals, p.h2h_away_goals, p.h2h_n) : null,
+            away_goals_h2h: p ? formatGoals(p.h2h_away_goals, p.h2h_home_goals, p.h2h_n) : null,
+            home_goals_oth: p ? formatGoals(p.home_oth_gf, p.home_oth_ga, p.home_oth_n) : null,
+            away_goals_oth: p ? formatGoals(p.away_oth_gf, p.away_oth_ga, p.away_oth_n) : null,
             updated_at: r.updated_at,
             available,
             markets,
@@ -234,21 +258,4 @@ async function _hydrate(rows) {
             stats,
         };
     });
-}
-
-// Summarize finished head-to-head meetings from the row's home-team
-// perspective ("2W-1D-0L"), meetings strictly before this fixture's kickoff.
-function _h2hSummary(h2h, r) {
-    let w = 0, d = 0, l = 0;
-    for (const f of h2h) {
-        const home = f.home_team_id === r.home_team_id && f.away_team_id === r.away_team_id;
-        const away = f.home_team_id === r.away_team_id && f.away_team_id === r.home_team_id;
-        if (!(home || away) || f.ft_home == null || f.ft_away == null) continue;
-        if (new Date(f.kickoff).getTime() >= new Date(r.kickoff).getTime()) continue;
-        const [gf, ga] = home ? [f.ft_home, f.ft_away] : [f.ft_away, f.ft_home];
-        if (gf > ga) w++;
-        else if (gf < ga) l++;
-        else d++;
-    }
-    return w + d + l ? `${w}W-${d}D-${l}L` : null;
 }
