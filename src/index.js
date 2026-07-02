@@ -1,5 +1,6 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
+import { fetchApisportsFixtures, settleApisportsResults } from './apisports.js';
 import { saveMatches } from './db/store.js';
 import { closeDb } from './db/connection.js';
 
@@ -14,6 +15,18 @@ import { closeDb } from './db/connection.js';
         console.debug(`Found ${res.length} games.`);
         const c = await saveMatches(res);
         console.debug(`[+] ${action}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
+        return;
+    }
+
+    if (action === 'fixtures') {
+        const c = await fetchApisportsFixtures(value);
+        console.debug(`[+] fixtures: ${c.fixtures} fixtures, ${c.leagues} leagues, ${c.teams} teams upserted (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'results') {
+        const c = await settleApisportsResults();
+        console.debug(`[+] results: ${c.refreshed} fixtures refreshed, ${c.settled} matches settled, ${c.fallback_completed} fallback-completed (quota remaining: ${c.quota_remaining}).`);
         return;
     }
 

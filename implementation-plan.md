@@ -25,11 +25,13 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Commit
 
 ## Phase 3 — api-sports fixtures & results
-- [ ] `src/apisports.js` — client (x-apisports-key header, zod validation, quota guard on x-ratelimit-requests-remaining)
-- [ ] `fixtures [date]` action — upsert leagues/teams/fixtures (timezone=Africa/Nairobi)
-- [ ] `results` action — refresh past-kickoff unfinished fixtures; settle scores/status; set `matches.completed_at` (linked final OR start_time > 4h past)
-- [ ] Verify: today's fixtures land; results settle; quota logged
-- [ ] Commit
+- [x] `src/apisports.js` — client (x-apisports-key header, zod validation, quota guard on x-ratelimit-requests-remaining, pagination)
+- [x] `fixtures [date]` action — upsert leagues/teams/fixtures (timezone=Africa/Nairobi)
+- [x] `results` action — refresh past-kickoff unfinished fixtures (ids batched 20/req); settle scores into linked matches; set `matches.completed_at` (linked terminal OR start_time > 4h past)
+- [x] MySQL session time_zone pinned to +03:00 (knex pool afterCreate) so NOW() aligns with stored EAT wall-clock datetimes
+- [x] Verify: 111 fixtures / 30 leagues / 220 teams upserted; results refreshed 11 in-play fixtures in 1 request; statuses NS/FT/HT/2H/PEN/CANC/INT present; quota remaining 149,998 (high-volume plan). Full settle check pends Phase 4 links + time passing.
+- [ ] NOTE: zod caught `league.round` = null on live data (schema fixed) — keep schemas tolerant on nullable fields
+- [x] Commit
 
 ## Phase 4 — Match linking (revised per 2026-07-02 README: fixtures = canonical base)
 - [ ] Name normalizer + fuzzy similarity scorer with `LINK_MIN_CONFIDENCE` threshold (default 0.85)
