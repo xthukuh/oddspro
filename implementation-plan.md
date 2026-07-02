@@ -63,6 +63,40 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Verify: export 55 correlated records with odds+rank/form columns; API multi-sort on `O 2.5` + filters (`1 lte 1.5 AND provider eq betika` → 7) + 400 on bad keys; browser-verified datatable/settings/filters/multi-sort via Playwright, 0 console errors
 - [x] Commit
 
+## Phase 7 — Default `npm run start` pipeline (added 2026-07-02)
+- [x] `src/pipeline.js` — `runStartPipeline(days)`: full sweep today..+N days (default 3), ordered for fewest server hits: fixtures per date → results → betpawa/betika odds per date → link once → stats → standings; `[start k/7]` step banners
+- [x] `src/index.js` — no action / `start [days]` / bare number (`npm run start -- 5`) dispatches the pipeline
+- [x] `src/db/store.js` — `completedMatchIds(provider, from)`: exclusion set so scrapers skip per-game detail requests for completed matches (saveMatches would discard them anyway); wired into pipeline AND single betpawa/betika actions
+- [x] `src/utils.js` `_progress()` helper — periodic `n/total` logs in the scraper detail batches and the deep-stats batch
+- [x] Fewer-hits ordering: date-scoped fixtures fetch refreshes today's statuses first (shrinks results' per-id refresh set); results completes matches BEFORE odds scrapes; link runs once instead of 12 auto-link passes
+- [x] BUGFIX (caught in live run 1): `Number(null) === 0` made the default sweep 1 date instead of 4 — switched to `parseInt` (null/undefined → NaN)
+- [x] BUGFIX (caught in live run 2): standings rows with `team.id = null` (TBD playoff/bracket placeholder slots) crashed zod validation at 60/71 leagues — such rows are now skipped pre-parse (no FK target to store anyway)
+- [x] Verify: live `npm run start` end-to-end — 4-date sweep (fixtures 111/203/570/276), results settled 6, betpawa 37+126+161+104 games, betika 168+138+244+108, single link pass (betpawa 268 + betika 319 fuzzy-linked), stats fetch-once, standings 71 league/seasons → 1116 rows; quota-guarded throughout (~149.8k remaining)
+- [x] Update `CLAUDE.md` (commands + architecture entry for `src/pipeline.js`)
+- [x] Commit
+
+## Phase 8 — Focused-date refresh button (added 2026-07-02)
+- [x] `src/pipeline.js` `runDateRefresh(date, onStep)` — single-date subset: fixtures → results (skipped for future dates) → betpawa/betika odds (completed-exclusion) → link once → deep stats (skipped for future dates); standings stays owned by the full sweep; `onStep` narrates progress
+- [x] `src/server.js` — `POST /api/refresh?date=YYYY-MM-DD` starts a single-slot background job (400 bad date, 409 + in-flight job when busy — parallel refreshes would deadlock on delete+insert gap locks); `GET /api/refresh` poll endpoint
+- [x] `web/src/api.js` — `startRefresh()` (409 resolves to the in-flight job), `fetchRefreshStatus()`
+- [x] `web/src/App.jsx` — Refresh button beside the date picker: disabled without a focused date, amber + live step label while running, 2s polling, table reload on completion, picks up an in-flight refresh on page load
+- [x] Verify: endpoints via curl (idle/400/202/409); live browser flow via Playwright — click → "Refreshing 2026-07-02 — betika odds…" → idle + table reload in ~45s, 0 console errors; empty date disables the button; today-refresh cost only 9 betpawa + 127 betika detail hits (completed games pre-excluded), settled 14, stats for 8 fixtures
+- [x] NOTE: stale pre-change `node src/server.js` (PID 19088) held :3001 and 404'd the new endpoints — killed and restarted with new code; server restart required after pulling these changes
+- [x] Commit
+- [x] Security hardening (post-review finding: CSRF/unauthenticated state-changing endpoint): `POST /api/refresh` requires `X-Requested-With` header (custom headers force a CORS preflight the server never approves — kills cross-site POSTs); server binds `API_HOST` (default `127.0.0.1`, LAN exposure now opt-in). Verified: 403 without header, 400 with header+bad date (no scrape burned), loopback-only bind via netstat, button flow re-verified in browser (31s refresh, 0 console errors)
+
+## Phase 9 — Freshness, stale odds & compact datatable (added 2026-07-02)
+- [x] Test harness FIRST (safeguard before behavior changes): `npm test` = `node --test "tests/*.test.js"` — `tests/markets.test.js` (canonical mapping incl. type_name-never-type_id invariant + whereMarket SQL via disconnected knex builder), `tests/snapshots.test.js` (zod contract of the standardized game record over the frozen `x-*-output.xx.json` scraper outputs; legacy null holes filtered — live `_batch` rejects on error), `tests/diff-odds.test.js` (all stale-diff scenarios)
+- [x] Migration `20260702000002_odds_markets_stale_flag.js` — `odds_markets.is_stale` (default false; existing rows read fresh, no backfill)
+- [x] `src/db/odds-diff.js` (pure, zero imports) — `oddsIdentity` (type_name/name/handicap, numeric handicap normalization: mysql2 DECIMAL strings vs snapshot numbers, NUL delimiter) + `diffOddsRows` → `{staleIds, deleteIds}`
+- [x] `src/db/store.js` — diff-based odds refresh replaces blanket delete+insert (vanished markets kept flagged stale, re-listed markets revive); explicit `updated_at: db.fn.now()` on the matches UPDATE (ON UPDATE CURRENT_TIMESTAMP skips no-op updates). Verified live: 2 consecutive betika scrapes, row totals stable (no identity-mismatch duplication), only genuine churn flagged (14→104 stale)
+- [x] `src/db/records.js` — rows gain `updated_at`, `markets_stale` (fresh-shadowed keys stripped), `available` (`!TERMINAL_STATUSES(status) && !completed_at && freshCount > 0`; TERMINAL = RESULT + CANC/ABD); market sort/filter pivots exclude stale; `status` moved out of STAT_COLUMNS
+- [x] `src/export.js` — `status` column after `goals` (CSV parity with the UI)
+- [x] `web/` — Status base column right of Goals; rainbow row tints cycled per `api_id` (same fixture across providers shares a tint); row `title` freshness tooltip; stale prices greyed slate-400 + "No longer offered"; unavailable matches unlinked ("Betting unavailable") with per-provider Settings re-enable toggle (`oddspro.links.unavailable`, default off — betpawa serves concluded pages ~6h); persisted column keys sanitized against the catalog; compact `text-xs` + tighter padding; self-hosted Inter Variable (`@fontsource-variable/inter`, Tailwind `@theme --font-sans`); navbar Date label dropped
+- [x] Verify: `npm test` 14/14; migration on populated DB (274k rows fresh); live double-scrape store round-trip; API fields + market-sort via curl; CSV header; full browser pass via Playwright (columns, tints, tooltips, stale cell, unlink + toggle, settings sections, 0 console errors); temp stale flags reverted
+- [x] NOTE: stale pre-change `node src/server.js` (PID 17244) held :3001 — killed and restarted with new code (recurring: restart server after backend changes)
+- [x] Commits: `test:` harness → `feat:` stale retention (store) → `feat:` read layer → `feat:` frontend → `docs:` this update
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).

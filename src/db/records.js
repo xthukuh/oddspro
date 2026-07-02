@@ -8,6 +8,10 @@ import { MARKET_COLUMNS, isMarketKey, marketKey, whereMarket } from '../markets.
 // Fixture statuses that carry a final result (usable for H2H history)
 const RESULT_STATUSES = ['FT', 'AET', 'PEN', 'AWD', 'WO'];
 
+// Terminal statuses (mirrors the results action): the game is over or dead,
+// so its match is no longer a viable betting option.
+const TERMINAL_STATUSES = [...RESULT_STATUSES, 'CANC', 'ABD'];
+
 // Base row fields: SQL expression + type drive sorting, filtering and
 // value coercion. `raw` marks computed expressions (vs plain columns).
 const BASE_FIELDS = {
@@ -27,7 +31,6 @@ const BASE_FIELDS = {
 // from fixture_statistics by `columnCatalog`). Display-only: not sortable.
 const STAT_COLUMNS = [
     { key: 'league', label: 'League', default: true },
-    { key: 'status', label: 'Status', default: true },
     { key: 'home_rank', label: 'Home Rank', default: true },
     { key: 'home_form', label: 'Home Form', default: true },
     { key: 'away_rank', label: 'Away Rank', default: true },
@@ -72,6 +75,7 @@ function _sqlTarget(query, key, joined) {
         alias = `mk${joined.size}`;
         joined.set(key, alias);
         const sub = whereMarket(db('odds_markets'), key)
+            .where('is_stale', 0) // dead odds never drive sort/filter
             .groupBy('match_id')
             .select('match_id')
             .min('price as price')
@@ -125,6 +129,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         .limit(per_page)
         .select(
             'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
+            'm.updated_at', 'm.completed_at',
             'm.home_team_name', 'm.away_team_name',
             'm.home_score_fulltime', 'm.away_score_fulltime',
             'l.name as league_name', 'l.country as league_country',
@@ -143,15 +148,20 @@ async function _hydrate(rows) {
     const fixtureIds = [...new Set(rows.map(r => r.api_id))];
     const teamIds = [...new Set(rows.flatMap(r => [r.home_team_id, r.away_team_id]))];
 
-    // Odds -> canonical market columns
+    // Odds -> canonical market columns. Fresh and stale rows pivot into
+    // separate maps (stale = vanished from the latest bookmaker update;
+    // last-seen price kept for display). Fresh row count (ALL markets, not
+    // just canonical) feeds the per-match availability flag.
     const odds = await db('odds_markets').whereIn('match_id', matchIds)
-        .select('match_id', 'type_name', 'name', 'price', 'handicap');
-    const marketsByMatch = new Map();
+        .select('match_id', 'type_name', 'name', 'price', 'handicap', 'is_stale');
+    const marketsByMatch = new Map(), staleByMatch = new Map(), freshCounts = new Map();
     for (const o of odds) {
+        if (!o.is_stale) freshCounts.set(o.match_id, (freshCounts.get(o.match_id) ?? 0) + 1);
         const key = marketKey(o);
         if (!key) continue;
-        let obj = marketsByMatch.get(o.match_id);
-        if (!obj) marketsByMatch.set(o.match_id, obj = {});
+        const map = o.is_stale ? staleByMatch : marketsByMatch;
+        let obj = map.get(o.match_id);
+        if (!obj) map.set(o.match_id, obj = {});
         obj[key] = Number(o.price);
     }
 
@@ -189,6 +199,18 @@ async function _hydrate(rows) {
         for (const [type, pair] of statByFixture.get(r.api_id) ?? []) {
             stats[`fs:${type}`] = `${pair[r.home_team_id] ?? '-'} / ${pair[r.away_team_id] ?? '-'}`;
         }
+        // A stale price only shows where no fresh price shadows it
+        const markets = marketsByMatch.get(r.match_id) ?? {};
+        const markets_stale = { ...staleByMatch.get(r.match_id) };
+        for (const key of Object.keys(markets_stale)) {
+            if (key in markets) delete markets_stale[key];
+        }
+        // No longer a viable betting option: game over/dead or the latest
+        // update carried no markets at all (completed matches keep their
+        // last snapshot fresh, so status/completed_at decide for them).
+        const available = !TERMINAL_STATUSES.includes(r.status)
+            && !r.completed_at
+            && (freshCounts.get(r.match_id) ?? 0) > 0;
         return {
             match_id: r.match_id,
             api_id: r.api_id,
@@ -205,7 +227,10 @@ async function _hydrate(rows) {
             away_rank: sa?.rank ?? null,
             away_form: sa?.form ?? null,
             h2h: _h2hSummary(h2h, r),
-            markets: marketsByMatch.get(r.match_id) ?? {},
+            updated_at: r.updated_at,
+            available,
+            markets,
+            markets_stale,
             stats,
         };
     });

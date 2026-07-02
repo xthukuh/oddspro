@@ -14,6 +14,8 @@ Source spec and progress tracking live in `implementation-plan.md` (phases 1–6
 npm install
 npm run migrate                     # knex migrate:latest (forward-only migrations)
 
+npm run start [-- days]             # DEFAULT full pipeline (src/pipeline.js): fixtures + odds for today..+3 days
+                                    # (`npm run start -- 5` overrides the sweep), then results, link once, stats, standings
 node src/index.js betpawa [date]    # scrape BetPawa odds → DB, then auto-link
 node src/index.js betika [date]     # scrape Betika odds → DB, then auto-link
 node src/index.js fixtures [date]   # API-Football fixtures for date → DB, then auto-link
@@ -26,9 +28,13 @@ node src/index.js export [date]     # temp CSV of the date's correlated records 
 npm run serve                       # visualization API server on :3001 (serves web/dist when built)
 npm run build:web                   # build the React frontend → web/dist/
 cd web && npm run dev               # frontend dev server on :5173 (proxies /api/* → :3001)
+
+npm test                            # node:test suite (tests/*.test.js) — offline, no DB/live APIs:
+                                    # market registry invariants, stale-odds diff scenarios, and the
+                                    # standardized game-record contract vs the frozen x-*-output.xx.json snapshots
 ```
 
-`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able. There is no test suite and no linter.
+`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able. There is no linter. Restart `npm run serve` after pulling backend changes — a stale server process holds :3001 with old code.
 
 `.env` (gitignored, see `.env.example`) holds MySQL credentials (`DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD/DB_CHARSET/DB_COLLATION` — Laravel-style names) and API-Football credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY`). Validated in `src/config.js` (zod).
 
@@ -36,17 +42,19 @@ cd web && npm run dev               # frontend dev server on :5173 (proxies /api
 
 Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker correlates → results settle → deep stats accumulate**.
 
-- `src/index.js` — CLI dispatcher; every action closes the shared knex pool on exit.
+- `src/index.js` — CLI dispatcher; every action closes the shared knex pool on exit. No action (or `start`/a bare day count) runs `src/pipeline.js`.
+- `src/pipeline.js` — default full sweep (`npm run start`), ordered for fewest server hits: fixtures per date first (a date fetch also refreshes today's statuses, shrinking the results refresh set), then results (completes matches so scrapers skip their per-game detail requests via the `completedMatchIds()` exclusion set), then odds per provider per date, then a single link pass, then stats + standings. Also exports `runDateRefresh(date, onStep)` — the single-date subset behind the web refresh button (skips results/stats for future dates; standings stays owned by the full sweep).
 - `src/betpawa.js` / `src/betika.js` — bookmaker scrapers (browser-mimicking axios clients against undocumented public APIs). Both emit the same standardized game record consumed by `store.saveMatches()`.
 - `src/apisports.js` — API-Football client + all its fetchers. Quota-guarded (`x-ratelimit-requests-remaining` header, halts at `APISPORTS_MIN_REMAINING` floor), paginated, zod-validated. Fixtures are fetched with `timezone=Africa/Nairobi` so kickoffs align with bookmaker wall-clock times.
 - `src/link.js` — correlation. API-Football fixtures are the **canonical base record**; `matches.fixture_id` is the link. Provider order matters: betpawa first, betika last (betika lacks identifier attributes and additionally scores against betpawa matches already linked to a candidate fixture). Fuzzy scorer = best of bigram-Dice / token-set / overlap-coefficient / initialism over normalized names; competition similarity is a bonus (+0.1×sim), never a veto; acceptance needs `LINK_MIN_CONFIDENCE` (default 0.85) plus a 0.05 margin over the runner-up. Confident links cache `team_aliases` / `league_aliases` for instant future correlation.
 - `src/db/connection.js` — the only knex instance (never use raw mysql2). Session `time_zone` is pinned to +03:00 in `knexfile.js` so SQL `NOW()` compares correctly against stored EAT wall-clock datetimes.
-- `src/db/store.js` — odds persistence: upsert `matches` by `(provider, provider_match_id)`, then delete+insert `odds_markets` (latest snapshot only, no history). Never touches `completed_at`/`fixture_id` (owned by results/link).
+- `src/db/store.js` — odds persistence: upsert `matches` by `(provider, provider_match_id)` (with an explicit `updated_at` bump — MySQL's ON UPDATE skips no-op updates), then refresh `odds_markets` via `src/db/odds-diff.js`: markets present in the latest snapshot are replaced (delete+insert), vanished ones are kept flagged `is_stale` (last-seen price survives for display), re-listed markets revive. Never touches `completed_at`/`fixture_id` (owned by results/link).
+- `src/db/odds-diff.js` — pure diff helper (`oddsIdentity`, `diffOddsRows`; zero imports so tests skip config/.env). Identity = type_name/name/handicap with numeric handicap normalization — mysql2 returns DECIMAL as a string (`'2.5'`) while snapshots carry numbers.
 - `src/utils.js` — shared helpers (`_date`, `_dtime`, `_batch`). `_batch` runs promises with bounded concurrency; keep DB-writing batches at concurrency 1 — parallel delete+insert transactions deadlock on InnoDB index gap locks.
 - `src/markets.js` — canonical odds market columns (1, X, 2, 1X, X2, 12, U/O 0.5–6.5; defaults 1.5–4.5). Single registry drives both the JS odds pivot and the SQL sort/filter conditions. Match markets by `type_name`, never `type_id` (betika reuses ids across different markets).
-- `src/db/records.js` — read layer for visualization: `queryRecords()` (correlated records only; pagination, multi-sort, filters; market columns sortable via LEFT JOIN pivot subqueries) and `columnCatalog()` (STATS columns discovered dynamically from `fixture_statistics`). Pre-match rank/form (standings) and H2H (fixtures history) are derived locally — no API hits. Score/goals are only surfaced once the fixture status is final (bookmaker pre-match scores are garbage).
-- `src/export.js` / `src/server.js` — CSV export action and the :3001 Express API (`GET /api/records`, `GET /api/columns`; `sort`/`filters` are JSON-encoded query params validated against the column registries — unknown keys are a 400).
-- `web/` — React 19 + Vite 6 + Tailwind 4 datatable. Column selections (markets + STATS) persist in localStorage; the settings modal renders whatever `/api/columns` returns, so new stat types appear without frontend changes.
+- `src/db/records.js` — read layer for visualization: `queryRecords()` (correlated records only; pagination, multi-sort, filters; market columns sortable via LEFT JOIN pivot subqueries that exclude stale rows) and `columnCatalog()` (STATS columns discovered dynamically from `fixture_statistics`). Pre-match rank/form (standings) and H2H (fixtures history) are derived locally — no API hits. Score/goals are only surfaced once the fixture status is final (bookmaker pre-match scores are garbage). Rows also carry `updated_at` (odds refresh time), `markets_stale` (last-seen prices of vanished markets) and `available` (false once the fixture is terminal, the match completed, or the latest update had no markets).
+- `src/export.js` / `src/server.js` — CSV export action and the :3001 Express API (`GET /api/records`, `GET /api/columns`; `sort`/`filters` are JSON-encoded query params validated against the column registries — unknown keys are a 400). `POST /api/refresh?date=` starts a single-slot background `runDateRefresh` job (409 while one runs — parallel refreshes would deadlock on delete+insert gap locks); `GET /api/refresh` is the poll endpoint the web refresh button uses (2s interval, reloads the table on completion). The POST requires an `X-Requested-With` header (CSRF guard — custom headers force a CORS preflight this server never approves), and the server binds `API_HOST` (default `127.0.0.1`; set `0.0.0.0` to expose on the LAN).
+- `web/` — React 19 + Vite 6 + Tailwind 4 datatable (compact `text-xs`, self-hosted Inter Variable). Row tints cycle per canonical fixture (`api_id`) so the same match shown per provider shares a color; row tooltips surface the odds refresh time; stale market prices render greyed; unavailable matches (concluded / no live markets) lose their link unless re-enabled per provider in Settings. Column selections (markets + STATS) and the link toggles persist in localStorage (keys sanitized against the catalog); the settings modal renders whatever `/api/columns` returns, so new stat types appear without frontend changes.
 
 ### Key invariants
 

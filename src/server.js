@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
+import { runDateRefresh } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -49,6 +50,60 @@ app.get('/api/records', async (req, res, next) => {
     }
 });
 
+// Single-slot refresh job state - one refresh at a time: parallel refreshes
+// would deadlock on InnoDB delete+insert gap locks (same rule as `_batch`
+// DB-writing concurrency 1), and a second sweep of the same date is wasted
+// server hits anyway.
+const refreshJob = {
+    running: false,
+    date: null,
+    step: null,
+    started_at: null,
+    finished_at: null,
+    error: null,
+    summary: null,
+};
+
+// POST /api/refresh?date=YYYY-MM-DD - start refreshing a date's data
+// (fixtures, results, odds, link, stats). 409 with the in-flight job when one
+// is already running; the response is always the current job state.
+app.post('/api/refresh', (req, res) => {
+    // CSRF guard: custom headers force a CORS preflight cross-origin, which
+    // this server never approves - only same-origin callers can set this.
+    if (!req.get('x-requested-with')) {
+        return res.status(403).json({ error: 'Missing X-Requested-With header.' });
+    }
+    const date = String(req.query.date ?? '');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
+        return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
+    }
+    if (refreshJob.running) return res.status(409).json(refreshJob);
+    Object.assign(refreshJob, {
+        running: true,
+        date,
+        step: 'starting',
+        started_at: new Date().toISOString(),
+        finished_at: null,
+        error: null,
+        summary: null,
+    });
+    runDateRefresh(date, step => { refreshJob.step = step; })
+        .then(summary => { refreshJob.summary = summary; })
+        .catch(e => {
+            refreshJob.error = String(e?.message ?? e);
+            console.error(e);
+        })
+        .finally(() => {
+            refreshJob.running = false;
+            refreshJob.step = null;
+            refreshJob.finished_at = new Date().toISOString();
+        });
+    res.status(202).json(refreshJob);
+});
+
+// GET /api/refresh - poll the refresh job state
+app.get('/api/refresh', (req, res) => res.json(refreshJob));
+
 // Built frontend (npm run build:web) with SPA fallback for non-/api routes
 const dist = path.resolve('web', 'dist');
 if (existsSync(dist)) {
@@ -66,8 +121,8 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     res.status(status).json({ error: String(err?.message ?? err) });
 });
 
-const server = app.listen(config.API_PORT, () => {
-    console.debug(`[+] oddspro API listening on http://localhost:${config.API_PORT}`);
+const server = app.listen(config.API_PORT, config.API_HOST, () => {
+    console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
 });
 
 // Graceful shutdown - close the HTTP server and the knex pool

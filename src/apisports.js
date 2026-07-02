@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { z } from 'zod';
 import { config } from './config.js';
-import { _date, _dtime, _batch } from './utils.js';
+import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
@@ -379,7 +379,8 @@ export async function fetchApisportsStats() {
         .select('f.id', 'f.kickoff', 'f.stats_fetched_at', 'f.lineups_fetched_at', 'f.events_fetched_at');
     console.debug(`API-Football - ${targets.length} final correlated fixtures need deep stats...`);
     const counts = { fixtures: targets.length, statistics: 0, lineups: 0, players: 0, events: 0 };
-    await _batch(targets, async f => {
+    const tick = _progress('API-Football - deep stats');
+    await _batch(targets, async (f, i, len) => {
         const giveup = (Date.now() - new Date(f.kickoff).getTime()) > STATS_GIVEUP_HOURS * 3600_000;
         if (!f.stats_fetched_at) counts.statistics += await _fetchFixtureStatistics(f.id, giveup);
         if (!f.lineups_fetched_at) {
@@ -388,6 +389,7 @@ export async function fetchApisportsStats() {
             counts.players += r.players;
         }
         if (!f.events_fetched_at) counts.events += await _fetchFixtureEvents(f.id, giveup);
+        tick(len);
     }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
@@ -421,6 +423,9 @@ export async function fetchApisportsStandings() {
         const rows = [], teams = new Map();
         for (const group of groups) {
             for (const raw of group) {
+                // Placeholder rows (TBD playoff/bracket slots) carry null team
+                // ids - no FK target, nothing to store.
+                if (!raw?.team?.id) continue;
                 const r = StandingRow.parse(raw);
                 teams.set(r.team.id, { id: r.team.id, name: r.team.name, logo: r.team.logo ?? null });
                 rows.push({

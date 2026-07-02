@@ -1,10 +1,12 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
 import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings } from './apisports.js';
-import { saveMatches } from './db/store.js';
+import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { exportRecords } from './export.js';
+import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
+import { _date, _dtime } from './utils.js';
 
 (async () => {
     const args = 'undefined' !== typeof process && Array.isArray(process.argv) ? process.argv : [];
@@ -12,8 +14,16 @@ import { closeDb } from './db/connection.js';
     if (!script) throw new TypeError('Failed to get process script name!');
     const action = args[2], value = args[3];
 
+    // Default (`npm run start`): full pipeline, today + 3 days ahead.
+    // `start [days]` or a bare number (`npm run start -- 5`) overrides the sweep.
+    if (!action || action === 'start' || /^\d+$/.test(action)) {
+        await runStartPipeline(/^\d+$/.test(action) ? action : value);
+        return;
+    }
+
     if (action === 'betpawa' || action === 'betika') {
-        const res = action === 'betpawa' ? await fetchBetpawaGames(value) : await fetchBetikaGames(value);
+        const exclude = await completedMatchIds(action, `${_dtime(_date(value)).substring(0, 10)} 00:00:00`);
+        const res = action === 'betpawa' ? await fetchBetpawaGames(value, exclude) : await fetchBetikaGames(value, exclude);
         console.debug(`Found ${res.length} games.`);
         const c = await saveMatches(res);
         console.debug(`[+] ${action}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);

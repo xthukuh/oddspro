@@ -1,5 +1,5 @@
 import axios from 'axios';
-import { _date, _dtime, _batch } from './utils.js';
+import { _date, _dtime, _batch, _progress } from './utils.js';
 
 // Get axios client instance
 const BetikaClient = axios.create({
@@ -99,8 +99,10 @@ function parseBetikaGame(game) {
     return result;
 }
 
-// Fetch games with their available odds markets
-export async function fetchBetikaGames(date_=null) {
+// Fetch games with their available odds markets.
+// `exclude_` (optional Set of provider match ids) skips already-completed
+// matches before their per-game detail requests - fewer server hits.
+export async function fetchBetikaGames(date_=null, exclude_=null) {
     const date = _date(date_), dt = _dtime(date).substring(0, 10), sub_type_id = 1, limit = 10;
     const dates = Object.fromEntries([...Array(8)].map((_, i) => [new Date(new Date().setDate(new Date().getDate() + i)).toISOString().substring(0, 10), i?i:-1]));
     const period = dates[dt];
@@ -120,14 +122,21 @@ export async function fetchBetikaGames(date_=null) {
         await new Promise(r => setTimeout(r, 50));
         return _next(++page);
     };
-    const items = await _next();
+    let items = await _next();
     console.debug(`Betika ${dt} - Found ${items.length} games...`);
+    if (exclude_ instanceof Set && exclude_.size) {
+        const before = items.length;
+        items = items.filter(g => !exclude_.has(Number(g.parent_match_id)));
+        if (items.length < before) console.debug(`Betika ${dt} - Skipped ${before - items.length} completed games (no detail requests).`);
+    }
 
     const games = [];
-    await _batch(items, async (g, i) => {
+    const tick = _progress(`Betika ${dt} - details`);
+    await _batch(items, async (g, i, len) => {
         const { data } = await BetikaClient.get('/match?parent_match_id=' + g.parent_match_id);
         const {odds: _, ...rest} = g;
         games[i] = parseBetikaGame({...rest, ...Object(data.meta), odds: data.data});
+        tick(len);
     }, 10);
     return games;
 }

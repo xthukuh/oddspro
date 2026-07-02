@@ -28,6 +28,16 @@ export function _dtime(value) {
     ].join(' ');
 }
 
+// Batch progress logger - returns a tick(total) to call once per completed
+// item; logs every `step` completions and on the final one.
+export function _progress(label, step = 25) {
+    let done = 0;
+    return total => {
+        done++;
+        if (done % step === 0 || done === total) console.debug(`${label} ${done}/${total}...`);
+    };
+}
+
 // Runs batch promises in parallel and returns results buffer.
 export async function _batch(list, each, parallel=5) {
     if (!Array.isArray(list)) throw new TypeError('Invalid batch list array.');
