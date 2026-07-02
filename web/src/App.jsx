@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
@@ -22,7 +22,7 @@ function _load(key) {
     }
 }
 
-const _today = () => new Date().toISOString().substring(0, 10);
+const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
 export default function App() {
     const [catalog, setCatalog] = useState(null);
@@ -137,28 +137,65 @@ export default function App() {
         localStorage.setItem(LS_LINKS, JSON.stringify(providers));
     };
 
+    const TODAY = _today();
+    const DAY_MS = 86400000;
+    const MIN_DATE = '2026-07-02';
+    const MAX_DATE = new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
+    const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
+    const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
+
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
-            <header className="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center gap-3">
-                <h1 className="text-lg font-semibold tracking-wide">ODDS PRO</h1>
-                <span className="text-slate-400 text-sm">correlated bookmaker odds &amp; stats</span>
+            <header className="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center gap-2">
+                <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
+                <span className="text-slate-400 text-xs">
+                    By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
+                </span>
                 <div className="grow" />
+                { date === TODAY ? null : (
+                    <button
+                        onClick={() => setDate(TODAY)}
+                        className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        Today
+                    </button>
+                )}
+                <button
+                    onClick={() => setDate(PREV_DATE)}
+                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    disabled={date <= MIN_DATE}
+                    title={`Previous (${PREV_DATE})`}
+                >
+                    &#10094;
+                </button>
                 <label className="flex items-center gap-2 text-sm">
                     <input
                         type="date"
                         value={date}
+                        min={MIN_DATE}
+                        max={MAX_DATE}
+                        onFocus={e => e.target.showPicker?.()}
+                        onClick={e => e.target.showPicker?.()}
                         onChange={e => { setDate(e.target.value); setPage(1); }}
-                        className="bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
+                        className="cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
                         title="Clear to show all dates"
                     />
                 </label>
+                <button
+                    onClick={() => setDate(NEXT_DATE)}
+                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    disabled={date >= MAX_DATE}
+                    title={`Next (${NEXT_DATE})`}
+                >
+                    &#10095;
+                </button>
                 <button
                     onClick={onRefresh}
                     disabled={!date || refresh?.running}
                     title={date
                         ? 'Re-fetch fixtures, results & odds for this date'
                         : 'Pick a date to refresh'}
-                    className={`px-3 py-1 rounded border text-sm ${refresh?.running
+                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${refresh?.running
                         ? 'bg-amber-600 border-amber-500 cursor-wait'
                         : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                 >
@@ -168,14 +205,14 @@ export default function App() {
                 </button>
                 <button
                     onClick={() => setShowFilters(v => !v)}
-                    className={`px-3 py-1 rounded border text-sm ${showFilters || filters.length
+                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${showFilters || filters.length
                         ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
                 >
                     Filters{filters.length ? ` (${filters.length})` : ''}
                 </button>
                 <button
                     onClick={() => setShowSettings(true)}
-                    className="px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                 >
                     Settings
                 </button>
