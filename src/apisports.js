@@ -394,6 +394,49 @@ export async function fetchApisportsStats() {
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
+// --- team history backfill (fetch-once per upcoming correlated fixture) ---
+
+// Backfill each team's recent finished fixtures plus the pair's full
+// head-to-head history for upcoming correlated fixtures, so the pre-match
+// rolling-goals windows are complete regardless of how long the warehouse
+// has been sweeping. Fetch-once per fixture (fixtures.history_fetched_at):
+// <=3 requests each, ever, minus the per-run team dedupe.
+export async function fetchApisportsHistory() {
+    const targets = await db('fixtures as f')
+        .whereNull('f.history_fetched_at')
+        .where('f.kickoff', '>', db.raw('NOW()'))
+        .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
+        .select('f.id', 'f.home_team_id', 'f.away_team_id');
+    console.debug(`API-Football - ${targets.length} upcoming correlated fixtures need team history...`);
+    // Fetch a buffer beyond the vs-others window: pair meetings are discarded
+    // from it, and the H2H window is served by the headtohead call anyway.
+    const last = config.PREMATCH_TEAM_WINDOW + config.PREMATCH_H2H_WINDOW;
+    const counts = { fixtures: targets.length, saved: 0 };
+    const fetchedTeams = new Set(); // a team with several upcoming fixtures costs one call
+    const tick = _progress('API-Football - team history');
+    await _batch(targets, async (f, i, len) => {
+        const items = [];
+        for (const team of [f.home_team_id, f.away_team_id]) {
+            if (fetchedTeams.has(team)) continue;
+            fetchedTeams.add(team);
+            items.push(...await _get('/fixtures', { team, last, timezone: TIMEZONE }));
+        }
+        // No `last` cap: the full meeting history backs the all-time h2h_count
+        items.push(...await _get('/fixtures/headtohead', {
+            h2h: `${f.home_team_id}-${f.away_team_id}`, timezone: TIMEZONE,
+        }));
+        // Only finished games are history. headtohead also returns future
+        // meetings; saving those would leak never-settling fixtures into the
+        // results action's per-id refresh set.
+        const finished = items.filter(it => FINAL_STATUSES.includes(it?.fixture?.status?.short));
+        const saved = await _saveFixtureItems(finished);
+        counts.saved += saved.fixtures;
+        await db('fixtures').where('id', f.id).update({ history_fetched_at: db.fn.now() });
+        tick(len);
+    }, 1); // serial: repo convention for DB-writing batches
+    return { ...counts, quota_remaining: apisportsQuotaRemaining() };
+}
+
 // --- standings (replace per league+season) ---
 
 const StandingRow = z.object({
