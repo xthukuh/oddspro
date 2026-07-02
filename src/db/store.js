@@ -1,4 +1,5 @@
 import { db } from './connection.js';
+import { diffOddsRows } from './odds-diff.js';
 
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
@@ -67,7 +68,9 @@ export async function completedMatchIds(provider, from_start_time = null) {
 }
 
 // Persist fetched provider games: upsert `matches` by (provider, provider_match_id),
-// then replace each match's `odds_markets` rows (delete + insert - latest snapshot only).
+// then refresh each match's `odds_markets` rows: markets present in the latest
+// snapshot are replaced (delete + insert), markets that vanished are kept and
+// flagged stale (last-seen price survives for display; see odds-diff.js).
 // Matches already marked completed are skipped entirely (fetch throttle rule).
 export async function saveMatches(games) {
     const counts = { inserted: 0, updated: 0, skipped: 0, markets: 0 };
@@ -88,15 +91,21 @@ export async function saveMatches(games) {
             let match_id;
             if (found) {
                 match_id = found.id;
-                await trx('matches').where('id', match_id).update(_matchRow(g));
+                // Explicit bump: ON UPDATE CURRENT_TIMESTAMP skips no-op updates,
+                // but updated_at must reflect every odds refresh (UI freshness).
+                await trx('matches').where('id', match_id).update({ ..._matchRow(g), updated_at: db.fn.now() });
                 counts.updated++;
             } else {
                 const [id] = await trx('matches').insert(_matchRow(g));
                 match_id = id;
                 counts.inserted++;
             }
-            await trx('odds_markets').where('match_id', match_id).del();
             const rows = _marketRows(match_id, g.markets);
+            const existingOdds = await trx('odds_markets').where('match_id', match_id)
+                .select('id', 'type_name', 'name', 'handicap', 'is_stale');
+            const { staleIds, deleteIds } = diffOddsRows(existingOdds, rows);
+            if (staleIds.length) await trx('odds_markets').whereIn('id', staleIds).update({ is_stale: true });
+            if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
             if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
             counts.markets += rows.length;
         });
