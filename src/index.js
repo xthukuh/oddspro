@@ -3,6 +3,7 @@ import { fetchBetikaGames } from './betika.js';
 import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings } from './apisports.js';
 import { saveMatches } from './db/store.js';
 import { linkMatches } from './link.js';
+import { exportRecords } from './export.js';
 import { closeDb } from './db/connection.js';
 
 (async () => {
@@ -41,6 +42,12 @@ import { closeDb } from './db/connection.js';
     if (action === 'standings') {
         const c = await fetchApisportsStandings();
         console.debug(`[+] standings: ${c.leagues} league/seasons, ${c.rows} rows saved, ${c.empty} without tables (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'export') {
+        const c = await exportRecords(value);
+        console.debug(`[+] export: ${c.rows} correlated records (${c.date}) -> ${c.file}`);
         return;
     }
 

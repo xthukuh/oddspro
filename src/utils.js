@@ -7,8 +7,9 @@ export function _pint(value) {
 
 // Helper - Get `Date` instance (returns `new Date()` when invalid)
 export function _date(value, set_hours_=undefined) {
-    const date = value
-    && !(value instanceof Date && !isNaN(value.getTime()))
+    const date = value instanceof Date && !isNaN(value.getTime())
+    ? value
+    : value
     && !['today', 'now'].includes(String(value).toLowerCase())
     && !isNaN((value = new Date(value)).getTime())
     ? value : new Date();
