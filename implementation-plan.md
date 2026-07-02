@@ -52,12 +52,16 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Commit
 
 ## Phase 6 — Visualization (added per 2026-07-02 README revision)
-- [ ] Market mapping layer: provider market type/name → canonical columns (1, X, 2, 1X, X2, 12, U/O 1.5–4.5)
-- [ ] `export [date]` action — temp CSV with README column spec (correlated records only)
-- [ ] API server (:3001): paginated + multi-sort + query-builder/filter endpoint over warehouse
-- [ ] `web/` React 19 + Vite + Tailwind datatable; settings modal (multi-select market + STATS columns, defaults pre-selected)
-- [ ] API-Football extras: pre-match stats / H2H columns
-- [ ] Verify + commit
+- [x] Market mapping layer `src/markets.js`: provider market type/name → canonical columns (1, X, 2, 1X, X2, 12, U/O 0.5–6.5; defaults 1.5–4.5). Match on `type_name` never `type_id` (betika reuses id 19 across team-total markets). Single registry drives both JS pivot and SQL sort/filter conditions.
+- [x] Shared read layer `src/db/records.js` — `queryRecords()` (paginate/multi-sort/filter; market columns sortable via LEFT JOIN pivot subqueries) + `columnCatalog()` (dynamic STATS list from fixture_statistics)
+- [x] `export [date]` action (`src/export.js`) — temp CSV (tmp/, gitignored, BOM for Excel) with README column spec, correlated records only
+- [x] API server `src/server.js` (:3001, `npm run serve`): GET /api/records (paginated + multi-sort + filter ops eq/ne/gt/gte/lt/lte/like), GET /api/columns; serves web/dist; graceful shutdown closes knex pool
+- [x] `web/` React 19 + Vite 6 + Tailwind 4 datatable (`npm run build:web`; dev :5173 proxies /api → :3001); settings modal (multi-select market + STATS columns, defaults pre-selected, localStorage-persisted); filter query builder; multi-sort headers (shift-click chains)
+- [x] API-Football extras: pre-match standings rank/form per team + H2H summary (W-D-L, home perspective) derived from local warehouse (no extra API hits); post-match fixture_statistics as dynamic toggleable columns
+- [x] BONUS: fixed pre-existing `_date()` bug (src/utils.js) — valid `Date` instances fell through to `new Date()`; first hit by export since mysql2 returns DATETIME as Date objects
+- [x] Score/goals only surfaced once fixture status is final (results-are-canonical; BetPawa reports 0-0 pre-match)
+- [x] Verify: export 55 correlated records with odds+rank/form columns; API multi-sort on `O 2.5` + filters (`1 lte 1.5 AND provider eq betika` → 7) + 400 on bad keys; browser-verified datatable/settings/filters/multi-sort via Playwright, 0 console errors
+- [x] Commit
 
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.

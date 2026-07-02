@@ -16,6 +16,7 @@ const EnvSchema = z.object({
     BETIKA_BASE_URL: z.string().url().optional(),
     APISPORTS_MIN_REMAINING: z.coerce.number().int().min(0).default(5),
     LINK_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.85),
+    API_PORT: z.coerce.number().int().positive().default(3001),
 });
 
 export const config = EnvSchema.parse(process.env);

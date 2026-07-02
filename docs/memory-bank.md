@@ -5,8 +5,8 @@ Project goals, standards, and hard-won lessons. Keep updated when major issues a
 ## Goals & state (2026-07-02)
 
 - MySQL data warehouse: bookmaker odds (BetPawa, Betika) + API-Football canonical fixtures/results/stats, correlated via fuzzy matching with learned aliases. Spec: `README.md`; progress: `implementation-plan.md`.
-- Phases 1–5 built, verified, committed. Phase 6 (visualization: market mapping → temp CSV export → API :3001 + React datatable) not started.
-- Pending verification: full stats path (statistics/lineups/events rows) — run `node src/index.js results` then `stats` after today's correlated matches finish.
+- Phases 1–6 built, verified, committed. Phase 6 (visualization): `src/markets.js` canonical market registry → `export [date]` temp CSV → `src/server.js` API :3001 → `web/` React 19/Vite 6/Tailwind 4 datatable with settings modal + filter builder.
+- Pending verification: full stats path (statistics/lineups/events rows) — run `node src/index.js results` then `stats` after today's correlated matches finish; new stat columns should then appear in the web settings modal automatically.
 - Alias fast-path exercise pends the next day's fresh matches.
 
 ## Resolved issues (do not re-learn these)
@@ -17,6 +17,9 @@ Project goals, standards, and hard-won lessons. Keep updated when major issues a
 4. **Timezone skew:** datetimes are stored as EAT wall-clock; MySQL server runs UTC. Session `time_zone` pinned to +03:00 via knex pool `afterCreate` (knexfile.js) so `NOW()` comparisons are correct. Fixtures fetched with `timezone=Africa/Nairobi`.
 5. **zod vs live API:** api-sports fields go null unexpectedly (`league.round`). Keep response schemas tolerant: `.nullable().optional()` on anything not structurally essential.
 6. **Correlation scoring lessons:** competition-name similarity must be a bonus, never a veto (identical team names were rejected at 0.816 when weighted 0.2); initialisms (BFA), token reordering (Flora Tallinn), reserve markers (II ≡ B), and club-type prefixes (JK/NK/US/AS/CS/CR/RS) all need explicit handling. Scorer = best-of(bigram dice, token-set dice, 0.9×overlap coefficient, initialism).
+7. **`_date()` Date-instance bug (src/utils.js):** a valid `Date` argument short-circuited the single boolean chain and fell through to `new Date()` — every value became "now". Latent until Phase 6 because all earlier callers passed strings; mysql2 returns DATETIME columns as `Date` objects. Fixed 2026-07-02 with a dedicated ternary arm for valid Dates.
+8. **Market identity:** map provider odds to canonical columns by `type_name`, never `type_id` — betika reuses `type_id` 19 across different team-total markets ("Z.PSV TOTAL" vs "ZWC.BELGIUM TOTAL"). Verified spellings live in `src/markets.js`.
+9. **Pre-match bookmaker scores are garbage:** BetPawa reports 0-0 and Betika null for upcoming games — visualization/export only surface score/goals when the fixture status is final (`FT/AET/PEN/AWD/WO`).
 
 ## Environment facts
 

@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 oddspro is a MySQL data warehouse for football bookmaker odds and stats. It scrapes odds from two Kenyan bookmakers (BetPawa, Betika), ingests canonical fixture/result/stats data from API-Football (api-sports.io), and correlates bookmaker matches to canonical fixtures via fuzzy matching with learned aliases. Plain Node.js (ES modules); knex/mysql2 for the DB layer; zod validates all external data.
 
-Source spec and progress tracking live in `implementation-plan.md` (phases 1–5 done; Phase 6 visualization pending).
+Source spec and progress tracking live in `implementation-plan.md` (phases 1–6 done: warehouse, ingestion, linking, deep stats, visualization).
 
 ## Commands
 
@@ -21,6 +21,11 @@ node src/index.js results           # refresh unfinished past-kickoff fixtures; 
 node src/index.js link [provider]   # correlate bookmaker matches ↔ canonical fixtures
 node src/index.js stats             # statistics + lineups + events for final correlated fixtures (fetch-once)
 node src/index.js standings         # refresh league tables for correlated leagues
+node src/index.js export [date]     # temp CSV of the date's correlated records → tmp/ (gitignored)
+
+npm run serve                       # visualization API server on :3001 (serves web/dist when built)
+npm run build:web                   # build the React frontend → web/dist/
+cd web && npm run dev               # frontend dev server on :5173 (proxies /api/* → :3001)
 ```
 
 `[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able. There is no test suite and no linter.
@@ -38,6 +43,10 @@ Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker cor
 - `src/db/connection.js` — the only knex instance (never use raw mysql2). Session `time_zone` is pinned to +03:00 in `knexfile.js` so SQL `NOW()` compares correctly against stored EAT wall-clock datetimes.
 - `src/db/store.js` — odds persistence: upsert `matches` by `(provider, provider_match_id)`, then delete+insert `odds_markets` (latest snapshot only, no history). Never touches `completed_at`/`fixture_id` (owned by results/link).
 - `src/utils.js` — shared helpers (`_date`, `_dtime`, `_batch`). `_batch` runs promises with bounded concurrency; keep DB-writing batches at concurrency 1 — parallel delete+insert transactions deadlock on InnoDB index gap locks.
+- `src/markets.js` — canonical odds market columns (1, X, 2, 1X, X2, 12, U/O 0.5–6.5; defaults 1.5–4.5). Single registry drives both the JS odds pivot and the SQL sort/filter conditions. Match markets by `type_name`, never `type_id` (betika reuses ids across different markets).
+- `src/db/records.js` — read layer for visualization: `queryRecords()` (correlated records only; pagination, multi-sort, filters; market columns sortable via LEFT JOIN pivot subqueries) and `columnCatalog()` (STATS columns discovered dynamically from `fixture_statistics`). Pre-match rank/form (standings) and H2H (fixtures history) are derived locally — no API hits. Score/goals are only surfaced once the fixture status is final (bookmaker pre-match scores are garbage).
+- `src/export.js` / `src/server.js` — CSV export action and the :3001 Express API (`GET /api/records`, `GET /api/columns`; `sort`/`filters` are JSON-encoded query params validated against the column registries — unknown keys are a 400).
+- `web/` — React 19 + Vite 6 + Tailwind 4 datatable. Column selections (markets + STATS) persist in localStorage; the settings modal renders whatever `/api/columns` returns, so new stat types appear without frontend changes.
 
 ### Key invariants
 
