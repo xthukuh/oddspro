@@ -56,3 +56,4 @@ experiments/
 
 # Custom
 **.xx*
+.playwright-mcp/
