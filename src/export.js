@@ -5,7 +5,7 @@ import { queryRecords, columnCatalog } from './db/records.js';
 
 // `export [date]` action - temp CSV of the date's correlated records with the
 // README column spec: api_id, start_time, fixture, provider, match_url,
-// score, goals, [default market columns], [default STATS columns].
+// score, goals, status, [default market columns], [default STATS columns].
 // Written to tmp/ (gitignored).
 
 // Escape one CSV cell (RFC 4180: quote when needed, double inner quotes)
@@ -21,7 +21,7 @@ export async function exportRecords(date_ = null) {
     const statCols = catalog.stats.filter(c => c.default);
 
     const header = [
-        'api_id', 'start_time', 'fixture', 'provider', 'match_url', 'score', 'goals',
+        'api_id', 'start_time', 'fixture', 'provider', 'match_url', 'score', 'goals', 'status',
         ...marketCols.map(c => c.label),
         ...statCols.map(c => c.label),
     ];
@@ -34,7 +34,7 @@ export async function exportRecords(date_ = null) {
         for (const r of res.data) {
             lines.push([
                 r.api_id, r.start_time instanceof Date ? _dtime(r.start_time) : r.start_time,
-                r.fixture, r.provider, r.match_url, r.score, r.goals,
+                r.fixture, r.provider, r.match_url, r.score, r.goals, r.status,
                 ...marketCols.map(c => r.markets[c.key]),
                 ...statCols.map(c => c.key.startsWith('fs:') ? r.stats[c.key] : r[c.key]),
             ].map(_cell).join(','));
