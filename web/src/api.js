@@ -28,3 +28,17 @@ export async function fetchRecords({ date, page, perPage, sort, filters }) {
         filters: filters?.length ? JSON.stringify(filters) : null,
     });
 }
+
+// Start refreshing a date's data. A 409 (refresh already running) also
+// resolves to the in-flight job state - callers just track it.
+export async function startRefresh(date) {
+    const res = await fetch(`/api/refresh?date=${encodeURIComponent(date)}`, { method: 'POST' });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    return body;
+}
+
+// Refresh job state: { running, date, step, started_at, finished_at, error, summary }
+export async function fetchRefreshStatus() {
+    return _get('/api/refresh');
+}

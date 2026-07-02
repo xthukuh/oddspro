@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
-import { fetchColumns, fetchRecords } from './api.js';
+import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import Pagination from './components/Pagination.jsx';
@@ -34,6 +34,8 @@ export default function App() {
     const [loading, setLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
+    const [refresh, setRefresh] = useState(null); // /api/refresh job state
+    const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -48,7 +50,7 @@ export default function App() {
         [statKeys, catalog],
     );
 
-    // Records whenever the query shape changes
+    // Records whenever the query shape changes (or a refresh lands new data)
     useEffect(() => {
         let stale = false;
         setLoading(true);
@@ -61,7 +63,38 @@ export default function App() {
             .catch(e => !stale && setError(String(e.message ?? e)))
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
-    }, [date, page, perPage, sort, filters]);
+    }, [date, page, perPage, sort, filters, refreshTick]);
+
+    // Pick up a refresh already in flight (e.g. page reloaded mid-refresh)
+    useEffect(() => {
+        fetchRefreshStatus().then(st => st?.running && setRefresh(st)).catch(() => {});
+    }, []);
+
+    // Poll the refresh job while it runs; reload records when it finishes
+    useEffect(() => {
+        if (!refresh?.running) return;
+        const id = setInterval(async () => {
+            try {
+                const st = await fetchRefreshStatus();
+                setRefresh(st);
+                if (!st.running) {
+                    setRefreshTick(t => t + 1);
+                    if (st.error) setError(`Refresh failed: ${st.error}`);
+                }
+            } catch {
+                // transient poll failure - keep polling
+            }
+        }, 2000);
+        return () => clearInterval(id);
+    }, [refresh?.running]);
+
+    const onRefresh = async () => {
+        try {
+            setRefresh(await startRefresh(date));
+        } catch (e) {
+            setError(String(e.message ?? e));
+        }
+    };
 
     // Header click: plain = single toggle asc/desc/off; shift = multi-sort chain
     const onSort = useCallback((key, additive) => {
@@ -104,6 +137,20 @@ export default function App() {
                         title="Clear to show all dates"
                     />
                 </label>
+                <button
+                    onClick={onRefresh}
+                    disabled={!date || refresh?.running}
+                    title={date
+                        ? 'Re-fetch fixtures, results & odds for this date'
+                        : 'Pick a date to refresh'}
+                    className={`px-3 py-1 rounded border text-sm ${refresh?.running
+                        ? 'bg-amber-600 border-amber-500 cursor-wait'
+                        : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
+                >
+                    {refresh?.running
+                        ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                        : 'Refresh'}
+                </button>
                 <button
                     onClick={() => setShowFilters(v => !v)}
                     className={`px-3 py-1 rounded border text-sm ${showFilters || filters.length

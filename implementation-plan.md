@@ -75,6 +75,15 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Update `CLAUDE.md` (commands + architecture entry for `src/pipeline.js`)
 - [x] Commit
 
+## Phase 8 — Focused-date refresh button (added 2026-07-02)
+- [x] `src/pipeline.js` `runDateRefresh(date, onStep)` — single-date subset: fixtures → results (skipped for future dates) → betpawa/betika odds (completed-exclusion) → link once → deep stats (skipped for future dates); standings stays owned by the full sweep; `onStep` narrates progress
+- [x] `src/server.js` — `POST /api/refresh?date=YYYY-MM-DD` starts a single-slot background job (400 bad date, 409 + in-flight job when busy — parallel refreshes would deadlock on delete+insert gap locks); `GET /api/refresh` poll endpoint
+- [x] `web/src/api.js` — `startRefresh()` (409 resolves to the in-flight job), `fetchRefreshStatus()`
+- [x] `web/src/App.jsx` — Refresh button beside the date picker: disabled without a focused date, amber + live step label while running, 2s polling, table reload on completion, picks up an in-flight refresh on page load
+- [x] Verify: endpoints via curl (idle/400/202/409); live browser flow via Playwright — click → "Refreshing 2026-07-02 — betika odds…" → idle + table reload in ~45s, 0 console errors; empty date disables the button; today-refresh cost only 9 betpawa + 127 betika detail hits (completed games pre-excluded), settled 14, stats for 8 fixtures
+- [x] NOTE: stale pre-change `node src/server.js` (PID 19088) held :3001 and 404'd the new endpoints — killed and restarted with new code; server restart required after pulling these changes
+- [x] Commit
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).

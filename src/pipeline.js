@@ -64,3 +64,46 @@ export async function runStartPipeline(days_ahead_ = null) {
 
     console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
 }
+
+// On-demand single-date refresh (web UI refresh button): fixtures, results
+// (unless the date is in the future - nothing to settle yet), both bookmakers'
+// odds, one link pass, then deep stats. Standings stay owned by the full
+// pipeline - a league-wide sweep is out of scope for one date. `onStep` gets
+// each step label (job progress for the API).
+export async function runDateRefresh(date_, onStep = null) {
+    const dt = _dtime(_date(date_)).substring(0, 10);
+    const today = _dtime(_date()).substring(0, 10);
+    const _step = label => {
+        console.debug(`[refresh ${dt}] ${label}...`);
+        if (typeof onStep === 'function') onStep(label);
+    };
+    const summary = { date: dt };
+
+    _step('fixtures');
+    summary.fixtures = (await fetchApisportsFixtures(dt)).fixtures;
+
+    if (dt <= today) {
+        _step('results');
+        const r = await settleApisportsResults();
+        summary.settled = r.settled;
+    }
+
+    for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
+        _step(`${provider} odds`);
+        const exclude = await completedMatchIds(provider, `${dt} 00:00:00`);
+        const c = await saveMatches(await fetcher(dt, exclude));
+        summary[provider] = { saved: c.inserted + c.updated, skipped: c.skipped, markets: c.markets };
+    }
+
+    _step('link');
+    await linkMatches();
+
+    if (dt <= today) {
+        _step('deep stats');
+        summary.stats = (await fetchApisportsStats()).fixtures;
+    }
+
+    summary.quota_remaining = apisportsQuotaRemaining();
+    console.debug(`[refresh ${dt}] Done - ${JSON.stringify(summary)}`);
+    return summary;
+}
