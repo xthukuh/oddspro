@@ -1,30 +1,58 @@
-/vendor/
-node_modules/
-npm-debug.log
-yarn-error.log
-
-# Laravel 4 specific
-bootstrap/compiled.php
-app/storage/
-
-# Laravel 5 & Lumen specific
-public/storage
-public/hot
-
-# Laravel 5 & Lumen specific with changed public path
-public_html/storage
-public_html/hot
-
-storage/*.key
+# Environment
 .env
-Homestead.yaml
-Homestead.json
-/.vagrant
-.phpunit.result.cache
+.env.local
+.env.*.local
 
-/public/build
-/storage/pail
-.env.backup
-.env.production
-.phpactor.json
-auth.json
+# Node
+node_modules/
+npm-debug.log*
+yarn-error.log*
+package-lock.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+.mypy_cache/
+.black_cache/
+
+# ML artefacts
+src/prediction/models/*.pkl
+src/prediction/models/*.json
+src/prediction/models/*.ubj
+src/prediction/models/checkpoints/
+docs/feature-importance.json
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+logs/
+*.log
+
+# Temp
+tmp/
+temp/
+
+# Daily API response cache (date-keyed, auto-expires)
+cache/
+
+# Backtest harness trial outputs (config+metrics JSON; reproducible from configs)
+experiments/
+
+# Custom
+**.xx*
