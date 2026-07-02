@@ -18,10 +18,11 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Commit `feat: warehouse foundation (db layer, schema, shared utils)`
 
 ## Phase 2 — Odds persistence
-- [ ] `src/db/store.js` — `saveMatches()`: upsert `matches` by (provider, provider_match_id); delete+insert `odds_markets`; skip completed matches
-- [ ] Rewire `betpawa`/`betika` CLI actions to persist to DB (stop writing x-*.json; existing files untouched)
-- [ ] Verify: run both actions for today; SQL row counts match console; re-run → no dupes, markets fully replaced
-- [ ] Commit
+- [x] `src/db/store.js` — `saveMatches()`: upsert `matches` by (provider, provider_match_id); delete+insert `odds_markets`; skip completed matches
+- [x] Rewire `betpawa`/`betika` CLI actions to persist to DB (stop writing x-*.json; existing files untouched)
+- [x] BONUS: fixed pre-existing `_batch` race - resolved before in-flight tasks drained (caused "Found 37" vs 47 saved; old JSON dumps could contain holes)
+- [x] Verify: betpawa 47 matches/11073 markets; betika 164 matches/26683 markets; betpawa re-run → 0 inserted/47 updated, market count identical (clean replace)
+- [x] Commit
 
 ## Phase 3 — api-sports fixtures & results
 - [ ] `src/apisports.js` — client (x-apisports-key header, zod validation, quota guard on x-ratelimit-requests-remaining)

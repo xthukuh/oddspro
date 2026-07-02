@@ -41,7 +41,11 @@ export async function _batch(list, each, parallel=5) {
                 abort = -1;
                 return reject(error);
             }
-            if (!arr.length) return resolve(buffer);
+            if (!arr.length) {
+                // Only resolve once in-flight tasks have also drained.
+                if (!pending) resolve(buffer);
+                return;
+            }
             if ((pending + 1) > parallel) return;
             pending++;
             const index = ++i;

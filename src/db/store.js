@@ -1,0 +1,93 @@
+import { db } from './connection.js';
+
+// Bulk insert chunk size for odds market rows
+const MARKETS_CHUNK = 200;
+
+// Map a standardized fetcher record to a `matches` row.
+// Note: `completed_at` and `fixture_id` are intentionally excluded - they are
+// owned by the results/link actions and must survive odds refreshes.
+function _matchRow(g) {
+    return {
+        provider: g.provider,
+        provider_match_id: g.match_id,
+        match_url: g.match_url,
+        start_time: g.start_time,
+        home_team_id: g.home_team_id,
+        home_team_name: g.home_team_name,
+        away_team_id: g.away_team_id,
+        away_team_name: g.away_team_name,
+        home_score_first_half: g.home_score_first_half,
+        home_score_second_half: g.home_score_second_half,
+        home_score_fulltime: g.home_score_fulltime,
+        away_score_first_half: g.away_score_first_half,
+        away_score_second_half: g.away_score_second_half,
+        away_score_fulltime: g.away_score_fulltime,
+        region_id: g.region_id,
+        region_name: g.region_name,
+        category_id: g.category_id,
+        category_name: g.category_name,
+        competition_id: g.competition_id,
+        competition_name: g.competition_name,
+        metadata: g.metadata,
+    };
+}
+
+// Map standardized market entries to `odds_markets` rows (drops invalid prices)
+function _marketRows(match_id, markets) {
+    const rows = [];
+    for (const m of Array.isArray(markets) ? markets : []) {
+        if (!Number.isFinite(m.price)) {
+            console.warn(`[store] dropped market with invalid price (match ${match_id}): ${m.type_name} / ${m.name}`);
+            continue;
+        }
+        rows.push({
+            match_id,
+            type_id: Number.isFinite(m.type_id) ? m.type_id : null,
+            type_name: m.type_name,
+            type_explainer: m.type_explainer ?? null,
+            name: m.name,
+            price: m.price,
+            handicap: Number.isFinite(m.handicap) ? m.handicap : null,
+            probability: Number.isFinite(m.probability) ? m.probability : null,
+        });
+    }
+    return rows;
+}
+
+// Persist fetched provider games: upsert `matches` by (provider, provider_match_id),
+// then replace each match's `odds_markets` rows (delete + insert - latest snapshot only).
+// Matches already marked completed are skipped entirely (fetch throttle rule).
+export async function saveMatches(games) {
+    const counts = { inserted: 0, updated: 0, skipped: 0, markets: 0 };
+    if (!Array.isArray(games) || !games.length) return counts;
+    const provider = games[0].provider;
+    const existing = await db('matches')
+        .select('id', 'provider_match_id', 'completed_at')
+        .where('provider', provider)
+        .whereIn('provider_match_id', games.map(g => g.match_id));
+    const byPid = new Map(existing.map(r => [Number(r.provider_match_id), r]));
+    for (const g of games) {
+        const found = byPid.get(Number(g.match_id));
+        if (found?.completed_at) {
+            counts.skipped++;
+            continue;
+        }
+        await db.transaction(async trx => {
+            let match_id;
+            if (found) {
+                match_id = found.id;
+                await trx('matches').where('id', match_id).update(_matchRow(g));
+                counts.updated++;
+            } else {
+                const [id] = await trx('matches').insert(_matchRow(g));
+                match_id = id;
+                counts.inserted++;
+            }
+            await trx('odds_markets').where('match_id', match_id).del();
+            const rows = _marketRows(match_id, g.markets);
+            if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
+            counts.markets += rows.length;
+        });
+    }
+    return counts;
+}

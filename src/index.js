@@ -1,6 +1,7 @@
-import Fs from 'fs';
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
+import { saveMatches } from './db/store.js';
+import { closeDb } from './db/connection.js';
 
 (async () => {
     const args = 'undefined' !== typeof process && Array.isArray(process.argv) ? process.argv : [];
@@ -8,29 +9,18 @@ import { fetchBetikaGames } from './betika.js';
     if (!script) throw new TypeError('Failed to get process script name!');
     const action = args[2], value = args[3];
 
-    console.debug({'process.stdout.isTTY': process.stdout.isTTY});
-
-    if (action === 'betpawa') {
-        const res = await fetchBetpawaGames(value);
+    if (action === 'betpawa' || action === 'betika') {
+        const res = action === 'betpawa' ? await fetchBetpawaGames(value) : await fetchBetikaGames(value);
         console.debug(`Found ${res.length} games.`);
-
-        const file = `x-${action}-output.xx.json`;
-        const txt = JSON.stringify(res, undefined, 4);
-        Fs.writeFileSync(file, txt);
-        console.debug(`[+]  ${file} (${txt.length})`);
-        return;
-    }
-    
-    if (action === 'betika') {
-        const res = await fetchBetikaGames(value);
-        console.debug(`Found ${res.length} games.`);
-
-        const file = `x-${action}-output.xx.json`;
-        const txt = JSON.stringify(res, undefined, 4);
-        Fs.writeFileSync(file, txt);
-        console.debug(`[+]  ${file} (${txt.length})`);
+        const c = await saveMatches(res);
+        console.debug(`[+] ${action}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
         return;
     }
 
     console.warn(`[!] Unsupported action: ${action}`);
-})();
+})()
+.catch(e => {
+    process.exitCode = 1;
+    console.error(e);
+})
+.finally(() => closeDb());
