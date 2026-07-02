@@ -212,10 +212,21 @@ export async function up(knex) {
         _base(knex, t);
         t.unique(['provider', 'alias_name']);
     });
+
+    await knex.schema.createTable('league_aliases', t => {
+        t.bigIncrements('id').unsigned().primary();
+        t.integer('league_id').unsigned().notNullable()
+            .references('id').inTable('leagues').onDelete('CASCADE');
+        t.enu('provider', ['betpawa', 'betika']).notNullable();
+        t.string('alias_name').notNullable(); // provider competition/category name
+        _base(knex, t);
+        t.unique(['provider', 'alias_name']);
+    });
 }
 
 export async function down(knex) {
     // reverse FK order
+    await knex.schema.dropTableIfExists('league_aliases');
     await knex.schema.dropTableIfExists('team_aliases');
     await knex.schema.dropTableIfExists('standings');
     await knex.schema.dropTableIfExists('fixture_events');

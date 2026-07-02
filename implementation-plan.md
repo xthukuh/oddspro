@@ -14,8 +14,8 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] `knexfile.js` + `src/db/connection.js` (knex singleton)
 - [x] Migration `src/db/migrations/*_init_schema.js` — full warehouse schema (11 tables, utf8mb4, timestamps, FKs) — written, NOT yet run
 - [x] `npm run migrate` script; `.env.example`
-- [ ] Verify: migration runs clean on fresh `oddspro` DB — **BLOCKED: MySQL access denied for root@127.0.0.1 (no password). Waiting for user to add DB credentials to `.env`.**
-- [ ] Commit `feat: warehouse foundation (db layer, schema, shared utils)`
+- [x] Verify: migration runs clean on fresh `oddspro` DB (14 tables incl. knex bookkeeping; unique keys + FK rules introspected and confirmed)
+- [x] Commit `feat: warehouse foundation (db layer, schema, shared utils)`
 
 ## Phase 2 — Odds persistence
 - [ ] `src/db/store.js` — `saveMatches()`: upsert `matches` by (provider, provider_match_id); delete+insert `odds_markets`; skip completed matches
@@ -30,9 +30,10 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [ ] Verify: today's fixtures land; results settle; quota logged
 - [ ] Commit
 
-## Phase 4 — Match linking
-- [ ] Team-name normalizer + matcher (aliases → normalized name + kickoff ±30min, both teams must agree)
-- [ ] `link` action + `team_aliases` learning + auto-link after odds/fixtures ingestion
+## Phase 4 — Match linking (revised per 2026-07-02 README: fixtures = canonical base)
+- [ ] Name normalizer + fuzzy similarity scorer with `LINK_MIN_CONFIDENCE` threshold (default 0.85)
+- [ ] `link` action, provider order **betpawa → betika** (betika also scores against linked betpawa records; kickoff ±30min window; competition/league similarity included)
+- [ ] `team_aliases` + `league_aliases` learning + auto-link after odds/fixtures ingestion
 - [ ] Verify: link rate reported; 10 links spot-checked; aliases reused on second run
 - [ ] Commit
 
@@ -43,5 +44,14 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [ ] Update `CLAUDE.md` (new actions, env vars, utils no longer duplicated)
 - [ ] Commit
 
+## Phase 6 — Visualization (added per 2026-07-02 README revision)
+- [ ] Market mapping layer: provider market type/name → canonical columns (1, X, 2, 1X, X2, 12, U/O 1.5–4.5)
+- [ ] `export [date]` action — temp CSV with README column spec (correlated records only)
+- [ ] API server (:3001): paginated + multi-sort + query-builder/filter endpoint over warehouse
+- [ ] `web/` React 19 + Vite + Tailwind datatable; settings modal (multi-select market + STATS columns, defaults pre-selected)
+- [ ] API-Football extras: pre-match stats / H2H columns
+- [ ] Verify + commit
+
 ## Issues / notes
-- 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. Resume: user adds `DB_USER`/`DB_PASSWORD` (and `DB_HOST`/`DB_PORT` if non-default) to `.env`, then run the DB bootstrap + `npm run migrate`.
+- 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
+- 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).
