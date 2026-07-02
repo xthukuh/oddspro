@@ -34,11 +34,13 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Commit
 
 ## Phase 4 — Match linking (revised per 2026-07-02 README: fixtures = canonical base)
-- [ ] Name normalizer + fuzzy similarity scorer with `LINK_MIN_CONFIDENCE` threshold (default 0.85)
-- [ ] `link` action, provider order **betpawa → betika** (betika also scores against linked betpawa records; kickoff ±30min window; competition/league similarity included)
-- [ ] `team_aliases` + `league_aliases` learning + auto-link after odds/fixtures ingestion
-- [ ] Verify: link rate reported; 10 links spot-checked; aliases reused on second run
-- [ ] Commit
+- [x] Name normalizer + fuzzy similarity scorer with `LINK_MIN_CONFIDENCE` threshold (default 0.85)
+- [x] `link` action, provider order **betpawa → betika** (betika also scores against linked betpawa records; kickoff ±30min window; competition/league similarity included)
+- [x] `team_aliases` + `league_aliases` learning + auto-link after odds/fixtures ingestion
+- [x] Scorer iteration after live near-miss review: best-of(bigram dice, token-set dice, 0.9×overlap coefficient, initialism match); reserve markers II≡B≡2; club-type prefixes (JK/NK/US/AS/CS/CR/RS...) as noise; competition = corroborating bonus (+0.1×sim) never a veto; 0.05 runner-up margin guard
+- [x] Verify: betpawa 26/47 (55%), betika 29/164 (18% — most unmatched lack an API-Football fixture that day); 14/14 spot-checks correct incl. initialism/word-flip/reserve cases; 55 links → 31 distinct fixtures (cross-bookmaker convergence); 110 team + 29 league aliases learned. Alias fast-path exercise pends next day's fresh matches.
+- [ ] Tuning knobs for user: `LINK_MIN_CONFIDENCE` (.env), weights/margin in `src/link.js` `_confidence()`
+- [x] Commit
 
 ## Phase 5 — Deep stats & standings
 - [ ] `stats` action — statistics + lineups + events per final fixture (fetch-once flags, low concurrency)
