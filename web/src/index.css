@@ -1,1 +1,8 @@
+/* Inter Variable (self-hosted): highly legible at the compact table size,
+   with tabular-friendly numerals for aligned odds columns. */
+@import '@fontsource-variable/inter';
 @import "tailwindcss";
+
+@theme {
+    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+}

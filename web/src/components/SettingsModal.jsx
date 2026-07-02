@@ -42,7 +42,15 @@ function ColumnPicker({ title, options, selected, onChange }) {
     );
 }
 
-export default function SettingsModal({ catalog, marketKeys, statKeys, onMarkets, onStats, onClose }) {
+export default function SettingsModal({
+    catalog, marketKeys, statKeys, providers, linkProviders, onMarkets, onStats, onLinkProviders, onClose,
+}) {
+    const links = new Set(linkProviders);
+    const toggleLink = p => {
+        const next = new Set(links);
+        next.has(p) ? next.delete(p) : next.add(p);
+        onLinkProviders(providers.filter(x => next.has(x)));
+    };
     return (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
             <div
@@ -66,6 +74,26 @@ export default function SettingsModal({ catalog, marketKeys, statKeys, onMarkets
                     selected={statKeys}
                     onChange={onStats}
                 />
+                <section className="mb-5">
+                    <h3 className="font-medium text-slate-700 mb-1">Unavailable match links</h3>
+                    <p className="text-xs text-slate-500 mb-2">
+                        Unavailable matches (concluded, or no markets left) are unlinked by default.
+                        Some providers still serve their match pages for a while (betpawa: ~6h after conclusion).
+                    </p>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
+                        {providers.map(p => (
+                            <label key={p} className="flex items-center gap-2 text-sm cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={links.has(p)}
+                                    onChange={() => toggleLink(p)}
+                                    className="accent-sky-600"
+                                />
+                                <span>Enable {p} links</span>
+                            </label>
+                        ))}
+                    </div>
+                </section>
                 <div className="text-right">
                     <button onClick={onClose} className="px-4 py-1.5 rounded bg-slate-800 text-white text-sm hover:bg-slate-700">
                         Done

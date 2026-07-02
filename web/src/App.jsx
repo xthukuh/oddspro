@@ -8,6 +8,10 @@ import SettingsModal from './components/SettingsModal.jsx';
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
 const LS_STATS = 'oddspro.cols.stats';
+// Providers whose unavailable matches keep a clickable link (settings toggle;
+// betpawa serves concluded match pages for ~6h)
+const LS_LINKS = 'oddspro.links.unavailable';
+const PROVIDERS = ['betpawa', 'betika'];
 
 function _load(key) {
     try {
@@ -24,6 +28,7 @@ export default function App() {
     const [catalog, setCatalog] = useState(null);
     const [marketKeys, setMarketKeys] = useState(() => _load(LS_MARKETS));
     const [statKeys, setStatKeys] = useState(() => _load(LS_STATS));
+    const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
     const [date, setDate] = useState(_today);
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -41,14 +46,21 @@ export default function App() {
     useEffect(() => {
         fetchColumns().then(setCatalog).catch(e => setError(String(e.message ?? e)));
     }, []);
-    const selectedMarkets = useMemo(
-        () => marketKeys ?? catalog?.markets.filter(c => c.default).map(c => c.key) ?? [],
-        [marketKeys, catalog],
-    );
-    const selectedStats = useMemo(
-        () => statKeys ?? catalog?.stats.filter(c => c.default).map(c => c.key) ?? [],
-        [statKeys, catalog],
-    );
+    // Persisted keys are filtered against the loaded catalog so selections
+    // that no longer exist (e.g. status moved to base columns) don't render
+    // ghost columns; localStorage itself is left untouched.
+    const selectedMarkets = useMemo(() => {
+        const keys = marketKeys ?? catalog?.markets.filter(c => c.default).map(c => c.key) ?? [];
+        if (!catalog) return keys;
+        const valid = new Set(catalog.markets.map(c => c.key));
+        return keys.filter(k => valid.has(k));
+    }, [marketKeys, catalog]);
+    const selectedStats = useMemo(() => {
+        const keys = statKeys ?? catalog?.stats.filter(c => c.default).map(c => c.key) ?? [];
+        if (!catalog) return keys;
+        const valid = new Set(catalog.stats.map(c => c.key));
+        return keys.filter(k => valid.has(k));
+    }, [statKeys, catalog]);
 
     // Records whenever the query shape changes (or a refresh lands new data)
     useEffect(() => {
@@ -120,6 +132,10 @@ export default function App() {
         setStatKeys(keys);
         localStorage.setItem(LS_STATS, JSON.stringify(keys));
     };
+    const saveLinkProviders = providers => {
+        setLinkProviders(providers);
+        localStorage.setItem(LS_LINKS, JSON.stringify(providers));
+    };
 
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
@@ -128,7 +144,6 @@ export default function App() {
                 <span className="text-slate-400 text-sm">correlated bookmaker odds &amp; stats</span>
                 <div className="grow" />
                 <label className="flex items-center gap-2 text-sm">
-                    <span className="text-slate-300">Date</span>
                     <input
                         type="date"
                         value={date}
@@ -189,6 +204,7 @@ export default function App() {
                     sort={sort}
                     onSort={onSort}
                     loading={loading}
+                    linkProviders={linkProviders}
                 />
                 <Pagination
                     page={result?.page ?? page}
@@ -205,8 +221,11 @@ export default function App() {
                     catalog={catalog}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
+                    providers={PROVIDERS}
+                    linkProviders={linkProviders}
                     onMarkets={saveMarkets}
                     onStats={saveStats}
+                    onLinkProviders={saveLinkProviders}
                     onClose={() => setShowSettings(false)}
                 />
             )}
