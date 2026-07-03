@@ -30,7 +30,7 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] `results` action — refresh past-kickoff unfinished fixtures (ids batched 20/req); settle scores into linked matches; set `matches.completed_at` (linked terminal OR start_time > 4h past)
 - [x] MySQL session time_zone pinned to +03:00 (knex pool afterCreate) so NOW() aligns with stored EAT wall-clock datetimes
 - [x] Verify: 111 fixtures / 30 leagues / 220 teams upserted; results refreshed 11 in-play fixtures in 1 request; statuses NS/FT/HT/2H/PEN/CANC/INT present; quota remaining 149,998 (high-volume plan). Full settle check pends Phase 4 links + time passing.
-- [ ] NOTE: zod caught `league.round` = null on live data (schema fixed) — keep schemas tolerant on nullable fields
+- NOTE: zod caught `league.round` = null on live data (schema fixed) — keep schemas tolerant on nullable fields
 - [x] Commit
 
 ## Phase 4 — Match linking (revised per 2026-07-02 README: fixtures = canonical base)
@@ -39,7 +39,7 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] `team_aliases` + `league_aliases` learning + auto-link after odds/fixtures ingestion
 - [x] Scorer iteration after live near-miss review: best-of(bigram dice, token-set dice, 0.9×overlap coefficient, initialism match); reserve markers II≡B≡2; club-type prefixes (JK/NK/US/AS/CS/CR/RS...) as noise; competition = corroborating bonus (+0.1×sim) never a veto; 0.05 runner-up margin guard
 - [x] Verify: betpawa 26/47 (55%), betika 29/164 (18% — most unmatched lack an API-Football fixture that day); 14/14 spot-checks correct incl. initialism/word-flip/reserve cases; 55 links → 31 distinct fixtures (cross-bookmaker convergence); 110 team + 29 league aliases learned. Alias fast-path exercise pends next day's fresh matches.
-- [ ] Tuning knobs for user: `LINK_MIN_CONFIDENCE` (.env), weights/margin in `src/link.js` `_confidence()`
+- NOTE: tuning knobs for user: `LINK_MIN_CONFIDENCE` (.env), weights/margin in `src/link.js` `_confidence()`. Alias cache growing as designed: 1,475 team + 132 league aliases by 2026-07-03
 - [x] Commit
 
 ## Phase 5 — Deep stats & standings
@@ -47,7 +47,7 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] `standings` action — per league/season on correlated fixtures; delete+replace rows; teams upserted for FK safety
 - [x] Deadlock fix: `_batch` concurrency 1 for delete+insert transaction workloads (parallel workers deadlocked on InnoDB index gap locks)
 - [x] Verify: standings 204 rows / 15 league-seasons, re-run idempotent (204 again), 3 table-less comps skipped; stats action correctly targets 0 fixtures at 6:45 AM (nothing final+correlated yet) with 0 API calls
-- [ ] PENDING: full stats-path live check (statistics/lineups/events rows landing) once today's correlated matches finish — run `results` then `stats` this afternoon
+- [x] Full stats-path live check VERIFIED 2026-07-03: `fixture_statistics` 252 rows / 12 fixtures (9 stat types each), `fixture_lineups` 7 rows / 4 fixtures, `fixture_events` 387 rows / 35 fixtures — rows land once leagues publish; fetch-once flags match (12/4/35)
 - [x] Update `CLAUDE.md` (rewritten: pipeline architecture, key invariants, all 7 actions, env names)
 - [x] Commit
 
@@ -107,9 +107,14 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Pipeline: `runStartPipeline` steps 8 (history) + 9 (prematch) after standings (snapshot needs local history + fresh rank/form); `runDateRefresh` gains both for today/future dates; CLI actions `history` / `prematch`
 - [x] Read layer (records.js): snapshot-preferred merge (presence of row wins wholesale — null snapshot rank ≠ fall back to live standings); live derivation fallback for pre-feature fixtures; new STAT_COLUMNS `h2h_count`, `home/away_goals_h2h`, `home/away_goals_oth` (display-only, snapshot-only); zero frontend changes (catalog-driven)
 - [x] Verify: `npm test` 25/25; migration on populated DB; live `history` run — 332 fixtures, 9,417 historical fixtures backfilled (~1,150 requests, quota 148,846 left); `prematch` — 332 snapshots, re-run idempotent; spot-check (332/332 full 5-game windows, 295 with H2H, e.g. Trans Narva–Levadia 65 meetings "5W-14D-46L"); read layer serves compact strings per provider pair; 0 snapshots on past fixtures
-- [ ] Live freeze check (after fixtures conclude): a concluded fixture's snapshot rank/form stays put while live standings move on
+- [x] Live freeze check VERIFIED 2026-07-03: 12 concluded fixtures hold snapshots, 0 written after kickoff, 3 already diverge from the moved live standings (e.g. fixture 1520753: frozen home rank 13 / form DLWWW vs live rank 9 / WDLWW) — the freeze holds while the world moves
 - [x] Docs: CLAUDE.md (commands, architecture, invariants) + this checklist
 - [x] Commit
+
+## Post-phase-10 touches
+- [x] 2026-07-03 user commit `602ed3c`: web header date navigation — `[OP]` branding, Today / ‹ prev / next › buttons, date picker bounds (min `2026-07-02`, max +7 days), noon-anchored date math (avoids UTC day-shift), `showPicker()` on focus/click, cursor-pointer polish
+- [x] 2026-07-03 retrospective: remaining live checks closed with read-only DB evidence (stats path, snapshot freeze — see §5/§10); README rewritten from spec-draft to accurate project README; memory-bank goals synced to phases 1–10. Warehouse health at check time: 9,704 fixtures, 2,009 bookmaker matches (betpawa 345/510 linked, betika 400/1499), 384 frozen snapshots, 389,500 odds rows (993 stale)
+- [ ] Alias fast-path live observation (high "via alias" counts) still pends the next fresh `npm run start` sweep
 
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.

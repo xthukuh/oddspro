@@ -2,13 +2,13 @@
 
 Project goals, standards, and hard-won lessons. Keep updated when major issues are resolved.
 
-## Goals & state (2026-07-02)
+## Goals & state (2026-07-03)
 
-- MySQL data warehouse: bookmaker odds (BetPawa, Betika) + API-Football canonical fixtures/results/stats, correlated via fuzzy matching with learned aliases. Spec: `README.md`; progress: `implementation-plan.md`.
-- Phases 1–6 built, verified, committed. Phase 6 (visualization): `src/markets.js` canonical market registry → `export [date]` temp CSV → `src/server.js` API :3001 → `web/` React 19/Vite 6/Tailwind 4 datatable with settings modal + filter builder.
-- Phase 7 (2026-07-02): `npm run start` = default full pipeline (`src/pipeline.js`), today..+3 days (override `npm run start -- N`), ordered for fewest server hits: fixtures/date → results → odds/provider/date (completed-match exclusion skips detail requests) → link once → stats → standings. Live-verified end-to-end.
-- Pending verification: full stats path (statistics/lineups/events rows) — run `node src/index.js results` then `stats` after today's correlated matches finish; new stat columns should then appear in the web settings modal automatically.
-- Alias fast-path exercise pends the next day's fresh matches.
+- MySQL data warehouse: bookmaker odds (BetPawa, Betika) + API-Football canonical fixtures/results/stats, correlated via fuzzy matching with learned aliases. Overview: `README.md` (rewritten 2026-07-03 as an accurate project README); progress: `implementation-plan.md`; architecture: `CLAUDE.md`.
+- **Phases 1–10 built, verified, committed.** 1–5: warehouse schema, odds persistence, API-Football ingestion, fuzzy linking with alias learning, deep stats + standings. 6: visualization (`src/markets.js` registry → `export` CSV → `src/server.js` API :3001 → `web/` React 19/Vite 6/Tailwind 4 datatable). 7: `npm run start` default full pipeline (`src/pipeline.js`, today..+3 days, fewest-hits ordering). 8: focused-date web refresh button (`runDateRefresh` + single-slot `/api/refresh` job; CSRF header guard + loopback-only bind). 9: `npm test` offline harness + stale-odds retention (`odds_markets.is_stale`, diff instead of delete+insert) + compact datatable (status column, rainbow fixture tints, freshness tooltips, unavailable-match unlinking). 10: frozen pre-match snapshots (`fixture_prematch`, `kickoff > NOW()` selection IS the freeze) + fetch-once team-history backfill + rolling-goals columns via pure `src/db/prematch-calc.js`.
+- Post-phase-10: user commit `602ed3c` added web header date navigation (Today/‹/›, min 2026-07-02, max +7 days, noon-anchored date math).
+- Live checks closed 2026-07-03 (read-only DB evidence): **stats path** — statistics 252 rows/12 fixtures, lineups 7/4, events 387/35; **snapshot freeze** — 12 concluded fixtures, 0 snapshots written post-kickoff, 3 already diverge from moved live standings (fixture 1520753: frozen rank 13/DLWWW vs live 9/WDLWW).
+- Still open: alias fast-path observation (high "via alias" counts) on the next fresh `npm run start` — cache stands at 1,475 team + 132 league aliases.
 
 ## Resolved issues (do not re-learn these)
 
