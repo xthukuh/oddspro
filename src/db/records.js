@@ -33,12 +33,17 @@ const BASE_FIELDS = {
     hot_score: { sql: 'fp.score', type: 'number' },
     // "Tip" column sorts/filters by its blended confidence (0..1)
     tip: { sql: 'fp.tip_confidence', type: 'number' },
+    // Odds refresh time / betting-closed time ("Locked At" = completed_at)
+    updated_at: { sql: 'm.updated_at', type: 'datetime' },
+    locked_at: { sql: 'm.completed_at', type: 'datetime' },
 };
 
 // Static pre-match STATS columns (dynamic post-match stat types are appended
 // from fixture_statistics by `columnCatalog`). Display-only: not sortable.
 const STAT_COLUMNS = [
     { key: 'league', label: 'League', default: true },
+    { key: 'season', label: 'Season', default: true },
+    { key: 'round', label: 'Round', default: true },
     { key: 'home_rank', label: 'Home Rank', default: true },
     { key: 'home_form', label: 'Home Form', default: true },
     { key: 'away_rank', label: 'Away Rank', default: true },
@@ -63,6 +68,10 @@ const FILTER_OPS = {
     lte: (q, col, v) => q.where(col, '<=', v),
     like: (q, col, v) => q.where(col, 'like', `%${v}%`),
 };
+
+// Column-to-column comparison operators for `{key, op, col}` filters
+// (RHS is another column, not a literal); `like` intentionally excluded.
+const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
 // Column catalog consumed by the settings modal (and the CSV default set).
 // `providers` is discovered from the warehouse so newly-integrated bookmakers
@@ -137,6 +146,10 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     const query = db('matches as m')
         .join('fixtures as f', 'f.id', 'm.fixture_id') // inner join = correlated only
         .join('leagues as l', 'l.id', 'f.league_id')
+        // Canonical API-Football team names (fixtures stores only ids);
+        // LEFT JOIN so a missing team row can never drop a match.
+        .leftJoin('teams as th', 'th.id', 'f.home_team_id')
+        .leftJoin('teams as ta', 'ta.id', 'f.away_team_id')
         // 1:1 (fp PK = fixture_id): never multiplies the m.id count/pagination
         .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id');
     if (date) {
@@ -155,9 +168,20 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     const joined = new Map();
     for (const f of Array.isArray(filters) ? filters : []) {
         const target = _sqlTarget(query, f?.key, joined);
-        const apply = FILTER_OPS[f?.op];
-        if (!target || !apply) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
-        apply(query, target, _coerce(f.key, f.value));
+        if (!target) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
+        if (f?.col != null) {
+            // Column-to-column comparison: the RHS resolves like the LHS
+            // (sharing market joins) and binds as an identifier (??), never
+            // a value. SQL NULL semantics drop rows missing either side.
+            const op = COL_OPS[f?.op];
+            const rhs = _sqlTarget(query, f.col, joined);
+            if (!op || !rhs) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
+            query.where(target, op, typeof rhs === 'string' ? db.raw('??', [rhs]) : rhs);
+        } else {
+            const apply = FILTER_OPS[f?.op];
+            if (!apply) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
+            apply(query, target, _coerce(f.key, f.value));
+        }
     }
 
     const [{ total }] = await query.clone().count('m.id as total');
@@ -177,8 +201,9 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'm.home_team_name', 'm.away_team_name',
             'm.home_score_fulltime', 'm.away_score_fulltime',
             'l.name as league_name', 'l.country as league_country',
-            'f.status', 'f.season', 'f.league_id', 'f.kickoff',
+            'f.status', 'f.season', 'f.round', 'f.league_id', 'f.kickoff',
             'f.home_team_id', 'f.away_team_id',
+            'th.name as api_home', 'ta.name as api_away',
             'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
             'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
             'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
@@ -192,6 +217,32 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         per_page: unpaged ? Number(total) : per_page,
         pages: unpaged ? 1 : Math.max(1, Math.ceil(Number(total) / per_page)),
     };
+}
+
+// Raw head-to-head meeting list for the web tooltip. Same row rules as
+// h2hSummary (either venue, scored, kickoff strictly before this fixture's),
+// newest first, capped: whole-date responses carry one list per row. Note
+// the frozen snapshot's h2h_count can exceed this live-derived list after
+// later history backfills - the tooltip's "+N more" line covers the gap.
+const H2H_MEETINGS_MAX = 10;
+function _h2hMeetings(h2h, r, homeName, awayName) {
+    const p = n => String(n).padStart(2, '0');
+    return h2h
+        .filter(f => ((f.home_team_id === r.home_team_id && f.away_team_id === r.away_team_id)
+            || (f.home_team_id === r.away_team_id && f.away_team_id === r.home_team_id))
+            && f.ft_home != null && f.ft_away != null
+            && new Date(f.kickoff).getTime() < new Date(r.kickoff).getTime())
+        .sort((a, b) => new Date(b.kickoff).getTime() - new Date(a.kickoff).getTime())
+        .slice(0, H2H_MEETINGS_MAX)
+        .map(f => {
+            const d = new Date(f.kickoff);
+            return {
+                date: `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`,
+                home: f.home_team_id === r.home_team_id ? homeName : awayName,
+                away: f.away_team_id === r.away_team_id ? awayName : homeName,
+                score: `${f.ft_home}-${f.ft_away}`,
+            };
+        });
 }
 
 // Attach odds pivot, pre-match stats (frozen fixture_prematch snapshot when
@@ -274,16 +325,24 @@ async function _hydrate(rows) {
         const available = !TERMINAL_STATUSES.includes(r.status)
             && !r.completed_at
             && (freshCounts.get(r.match_id) ?? 0) > 0;
+        // Canonical team names for tooltips; fall back to bookmaker names
+        const homeName = r.api_home ?? r.home_team_name;
+        const awayName = r.api_away ?? r.away_team_name;
         return {
             match_id: r.match_id,
             api_id: r.api_id,
             provider: r.provider,
             start_time: r.start_time,
             fixture: `${r.home_team_name} - ${r.away_team_name}`,
+            fixture_api: r.api_home && r.api_away ? `${r.api_home} - ${r.api_away}` : null,
+            home_team: r.home_team_name,
+            away_team: r.away_team_name,
             match_url: r.match_url,
             score: hs != null && as != null ? `${hs}-${as}` : null,
             goals: hs != null && as != null ? hs + as : null,
             league: r.league_country ? `${r.league_country} - ${r.league_name}` : r.league_name,
+            season: r.season ?? null,
+            round: r.round ?? null,
             status: r.status,
             home_rank: p ? p.home_rank : sh?.rank ?? null,
             home_form: p ? p.home_form : sh?.form ?? null,
@@ -291,11 +350,13 @@ async function _hydrate(rows) {
             away_form: p ? p.away_form : sa?.form ?? null,
             h2h: p ? p.h2h : h2hSummary(h2h, r),
             h2h_count: p?.h2h_count ?? null,
+            h2h_meetings: _h2hMeetings(h2h, r, homeName, awayName),
             home_goals_h2h: p ? formatGoals(p.h2h_home_goals, p.h2h_away_goals, p.h2h_n) : null,
             away_goals_h2h: p ? formatGoals(p.h2h_away_goals, p.h2h_home_goals, p.h2h_n) : null,
             home_goals_oth: p ? formatGoals(p.home_oth_gf, p.home_oth_ga, p.home_oth_n) : null,
             away_goals_oth: p ? formatGoals(p.away_oth_gf, p.away_oth_ga, p.away_oth_n) : null,
             updated_at: r.updated_at,
+            locked_at: r.completed_at ?? null,
             available,
             // Over 2.5 hot pick ledger (fixture_predictions LEFT JOIN)
             hot: !!r.hot,

@@ -1,5 +1,11 @@
-// Paginated multi-sort datatable: fixed base columns + selected market and
-// STATS columns. Click a header to sort (shift-click chains multi-sort).
+// Client-sorted datatable: fixed base columns + selected market and STATS
+// columns. Click a header to sort descending first (shift-click chains
+// multi-sort); the whole selection is loaded, so sorting never hits the API.
+// Sticky chrome: the header row pins to the top and the Score column pins
+// left while scrolling horizontally.
+
+import { useMemo } from 'react';
+import { sortRows } from '../sortValues.js';
 
 const PROVIDER_STYLE = {
     betpawa: 'bg-emerald-100 text-emerald-800',
@@ -18,15 +24,65 @@ export const BASE_COLUMNS = [
     { key: 'goals', label: 'Goals' },
     { key: 'tip', label: 'Tip' },
     { key: 'status', label: 'Status' },
+    { key: 'updated_at', label: 'Updated' },
+    { key: 'locked_at', label: 'Locked' },
 ];
 
-// Soft row tints cycled by canonical fixture (api_id) in first-appearance
-// order: the same fixture shown once per provider shares a tint, adjacent
-// fixtures always differ. Full literal class names (Tailwind purge).
-const ROW_TINTS = [
-    'bg-rose-50', 'bg-orange-50', 'bg-amber-50', 'bg-lime-50', 'bg-emerald-50',
-    'bg-cyan-50', 'bg-sky-50', 'bg-violet-50', 'bg-fuchsia-50',
-];
+// Two alternating row tones cycled by canonical fixture (api_id) in
+// first-appearance order: the same fixture shown once per provider shares a
+// tone, adjacent fixtures always differ. Opaque classes on purpose - the
+// sticky Score cell reuses them to cover content scrolling underneath.
+const ROW_TINTS = ['bg-white', 'bg-slate-100'];
+
+// Header abbreviations (space) + definitions (header tooltip). Column keys
+// missing here keep their catalog label and get the sort hint only.
+const HEADER_META = {
+    api_id: { short: 'ID', info: 'API-Football fixture id' },
+    start_time: { info: 'Kickoff time' },
+    fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
+    provider: { info: 'Bookmaker' },
+    score: { info: 'Final score (home-away), canonical API-Football result' },
+    goals: { info: 'Total goals at full time' },
+    tip: { info: 'Safest bettable outcome + blended confidence - 🔥 marks an over-2.5 hot pick' },
+    status: { info: 'Fixture status' },
+    updated_at: { info: 'Last bookmaker odds refresh' },
+    locked_at: { info: 'Betting closed - odds frozen and final' },
+    league: { info: 'Country - league' },
+    season: { info: 'Season (starting year)' },
+    round: { info: 'Competition round' },
+    home_rank: { short: 'H Rank', info: 'Home team league rank' },
+    away_rank: { short: 'A Rank', info: 'Away team league rank' },
+    home_form: { short: 'H Form', info: 'Home team league form, most recent last (W win · D draw · L loss)' },
+    away_form: { short: 'A Form', info: 'Away team league form, most recent last (W win · D draw · L loss)' },
+    h2h: { info: 'Head-to-head record from the home team\'s perspective (W-D-L)' },
+    h2h_count: { short: 'Mtgs', info: 'Finished head-to-head meetings on record' },
+    home_goals_h2h: { short: 'H:GvO', info: 'Home goals for/against vs this opponent, recent meetings (avg total per game)' },
+    away_goals_h2h: { short: 'A:GvO', info: 'Away goals for/against vs this opponent, recent meetings (avg total per game)' },
+    home_goals_oth: { short: 'H:GvR', info: 'Home goals for/against vs other teams, recent games (avg total per game)' },
+    away_goals_oth: { short: 'A:GvR', info: 'Away goals for/against vs other teams, recent games (avg total per game)' },
+};
+
+// Odds market definitions for header/cell tooltips
+const MARKET_INFO = {
+    1: 'Home win', X: 'Draw', 2: 'Away win',
+    '1X': 'Home win or draw', X2: 'Draw or away win', 12: 'Home or away win',
+};
+function _marketInfo(key) {
+    if (MARKET_INFO[key]) return `${MARKET_INFO[key]} (full time)`;
+    const m = /^([UO]) (\d+(?:\.\d+)?)$/.exec(key);
+    return m ? `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals` : null;
+}
+
+// API-Football fixture status glossary (short codes are cryptic)
+const STATUS_INFO = {
+    TBD: 'Time to be defined', NS: 'Not started', '1H': 'First half (live)',
+    HT: 'Half time', '2H': 'Second half (live)', ET: 'Extra time (live)',
+    BT: 'Break time (live)', P: 'Penalty shootout (live)', LIVE: 'In play',
+    SUSP: 'Suspended', INT: 'Interrupted', FT: 'Full time',
+    AET: 'Finished after extra time', PEN: 'Finished after penalties',
+    PST: 'Postponed', CANC: 'Cancelled', ABD: 'Abandoned',
+    AWD: 'Awarded (technical result)', WO: 'Walkover',
+};
 
 // Rearrange columns by the persisted key order (settings drag control):
 // ordered keys first, anything new/unknown keeps its natural position after.
@@ -42,6 +98,73 @@ function _time(value) {
     const d = new Date(value);
     const p = n => String(n).padStart(2, '0');
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+const _dt = value => (value ? new Date(value).toLocaleString() : null);
+
+// H2H tooltip: recent meeting lines (date, names, score) + overflow marker
+// when the frozen snapshot count exceeds the capped list.
+function _h2hTitle(row) {
+    const list = row.h2h_meetings ?? [];
+    if (!list.length) return null;
+    const lines = list.map(m => `${m.date}  ${m.home} ${m.score} ${m.away}`);
+    const more = (row.h2h_count ?? 0) - list.length;
+    if (more > 0) lines.push(`+${more} more`);
+    return lines.join('\n');
+}
+
+// Per-column cell tooltips: advantageous context for the value, kept short.
+// Interactive inner elements (fixture link, tip span, hot badge) carry their
+// own titles, which win on direct hover.
+const CELL_TITLES = {
+    api_id: row => [
+        `Fixture #${row.api_id}`,
+        row.fixture_api,
+        [row.league, row.season, row.round].filter(v => v != null).join(' · ') || null,
+    ].filter(Boolean).join('\n'),
+    start_time: row => _dt(row.start_time),
+    fixture: row => (row.fixture_api && row.fixture_api !== row.fixture ? row.fixture_api : null),
+    score: row => {
+        if (!row.score) return null;
+        const [hs, as] = row.score.split('-');
+        return [
+            _time(row.start_time),
+            `${row.home_team ?? 'Home'} ${hs}`,
+            `${row.away_team ?? 'Away'} ${as}`,
+            _dt(row.locked_at ?? row.updated_at),
+        ].filter(Boolean).join('\n');
+    },
+    goals: row => {
+        if (!row.score) return null;
+        const [hs, as] = row.score.split('-');
+        return [
+            `${row.home_team ?? 'Home'} ${hs} - ${as} ${row.away_team ?? 'Away'}`,
+            _dt(row.locked_at ?? row.updated_at),
+        ].filter(Boolean).join('\n');
+    },
+    status: row => STATUS_INFO[row.status] ?? null,
+    updated_at: row => _dt(row.updated_at),
+    locked_at: row => _dt(row.locked_at),
+    home_rank: row => (row.home_rank != null ? `${row.home_team ?? 'Home'} - current league rank` : null),
+    away_rank: row => (row.away_rank != null ? `${row.away_team ?? 'Away'} - current league rank` : null),
+    home_form: row => (row.home_form ? `${row.home_team ?? 'Home'} - ${HEADER_META.home_form.info}` : null),
+    away_form: row => (row.away_form ? `${row.away_team ?? 'Away'} - ${HEADER_META.away_form.info}` : null),
+    h2h: _h2hTitle,
+    h2h_count: _h2hTitle,
+    home_goals_h2h: row => (row.home_goals_h2h ? HEADER_META.home_goals_h2h.info : null),
+    away_goals_h2h: row => (row.away_goals_h2h ? HEADER_META.away_goals_h2h.info : null),
+    home_goals_oth: row => (row.home_goals_oth ? HEADER_META.home_goals_oth.info : null),
+    away_goals_oth: row => (row.away_goals_oth ? HEADER_META.away_goals_oth.info : null),
+};
+
+function _cellTitle(row, col) {
+    const fn = CELL_TITLES[col.key];
+    if (fn) return fn(row) ?? undefined;
+    if (col.group === 'market') return _marketInfo(col.key) ?? undefined;
+    if (col.key.startsWith('fs:')) {
+        return row.stats?.[col.key] != null ? 'Home / Away - post-match statistic' : undefined;
+    }
+    return undefined;
 }
 
 // Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
@@ -66,6 +189,9 @@ function _hotBadge(row) {
 
 function _cell(row, key, linkProviders) {
     if (key === 'start_time') return _time(row.start_time);
+    if (key === 'updated_at' || key === 'locked_at') {
+        return row[key] ? _time(row[key]) : <span className="text-slate-300">-</span>;
+    }
     if (key === 'tip') {
         // Safest bettable outcome + blended confidence; 🔥 marks the fixture
         // as an over-2.5 hot pick; ✓/✗ appear once the tip settles.
@@ -139,16 +265,31 @@ function _marketCell(row, key) {
 
 export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
-    const sortable = new Set([
-        ...(catalog?.base.filter(c => c.sortable).map(c => c.key) ?? []),
-        ...(catalog?.markets.filter(c => c.sortable).map(c => c.key) ?? []),
-    ]);
-    const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
-    const columns = applyOrder([
-        ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
-        ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
-        ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
-    ], columnOrder);
+
+    // Column pipeline: assemble + apply the drag order, pin Score first
+    // (left-sticky needs a fixed offset), drop enabled-but-empty market/stat
+    // columns (base columns always show).
+    const columns = useMemo(() => {
+        const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
+        const all = applyOrder([
+            ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
+            ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
+            ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
+        ], columnOrder);
+        const score = all.find(c => c.key === 'score');
+        const cols = score ? [score, ...all.filter(c => c !== score)] : all;
+        if (!rows.length) return cols;
+        return cols.filter(col => {
+            if (col.group === 'base') return true;
+            if (col.group === 'market') {
+                return rows.some(r => r.markets?.[col.key] != null || r.markets_stale?.[col.key] != null);
+            }
+            if (col.key.startsWith('fs:')) return rows.some(r => r.stats?.[col.key] != null);
+            return rows.some(r => r[col.key] != null);
+        });
+    }, [catalog, rows, marketKeys, statKeys, columnOrder]);
+
+    const sorted = useMemo(() => sortRows(rows, sort, columns), [rows, sort, columns]);
     const order = new Map(sort.map((s, i) => [s.key, { ...s, i }]));
     const tint = new Map();
     for (const row of rows) {
@@ -156,21 +297,30 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     }
 
     return (
-        <div className={`overflow-x-auto bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}>
+        <div className={`overflow-auto max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}>
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
-                    <tr className="bg-slate-50 border-b border-slate-200 text-left text-slate-600 select-none">
+                    <tr className="text-left text-slate-600 select-none">
                         {columns.map(col => {
                             const s = order.get(col.key);
-                            const canSort = sortable.has(col.key);
+                            const meta = HEADER_META[col.key];
+                            const info = meta?.info
+                                ?? (col.group === 'market' ? _marketInfo(col.key) : null)
+                                ?? (col.key.startsWith('fs:') ? 'Home / Away - post-match statistic' : null);
+                            // Backgrounds and edge shadows live on the sticky
+                            // cells themselves (tr backgrounds/borders don't
+                            // stick); the Score corner wins both axes.
+                            const sticky = col.key === 'score'
+                                ? 'sticky left-0 top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
+                                : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_#e2e8f0]';
                             return (
                                 <th
                                     key={col.key}
-                                    onClick={canSort ? e => onSort(col.key, e.shiftKey) : undefined}
-                                    className={`px-2 py-1.5 font-medium ${col.group === 'market' ? 'text-center' : ''} ${canSort ? 'cursor-pointer hover:bg-slate-100' : ''}`}
-                                    title={canSort ? 'Click to sort - shift-click for multi-sort' : undefined}
+                                    onClick={e => onSort(col.key, e.shiftKey)}
+                                    className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium cursor-pointer hover:bg-slate-100 ${col.group === 'market' ? 'text-center' : ''}`}
+                                    title={`${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
                                 >
-                                    {col.label}
+                                    {meta?.short ?? col.label}
                                     {s && (
                                         <span className="ml-1 text-sky-600">
                                             {s.dir === 'asc' ? '▲' : '▼'}
@@ -183,14 +333,19 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     </tr>
                 </thead>
                 <tbody>
-                    {rows.map(row => (
+                    {sorted.map(row => (
                         <tr
                             key={row.match_id}
-                            className={`border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
-                            title={row.updated_at ? `Updated ${new Date(row.updated_at).toLocaleString()}` : undefined}
+                            className={`group border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
                         >
                             {columns.map(col => (
-                                <td key={col.key} className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''}`}>
+                                <td
+                                    key={col.key}
+                                    title={_cellTitle(row, col)}
+                                    className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.key === 'score'
+                                        ? `sticky left-0 z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
+                                        : ''}`}
+                                >
                                     {col.group === 'market' ? _marketCell(row, col.key) : _cell(row, col.key, links)}
                                 </td>
                             ))}

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchColumns, fetchHotpicks, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
@@ -29,6 +29,14 @@ function _load(key) {
 
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
+// Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
+// the cleared all-dates view) so reload / back / forward keep the navigation.
+const _dateFromUrl = () => {
+    const v = new URLSearchParams(location.search).get('date');
+    if (v === 'all') return '';
+    return v && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null;
+};
+
 export default function App() {
     const [catalog, setCatalog] = useState(null);
     const [marketKeys, setMarketKeys] = useState(() => _load(LS_MARKETS));
@@ -37,7 +45,7 @@ export default function App() {
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
     const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
-    const [date, setDate] = useState(_today);
+    const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
     const [sort, setSort] = useState([]);
     const [filters, setFilters] = useState([]);
     const [result, setResult] = useState(null);
@@ -47,7 +55,6 @@ export default function App() {
     const [showFilters, setShowFilters] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
-    const [hotpicks, setHotpicks] = useState(null); // /api/hotpicks summary
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -82,7 +89,6 @@ export default function App() {
         setLoading(true);
         fetchRecords({
             date: date || 'all',
-            sort,
             filters,
             completed: showCompleted,
             // Only constrain when a strict subset is chosen
@@ -96,12 +102,14 @@ export default function App() {
             .catch(e => !stale && setError(String(e.message ?? e)))
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
-    }, [date, sort, filters, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
+    }, [date, filters, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
-    // Hot-pick accuracy summary on load and whenever a refresh lands new data
+    // Back/forward restore the date encoded in the URL
     useEffect(() => {
-        fetchHotpicks().then(setHotpicks).catch(() => {});
-    }, [refreshTick]);
+        const onPop = () => setDate(_dateFromUrl() ?? _today());
+        window.addEventListener('popstate', onPop);
+        return () => window.removeEventListener('popstate', onPop);
+    }, []);
 
     // Pick up a refresh already in flight (e.g. page reloaded mid-refresh)
     useEffect(() => {
@@ -134,19 +142,27 @@ export default function App() {
         }
     };
 
-    // Header click: plain = single toggle asc/desc/off; shift = multi-sort chain
+    // Header click: plain = single toggle desc/asc/off (descending first -
+    // "best" values on top); shift = multi-sort chain. Sorting is client-side
+    // (the table holds the whole selection), so clicks never hit the network.
     const onSort = useCallback((key, additive) => {
         setSort(prev => {
             const found = prev.find(s => s.key === key);
             const next = found
-                ? found.dir === 'asc'
-                    ? { key, dir: 'desc' }
-                    : null // desc -> remove
-                : { key, dir: 'asc' };
+                ? found.dir === 'desc'
+                    ? { key, dir: 'asc' }
+                    : null // asc -> remove
+                : { key, dir: 'desc' };
             if (!additive) return next ? [next] : [];
             const rest = prev.filter(s => s.key !== key);
             return next ? [...rest, next] : rest;
         });
+    }, []);
+
+    // Navigate dates keeping state and URL in sync (today = clean URL)
+    const changeDate = useCallback(d => {
+        setDate(d);
+        history.pushState(null, '', d === _today() ? location.pathname : `?date=${d || 'all'}`);
     }, []);
 
     const saveMarkets = keys => {
@@ -175,21 +191,6 @@ export default function App() {
         localStorage.setItem(LS_COMPLETED, value ? '1' : '0');
     };
 
-    // Header chip: settled hit-rate over the freshest window with data
-    // (30d, else all-time), or the pending count while nothing has settled.
-    const hotChip = useMemo(() => {
-        if (!hotpicks) return null;
-        const { windows, pending } = hotpicks;
-        const [w, label] = windows['30d'].picks ? [windows['30d'], '30d'] : [windows.all, 'all'];
-        const title = `Over 2.5 hot picks - 7d ${windows['7d'].hits}/${windows['7d'].picks}`
-            + ` · 30d ${windows['30d'].hits}/${windows['30d'].picks}`
-            + ` · all ${windows.all.hits}/${windows.all.picks} · ${pending} pending`;
-        if (w.picks) {
-            return { title, text: `🔥 ${w.hits}/${w.picks} · ${Math.round(w.rate * 100)}% (${label})` };
-        }
-        return pending ? { title, text: `🔥 ${pending} pending` } : null;
-    }, [hotpicks]);
-
     const TODAY = _today();
     const DAY_MS = 86400000;
     const MIN_DATE = '2026-07-02';
@@ -204,25 +205,17 @@ export default function App() {
                 <span className="text-slate-400 text-xs">
                     By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
                 </span>
-                {hotChip && (
-                    <span
-                        className="px-2 py-0.5 rounded-full text-xs bg-slate-800 border border-slate-700 text-amber-300 cursor-help"
-                        title={hotChip.title}
-                    >
-                        {hotChip.text}
-                    </span>
-                )}
                 <div className="grow" />
                 { date === TODAY ? null : (
                     <button
-                        onClick={() => setDate(TODAY)}
+                        onClick={() => changeDate(TODAY)}
                         className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                     >
                         Today
                     </button>
                 )}
                 <button
-                    onClick={() => setDate(PREV_DATE)}
+                    onClick={() => changeDate(PREV_DATE)}
                     className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                     disabled={date <= MIN_DATE}
                     title={`Previous (${PREV_DATE})`}
@@ -237,13 +230,13 @@ export default function App() {
                         max={MAX_DATE}
                         onFocus={e => e.target.showPicker?.()}
                         onClick={e => e.target.showPicker?.()}
-                        onChange={e => setDate(e.target.value)}
-                        className="cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
+                        onChange={e => changeDate(e.target.value)}
+                        className="date-input-dark cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
                         title="Clear to show all dates"
                     />
                 </label>
                 <button
-                    onClick={() => setDate(NEXT_DATE)}
+                    onClick={() => changeDate(NEXT_DATE)}
                     className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                     disabled={date >= MAX_DATE}
                     title={`Next (${NEXT_DATE})`}

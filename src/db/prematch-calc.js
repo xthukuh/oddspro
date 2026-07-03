@@ -90,6 +90,8 @@ export function computePrematch({ fixture, fixturesByTeam, homeStanding, awaySta
 }
 
 // Compact display string for a goals window: "gf/ga (avg total per game)".
+// The web sort registry (web/src/sortValues.js) parses the parenthesized
+// avg back out - keep the format in sync.
 export function formatGoals(gf, ga, n) {
     if (!n) return null;
     return `${gf}/${ga} (${((gf + ga) / n).toFixed(1)})`;

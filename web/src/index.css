@@ -6,3 +6,10 @@
 @theme {
     --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
 }
+
+/* Dark navbar date input: the native webkit calendar glyph renders near-black
+   by default and disappears on bg-slate-800 - invert it to match the text. */
+.date-input-dark::-webkit-calendar-picker-indicator {
+    filter: invert(1);
+    cursor: pointer;
+}

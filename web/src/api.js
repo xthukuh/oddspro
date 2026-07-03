@@ -17,24 +17,19 @@ export async function fetchColumns() {
     return _get('/api/columns');
 }
 
-// Records for the whole selection (the table is unpaginated): { data, total }
-//   date: 'YYYY-MM-DD' | 'all'; sort: [{key, dir}]; filters: [{key, op, value}]
+// Records for the whole selection (the table is unpaginated; sorting is
+// client-side - the server's stable default order is the input):
+//   date: 'YYYY-MM-DD' | 'all'; filters: [{key, op, value|col}]
 //   completed: false hides concluded games (settings toggle)
 //   providers: subset of visible bookmakers (settings multi-select)
-export async function fetchRecords({ date, sort, filters, completed, providers }) {
+export async function fetchRecords({ date, filters, completed, providers }) {
     return _get('/api/records', {
         date,
         per_page: 'all',
-        sort: sort?.length ? JSON.stringify(sort) : null,
         filters: filters?.length ? JSON.stringify(filters) : null,
         completed: completed === false ? 0 : null,
         providers: providers?.length ? providers.join(',') : null,
     });
-}
-
-// Hot picks accuracy summary: { windows: {7d,30d,all}, pending, upcoming }
-export async function fetchHotpicks() {
-    return _get('/api/hotpicks');
 }
 
 // Start refreshing a date's data. A 409 (refresh already running) also

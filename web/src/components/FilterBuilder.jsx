@@ -1,7 +1,9 @@
 import { useState } from 'react';
 
 // Advanced query builder: AND-combined condition rows over the filterable
-// fields (base columns + odds market columns), applied server-side.
+// fields (base columns + odds market columns), applied server-side. Each
+// condition compares its field to a literal value OR to another column
+// (wire shape {key, op, col} - e.g. market '1' < market '2').
 
 const OPS = [
     ['eq', '='],
@@ -13,8 +15,18 @@ const OPS = [
     ['like', 'contains'],
 ];
 
+// `like` has no column-to-column form (server rejects it)
+const COL_OPS = OPS.filter(([op]) => op !== 'like');
+
+const NEW_ROW = { key: '1', op: 'gte', value: '', mode: 'value' };
+
 export default function FilterBuilder({ catalog, filters, onApply }) {
-    const [rows, setRows] = useState(filters.length ? filters : [{ key: '1', op: 'gte', value: '' }]);
+    // Applied filters round-trip into row state; mode is inferred from `col`
+    const [rows, setRows] = useState(filters.length
+        ? filters.map(f => ('col' in f
+            ? { key: f.key, op: f.op, col: f.col, value: '', mode: 'col' }
+            : { ...f, mode: 'value' }))
+        : [{ ...NEW_ROW }]);
     const fields = [
         ...catalog.base.filter(c => c.filterable).map(c => c.key),
         ...catalog.markets.filter(c => c.filterable).map(c => c.key),
@@ -22,11 +34,17 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
 
     const update = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
 
+    const apply = () => onApply(rows
+        .filter(r => (r.mode === 'col' ? r.col : r.value !== ''))
+        .map(r => (r.mode === 'col'
+            ? { key: r.key, op: r.op, col: r.col }
+            : { key: r.key, op: r.op, value: r.value })));
+
     return (
         <div className="border-b border-slate-200 bg-white px-4 py-3 text-sm">
             {rows.map((row, i) => (
-                <div key={i} className="flex items-center gap-2 mb-2">
-                    <span className="w-10 text-right text-slate-400">{i ? 'and' : 'where'}</span>
+                <div key={i} className="flex items-center justify-end gap-2 mb-2">
+                    <span className="text-slate-400">{i ? 'and' : 'where'}</span>
                     <select
                         value={row.key}
                         onChange={e => update(i, { key: e.target.value })}
@@ -39,14 +57,43 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                         onChange={e => update(i, { op: e.target.value })}
                         className="border border-slate-300 rounded px-2 py-1"
                     >
-                        {OPS.map(([op, label]) => <option key={op} value={op}>{label}</option>)}
+                        {(row.mode === 'col' ? COL_OPS : OPS).map(([op, label]) => (
+                            <option key={op} value={op}>{label}</option>
+                        ))}
                     </select>
-                    <input
-                        value={row.value}
-                        onChange={e => update(i, { value: e.target.value })}
-                        placeholder="value"
-                        className="border border-slate-300 rounded px-2 py-1 w-44"
-                    />
+                    <button
+                        onClick={() => update(i, row.mode === 'col'
+                            ? { mode: 'value' }
+                            : { mode: 'col', ...(row.op === 'like' ? { op: 'gte' } : {}) })}
+                        className={`px-2 py-1 rounded border text-xs ${row.mode === 'col'
+                            ? 'border-sky-500 bg-sky-50 text-sky-700'
+                            : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
+                        title={row.mode === 'col'
+                            ? 'Comparing to another column - switch to a value'
+                            : 'Compare to another column instead of a value'}
+                    >
+                        {row.mode === 'col' ? 'col' : 'val'}
+                    </button>
+                    {row.mode === 'col' ? (
+                        <select
+                            value={row.col ?? ''}
+                            onChange={e => update(i, { col: e.target.value })}
+                            className="border border-slate-300 rounded px-2 py-1 w-44"
+                        >
+                            <option value="" disabled>column…</option>
+                            {fields.filter(f => f !== row.key).map(f => (
+                                <option key={f} value={f}>{f}</option>
+                            ))}
+                        </select>
+                    ) : (
+                        <input
+                            value={row.value}
+                            onChange={e => update(i, { value: e.target.value })}
+                            onKeyDown={e => e.key === 'Enter' && apply()}
+                            placeholder="value"
+                            className="border border-slate-300 rounded px-2 py-1 w-44"
+                        />
+                    )}
                     <button
                         onClick={() => setRows(rs => rs.filter((_, j) => j !== i))}
                         className="text-slate-400 hover:text-red-600"
@@ -56,21 +103,21 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                     </button>
                 </div>
             ))}
-            <div className="flex items-center gap-3 pl-12">
+            <div className="flex items-center justify-end gap-3">
                 <button
-                    onClick={() => setRows(rs => [...rs, { key: '1', op: 'gte', value: '' }])}
+                    onClick={() => setRows(rs => [...rs, { ...NEW_ROW }])}
                     className="text-sky-700 hover:underline"
                 >
                     + Add condition
                 </button>
                 <button
-                    onClick={() => onApply(rows.filter(r => r.value !== ''))}
+                    onClick={apply}
                     className="px-3 py-1 rounded bg-sky-600 text-white hover:bg-sky-500"
                 >
                     Apply
                 </button>
                 <button
-                    onClick={() => { setRows([{ key: '1', op: 'gte', value: '' }]); onApply([]); }}
+                    onClick={() => { setRows([{ ...NEW_ROW }]); onApply([]); }}
                     className="text-slate-500 hover:underline"
                 >
                     Clear
