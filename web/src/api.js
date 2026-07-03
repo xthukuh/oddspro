@@ -17,17 +17,18 @@ export async function fetchColumns() {
     return _get('/api/columns');
 }
 
-// Paginated records: { data, total, page, per_page, pages }
+// Records for the whole selection (the table is unpaginated): { data, total }
 //   date: 'YYYY-MM-DD' | 'all'; sort: [{key, dir}]; filters: [{key, op, value}]
 //   completed: false hides concluded games (settings toggle)
-export async function fetchRecords({ date, page, perPage, sort, filters, completed }) {
+//   providers: subset of visible bookmakers (settings multi-select)
+export async function fetchRecords({ date, sort, filters, completed, providers }) {
     return _get('/api/records', {
         date,
-        page,
-        per_page: perPage,
+        per_page: 'all',
         sort: sort?.length ? JSON.stringify(sort) : null,
         filters: filters?.length ? JSON.stringify(filters) : null,
         completed: completed === false ? 0 : null,
+        providers: providers?.length ? providers.join(',') : null,
     });
 }
 

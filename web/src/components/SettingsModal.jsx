@@ -1,57 +1,56 @@
-// Settings dialog: multi-select the odds market columns and STATS columns
-// shown in the datatable (defaults pre-selected per README).
+import { useState } from 'react';
+import MultiSelect from './MultiSelect.jsx';
+import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 
-function ColumnPicker({ title, options, selected, onChange }) {
-    const set = new Set(selected);
-    const toggle = key => {
-        const next = new Set(set);
-        next.has(key) ? next.delete(key) : next.add(key);
-        // preserve catalog order in the persisted selection
-        onChange(options.filter(o => next.has(o.key)).map(o => o.key));
+// Settings dialog, organized into three compact sections:
+//   Table columns - market/stats multi-select dropdowns + drag-to-reorder;
+//   Providers     - visible bookmakers + unavailable-link exceptions;
+//   Behavior      - completed-games visibility.
+
+// Drag-to-reorder pills for the currently visible columns. Plain HTML5 drag
+// and drop - dropping a pill inserts it before the pill it lands on.
+function ColumnOrder({ columns, onOrder }) {
+    const [drag, setDrag] = useState(null);
+    const dropAt = key => {
+        if (!drag || drag === key) return;
+        const keys = columns.map(c => c.key).filter(k => k !== drag);
+        keys.splice(keys.indexOf(key), 0, drag);
+        onOrder(keys);
     };
     return (
-        <section className="mb-5">
-            <div className="flex items-center gap-3 mb-2">
-                <h3 className="font-medium text-slate-700">{title}</h3>
-                <div className="grow" />
-                {[
-                    ['Defaults', () => onChange(options.filter(o => o.default).map(o => o.key))],
-                    ['All', () => onChange(options.map(o => o.key))],
-                    ['None', () => onChange([])],
-                ].map(([label, fn]) => (
-                    <button key={label} onClick={fn} className="text-xs text-sky-700 hover:underline">
-                        {label}
-                    </button>
-                ))}
-            </div>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
-                {options.map(o => (
-                    <label key={o.key} className="flex items-center gap-2 text-sm cursor-pointer">
-                        <input
-                            type="checkbox"
-                            checked={set.has(o.key)}
-                            onChange={() => toggle(o.key)}
-                            className="accent-sky-600"
-                        />
-                        <span>{o.label}</span>
-                    </label>
-                ))}
-                {!options.length && <span className="text-sm text-slate-400 col-span-full">Nothing available yet.</span>}
-            </div>
-        </section>
+        <div className="flex flex-wrap gap-1.5">
+            {columns.map(c => (
+                <span
+                    key={c.key}
+                    draggable
+                    onDragStart={() => setDrag(c.key)}
+                    onDragEnd={() => setDrag(null)}
+                    onDragOver={e => e.preventDefault()}
+                    onDrop={e => { e.preventDefault(); dropAt(c.key); }}
+                    className={`cursor-grab select-none px-2 py-0.5 rounded border text-xs bg-white
+                        ${drag === c.key ? 'opacity-40 border-sky-400' : 'border-slate-300 hover:border-slate-400'}`}
+                    title="Drag to reposition this column"
+                >
+                    <span className="text-slate-400 mr-1">⠿</span>
+                    {c.label}
+                </span>
+            ))}
+        </div>
     );
 }
 
 export default function SettingsModal({
-    catalog, marketKeys, statKeys, providers, linkProviders, showCompleted,
-    onMarkets, onStats, onLinkProviders, onShowCompleted, onClose,
+    catalog, marketKeys, statKeys, columnOrder, providers, visibleProviders, linkProviders, showCompleted,
+    onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted, onClose,
 }) {
-    const links = new Set(linkProviders);
-    const toggleLink = p => {
-        const next = new Set(links);
-        next.has(p) ? next.delete(p) : next.add(p);
-        onLinkProviders(providers.filter(x => next.has(x)));
-    };
+    const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
+    const orderedColumns = applyOrder([
+        ...BASE_COLUMNS,
+        ...marketKeys.map(key => ({ key, label: key })),
+        ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key })),
+    ], columnOrder);
+    const providerOptions = providers.map(p => ({ key: p, label: p, default: true }));
+
     return (
         <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
             <div
@@ -63,23 +62,58 @@ export default function SettingsModal({
                     <div className="grow" />
                     <button onClick={onClose} className="text-slate-500 hover:text-slate-800 text-xl leading-none">&times;</button>
                 </div>
-                <ColumnPicker
-                    title="Odds market columns"
-                    options={catalog.markets}
-                    selected={marketKeys}
-                    onChange={onMarkets}
-                />
-                <ColumnPicker
-                    title="Stats columns"
-                    options={catalog.stats}
-                    selected={statKeys}
-                    onChange={onStats}
-                />
+
                 <section className="mb-5">
-                    <h3 className="font-medium text-slate-700 mb-1">Completed games</h3>
-                    <p className="text-xs text-slate-500 mb-2">
-                        Untick to hide concluded games and see upcoming matches only.
+                    <h3 className="font-medium text-slate-700 mb-2">Table columns</h3>
+                    <div className="flex flex-wrap gap-2 mb-3">
+                        <MultiSelect
+                            label="Odds markets"
+                            options={catalog.markets}
+                            selected={marketKeys}
+                            onChange={onMarkets}
+                        />
+                        <MultiSelect
+                            label="Stats"
+                            options={catalog.stats}
+                            selected={statKeys}
+                            onChange={onStats}
+                        />
+                    </div>
+                    <div className="flex items-center gap-3 mb-2">
+                        <h4 className="text-sm text-slate-600">Column order</h4>
+                        <div className="grow" />
+                        <button onClick={() => onOrder(null)} className="text-xs text-sky-700 hover:underline">
+                            Reset order
+                        </button>
+                    </div>
+                    <ColumnOrder columns={orderedColumns} onOrder={onOrder} />
+                </section>
+
+                <section className="mb-5">
+                    <h3 className="font-medium text-slate-700 mb-2">Providers</h3>
+                    <div className="flex flex-wrap gap-2 mb-2">
+                        <MultiSelect
+                            label="Visible providers"
+                            options={providerOptions}
+                            selected={visibleProviders}
+                            onChange={onVisibleProviders}
+                        />
+                        <MultiSelect
+                            label="Unavailable match links"
+                            options={providers.map(p => ({ key: p, label: p }))}
+                            selected={linkProviders}
+                            onChange={onLinkProviders}
+                        />
+                    </div>
+                    <p className="text-xs text-slate-500">
+                        Visible providers filter the table rows. Unavailable matches (concluded, or no
+                        markets left) are unlinked by default - enable a provider to keep its links
+                        anyway (betpawa serves concluded match pages for ~6h).
                     </p>
+                </section>
+
+                <section className="mb-5">
+                    <h3 className="font-medium text-slate-700 mb-2">Behavior</h3>
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
                             type="checkbox"
@@ -89,27 +123,9 @@ export default function SettingsModal({
                         />
                         <span>Show completed games</span>
                     </label>
+                    <p className="text-xs text-slate-500 mt-1">Untick to see upcoming matches only.</p>
                 </section>
-                <section className="mb-5">
-                    <h3 className="font-medium text-slate-700 mb-1">Unavailable match links</h3>
-                    <p className="text-xs text-slate-500 mb-2">
-                        Unavailable matches (concluded, or no markets left) are unlinked by default.
-                        Some providers still serve their match pages for a while (betpawa: ~6h after conclusion).
-                    </p>
-                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-1">
-                        {providers.map(p => (
-                            <label key={p} className="flex items-center gap-2 text-sm cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={links.has(p)}
-                                    onChange={() => toggleLink(p)}
-                                    className="accent-sky-600"
-                                />
-                                <span>Enable {p} links</span>
-                            </label>
-                        ))}
-                    </div>
-                </section>
+
                 <div className="text-right">
                     <button onClick={onClose} className="px-4 py-1.5 rounded bg-slate-800 text-white text-sm hover:bg-slate-700">
                         Done

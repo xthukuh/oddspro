@@ -2,18 +2,21 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchHotpicks, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
-import Pagination from './components/Pagination.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
 const LS_STATS = 'oddspro.cols.stats';
+// Custom column order (settings drag control; null = natural order)
+const LS_ORDER = 'oddspro.cols.order';
 // Providers whose unavailable matches keep a clickable link (settings toggle;
 // betpawa serves concluded match pages for ~6h)
 const LS_LINKS = 'oddspro.links.unavailable';
+// Providers whose rows show in the table (settings multi-select; default all -
+// the catalog discovers new bookmakers, so null means "everything known")
+const LS_PROVIDERS = 'oddspro.providers.visible';
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
-const PROVIDERS = ['betpawa', 'betika'];
 
 function _load(key) {
     try {
@@ -30,11 +33,11 @@ export default function App() {
     const [catalog, setCatalog] = useState(null);
     const [marketKeys, setMarketKeys] = useState(() => _load(LS_MARKETS));
     const [statKeys, setStatKeys] = useState(() => _load(LS_STATS));
+    const [columnOrder, setColumnOrder] = useState(() => _load(LS_ORDER));
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
+    const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [date, setDate] = useState(_today);
-    const [page, setPage] = useState(1);
-    const [perPage, setPerPage] = useState(50);
     const [sort, setSort] = useState([]);
     const [filters, setFilters] = useState([]);
     const [result, setResult] = useState(null);
@@ -65,12 +68,26 @@ export default function App() {
         const valid = new Set(catalog.stats.map(c => c.key));
         return keys.filter(k => valid.has(k));
     }, [statKeys, catalog]);
+    // Known bookmakers come from the catalog; null selection = all visible
+    const providers = catalog?.providers ?? [];
+    const selectedProviders = useMemo(() => {
+        if (!providerKeys) return providers;
+        const valid = new Set(providers);
+        return providerKeys.filter(p => valid.has(p));
+    }, [providerKeys, providers]);
 
     // Records whenever the query shape changes (or a refresh lands new data)
     useEffect(() => {
         let stale = false;
         setLoading(true);
-        fetchRecords({ date: date || 'all', page, perPage, sort, filters, completed: showCompleted })
+        fetchRecords({
+            date: date || 'all',
+            sort,
+            filters,
+            completed: showCompleted,
+            // Only constrain when a strict subset is chosen
+            providers: providerKeys && selectedProviders.length < providers.length ? selectedProviders : null,
+        })
             .then(res => {
                 if (stale) return;
                 setResult(res);
@@ -79,7 +96,7 @@ export default function App() {
             .catch(e => !stale && setError(String(e.message ?? e)))
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
-    }, [date, page, perPage, sort, filters, refreshTick, showCompleted]);
+    }, [date, sort, filters, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
     // Hot-pick accuracy summary on load and whenever a refresh lands new data
     useEffect(() => {
@@ -119,7 +136,6 @@ export default function App() {
 
     // Header click: plain = single toggle asc/desc/off; shift = multi-sort chain
     const onSort = useCallback((key, additive) => {
-        setPage(1);
         setSort(prev => {
             const found = prev.find(s => s.key === key);
             const next = found
@@ -141,13 +157,21 @@ export default function App() {
         setStatKeys(keys);
         localStorage.setItem(LS_STATS, JSON.stringify(keys));
     };
-    const saveLinkProviders = providers => {
-        setLinkProviders(providers);
-        localStorage.setItem(LS_LINKS, JSON.stringify(providers));
+    const saveOrder = keys => {
+        setColumnOrder(keys);
+        if (keys) localStorage.setItem(LS_ORDER, JSON.stringify(keys));
+        else localStorage.removeItem(LS_ORDER); // Reset order
+    };
+    const saveLinkProviders = keys => {
+        setLinkProviders(keys);
+        localStorage.setItem(LS_LINKS, JSON.stringify(keys));
+    };
+    const saveProviders = keys => {
+        setProviderKeys(keys);
+        localStorage.setItem(LS_PROVIDERS, JSON.stringify(keys));
     };
     const saveShowCompleted = value => {
         setShowCompleted(value);
-        setPage(1);
         localStorage.setItem(LS_COMPLETED, value ? '1' : '0');
     };
 
@@ -213,7 +237,7 @@ export default function App() {
                         max={MAX_DATE}
                         onFocus={e => e.target.showPicker?.()}
                         onClick={e => e.target.showPicker?.()}
-                        onChange={e => { setDate(e.target.value); setPage(1); }}
+                        onChange={e => setDate(e.target.value)}
                         className="cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
                         title="Clear to show all dates"
                     />
@@ -259,7 +283,7 @@ export default function App() {
                 <FilterBuilder
                     catalog={catalog}
                     filters={filters}
-                    onApply={next => { setFilters(next); setPage(1); }}
+                    onApply={setFilters}
                 />
             )}
 
@@ -275,19 +299,15 @@ export default function App() {
                     rows={result?.data ?? []}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
+                    columnOrder={columnOrder}
                     sort={sort}
                     onSort={onSort}
                     loading={loading}
                     linkProviders={linkProviders}
                 />
-                <Pagination
-                    page={result?.page ?? page}
-                    pages={result?.pages ?? 1}
-                    total={result?.total ?? 0}
-                    perPage={perPage}
-                    onPage={setPage}
-                    onPerPage={n => { setPerPage(n); setPage(1); }}
-                />
+                <div className="py-3 text-sm text-slate-500">
+                    {result?.total ?? 0} record{result?.total === 1 ? '' : 's'}
+                </div>
             </main>
 
             {showSettings && catalog && (
@@ -295,11 +315,15 @@ export default function App() {
                     catalog={catalog}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
-                    providers={PROVIDERS}
+                    columnOrder={columnOrder}
+                    providers={providers}
+                    visibleProviders={selectedProviders}
                     linkProviders={linkProviders}
                     showCompleted={showCompleted}
                     onMarkets={saveMarkets}
                     onStats={saveStats}
+                    onOrder={saveOrder}
+                    onVisibleProviders={saveProviders}
                     onLinkProviders={saveLinkProviders}
                     onShowCompleted={saveShowCompleted}
                     onClose={() => setShowSettings(false)}

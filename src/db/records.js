@@ -65,9 +65,13 @@ const FILTER_OPS = {
 };
 
 // Column catalog consumed by the settings modal (and the CSV default set).
+// `providers` is discovered from the warehouse so newly-integrated bookmakers
+// appear in the settings UI without frontend changes.
 export async function columnCatalog() {
     const types = await db('fixture_statistics').distinct('type').orderBy('type');
+    const providers = await db('matches').distinct('provider').orderBy('provider');
     return {
+        providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
         markets: MARKET_COLUMNS.map(c => ({ ...c, sortable: true, filterable: true })),
         stats: [
@@ -123,9 +127,12 @@ function _coerce(key, value) {
 //   filters: [{key, op, value}] with ops eq/ne/gt/gte/lt/lte/like
 //   completed: false hides concluded games (terminal fixture status or a
 //   completed match) - the web "Show completed games" settings toggle
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true } = {}) {
-    page = Math.max(1, Number(page) || 1);
-    per_page = Math.min(500, Math.max(1, Number(per_page) || 50));
+//   providers: array limiting rows to those bookmakers (default: all)
+//   per_page: 'all' disables pagination (the web table shows a whole date)
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null } = {}) {
+    const unpaged = per_page === 'all';
+    page = unpaged ? 1 : Math.max(1, Number(page) || 1);
+    per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
 
     const query = db('matches as m')
         .join('fixtures as f', 'f.id', 'm.fixture_id') // inner join = correlated only
@@ -140,6 +147,9 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         // Same "game is over" definition as the availability flag: terminal
         // fixture status, or the match completed (incl. the 4h fallback)
         query.whereNotIn('f.status', TERMINAL_STATUSES).whereNull('m.completed_at');
+    }
+    if (Array.isArray(providers) && providers.length) {
+        query.whereIn('m.provider', providers);
     }
 
     const joined = new Map();
@@ -159,9 +169,8 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     }
     query.orderBy('m.start_time').orderBy('f.id').orderBy('m.provider');
 
+    if (!unpaged) query.offset((page - 1) * per_page).limit(per_page);
     const rows = await query
-        .offset((page - 1) * per_page)
-        .limit(per_page)
         .select(
             'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
             'm.updated_at', 'm.completed_at',
@@ -176,7 +185,13 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         );
 
     const data = await _hydrate(rows);
-    return { data, total: Number(total), page, per_page, pages: Math.max(1, Math.ceil(Number(total) / per_page)) };
+    return {
+        data,
+        total: Number(total),
+        page,
+        per_page: unpaged ? Number(total) : per_page,
+        pages: unpaged ? 1 : Math.max(1, Math.ceil(Number(total) / per_page)),
+    };
 }
 
 // Attach odds pivot, pre-match stats (frozen fixture_prematch snapshot when

@@ -145,6 +145,15 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] "Show completed games" settings toggle (default on): `queryRecords({completed:false})` → `?completed=0` → localStorage `oddspro.show.completed`; hides terminal-status fixtures + completed matches
 - [x] Verify: 53/53 offline; live run 393 evaluated / 388 tips / 16 hot unchanged (AI verdicts reused); healthy tip spread (13 markets, conf 50–84%, `12`/`O 1.5`/`U 3.5-4.5`/DC dominate); HTTP 205→117 rows with completed=0; browser-checked Tip column + toggle; stale :3001 server restarted (pid 20960 left serving)
 
+## Phase 12c — Web UX round (added 2026-07-03, user change requests)
+- [x] Missed tips render red (whole tip text + ✗; hits keep the calm ✓)
+- [x] Frozen odds greyed: `available === false` (concluded / no live markets) greys ALL the row's prices like stale ones ("Frozen - betting unavailable" tooltip)
+- [x] Providers future-proofed: `columnCatalog()` discovers `providers` from `matches`; "Visible providers" multi-select filters rows server-side (`?providers=a,b`); localStorage `oddspro.providers.visible` (null = all known, so newly-integrated bookmakers appear automatically)
+- [x] Settings modal redesigned: three sections (Table columns / Providers / Behavior) with compact `MultiSelect.jsx` dropdowns (count summary button → checkbox panel with Defaults/All/None) replacing the checkbox grids
+- [x] Pagination removed: `per_page='all'` in queryRecords (CSV export still pages at 500), whole selected date rendered at once, record-count footer, `Pagination.jsx` deleted
+- [x] Column reordering: drag pills in settings (HTML5 DnD, drop inserts before target, Reset order), `applyOrder` + `BASE_COLUMNS` exported from DataTable, order persists in `oddspro.cols.order`
+- [x] Verify: 53/53 offline; API checks (205 rows unpaged, betpawa-only 102, catalog providers); browser-checked modal, frozen-grey FT rows, saved order `[fixture, tip, start_time]` renders first; server restarted (pid 11584)
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).

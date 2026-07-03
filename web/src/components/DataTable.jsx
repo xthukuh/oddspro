@@ -7,8 +7,9 @@ const PROVIDER_STYLE = {
 };
 
 // Base columns are always shown (README temp-csv order); match_url folds
-// into the fixture cell as an outbound link.
-const BASE_COLUMNS = [
+// into the fixture cell as an outbound link. Exported for the settings
+// modal's column-order control.
+export const BASE_COLUMNS = [
     { key: 'api_id', label: 'API ID' },
     { key: 'start_time', label: 'Start' },
     { key: 'fixture', label: 'Fixture' },
@@ -26,6 +27,16 @@ const ROW_TINTS = [
     'bg-rose-50', 'bg-orange-50', 'bg-amber-50', 'bg-lime-50', 'bg-emerald-50',
     'bg-cyan-50', 'bg-sky-50', 'bg-violet-50', 'bg-fuchsia-50',
 ];
+
+// Rearrange columns by the persisted key order (settings drag control):
+// ordered keys first, anything new/unknown keeps its natural position after.
+export function applyOrder(columns, order) {
+    if (!Array.isArray(order) || !order.length) return columns;
+    const byKey = new Map(columns.map(c => [c.key, c]));
+    const ordered = order.map(k => byKey.get(k)).filter(Boolean);
+    const placed = new Set(ordered.map(c => c.key));
+    return [...ordered, ...columns.filter(c => !placed.has(c.key))];
+}
 
 function _time(value) {
     const d = new Date(value);
@@ -63,13 +74,15 @@ function _cell(row, key, linkProviders) {
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
             + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '');
+        // A missed tip turns red wholesale; a hit stays calm with its ✓
+        const missed = row.tip_outcome === 'miss';
         return (
-            <span className="whitespace-nowrap cursor-help" title={title}>
+            <span className={`whitespace-nowrap cursor-help ${missed ? 'text-rose-600' : ''}`} title={title}>
                 {row.hot ? '🔥 ' : ''}
                 <span className="font-medium">{row.tip_market}</span>
-                {pct && <span className="text-slate-500"> · {pct}</span>}
+                {pct && <span className={missed ? '' : 'text-slate-500'}> · {pct}</span>}
                 {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
-                {row.tip_outcome === 'miss' && <span className="text-rose-600 font-bold"> ✗</span>}
+                {missed && <span className="font-bold"> ✗</span>}
             </span>
         );
     }
@@ -108,27 +121,34 @@ function _cell(row, key, linkProviders) {
 }
 
 // Odds cell: fresh price, or the greyed last-seen price of a market that
-// vanished from the latest bookmaker update, or an empty dash.
+// vanished from the latest bookmaker update, or an empty dash. A frozen
+// match (concluded / no longer refreshed - `available` is false) greys ALL
+// its prices the same way: these odds can no longer be taken.
 function _marketCell(row, key) {
+    const frozen = row.available === false;
     const fresh = row.markets[key];
-    if (fresh != null) return fresh.toFixed(2);
+    if (fresh != null) {
+        return frozen
+            ? <span className="text-slate-400" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>
+            : fresh.toFixed(2);
+    }
     const stale = row.markets_stale?.[key];
     if (stale != null) return <span className="text-slate-400" title="No longer offered">{stale.toFixed(2)}</span>;
     return <span className="text-slate-300">-</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, sort, onSort, loading, linkProviders }) {
+export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
     const sortable = new Set([
         ...(catalog?.base.filter(c => c.sortable).map(c => c.key) ?? []),
         ...(catalog?.markets.filter(c => c.sortable).map(c => c.key) ?? []),
     ]);
     const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
-    const columns = [
+    const columns = applyOrder([
         ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
         ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
         ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
-    ];
+    ], columnOrder);
     const order = new Map(sort.map((s, i) => [s.key, { ...s, i }]));
     const tint = new Map();
     for (const row of rows) {
