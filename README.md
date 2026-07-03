@@ -57,6 +57,10 @@ npm test                            # offline node:test suite (no DB / live APIs
 
 `[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`.
 
+**Automation:** a Windows Task Scheduler task `oddspro-pipeline` runs `scripts/pipeline-task.cmd`
+(the full sweep) daily at 08:00, appending to `logs/pipeline.log` (gitignored). Manage it with
+`schtasks /query|/change|/delete /tn oddspro-pipeline`.
+
 ## Web UI
 
 `npm run serve` + `npm run build:web` serve a React 19 / Vite 6 / Tailwind 4 datatable on :3001:

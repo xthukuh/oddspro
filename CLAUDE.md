@@ -38,7 +38,7 @@ npm test                            # node:test suite (tests/*.test.js) — offl
                                     # vs the frozen x-*-output.xx.json snapshots
 ```
 
-`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able. There is no linter. Restart `npm run serve` after pulling backend changes — a stale server process holds :3001 with old code.
+`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able — a Windows Task Scheduler task `oddspro-pipeline` runs `scripts/pipeline-task.cmd` (full sweep → `logs/pipeline.log`) daily at 08:00. There is no linter. Restart `npm run serve` after pulling backend changes — a stale server process holds :3001 with old code.
 
 `.env` (gitignored, see `.env.example`) holds MySQL credentials (`DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD/DB_CHARSET/DB_COLLATION` — Laravel-style names) and API-Football credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY`). Validated in `src/config.js` (zod).
 
