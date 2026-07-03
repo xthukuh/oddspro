@@ -1,10 +1,10 @@
 // Client-sorted datatable: fixed base columns + selected market and STATS
 // columns. Click a header to sort descending first (shift-click chains
 // multi-sort); the whole selection is loaded, so sorting never hits the API.
-// Sticky chrome: the header row pins to the top and the Score column pins
-// left while scrolling horizontally.
+// Sticky chrome: the header row pins to the top, and a duplicate Score
+// column pins left only while the real one is scrolled out of view.
 
-import { useMemo } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import { sortRows } from '../sortValues.js';
 
 const PROVIDER_STYLE = {
@@ -266,18 +266,15 @@ function _marketCell(row, key) {
 export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
 
-    // Column pipeline: assemble + apply the drag order, pin Score first
-    // (left-sticky needs a fixed offset), drop enabled-but-empty market/stat
-    // columns (base columns always show).
+    // Column pipeline: assemble + apply the drag order, drop enabled-but-
+    // empty market/stat columns (base columns always show).
     const columns = useMemo(() => {
         const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
-        const all = applyOrder([
+        const cols = applyOrder([
             ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
             ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
             ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
         ], columnOrder);
-        const score = all.find(c => c.key === 'score');
-        const cols = score ? [score, ...all.filter(c => c !== score)] : all;
         if (!rows.length) return cols;
         return cols.filter(col => {
             if (col.group === 'base') return true;
@@ -296,12 +293,33 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         if (!tint.has(row.api_id)) tint.set(row.api_id, ROW_TINTS[tint.size % ROW_TINTS.length]);
     }
 
+    // Left-pinned Score duplicate, shown only while the real Score column is
+    // scrolled out of view. Hysteresis matters: inserting the pin shifts the
+    // table right by its own width, so pin when the original crosses the
+    // container's left edge, but unpin only once it would clear the pin's
+    // width again - a symmetric threshold would oscillate at the boundary.
+    const containerRef = useRef(null);
+    const scoreThRef = useRef(null);
+    const [pinScore, setPinScore] = useState(false);
+    const onScroll = () => {
+        const cont = containerRef.current, th = scoreThRef.current;
+        if (!cont || !th) return;
+        const dx = th.getBoundingClientRect().left - cont.getBoundingClientRect().left;
+        setPinScore(p => (p ? dx < th.offsetWidth : dx < 0));
+    };
+    const scoreCol = columns.find(c => c.key === 'score');
+    const pinned = pinScore && scoreCol ? [{ ...scoreCol, pin: true }, ...columns] : columns;
+
     return (
-        <div className={`overflow-auto max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}>
+        <div
+            ref={containerRef}
+            onScroll={onScroll}
+            className={`overflow-auto max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+        >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
                     <tr className="text-left text-slate-600 select-none">
-                        {columns.map(col => {
+                        {pinned.map(col => {
                             const s = order.get(col.key);
                             const meta = HEADER_META[col.key];
                             const info = meta?.info
@@ -309,13 +327,14 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                 ?? (col.key.startsWith('fs:') ? 'Home / Away - post-match statistic' : null);
                             // Backgrounds and edge shadows live on the sticky
                             // cells themselves (tr backgrounds/borders don't
-                            // stick); the Score corner wins both axes.
-                            const sticky = col.key === 'score'
+                            // stick); the pinned Score corner wins both axes.
+                            const sticky = col.pin
                                 ? 'sticky left-0 top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
                                 : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_#e2e8f0]';
                             return (
                                 <th
-                                    key={col.key}
+                                    key={col.pin ? 'pin:score' : col.key}
+                                    ref={!col.pin && col.key === 'score' ? scoreThRef : undefined}
                                     onClick={e => onSort(col.key, e.shiftKey)}
                                     className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium cursor-pointer hover:bg-slate-100 ${col.group === 'market' ? 'text-center' : ''}`}
                                     title={`${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
@@ -338,11 +357,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             key={row.match_id}
                             className={`group border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
                         >
-                            {columns.map(col => (
+                            {pinned.map(col => (
                                 <td
-                                    key={col.key}
+                                    key={col.pin ? 'pin:score' : col.key}
                                     title={_cellTitle(row, col)}
-                                    className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.key === 'score'
+                                    className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
                                         ? `sticky left-0 z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
                                         : ''}`}
                                 >
@@ -353,7 +372,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     ))}
                     {!rows.length && (
                         <tr>
-                            <td colSpan={columns.length} className="px-2 py-8 text-center text-slate-400">
+                            <td colSpan={pinned.length} className="px-2 py-8 text-center text-slate-400">
                                 {loading ? 'Loading...' : 'No correlated records for this selection.'}
                             </td>
                         </tr>
