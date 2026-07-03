@@ -1,5 +1,19 @@
 # Prediction phase — scoping draft (2026-07-03)
 
+Status: **superseded 2026-07-03 (same day) — Phase 12 shipped a different direction.**
+The brainstorm settled on **rule-based logical deduction, explicitly no ML training**:
+strict AND concurrence gates over leak-free history aggregates (`src/db/goals-rules.js`),
+BetPawa vig-removed implied probability as a market gate, API-Football `/predictions` as a
+boost/veto signal, and an optional OpenRouter AI adjudicator — all Node, inside the existing
+pipeline (see `implementation-plan.md` Phase 12). The Python/XGBoost standards below are
+kept for reference only; if an ML phase ever happens, the `fixture_predictions` outcome
+ledger (every evaluated fixture with signals + settled hit/miss) is a ready-made evaluation
+baseline. Thresholds were tuned by `scripts/backtest-hotpicks.js` (10,678 fixtures replayed
+with kickoff cutoffs — empirical validation, not model training): baseline over-2.5 rate
+54.3%, shipped gates 73.2% stats-only precision.
+
+Original draft below, unchanged:
+
 Status: **scoping only — not approved for implementation.** This captures what the warehouse
 already offers and the decisions to make before any code. To be brainstormed together.
 

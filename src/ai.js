@@ -33,23 +33,38 @@ function _parseVerdict(content) {
 // Ask the model to confirm or veto one over-2.5 candidate given the full
 // signal breakdown. Throws on any failure; the caller records ai_verdict
 // 'error' and keeps the rule verdict.
-//   { fixture, kickoff, league, signals, market, api }
-export async function adjudicateHotPick({ fixture, kickoff, league, signals, market, api }) {
-    const lines = signals.map(s =>
-        `- ${s.key}: ${s.value ?? 'n/a'} (threshold ${s.threshold}, ${s.pass ? 'PASS' : 'FAIL'})`);
+//   { fixture, kickoff, league, home, away, h2h, market, api }
+//   home/away: teamGoalsAggregates() results; h2h: h2hGoalsAggregates()
+export async function adjudicateHotPick({ fixture, kickoff, league, home, away, h2h, market, api }) {
+    const team = (label, t) =>
+        `${label}: last ${t.n} games - avg total ${t.avgTotal}, over-2.5 rate ${t.overRate},`
+        + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`;
     const prompt = [
-        'You are a strict football goals analyst. A rule engine flagged this fixture as a',
-        'candidate for OVER 2.5 total goals. Your job is to catch false positives, not to',
-        'be agreeable - veto whenever the evidence looks fragile, contradictory or stale.',
+        'You are the final reviewer of an over-2.5-goals shortlist. A strict rule engine',
+        'already verified every quantitative gate (rolling goal averages, over rates,',
+        'sample sizes, market probability floor, no contradictions) - they ALL passed.',
+        'Your only job is to catch qualitative false positives the thresholds cannot see.',
         '',
         `Fixture: ${fixture}`,
         `League: ${league ?? 'unknown'}`,
         `Kickoff: ${kickoff}`,
+        team('Home', home),
+        team('Away', away),
+        `Head-to-head: ${h2h.n ? `last ${h2h.n} meetings - avg total ${h2h.avgTotal}, over-2.5 rate ${h2h.overRate}` : 'no prior meetings known'}`,
         `Bookmaker prices: over 2.5 = ${market?.over ?? 'n/a'}, under 2.5 = ${market?.under ?? 'n/a'}`
         + ` (vig-removed P(over) = ${market?.impliedOver ?? 'n/a'})`,
-        `API-Football prediction signal: ${api ?? 'none'}`,
-        'Rule signals:',
-        ...lines,
+        `API-Football prediction: ${api ?? 'no signal'}`,
+        '',
+        'Veto ONLY when you can name a concrete red flag, for example:',
+        '- a scoring average that looks inflated by one anomalous blowout (high avg total',
+        '  but a much weaker over-2.5 rate on the same games);',
+        '- wildly asymmetric profiles (all the goals come from one side\'s games while the',
+        '  other side\'s games are tight and low-scoring);',
+        '- the market pricing sharply disagreeing with the statistical picture.',
+        'Do NOT veto because a value sits near its threshold, because the head-to-head',
+        'sample is thin or empty (that is neutral by design), or out of general caution -',
+        'the shortlist is intentionally strict already and most candidates deserve',
+        'confirmation. Expected veto rate: low.',
         '',
         'Reply with ONLY a JSON object, no other text:',
         '{"verdict":"confirm"|"veto","reason":"one short sentence"}',

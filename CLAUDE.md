@@ -26,6 +26,9 @@ node src/index.js stats             # statistics + lineups + events for final co
 node src/index.js standings         # refresh league tables for correlated leagues
 node src/index.js history           # backfill team last-N + full head-to-head history for upcoming correlated fixtures (fetch-once)
 node src/index.js prematch          # upsert pre-match snapshots for upcoming correlated fixtures (frozen once kickoff passes)
+node src/index.js predictions       # API-Football /predictions for upcoming correlated fixtures (fetch-once)
+node src/index.js hotpicks          # settle + recompute over-2.5 hot picks (rules + optional AI adjudication)
+node scripts/backtest-hotpicks.js   # replay historical fixtures to measure/tune hot-pick gate precision
 node src/index.js export [date]     # temp CSV of the date's correlated records → tmp/ (gitignored)
 
 npm run serve                       # visualization API server on :3001 (serves web/dist when built)
@@ -34,13 +37,14 @@ cd web && npm run dev               # frontend dev server on :5173 (proxies /api
 
 npm test                            # node:test suite (tests/*.test.js) — offline, no DB/live APIs:
                                     # market registry invariants, stale-odds diff scenarios, pre-match calc
-                                    # (H2H/rolling-goals windows), and the standardized game-record contract
+                                    # (H2H/rolling-goals windows), hot-pick rules (gates/devig/veto logic),
+                                    # and the standardized game-record contract
                                     # vs the frozen x-*-output.xx.json snapshots
 ```
 
 `[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`. All actions are idempotent and cron-able — a Windows Task Scheduler task `oddspro-pipeline` runs `scripts/pipeline-task.cmd` (full sweep → `logs/pipeline.log`) daily at 08:00. There is no linter. Restart `npm run serve` after pulling backend changes — a stale server process holds :3001 with old code.
 
-`.env` (gitignored, see `.env.example`) holds MySQL credentials (`DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD/DB_CHARSET/DB_COLLATION` — Laravel-style names) and API-Football credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY`). Validated in `src/config.js` (zod).
+`.env` (gitignored, see `.env.example`) holds MySQL credentials (`DB_HOST/DB_PORT/DB_DATABASE/DB_USERNAME/DB_PASSWORD/DB_CHARSET/DB_COLLATION` — Laravel-style names), API-Football credentials (`X_APISPORTS_URL`, `X_APISPORTS_KEY`), and optionally `OPENROUTER_API_KEY` (+ `HOTPICK_AI_MODEL`, `HOTPICK_*` threshold overrides) for the hot-picks AI adjudicator — the key lives ONLY in `.env`, never in git. Validated in `src/config.js` (zod).
 
 ## Architecture
 
@@ -54,6 +58,8 @@ Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker cor
 - `src/db/connection.js` — the only knex instance (never use raw mysql2). Session `time_zone` is pinned to +03:00 in `knexfile.js` so SQL `NOW()` compares correctly against stored EAT wall-clock datetimes.
 - `src/db/store.js` — odds persistence: upsert `matches` by `(provider, provider_match_id)` (with an explicit `updated_at` bump — MySQL's ON UPDATE skips no-op updates), then refresh `odds_markets` via `src/db/odds-diff.js`: markets present in the latest snapshot are replaced (delete+insert), vanished ones are kept flagged `is_stale` (last-seen price survives for display), re-listed markets revive. Never touches `completed_at`/`fixture_id` (owned by results/link).
 - `src/prematch.js` — pre-match snapshot writer (`updatePrematchSnapshots()`): upserts `fixture_prematch` (rank/form/H2H/rolling-goals aggregates) for every upcoming correlated fixture; the `kickoff > NOW()` selection **is** the freeze — past fixtures are never selected again, so their last pre-kickoff snapshot stands forever. Single-statement chunked upserts (no delete+insert, no deadlock exposure).
+- `src/hotpicks.js` — over-2.5 hot picks (`updateHotPicks()`): settles `fixture_predictions` outcomes from canonical final scores, then re-evaluates every upcoming correlated snapshot-backed fixture through the deduction gates; rule-hot candidates optionally pass an OpenRouter confirm/veto (`src/ai.js`, fail-open — errors keep the rule verdict; verdicts are reused while the score is unchanged so reruns don't re-bill). Same freeze idiom as prematch: `kickoff > NOW()` selection, chunked onConflict-merge upsert (merge list excludes `result_goals`/`outcome` — owned by the settle pass). `hotpicksSummary()` backs `GET /api/hotpicks`.
+- `src/db/goals-rules.js` — pure hot-pick deduction rules (zero imports, offline-testable): vig-removed `impliedProbability`, kickoff-cutoff team/H2H goal aggregates, API-Football prediction signal parsing, and `scoreOver25` — strict AND concurrence gates (both teams' rolling avg-total + over-rate, market probability floor, H2H veto, API veto), precision over recall by design. `DEFAULT_THRESHOLDS` tuned by `scripts/backtest-hotpicks.js` (2026-07-03: 54.3% baseline → 73.2% stats-only precision over 10,678 fixtures); `HOTPICK_TEAM_WINDOW` must stay ≤ ~8 (history backfill only fetches 10 games/team).
 - `src/db/prematch-calc.js` — pure calculations shared by the snapshot writer and the read-layer live fallback (`h2hSummary`, `computePrematch`, `formatGoals`; zero imports so tests skip config/.env). Callers filter `status IN RESULT_STATUSES` in SQL; the calc enforces non-null FT scores + kickoff strictly before the fixture's kickoff. Rolling windows configurable via `PREMATCH_TEAM_WINDOW` / `PREMATCH_H2H_WINDOW` (default 5/5).
 - `src/db/odds-diff.js` — pure diff helper (`oddsIdentity`, `diffOddsRows`; zero imports so tests skip config/.env). Identity = type_name/name/handicap with numeric handicap normalization — mysql2 returns DECIMAL as a string (`'2.5'`) while snapshots carry numbers.
 - `src/utils.js` — shared helpers (`_date`, `_dtime`, `_batch`). `_batch` runs promises with bounded concurrency; keep DB-writing batches at concurrency 1 — parallel delete+insert transactions deadlock on InnoDB index gap locks.
@@ -67,6 +73,7 @@ Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker cor
 - **Fetch throttling:** `matches.completed_at` set ⇒ odds refreshes skip the match. Fixtures reaching a terminal status (`FT/AET/PEN/AWD/WO/CANC/ABD`) complete their linked matches; unlinked matches complete 4h after start (fallback).
 - **Fetch-once stats:** `fixtures.stats_fetched_at`/`lineups_fetched_at`/`events_fetched_at` guarantee each final fixture costs at most 3 detail requests ever. Empty responses only set the flag after 48h post-kickoff (minor leagues may never publish stats). Never delete or refetch immutable API data.
 - **Pre-match snapshots freeze at kickoff:** `fixture_prematch` rows are upserted every run while the fixture is upcoming and never written after kickoff — historical pre-match stats must stay exactly as they were, unaffected by later matches.
+- **Hot picks freeze at kickoff and settle exactly once:** `fixture_predictions` rows use the same `kickoff > NOW()` selection-freeze; the settle pass (canonical FT scores → `result_goals`/`outcome`) is the only writer of those columns. The hit-rate scoreboard is honest by construction — never rewrite a settled or past-kickoff pick. AI adjudication is optional (no `OPENROUTER_API_KEY` = rules-only) and can only veto, never promote; API `/predictions` uses the fetch-once flag `fixtures.predictions_fetched_at`.
 - **Fetch-once history:** `fixtures.history_fetched_at` guarantees each upcoming correlated fixture costs at most 3 backfill requests ever (2× team last-N, 1× full head-to-head). Only FINAL_STATUSES items are saved — headtohead also returns future meetings, which must not leak into the results refresh set.
 - **Results are canonical:** the `results` action copies authoritative scores from final fixtures into linked matches (bookmaker-parsed scores are unreliable for upcoming games — BetPawa reports 0-0, Betika null).
 - **Betika null fields:** `home_team_id, away_team_id, region_id, region_name, category_id, competition_id` are always null (not exposed by its API).

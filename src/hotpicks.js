@@ -129,12 +129,13 @@ export async function updateHotPicks() {
         const p = prices.get(f.id) ?? null;
         const market = p ? { ...p, impliedOver: impliedProbability(p.over, p.under) } : null;
         const api = apiPredictionSignal(apiPreds.get(f.id));
-        const out = scoreOver25({
+        const inputs = {
             home: teamGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
             away: teamGoalsAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
             h2h: h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
             market, api,
-        }, thresholds);
+        };
+        const out = scoreOver25(inputs, thresholds);
         const row = {
             fixture_id: f.id,
             market: 'O 2.5',
@@ -151,7 +152,7 @@ export async function updateHotPicks() {
             computed_at: db.fn.now(),
         };
         rows.push(row);
-        if (out.hot) candidates.push({ f, row, out, market, api });
+        if (out.hot) candidates.push({ f, row, inputs });
     }
 
     // AI adjudication - only rule-passing candidates, optional and fail-open.
@@ -172,9 +173,7 @@ export async function updateHotPicks() {
                         fixture: `${c.f.home_name} - ${c.f.away_name}`,
                         kickoff: c.f.kickoff,
                         league: c.f.league,
-                        signals: c.out.signals,
-                        market: c.market,
-                        api: c.api,
+                        ...c.inputs,
                     });
                 } catch (e) {
                     console.warn(`[!] AI adjudication failed for fixture ${c.f.id} (rule verdict kept): ${e?.message ?? e}`);
