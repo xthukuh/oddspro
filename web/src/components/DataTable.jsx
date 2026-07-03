@@ -15,6 +15,7 @@ const BASE_COLUMNS = [
     { key: 'provider', label: 'Provider' },
     { key: 'score', label: 'Score' },
     { key: 'goals', label: 'Goals' },
+    { key: 'tip', label: 'Tip' },
     { key: 'status', label: 'Status' },
 ];
 
@@ -54,6 +55,24 @@ function _hotBadge(row) {
 
 function _cell(row, key, linkProviders) {
     if (key === 'start_time') return _time(row.start_time);
+    if (key === 'tip') {
+        // Safest bettable outcome + blended confidence; 🔥 marks the fixture
+        // as an over-2.5 hot pick; ✓/✗ appear once the tip settles.
+        if (!row.tip_market) return <span className="text-slate-300">-</span>;
+        const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
+        const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
+            + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
+            + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '');
+        return (
+            <span className="whitespace-nowrap cursor-help" title={title}>
+                {row.hot ? '🔥 ' : ''}
+                <span className="font-medium">{row.tip_market}</span>
+                {pct && <span className="text-slate-500"> · {pct}</span>}
+                {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
+                {row.tip_outcome === 'miss' && <span className="text-rose-600 font-bold"> ✗</span>}
+            </span>
+        );
+    }
     if (key === 'provider') {
         return (
             <span className={`px-1.5 py-0.5 rounded text-[11px] font-medium ${PROVIDER_STYLE[row.provider] ?? ''}`}>

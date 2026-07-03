@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import { z } from 'zod';
 import { DEFAULT_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
+import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
@@ -28,6 +29,9 @@ const EnvSchema = z.object({
     HOTPICK_MIN_AVG_TOTAL: z.coerce.number().min(0).default(DEFAULT_THRESHOLDS.minAvgTotal),
     HOTPICK_MIN_IMPLIED_OVER: z.coerce.number().min(0).max(1).default(DEFAULT_THRESHOLDS.minImpliedOver),
     HOTPICK_H2H_MIN_OVER_RATE: z.coerce.number().min(0).max(1).default(DEFAULT_THRESHOLDS.h2hMinOverRate),
+    // "Tip" column: safest bettable outcome floors (see src/db/tip-rules.js)
+    TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
+    TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
     // AI adjudication is optional: no key = rules-only verdicts (fail-open)
     OPENROUTER_API_KEY: z.string().min(1).optional(),
     OPENROUTER_URL: z.string().url().default('https://openrouter.ai/api/v1'),

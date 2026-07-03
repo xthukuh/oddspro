@@ -31,6 +31,8 @@ const BASE_FIELDS = {
     // entry are NULL, not 0.
     hot: { sql: 'fp.hot', type: 'number' },
     hot_score: { sql: 'fp.score', type: 'number' },
+    // "Tip" column sorts/filters by its blended confidence (0..1)
+    tip: { sql: 'fp.tip_confidence', type: 'number' },
 };
 
 // Static pre-match STATS columns (dynamic post-match stat types are appended
@@ -119,7 +121,9 @@ function _coerce(key, value) {
 //   date: 'YYYY-MM-DD' | Date | null (null = all dates)
 //   sort: [{key, dir:'asc'|'desc'}] over base fields + market columns
 //   filters: [{key, op, value}] with ops eq/ne/gt/gte/lt/lte/like
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [] } = {}) {
+//   completed: false hides concluded games (terminal fixture status or a
+//   completed match) - the web "Show completed games" settings toggle
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true } = {}) {
     page = Math.max(1, Number(page) || 1);
     per_page = Math.min(500, Math.max(1, Number(per_page) || 50));
 
@@ -131,6 +135,11 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     if (date) {
         const d = date instanceof Date ? date.toISOString().substring(0, 10) : String(date);
         query.whereBetween('m.start_time', [`${d} 00:00:00`, `${d} 23:59:59`]);
+    }
+    if (!completed) {
+        // Same "game is over" definition as the availability flag: terminal
+        // fixture status, or the match completed (incl. the 4h fallback)
+        query.whereNotIn('f.status', TERMINAL_STATUSES).whereNull('m.completed_at');
     }
 
     const joined = new Map();
@@ -163,6 +172,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'f.home_team_id', 'f.away_team_id',
             'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
             'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
+            'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
         );
 
     const data = await _hydrate(rows);
@@ -278,6 +288,10 @@ async function _hydrate(rows) {
             hot_outcome: r.hot_outcome ?? null,
             hot_reason: r.hot_ai_reason ?? null,
             hot_signals: _json(r.hot_signals),
+            tip_market: r.tip_market ?? null,
+            tip_price: r.tip_price == null ? null : Number(r.tip_price),
+            tip_confidence: r.tip_confidence == null ? null : Number(r.tip_confidence),
+            tip_outcome: r.tip_outcome ?? null,
             markets,
             markets_stale,
             stats,

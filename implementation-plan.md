@@ -136,6 +136,15 @@ Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io 
 - [x] Verify: migration on populated DB; backtest table prints; predictions fetch-once; hotpicks idempotent (16 hot stable across reruns); server endpoints + `hot eq 1` filter live-checked via browser (badges + chip render); orphan-free (verify server stopped)
 - [ ] Settlement observation (~2026-07-04+): first picks settle → hit/miss populate, chip switches from "16 pending" to a hit-rate; confirm frozen picks never rewritten post-kickoff
 
+## Phase 12b — "Tip" column + completed-games toggle (added 2026-07-03)
+- [x] Migration `20260703000002_tips.js` — `fixture_predictions` += `tip_market/tip_price/tip_confidence/tip_outcome` (tip_outcome owned by settle, like outcome)
+- [x] `src/db/tip-rules.js` (pure, zero imports) — `teamOutcomeAggregates`/`h2hOutcomeAggregates` (W/D/L + per-line over rates), `bestTip` (safest bettable outcome across 1X2/DC/all O/U lines; confidence = devigged market 0.6 + stats 0.3 + API percents 0.1, renormalized; DC probs derived from the devigged 1X2 book; price floor `TIP_MIN_PRICE` 1.2 excludes junk odds — the hidden-gem mechanic; `TIP_MIN_CONFIDENCE` 0.5 floor), `tipHit` (settles any canonical market)
+- [x] Tests `tests/tip-rules.test.js` — 13 tests (aggregates, devig, price floor, DC derivation, stats corroboration both directions, thin-sample neutrality, O/U complement, API blend, floors, tipHit matrix). Suite 53/53
+- [x] Writer: `_loadMarkets` generalizes odds loading to all canonical groups via `marketKey` (per-group provider preference — no cross-provider devig); tips computed beside hot gates; tip settle pass (pure tipHit, grouped whereIn updates); PICK_COLUMNS extended
+- [x] Read layer: `tip` base column (sorts/filters by `fp.tip_confidence`) + `tip_*` row fields; web `Tip` column right of Goals (`🔥 O 2.5 · 74%` style, ✓/✗ once settled, price in tooltip)
+- [x] "Show completed games" settings toggle (default on): `queryRecords({completed:false})` → `?completed=0` → localStorage `oddspro.show.completed`; hides terminal-status fixtures + completed matches
+- [x] Verify: 53/53 offline; live run 393 evaluated / 388 tips / 16 hot unchanged (AI verdicts reused); healthy tip spread (13 markets, conf 50–84%, `12`/`O 1.5`/`U 3.5-4.5`/DC dominate); HTTP 205→117 rows with completed=0; browser-checked Tip column + toggle; stale :3001 server restarted (pid 20960 left serving)
+
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
 - 2026-07-02: README rewritten with fuller spec → plan revised: fixtures = canonical base; betpawa→betika correlation order; fuzzy confidence matching + `league_aliases` cache table (added to init migration pre-first-run); Phase 6 visualization added (temp CSV export → API + React datatable).

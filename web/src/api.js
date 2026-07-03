@@ -19,13 +19,15 @@ export async function fetchColumns() {
 
 // Paginated records: { data, total, page, per_page, pages }
 //   date: 'YYYY-MM-DD' | 'all'; sort: [{key, dir}]; filters: [{key, op, value}]
-export async function fetchRecords({ date, page, perPage, sort, filters }) {
+//   completed: false hides concluded games (settings toggle)
+export async function fetchRecords({ date, page, perPage, sort, filters, completed }) {
     return _get('/api/records', {
         date,
         page,
         per_page: perPage,
         sort: sort?.length ? JSON.stringify(sort) : null,
         filters: filters?.length ? JSON.stringify(filters) : null,
+        completed: completed === false ? 0 : null,
     });
 }
 

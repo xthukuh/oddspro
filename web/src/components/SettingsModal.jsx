@@ -43,7 +43,8 @@ function ColumnPicker({ title, options, selected, onChange }) {
 }
 
 export default function SettingsModal({
-    catalog, marketKeys, statKeys, providers, linkProviders, onMarkets, onStats, onLinkProviders, onClose,
+    catalog, marketKeys, statKeys, providers, linkProviders, showCompleted,
+    onMarkets, onStats, onLinkProviders, onShowCompleted, onClose,
 }) {
     const links = new Set(linkProviders);
     const toggleLink = p => {
@@ -74,6 +75,21 @@ export default function SettingsModal({
                     selected={statKeys}
                     onChange={onStats}
                 />
+                <section className="mb-5">
+                    <h3 className="font-medium text-slate-700 mb-1">Completed games</h3>
+                    <p className="text-xs text-slate-500 mb-2">
+                        Untick to hide concluded games and see upcoming matches only.
+                    </p>
+                    <label className="flex items-center gap-2 text-sm cursor-pointer">
+                        <input
+                            type="checkbox"
+                            checked={showCompleted}
+                            onChange={e => onShowCompleted(e.target.checked)}
+                            className="accent-sky-600"
+                        />
+                        <span>Show completed games</span>
+                    </label>
+                </section>
                 <section className="mb-5">
                     <h3 className="font-medium text-slate-700 mb-1">Unavailable match links</h3>
                     <p className="text-xs text-slate-500 mb-2">

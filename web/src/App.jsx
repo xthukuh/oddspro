@@ -11,6 +11,8 @@ const LS_STATS = 'oddspro.cols.stats';
 // Providers whose unavailable matches keep a clickable link (settings toggle;
 // betpawa serves concluded match pages for ~6h)
 const LS_LINKS = 'oddspro.links.unavailable';
+// Whether concluded games stay in the table (settings toggle; default on)
+const LS_COMPLETED = 'oddspro.show.completed';
 const PROVIDERS = ['betpawa', 'betika'];
 
 function _load(key) {
@@ -29,6 +31,7 @@ export default function App() {
     const [marketKeys, setMarketKeys] = useState(() => _load(LS_MARKETS));
     const [statKeys, setStatKeys] = useState(() => _load(LS_STATS));
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
+    const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [date, setDate] = useState(_today);
     const [page, setPage] = useState(1);
     const [perPage, setPerPage] = useState(50);
@@ -67,7 +70,7 @@ export default function App() {
     useEffect(() => {
         let stale = false;
         setLoading(true);
-        fetchRecords({ date: date || 'all', page, perPage, sort, filters })
+        fetchRecords({ date: date || 'all', page, perPage, sort, filters, completed: showCompleted })
             .then(res => {
                 if (stale) return;
                 setResult(res);
@@ -76,7 +79,7 @@ export default function App() {
             .catch(e => !stale && setError(String(e.message ?? e)))
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
-    }, [date, page, perPage, sort, filters, refreshTick]);
+    }, [date, page, perPage, sort, filters, refreshTick, showCompleted]);
 
     // Hot-pick accuracy summary on load and whenever a refresh lands new data
     useEffect(() => {
@@ -141,6 +144,11 @@ export default function App() {
     const saveLinkProviders = providers => {
         setLinkProviders(providers);
         localStorage.setItem(LS_LINKS, JSON.stringify(providers));
+    };
+    const saveShowCompleted = value => {
+        setShowCompleted(value);
+        setPage(1);
+        localStorage.setItem(LS_COMPLETED, value ? '1' : '0');
     };
 
     // Header chip: settled hit-rate over the freshest window with data
@@ -289,9 +297,11 @@ export default function App() {
                     statKeys={selectedStats}
                     providers={PROVIDERS}
                     linkProviders={linkProviders}
+                    showCompleted={showCompleted}
                     onMarkets={saveMarkets}
                     onStats={saveStats}
                     onLinkProviders={saveLinkProviders}
+                    onShowCompleted={saveShowCompleted}
                     onClose={() => setShowSettings(false)}
                 />
             )}

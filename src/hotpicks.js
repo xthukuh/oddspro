@@ -1,11 +1,12 @@
 import { config } from './config.js';
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
-import { whereMarket } from './markets.js';
+import { marketKey } from './markets.js';
 import {
     teamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
     apiPredictionSignal, scoreOver25,
 } from './db/goals-rules.js';
+import { teamOutcomeAggregates, h2hOutcomeAggregates, bestTip, tipHit } from './db/tip-rules.js';
 import { aiEnabled, adjudicateHotPick } from './ai.js';
 import { _batch, _progress } from './utils.js';
 
@@ -18,39 +19,61 @@ import { _batch, _progress } from './utils.js';
 // kickoff stands forever. Settlement (result_goals/outcome) is owned by the
 // settle pass here and excluded from the compute upsert's merge list.
 
-// Everything the compute pass owns (settle owns result_goals/outcome)
+// Everything the compute pass owns (settle owns result_goals/outcome and
+// tip_outcome)
 const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
-    'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model', 'computed_at',
+    'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model',
+    'tip_market', 'tip_price', 'tip_confidence', 'computed_at',
 ];
 
-// Best available O/U 2.5 price pair per fixture: betpawa first, betika only
-// when betpawa lacks a full book (betika odds carry no probability metadata
-// but its prices still make a valid two-way normalization).
-async function _loadMarketPrices(fixtureIds) {
+// O/U total-goals lines (mirrors markets.js OU_LINES)
+const OU_LINES = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
+
+// Canonical market prices per fixture, grouped for devigging: per market
+// group prefer the first provider carrying the FULL group (betpawa first -
+// mixing providers inside one group would break the vig removal), betika as
+// the fallback. Returns Map(fixture_id -> { x12, dc, ou }).
+async function _loadMarkets(fixtureIds) {
+    const rows = await db('odds_markets as om')
+        .join('matches as m', 'm.id', 'om.match_id')
+        .whereIn('m.fixture_id', fixtureIds)
+        .where('om.is_stale', 0)
+        .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
     const byFixture = new Map();
-    for (const [key, side] of [['O 2.5', 'over'], ['U 2.5', 'under']]) {
-        const rows = await whereMarket(
-            db('odds_markets as om')
-                .join('matches as m', 'm.id', 'om.match_id')
-                .whereIn('m.fixture_id', fixtureIds)
-                .where('om.is_stale', 0)
-                .select('m.fixture_id', 'm.provider', 'om.price'),
-            key
-        );
-        for (const r of rows) {
-            let providers = byFixture.get(r.fixture_id);
-            if (!providers) byFixture.set(r.fixture_id, providers = {});
-            (providers[r.provider] ??= {})[side] = Number(r.price); // DECIMAL arrives as string
+    for (const r of rows) {
+        const key = marketKey(r);
+        if (!key) continue;
+        let providers = byFixture.get(r.fixture_id);
+        if (!providers) byFixture.set(r.fixture_id, providers = {});
+        const map = (providers[r.provider] ??= {});
+        const price = Number(r.price); // DECIMAL arrives as string
+        // Duplicate identities keep the lowest price (matches records.js MIN)
+        if (map[key] == null || price < map[key]) map[key] = price;
+    }
+    const _group = (providers, keys) => {
+        for (const p of ['betpawa', 'betika']) {
+            const m = providers[p];
+            if (m && keys.every(k => m[k] > 1)) {
+                return Object.fromEntries(keys.map(k => [k, m[k]]));
+            }
         }
-    }
-    const best = new Map();
+        return null;
+    };
+    const groups = new Map();
     for (const [fixture_id, providers] of byFixture) {
-        const complete = ['betpawa', 'betika'].find(p => providers[p]?.over && providers[p]?.under);
-        const pick = providers[complete] ?? providers.betpawa ?? providers.betika;
-        if (pick) best.set(fixture_id, pick);
+        const ou = {};
+        for (const line of OU_LINES) {
+            const pair = _group(providers, [`O ${line}`, `U ${line}`]);
+            if (pair) ou[line] = { over: pair[`O ${line}`], under: pair[`U ${line}`] };
+        }
+        groups.set(fixture_id, {
+            x12: _group(providers, ['1', 'X', '2']),
+            dc: _group(providers, ['1X', 'X2', '12']),
+            ou,
+        });
     }
-    return best;
+    return groups;
 }
 
 // Settle + (re)compute hot picks for all upcoming correlated fixtures.
@@ -68,6 +91,28 @@ export async function updateHotPicks() {
     );
     const settled = settledRes.affectedRows ?? 0;
 
+    // Settle tips the same way: any canonical market resolves from the final
+    // score (pure tipHit); grouped into two whereIn updates.
+    const pendingTips = await db('fixture_predictions as p')
+        .join('fixtures as f', 'f.id', 'p.fixture_id')
+        .whereNull('p.tip_outcome').whereNotNull('p.tip_market')
+        .whereIn('f.status', FINAL_STATUSES)
+        .select('p.fixture_id', 'p.tip_market',
+            db.raw('COALESCE(f.ft_home, f.goals_home) as fh'),
+            db.raw('COALESCE(f.ft_away, f.goals_away) as fa'));
+    const tipHits = [], tipMisses = [];
+    for (const t of pendingTips) {
+        if (t.fh == null || t.fa == null) continue;
+        (tipHit(t.tip_market, t.fh, t.fa) ? tipHits : tipMisses).push(t.fixture_id);
+    }
+    for (const [ids, outcome] of [[tipHits, 'hit'], [tipMisses, 'miss']]) {
+        for (let i = 0; i < ids.length; i += 200) {
+            await db('fixture_predictions').whereIn('fixture_id', ids.slice(i, i + 200))
+                .update({ tip_outcome: outcome });
+        }
+    }
+    const tips_settled = tipHits.length + tipMisses.length;
+
     // The pre-match snapshot EXISTS guard also guarantees the history
     // backfill ran for these fixtures (pipeline order), so the rolling
     // windows below are served from complete local history.
@@ -80,8 +125,8 @@ export async function updateHotPicks() {
         .whereRaw('EXISTS (SELECT 1 FROM fixture_prematch p WHERE p.fixture_id = f.id)')
         .select('f.id', 'f.kickoff', 'f.home_team_id', 'f.away_team_id',
             'l.name as league', 'th.name as home_name', 'ta.name as away_name');
-    console.debug(`Hot picks - ${settled} settled; ${targets.length} upcoming correlated fixtures to evaluate...`);
-    if (!targets.length) return { settled, fixtures: 0, written: 0, hot: 0, ai: { confirmed: 0, vetoed: 0, errors: 0 } };
+    console.debug(`Hot picks - ${settled} settled (${tips_settled} tips); ${targets.length} upcoming correlated fixtures to evaluate...`);
+    if (!targets.length) return { settled, tips_settled, fixtures: 0, written: 0, hot: 0, tips: 0, ai: { confirmed: 0, vetoed: 0, errors: 0 } };
 
     const fixtureIds = targets.map(f => f.id);
     const teamIds = [...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))];
@@ -104,7 +149,7 @@ export async function updateHotPicks() {
         }
     }
 
-    const prices = await _loadMarketPrices(fixtureIds);
+    const markets = await _loadMarkets(fixtureIds);
     const apiPreds = new Map((await db('fixture_api_predictions').whereIn('fixture_id', fixtureIds))
         .map(p => [p.fixture_id, p]));
     // Existing rows: reuse AI verdicts when the evaluation is unchanged
@@ -126,9 +171,11 @@ export async function updateHotPicks() {
         const cutoff = new Date(f.kickoff).getTime();
         const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
         const awayRows = fixturesByTeam.get(f.away_team_id) ?? [];
-        const p = prices.get(f.id) ?? null;
+        const groups = markets.get(f.id) ?? { x12: null, dc: null, ou: {} };
+        const p = groups.ou[2.5] ?? null;
         const market = p ? { ...p, impliedOver: impliedProbability(p.over, p.under) } : null;
-        const api = apiPredictionSignal(apiPreds.get(f.id));
+        const apiPred = apiPreds.get(f.id);
+        const api = apiPredictionSignal(apiPred);
         const inputs = {
             home: teamGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
             away: teamGoalsAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
@@ -136,6 +183,28 @@ export async function updateHotPicks() {
             market, api,
         };
         const out = scoreOver25(inputs, thresholds);
+
+        // Safest bettable outcome across every canonical market (the "Tip"
+        // column) - independent of the hot verdict, same leak-free windows.
+        const apiPct = apiPred && apiPred.percent_home != null && apiPred.percent_draw != null && apiPred.percent_away != null
+            ? {
+                home: Number(apiPred.percent_home) / 100,
+                draw: Number(apiPred.percent_draw) / 100,
+                away: Number(apiPred.percent_away) / 100,
+            }
+            : null;
+        const tip = bestTip({
+            ...groups,
+            home: teamOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
+            away: teamOutcomeAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
+            h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
+            apiPercents: apiPct,
+        }, {
+            teamWindow: thresholds.teamWindow,
+            minGames: thresholds.minGames,
+            minPrice: config.TIP_MIN_PRICE,
+            minConfidence: config.TIP_MIN_CONFIDENCE,
+        });
         const row = {
             fixture_id: f.id,
             market: 'O 2.5',
@@ -149,6 +218,9 @@ export async function updateHotPicks() {
             ai_verdict: null,
             ai_reason: null,
             ai_model: null,
+            tip_market: tip?.market ?? null,
+            tip_price: tip?.price ?? null,
+            tip_confidence: tip?.confidence ?? null,
             computed_at: db.fn.now(),
         };
         rows.push(row);
@@ -194,7 +266,14 @@ export async function updateHotPicks() {
         await db('fixture_predictions').insert(rows.slice(i, i + 200))
             .onConflict('fixture_id').merge(PICK_COLUMNS);
     }
-    return { settled, fixtures: targets.length, written: rows.length, hot: rows.filter(r => r.hot).length, ai };
+    return {
+        settled, tips_settled,
+        fixtures: targets.length,
+        written: rows.length,
+        hot: rows.filter(r => r.hot).length,
+        tips: rows.filter(r => r.tip_market != null).length,
+        ai,
+    };
 }
 
 // Accuracy summary for the web header chip + hot list (GET /api/hotpicks).

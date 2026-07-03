@@ -77,7 +77,7 @@ import { _date, _dtime } from './utils.js';
 
     if (action === 'hotpicks') {
         const c = await updateHotPicks();
-        console.debug(`[+] hotpicks: ${c.settled} settled, ${c.written} evaluated, ${c.hot} hot (AI: ${c.ai.confirmed} confirmed, ${c.ai.vetoed} vetoed, ${c.ai.errors} errors).`);
+        console.debug(`[+] hotpicks: ${c.settled} settled (${c.tips_settled} tips), ${c.written} evaluated, ${c.hot} hot, ${c.tips} tips (AI: ${c.ai.confirmed} confirmed, ${c.ai.vetoed} vetoed, ${c.ai.errors} errors).`);
         return;
     }
 

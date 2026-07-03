@@ -38,13 +38,14 @@ app.get('/api/columns', async (req, res, next) => {
 // date defaults to today; pass date=all for every date.
 app.get('/api/records', async (req, res, next) => {
     try {
-        const { date, page, per_page, sort, filters } = req.query;
+        const { date, page, per_page, sort, filters, completed } = req.query;
         res.json(await queryRecords({
             date: date === 'all' ? null : (date || new Date()),
             page,
             per_page,
             sort: _json(sort, []),
             filters: _json(filters, []),
+            completed: completed !== '0', // ?completed=0 hides concluded games
         }));
     } catch (e) {
         next(e);

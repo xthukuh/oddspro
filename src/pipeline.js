@@ -82,7 +82,7 @@ export async function runStartPipeline(days_ahead_ = null) {
 
     _step('hot picks (rules + optional AI adjudication)');
     const k = await updateHotPicks();
-    console.debug(`[+] hotpicks: ${k.settled} settled, ${k.written} evaluated, ${k.hot} hot (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
+    console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
 
     console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
 }
