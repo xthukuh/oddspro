@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { fetchColumns, fetchHotpicks, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import Pagination from './components/Pagination.jsx';
@@ -41,6 +41,7 @@ export default function App() {
     const [showFilters, setShowFilters] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
+    const [hotpicks, setHotpicks] = useState(null); // /api/hotpicks summary
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -76,6 +77,11 @@ export default function App() {
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
     }, [date, page, perPage, sort, filters, refreshTick]);
+
+    // Hot-pick accuracy summary on load and whenever a refresh lands new data
+    useEffect(() => {
+        fetchHotpicks().then(setHotpicks).catch(() => {});
+    }, [refreshTick]);
 
     // Pick up a refresh already in flight (e.g. page reloaded mid-refresh)
     useEffect(() => {
@@ -137,6 +143,21 @@ export default function App() {
         localStorage.setItem(LS_LINKS, JSON.stringify(providers));
     };
 
+    // Header chip: settled hit-rate over the freshest window with data
+    // (30d, else all-time), or the pending count while nothing has settled.
+    const hotChip = useMemo(() => {
+        if (!hotpicks) return null;
+        const { windows, pending } = hotpicks;
+        const [w, label] = windows['30d'].picks ? [windows['30d'], '30d'] : [windows.all, 'all'];
+        const title = `Over 2.5 hot picks - 7d ${windows['7d'].hits}/${windows['7d'].picks}`
+            + ` · 30d ${windows['30d'].hits}/${windows['30d'].picks}`
+            + ` · all ${windows.all.hits}/${windows.all.picks} · ${pending} pending`;
+        if (w.picks) {
+            return { title, text: `🔥 ${w.hits}/${w.picks} · ${Math.round(w.rate * 100)}% (${label})` };
+        }
+        return pending ? { title, text: `🔥 ${pending} pending` } : null;
+    }, [hotpicks]);
+
     const TODAY = _today();
     const DAY_MS = 86400000;
     const MIN_DATE = '2026-07-02';
@@ -151,6 +172,14 @@ export default function App() {
                 <span className="text-slate-400 text-xs">
                     By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
                 </span>
+                {hotChip && (
+                    <span
+                        className="px-2 py-0.5 rounded-full text-xs bg-slate-800 border border-slate-700 text-amber-300 cursor-help"
+                        title={hotChip.title}
+                    >
+                        {hotChip.text}
+                    </span>
+                )}
                 <div className="grow" />
                 { date === TODAY ? null : (
                     <button

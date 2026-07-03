@@ -3,6 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
+import { hotpicksSummary } from './hotpicks.js';
 import { runDateRefresh } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 
@@ -45,6 +46,15 @@ app.get('/api/records', async (req, res, next) => {
             sort: _json(sort, []),
             filters: _json(filters, []),
         }));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/hotpicks - over 2.5 hot-pick accuracy windows + upcoming hot list
+app.get('/api/hotpicks', async (req, res, next) => {
+    try {
+        res.json(await hotpicksSummary());
     } catch (e) {
         next(e);
     }

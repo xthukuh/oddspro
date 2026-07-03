@@ -437,6 +437,76 @@ export async function fetchApisportsHistory() {
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
+// --- predictions (fetch-once per upcoming correlated fixture) ---
+
+// Consumed fields of a /predictions response item (kept tolerant - live data
+// has taught this; `raw` in the table preserves everything else).
+const PredictionItem = z.object({
+    predictions: z.object({
+        under_over: z.union([z.string(), z.number()]).nullable().optional(),
+        goals: z.object({
+            home: z.union([z.string(), z.number()]).nullable().optional(),
+            away: z.union([z.string(), z.number()]).nullable().optional(),
+        }).partial().nullable().optional(),
+        advice: z.string().nullable().optional(),
+        percent: z.object({
+            home: z.string().nullable().optional(),
+            draw: z.string().nullable().optional(),
+            away: z.string().nullable().optional(),
+        }).partial().nullable().optional(),
+    }).partial().nullable().optional(),
+});
+
+// "45%" -> 45.00; anything unreadable -> null
+function _percent(value) {
+    const n = parseFloat(String(value ?? '').replace('%', ''));
+    return Number.isFinite(n) ? n : null;
+}
+
+// Fetch API-Football's own prediction for each upcoming correlated fixture
+// (advice, 1X2 percentages, goals lines) - a boost/veto signal for the hot
+// picks rules, never the pick itself. Fetch-once per fixture
+// (fixtures.predictions_fetched_at): predictions may drift as kickoff nears,
+// but one snapshot up to a few days early is enough for a secondary signal.
+export async function fetchApisportsPredictions() {
+    const targets = await db('fixtures as f')
+        .whereNull('f.predictions_fetched_at')
+        .where('f.kickoff', '>', db.raw('NOW()'))
+        .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
+        .select('f.id');
+    console.debug(`API-Football - ${targets.length} upcoming correlated fixtures need predictions...`);
+    const counts = { fixtures: targets.length, saved: 0 };
+    const tick = _progress('API-Football - predictions');
+    await _batch(targets, async (f, i, len) => {
+        const items = await _get('/predictions', { fixture: f.id });
+        const p = items.length ? PredictionItem.parse(items[0]).predictions : null;
+        await db.transaction(async trx => {
+            if (p) {
+                await trx('fixture_api_predictions').insert({
+                    fixture_id: f.id,
+                    advice: p.advice ?? null,
+                    percent_home: _percent(p.percent?.home),
+                    percent_draw: _percent(p.percent?.draw),
+                    percent_away: _percent(p.percent?.away),
+                    under_over: p.under_over == null ? null : String(p.under_over),
+                    goals_home: p.goals?.home == null ? null : String(p.goals.home),
+                    goals_away: p.goals?.away == null ? null : String(p.goals.away),
+                    raw: JSON.stringify(items[0]),
+                }).onConflict('fixture_id').merge([
+                    'advice', 'percent_home', 'percent_draw', 'percent_away',
+                    'under_over', 'goals_home', 'goals_away', 'raw',
+                ]);
+                counts.saved++;
+            }
+            // Flag even on an empty response - fetch-once; a fixture without a
+            // prediction is simply neutral downstream.
+            await trx('fixtures').where('id', f.id).update({ predictions_fetched_at: db.fn.now() });
+        });
+        tick(len);
+    }, 1); // serial: repo convention for DB-writing batches
+    return { ...counts, quota_remaining: apisportsQuotaRemaining() };
+}
+
 // --- standings (replace per league+season) ---
 
 const StandingRow = z.object({

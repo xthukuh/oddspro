@@ -26,6 +26,11 @@ const BASE_FIELDS = {
     },
     league: { sql: 'l.name', type: 'string' },
     status: { sql: 'f.status', type: 'string' },
+    // Over 2.5 hot picks (fixture_predictions is 1:1 per fixture; LEFT JOIN
+    // in queryRecords). `hot eq 1` filters to picks; rows without a ledger
+    // entry are NULL, not 0.
+    hot: { sql: 'fp.hot', type: 'number' },
+    hot_score: { sql: 'fp.score', type: 'number' },
 };
 
 // Static pre-match STATS columns (dynamic post-match stat types are appended
@@ -94,6 +99,16 @@ function _sqlTarget(query, key, joined) {
     return `${alias}.price`;
 }
 
+// mysql2 may return JSON columns as objects or strings depending on flags
+function _json(value) {
+    if (value == null || typeof value === 'object') return value ?? null;
+    try {
+        return JSON.parse(value);
+    } catch {
+        return null;
+    }
+}
+
 // Coerce a filter value by field type (market columns are numeric prices)
 function _coerce(key, value) {
     const type = BASE_FIELDS[key]?.type ?? 'number';
@@ -110,7 +125,9 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
 
     const query = db('matches as m')
         .join('fixtures as f', 'f.id', 'm.fixture_id') // inner join = correlated only
-        .join('leagues as l', 'l.id', 'f.league_id');
+        .join('leagues as l', 'l.id', 'f.league_id')
+        // 1:1 (fp PK = fixture_id): never multiplies the m.id count/pagination
+        .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id');
     if (date) {
         const d = date instanceof Date ? date.toISOString().substring(0, 10) : String(date);
         query.whereBetween('m.start_time', [`${d} 00:00:00`, `${d} 23:59:59`]);
@@ -144,6 +161,8 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'l.name as league_name', 'l.country as league_country',
             'f.status', 'f.season', 'f.league_id', 'f.kickoff',
             'f.home_team_id', 'f.away_team_id',
+            'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
+            'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
         );
 
     const data = await _hydrate(rows);
@@ -253,6 +272,12 @@ async function _hydrate(rows) {
             away_goals_oth: p ? formatGoals(p.away_oth_gf, p.away_oth_ga, p.away_oth_n) : null,
             updated_at: r.updated_at,
             available,
+            // Over 2.5 hot pick ledger (fixture_predictions LEFT JOIN)
+            hot: !!r.hot,
+            hot_score: r.hot_score == null ? null : Number(r.hot_score),
+            hot_outcome: r.hot_outcome ?? null,
+            hot_reason: r.hot_ai_reason ?? null,
+            hot_signals: _json(r.hot_signals),
             markets,
             markets_stale,
             stats,

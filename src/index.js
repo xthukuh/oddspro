@@ -1,9 +1,10 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
-import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings, fetchApisportsHistory } from './apisports.js';
+import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings, fetchApisportsHistory, fetchApisportsPredictions } from './apisports.js';
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
+import { updateHotPicks } from './hotpicks.js';
 import { exportRecords } from './export.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
@@ -65,6 +66,18 @@ import { _date, _dtime } from './utils.js';
     if (action === 'prematch') {
         const c = await updatePrematchSnapshots();
         console.debug(`[+] prematch: ${c.written} snapshots upserted (${c.fixtures} upcoming correlated fixtures).`);
+        return;
+    }
+
+    if (action === 'predictions') {
+        const c = await fetchApisportsPredictions();
+        console.debug(`[+] predictions: ${c.fixtures} fixtures processed, ${c.saved} predictions saved (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'hotpicks') {
+        const c = await updateHotPicks();
+        console.debug(`[+] hotpicks: ${c.settled} settled, ${c.written} evaluated, ${c.hot} hot (AI: ${c.ai.confirmed} confirmed, ${c.ai.vetoed} vetoed, ${c.ai.errors} errors).`);
         return;
     }
 

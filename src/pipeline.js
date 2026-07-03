@@ -1,15 +1,16 @@
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
-import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings, fetchApisportsHistory, apisportsQuotaRemaining } from './apisports.js';
+import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fetchApisportsStandings, fetchApisportsHistory, fetchApisportsPredictions, apisportsQuotaRemaining } from './apisports.js';
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
+import { updateHotPicks } from './hotpicks.js';
 import { _date, _dtime } from './utils.js';
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
 
-const STEPS = 9;
+const STEPS = 11;
 
 // Full ingestion pipeline (default `npm run start` action). Step order is
 // chosen to minimize server hits:
@@ -21,7 +22,9 @@ const STEPS = 9;
 //   5. link once after all ingestion (instead of after every fetch);
 //   6-7. deep stats (fetch-once flags) + standings;
 //   8. team history backfill (fetch-once) - needs linked fixtures (5);
-//   9. pre-match snapshots - needs local history (8) and fresh standings (7).
+//   9. pre-match snapshots - needs local history (8) and fresh standings (7);
+//   10. API predictions (fetch-once) - the hot-pick boost/veto signal;
+//   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4).
 export async function runStartPipeline(days_ahead_ = null) {
     // parseInt: null/undefined parse to NaN (Number(null) would be 0)
     const n = parseInt(days_ahead_, 10);
@@ -72,6 +75,14 @@ export async function runStartPipeline(days_ahead_ = null) {
     _step('pre-match snapshots (upsert upcoming, freeze past)');
     const p = await updatePrematchSnapshots();
     console.debug(`[+] prematch: ${p.written} snapshots upserted.`);
+
+    _step('API predictions (upcoming correlated fixtures, fetch-once)');
+    const a = await fetchApisportsPredictions();
+    console.debug(`[+] predictions: ${a.fixtures} fixtures processed, ${a.saved} predictions saved (quota remaining: ${a.quota_remaining}).`);
+
+    _step('hot picks (rules + optional AI adjudication)');
+    const k = await updateHotPicks();
+    console.debug(`[+] hotpicks: ${k.settled} settled, ${k.written} evaluated, ${k.hot} hot (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
 
     console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
 }
@@ -124,6 +135,12 @@ export async function runDateRefresh(date_, onStep = null) {
 
         _step('pre-match snapshots');
         summary.prematch = (await updatePrematchSnapshots()).written;
+
+        _step('API predictions');
+        summary.predictions = (await fetchApisportsPredictions()).saved;
+
+        _step('hot picks');
+        summary.hotpicks = (await updateHotPicks()).hot;
     }
 
     summary.quota_remaining = apisportsQuotaRemaining();

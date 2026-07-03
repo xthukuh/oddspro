@@ -32,6 +32,26 @@ function _time(value) {
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
+// tooltip carries the AI reason (when adjudicated) or the signal audit.
+function _hotBadge(row) {
+    // Non-hot rows are also settled in the ledger (calibration); only actual
+    // picks earn the badge - a frozen pick keeps hot=1 forever.
+    if (!row.hot) return null;
+    const detail = row.hot_reason
+        ?? (Array.isArray(row.hot_signals)
+            ? row.hot_signals.map(s => `${s.key}: ${s.value ?? '-'}`).join(' · ')
+            : '');
+    const title = `Over 2.5 hot pick${row.hot_score != null ? ` (score ${row.hot_score})` : ''}${detail ? ` - ${detail}` : ''}`;
+    return (
+        <span className="mr-1 cursor-help" title={title}>
+            🔥
+            {row.hot_outcome === 'hit' && <span className="text-emerald-600 font-bold">✓</span>}
+            {row.hot_outcome === 'miss' && <span className="text-rose-600 font-bold">✗</span>}
+        </span>
+    );
+}
+
 function _cell(row, key, linkProviders) {
     if (key === 'start_time') return _time(row.start_time);
     if (key === 'provider') {
@@ -46,14 +66,23 @@ function _cell(row, key, linkProviders) {
         // unless the provider is opted in via Settings (betpawa keeps
         // concluded match pages up for ~6h).
         const dead = row.available === false;
+        const badge = _hotBadge(row);
         if (row.match_url && (!dead || linkProviders.has(row.provider))) {
             return (
-                <a href={row.match_url} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline">
-                    {row.fixture}
-                </a>
+                <>
+                    {badge}
+                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline">
+                        {row.fixture}
+                    </a>
+                </>
             );
         }
-        return dead ? <span title="Betting unavailable">{row.fixture}</span> : row.fixture;
+        return (
+            <>
+                {badge}
+                {dead ? <span title="Betting unavailable">{row.fixture}</span> : row.fixture}
+            </>
+        );
     }
     const value = key.startsWith('fs:') ? row.stats[key] : row[key];
     return value ?? <span className="text-slate-300">-</span>;

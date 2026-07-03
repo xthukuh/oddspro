@@ -29,6 +29,11 @@ export async function fetchRecords({ date, page, perPage, sort, filters }) {
     });
 }
 
+// Hot picks accuracy summary: { windows: {7d,30d,all}, pending, upcoming }
+export async function fetchHotpicks() {
+    return _get('/api/hotpicks');
+}
+
 // Start refreshing a date's data. A 409 (refresh already running) also
 // resolves to the in-flight job state - callers just track it.
 export async function startRefresh(date) {
