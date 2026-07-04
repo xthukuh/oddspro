@@ -71,6 +71,18 @@ export function teamOutcomeAggregates(rows, teamId, opponentId, cutoff, window) 
     };
 }
 
+// Fairness pairing (mirrors goals-rules pairedTeamGoalsAggregates): both
+// teams judged over the SAME number of games, capped at the smaller side's
+// qualifying count - mixed windows bias the blended stats support.
+export function pairedTeamOutcomeAggregates(homeRows, awayRows, homeId, awayId, cutoff, window) {
+    let home = teamOutcomeAggregates(homeRows, homeId, awayId, cutoff, window);
+    let away = teamOutcomeAggregates(awayRows, awayId, homeId, cutoff, window);
+    const cap = Math.min(home.n, away.n);
+    if (home.n > cap) home = teamOutcomeAggregates(homeRows, homeId, awayId, cutoff, cap);
+    if (away.n > cap) away = teamOutcomeAggregates(awayRows, awayId, homeId, cutoff, cap);
+    return { home, away };
+}
+
 // Outcome rates over the pair's last-`window` finished meetings, from the
 // analyzed fixture's home-team perspective.
 export function h2hOutcomeAggregates(rows, homeId, awayId, cutoff, window) {

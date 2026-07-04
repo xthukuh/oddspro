@@ -75,6 +75,24 @@ export function teamGoalsAggregates(rows, teamId, opponentId, cutoff, window) {
     };
 }
 
+// Fairness pairing: both teams of one fixture must be judged over the SAME
+// number of games. Mixed windows subtly bias the rate gates (a 7-game side
+// needs 5/7 = 0.714 to clear a 0.6 over-rate floor while a 5-game side needs
+// only 3/5 = 0.6) and the averages span different stretches of form.
+// Computes each side's last-`window` aggregates, then caps BOTH at the
+// smaller qualifying count, recomputing the richer side over its most recent
+// `cap` games. `pool` carries the uncapped per-side counts so callers can
+// still attribute WHICH side is thin (eligibility reasons).
+export function pairedTeamGoalsAggregates(homeRows, awayRows, homeId, awayId, cutoff, window) {
+    let home = teamGoalsAggregates(homeRows, homeId, awayId, cutoff, window);
+    let away = teamGoalsAggregates(awayRows, awayId, homeId, cutoff, window);
+    const pool = { home_n: home.n, away_n: away.n };
+    const cap = Math.min(home.n, away.n);
+    if (home.n > cap) home = teamGoalsAggregates(homeRows, homeId, awayId, cutoff, cap);
+    if (away.n > cap) away = teamGoalsAggregates(awayRows, awayId, homeId, cutoff, cap);
+    return { home, away, pool };
+}
+
 // Aggregate goal behavior over the pair's last-`window` finished meetings.
 export function h2hGoalsAggregates(rows, homeId, awayId, cutoff, window) {
     const meetings = _qualifying(rows, cutoff)

@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    DEFAULT_THRESHOLDS, impliedProbability, teamGoalsAggregates,
+    DEFAULT_THRESHOLDS, impliedProbability, teamGoalsAggregates, pairedTeamGoalsAggregates,
     h2hGoalsAggregates, apiPredictionSignal, scoreOver25,
 } from '../src/db/goals-rules.js';
 
@@ -192,4 +192,45 @@ test('scoreOver25 threshold overrides apply', () => {
         { home: goodTeam, away: goodTeam, h2h: noH2h, market: goodMarket, api: null },
         { minImpliedOver: 0.65 },
     ).hot, false);
+});
+
+// --- pairedTeamGoalsAggregates (fairness pairing) ---
+
+test('pairedTeamGoalsAggregates caps both sides at the smaller qualifying count', () => {
+    const homeRows = [
+        fx(1, 3, 2, 2, '2026-06-01 15:00:00'), // newest: 4 goals (over)
+        fx(1, 4, 1, 0, '2026-05-01 15:00:00'), // 1 goal
+        fx(5, 1, 0, 3, '2026-04-01 15:00:00'), // 3 goals (over) - drops when capped
+    ];
+    const awayRows = [
+        fx(2, 6, 1, 1, '2026-06-02 15:00:00'), // 2 goals
+        fx(7, 2, 2, 2, '2026-05-02 15:00:00'), // 4 goals (over)
+    ];
+    const { home, away, pool } = pairedTeamGoalsAggregates(homeRows, awayRows, 1, 2, CUTOFF, 5);
+    // Raw pools kept for eligibility attribution
+    assert.deepEqual(pool, { home_n: 3, away_n: 2 });
+    // Both judged over exactly 2 games - home's oldest game is excluded
+    assert.equal(home.n, 2);
+    assert.equal(away.n, 2);
+    assert.equal(home.avgTotal, 2.5); // (4 + 1) / 2, NOT (4 + 1 + 3) / 3
+    assert.equal(home.overRate, 0.5); // 1 of the 2 most recent, NOT 2 of 3
+    assert.equal(away.avgTotal, 3);
+    assert.equal(away.overRate, 0.5);
+});
+
+test('pairedTeamGoalsAggregates leaves equal samples untouched', () => {
+    const homeRows = [fx(1, 3, 2, 1, '2026-06-01 15:00:00'), fx(1, 4, 0, 0, '2026-05-01 15:00:00')];
+    const awayRows = [fx(2, 5, 1, 1, '2026-06-02 15:00:00'), fx(2, 6, 3, 0, '2026-05-02 15:00:00')];
+    const { home, away } = pairedTeamGoalsAggregates(homeRows, awayRows, 1, 2, CUTOFF, 5);
+    assert.deepEqual(home, teamGoalsAggregates(homeRows, 1, 2, CUTOFF, 5));
+    assert.deepEqual(away, teamGoalsAggregates(awayRows, 2, 1, CUTOFF, 5));
+});
+
+test('pairedTeamGoalsAggregates zeroes both sides when one has no history', () => {
+    const homeRows = [fx(1, 3, 2, 1, '2026-06-01 15:00:00')];
+    const { home, away, pool } = pairedTeamGoalsAggregates(homeRows, [], 1, 2, CUTOFF, 5);
+    assert.deepEqual(pool, { home_n: 1, away_n: 0 });
+    assert.equal(home.n, 0);
+    assert.equal(away.n, 0);
+    assert.equal(home.avgTotal, null);
 });

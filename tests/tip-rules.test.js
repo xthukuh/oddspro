@@ -4,7 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    DEFAULT_TIP, teamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, tipHit, bestTip,
+    DEFAULT_TIP, teamOutcomeAggregates, pairedTeamOutcomeAggregates,
+    h2hOutcomeAggregates, tipEligibility, tipHit, bestTip,
 } from '../src/db/tip-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -52,6 +53,26 @@ test('teamOutcomeAggregates respects the cutoff, window and empty history', () =
     assert.equal(empty.n, 0);
     assert.equal(empty.winRate, null);
     assert.equal(empty.overRates, null);
+});
+
+// --- pairedTeamOutcomeAggregates (fairness pairing) ---
+
+test('pairedTeamOutcomeAggregates judges both teams over the min-capped window', () => {
+    const homeRows = [
+        fx(1, 3, 2, 0, '2026-06-01 15:00:00'), // newest: win
+        fx(1, 4, 0, 0, '2026-05-01 15:00:00'), // draw - drops when capped
+        fx(1, 5, 0, 1, '2026-04-01 15:00:00'), // loss - drops when capped
+    ];
+    const awayRows = [fx(2, 6, 3, 1, '2026-06-02 15:00:00')]; // win
+    const { home, away } = pairedTeamOutcomeAggregates(homeRows, awayRows, 1, 2, CUTOFF, 5);
+    assert.equal(home.n, 1);
+    assert.equal(away.n, 1);
+    assert.equal(home.winRate, 1); // only the most recent game counts
+    assert.equal(away.winRate, 1);
+    // Equal samples pass through identical to the direct computation
+    const even = pairedTeamOutcomeAggregates(homeRows, homeRows.map(f => fx(2, 9, f.ft_home, f.ft_away, f.kickoff)), 1, 2, CUTOFF, 5);
+    assert.deepEqual(even.home, teamOutcomeAggregates(homeRows, 1, 2, CUTOFF, 5));
+    assert.equal(even.home.n, even.away.n);
 });
 
 // --- h2hOutcomeAggregates ---

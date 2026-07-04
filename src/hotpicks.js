@@ -3,10 +3,10 @@ import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import { marketKey } from './markets.js';
 import {
-    teamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
+    pairedTeamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
     apiPredictionSignal, scoreOver25,
 } from './db/goals-rules.js';
-import { teamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipHit } from './db/tip-rules.js';
+import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipHit } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
 import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai.js';
 import { _batch, _progress } from './utils.js';
@@ -184,9 +184,13 @@ export async function updateHotPicks() {
         const market = p ? { ...p, impliedOver: impliedProbability(p.over, p.under) } : null;
         const apiPred = apiPreds.get(f.id);
         const api = apiPredictionSignal(apiPred);
+        // Fairness pairing: both teams judged over the SAME window, capped
+        // at the smaller side's qualifying count (see goals-rules).
+        const pair = pairedTeamGoalsAggregates(homeRows, awayRows,
+            f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow);
         const inputs = {
-            home: teamGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
-            away: teamGoalsAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
+            home: pair.home,
+            away: pair.away,
             h2h: h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
             market, api,
         };
@@ -197,9 +201,10 @@ export async function updateHotPicks() {
         // Eligibility screens first: thin-evidence fixtures skip the tip
         // computation entirely and record why (a market-only blend is just
         // the bookmaker's own opinion - the prime false-positive source).
-        // The hot-gate goals aggregates carry the same qualifying sample
-        // sizes (same window/cutoff/vs-others semantics), so no extra work.
-        const elig = tipEligibility({ ...groups, home: inputs.home, away: inputs.away },
+        // Eligibility judges the UNCAPPED per-side pools so the skip reason
+        // names the side that is actually thin (pairing would mask it).
+        const elig = tipEligibility(
+            { ...groups, home: { n: pair.pool.home_n }, away: { n: pair.pool.away_n } },
             { minGames: thresholds.minGames });
         let tip = null;
         if (elig.eligible) {
@@ -212,8 +217,8 @@ export async function updateHotPicks() {
                 : null;
             tip = bestTip({
                 ...groups,
-                home: teamOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
-                away: teamOutcomeAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
+                ...pairedTeamOutcomeAggregates(homeRows, awayRows,
+                    f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
                 h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
                 apiPercents: apiPct,
             }, {

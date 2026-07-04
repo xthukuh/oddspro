@@ -8,7 +8,7 @@
 //   node scripts/backtest-hotpicks.js
 import { db, closeDb } from '../src/db/connection.js';
 import { FINAL_STATUSES } from '../src/apisports.js';
-import { DEFAULT_THRESHOLDS, teamGoalsAggregates, h2hGoalsAggregates, scoreOver25 } from '../src/db/goals-rules.js';
+import { DEFAULT_THRESHOLDS, pairedTeamGoalsAggregates, h2hGoalsAggregates, scoreOver25 } from '../src/db/goals-rules.js';
 
 const WINDOWS = [5, 6, 7, 8];
 const OVER_RATES = [0.5, 0.55, 0.6, 0.65, 0.7];
@@ -38,10 +38,14 @@ try {
     const prepared = fixtures.map(f => {
         const cutoff = new Date(f.kickoff).getTime();
         const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
-        const perWindow = new Map(WINDOWS.map(w => [w, {
-            home: teamGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, w),
-            away: teamGoalsAggregates(fixturesByTeam.get(f.away_team_id) ?? [], f.away_team_id, f.home_team_id, cutoff, w),
-        }]));
+        const awayRows = fixturesByTeam.get(f.away_team_id) ?? [];
+        // Paired windows mirror the live writer: both sides judged over the
+        // same (min-capped) sample per fixture.
+        const perWindow = new Map(WINDOWS.map(w => {
+            const { home, away } = pairedTeamGoalsAggregates(homeRows, awayRows,
+                f.home_team_id, f.away_team_id, cutoff, w);
+            return [w, { home, away }];
+        }));
         return {
             over: f.ft_home + f.ft_away >= 3,
             h2h: h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, 5),
