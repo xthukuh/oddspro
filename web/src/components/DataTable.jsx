@@ -325,22 +325,45 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         if (!tint.has(row.api_id)) tint.set(row.api_id, ROW_TINTS[tint.size % ROW_TINTS.length]);
     }
 
-    // Left-pinned Score duplicate, shown only while the real Score column is
-    // scrolled out of view. Hysteresis matters: inserting the pin shifts the
-    // table right by its own width, so pin when the original crosses the
-    // container's left edge, but unpin only once it would clear the pin's
-    // width again - a symmetric threshold would oscillate at the boundary.
+    // Left-pinned duplicates of the columns worth keeping in view (Score and
+    // Tip), each shown only while its real column is scrolled out of view.
+    // Hysteresis matters: inserting a pin shifts the table right, so a column
+    // pins when it crosses the container's left edge but unpins only once it
+    // would clear the TOTAL width of the currently-inserted pins - adding or
+    // removing a pin moves the real columns and the threshold by the same
+    // amount, so the states never oscillate at the boundary.
+    const PIN_KEYS = ['score', 'tip'];
     const containerRef = useRef(null);
-    const scoreThRef = useRef(null);
-    const [pinScore, setPinScore] = useState(false);
+    const pinThRefs = useRef({}); // key -> the real column's <th>
+    const [pinState, setPinState] = useState({}); // key -> pinned?
     const onScroll = () => {
-        const cont = containerRef.current, th = scoreThRef.current;
-        if (!cont || !th) return;
-        const dx = th.getBoundingClientRect().left - cont.getBoundingClientRect().left;
-        setPinScore(p => (p ? dx < th.offsetWidth : dx < 0));
+        const cont = containerRef.current;
+        if (!cont) return;
+        const contLeft = cont.getBoundingClientRect().left;
+        setPinState(prev => {
+            const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
+                sum + (prev[key] ? pinThRefs.current[key]?.offsetWidth ?? 0 : 0), 0);
+            const next = {};
+            let changed = false;
+            for (const key of PIN_KEYS) {
+                const th = pinThRefs.current[key];
+                if (!th) continue;
+                const dx = th.getBoundingClientRect().left - contLeft;
+                next[key] = prev[key] ? dx < pinnedWidth : dx < 0;
+                if (next[key] !== !!prev[key]) changed = true;
+            }
+            return changed ? next : prev;
+        });
     };
-    const scoreCol = columns.find(c => c.key === 'score');
-    const pinned = pinScore && scoreCol ? [{ ...scoreCol, pin: true }, ...columns] : columns;
+    // Pins keep the columns' own (drag-order) relative order and stack with
+    // cumulative left offsets so they never overlap.
+    let pinLeft = 0;
+    const pins = columns.filter(c => pinState[c.key]).map(c => {
+        const p = { ...c, pin: true, left: pinLeft };
+        pinLeft += pinThRefs.current[c.key]?.offsetWidth ?? 0;
+        return p;
+    });
+    const pinned = pins.length ? [...pins, ...columns] : columns;
 
     return (
         <>
@@ -361,14 +384,17 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                 ?? (col.key.startsWith('fs:') ? 'Home / Away - post-match statistic' : null);
                             // Backgrounds and edge shadows live on the sticky
                             // cells themselves (tr backgrounds/borders don't
-                            // stick); the pinned Score corner wins both axes.
+                            // stick); a pinned corner cell wins both axes.
                             const sticky = col.pin
-                                ? 'sticky left-0 top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
+                                ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
                                 : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_#e2e8f0]';
                             return (
                                 <th
-                                    key={col.pin ? 'pin:score' : col.key}
-                                    ref={!col.pin && col.key === 'score' ? scoreThRef : undefined}
+                                    key={col.pin ? `pin:${col.key}` : col.key}
+                                    style={col.pin ? { left: col.left } : undefined}
+                                    ref={!col.pin && PIN_KEYS.includes(col.key)
+                                        ? el => { pinThRefs.current[col.key] = el; }
+                                        : undefined}
                                     onClick={e => onSort(col.key, e.shiftKey)}
                                     className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium cursor-pointer hover:bg-slate-100 ${col.group === 'market' ? 'text-center' : ''}`}
                                     title={`${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
@@ -393,10 +419,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                         >
                             {pinned.map(col => (
                                 <td
-                                    key={col.pin ? 'pin:score' : col.key}
+                                    key={col.pin ? `pin:${col.key}` : col.key}
                                     title={_cellTitle(row, col)}
+                                    style={col.pin ? { left: col.left } : undefined}
                                     className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
-                                        ? `sticky left-0 z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
+                                        ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
                                         : ''}`}
                                 >
                                     {col.group === 'market' ? _marketCell(row, col.key) : _cell(row, col.key, links, openTip)}
