@@ -4,7 +4,7 @@ import { fetchApisportsFixtures, settleApisportsResults, fetchApisportsStats, fe
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
-import { updateHotPicks } from './hotpicks.js';
+import { updateHotPicks, performanceSummary } from './hotpicks.js';
 import { exportRecords } from './export.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
@@ -77,7 +77,34 @@ import { _date, _dtime } from './utils.js';
 
     if (action === 'hotpicks') {
         const c = await updateHotPicks();
-        console.debug(`[+] hotpicks: ${c.settled} settled (${c.tips_settled} tips), ${c.written} evaluated, ${c.hot} hot, ${c.tips} tips (AI: ${c.ai.confirmed} confirmed, ${c.ai.vetoed} vetoed, ${c.ai.errors} errors).`);
+        console.debug(`[+] hotpicks: ${c.settled} settled (${c.tips_settled} tips), ${c.written} evaluated, ${c.hot} hot, `
+            + `${c.tips} tips, ${c.tips_skipped} skipped ineligible `
+            + `(AI hot: ${c.ai.confirmed}/${c.ai.vetoed}/${c.ai.errors} confirmed/vetoed/errors; `
+            + `AI tips: ${c.tip_ai.confirmed}/${c.tip_ai.vetoed}/${c.tip_ai.errors}).`);
+        return;
+    }
+
+    if (action === 'performance') {
+        const p = await performanceSummary();
+        // Flat tables: one row per window / bucket, per pick stream
+        const _rows = (label, blocks) => Object.entries(blocks).map(([key, s]) => ({
+            [label]: key, picks: s.picks, hits: s.hits, misses: s.misses, pending: s.pending,
+            'hit-rate': s.rate == null ? '-' : `${(s.rate * 100).toFixed(1)}%`,
+            'avg price': s.avg_price ?? '-',
+            'break-even': s.break_even == null ? '-' : `${(s.break_even * 100).toFixed(1)}%`,
+            profit: s.profit, roi: s.roi == null ? '-' : `${(s.roi * 100).toFixed(1)}%`,
+        }));
+        for (const [name, stream] of [['TIPS', p.tips], ['HOT PICKS (O 2.5)', p.hotpicks]]) {
+            console.log(`\n=== ${name} - flat-stake performance (1 unit/pick) ===`);
+            console.table(_rows('window', stream.windows));
+            for (const [bucket, blocks] of Object.entries(stream.buckets)) {
+                console.log(`--- by ${bucket} (all time) ---`);
+                console.table(_rows(bucket, blocks));
+            }
+            const v = stream.ai_impact.vetoed;
+            console.log(`--- AI-vetoed (excluded above): ${v.picks} picks, `
+                + `${v.hits}/${v.misses} hit/miss, profit ${v.profit} -> veto saved ${stream.ai_impact.saved} units ---`);
+        }
         return;
     }
 

@@ -6,6 +6,7 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { sortRows } from '../sortValues.js';
+import TipPopover, { skipLabel } from './TipPopover.jsx';
 
 const PROVIDER_STYLE = {
     betpawa: 'bg-emerald-100 text-emerald-800',
@@ -187,26 +188,50 @@ function _hotBadge(row) {
     );
 }
 
-function _cell(row, key, linkProviders) {
+function _cell(row, key, linkProviders, openTip) {
     if (key === 'start_time') return _time(row.start_time);
     if (key === 'updated_at' || key === 'locked_at') {
         return row[key] ? _time(row[key]) : <span className="text-slate-300">-</span>;
     }
     if (key === 'tip') {
         // Safest bettable outcome + blended confidence; 🔥 marks the fixture
-        // as an over-2.5 hot pick; ✓/✗ appear once the tip settles.
-        if (!row.tip_market) return <span className="text-slate-300">-</span>;
+        // as an over-2.5 hot pick; ✓/✗ appear once the tip settles. Clicking
+        // opens the justification popover (blend breakdown, gate audit, AI).
+        if (!row.tip_market) {
+            // Distinguish "not enough data" (eligibility skip) from "no value
+            // found" ('no_pick') and from old rows without a stored reason.
+            const reason = row.tip_skip_reason;
+            if (!reason) return <span className="text-slate-300">-</span>;
+            return (
+                <span
+                    className="text-slate-300 italic cursor-pointer"
+                    title={`${skipLabel(reason)}\nClick for details`}
+                    onClick={e => openTip(row, e)}
+                >
+                    {reason === 'no_pick' ? '-' : 'no data'}
+                </span>
+            );
+        }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
+        const vetoed = row.tip_ai_verdict === 'veto';
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
-            + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '');
-        // A missed tip turns red wholesale; a hit stays calm with its ✓
+            + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '')
+            + (vetoed ? ` - AI veto: ${row.tip_ai_reason ?? 'see details'}` : '')
+            + '\nClick for reasoning';
+        // A missed tip turns red wholesale; a hit stays calm with its ✓; an
+        // AI-vetoed tip is struck through (it stays on record and settles -
+        // the performance report measures what the veto was worth).
         const missed = row.tip_outcome === 'miss';
         return (
-            <span className={`whitespace-nowrap cursor-help ${missed ? 'text-rose-600' : ''}`} title={title}>
+            <span
+                className={`whitespace-nowrap cursor-pointer ${missed ? 'text-rose-600' : vetoed ? 'text-slate-400' : ''}`}
+                title={title}
+                onClick={e => openTip(row, e)}
+            >
                 {row.hot ? '🔥 ' : ''}
-                <span className="font-medium">{row.tip_market}</span>
-                {pct && <span className={missed ? '' : 'text-slate-500'}> · {pct}</span>}
+                <span className={`font-medium ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
+                {pct && <span className={missed || vetoed ? '' : 'text-slate-500'}> · {pct}</span>}
                 {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
                 {missed && <span className="font-bold"> ✗</span>}
             </span>
@@ -266,6 +291,13 @@ function _marketCell(row, key) {
 export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
 
+    // Tip justification popover, anchored at the click point (one at a time)
+    const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
+    const openTip = (row, e) => {
+        e.stopPropagation();
+        setTipPop({ row, x: e.clientX, y: e.clientY });
+    };
+
     // Column pipeline: assemble + apply the drag order, drop enabled-but-
     // empty market/stat columns (base columns always show).
     const columns = useMemo(() => {
@@ -311,6 +343,8 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     const pinned = pinScore && scoreCol ? [{ ...scoreCol, pin: true }, ...columns] : columns;
 
     return (
+        <>
+        {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} onClose={() => setTipPop(null)} />}
         <div
             ref={containerRef}
             onScroll={onScroll}
@@ -365,7 +399,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                         ? `sticky left-0 z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
                                         : ''}`}
                                 >
-                                    {col.group === 'market' ? _marketCell(row, col.key) : _cell(row, col.key, links)}
+                                    {col.group === 'market' ? _marketCell(row, col.key) : _cell(row, col.key, links, openTip)}
                                 </td>
                             ))}
                         </tr>
@@ -380,5 +414,6 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                 </tbody>
             </table>
         </div>
+        </>
     );
 }

@@ -6,8 +6,9 @@ import {
     teamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
     apiPredictionSignal, scoreOver25,
 } from './db/goals-rules.js';
-import { teamOutcomeAggregates, h2hOutcomeAggregates, bestTip, tipHit } from './db/tip-rules.js';
-import { aiEnabled, adjudicateHotPick } from './ai.js';
+import { teamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipHit } from './db/tip-rules.js';
+import { summarizePerformance } from './db/perf-rules.js';
+import { aiEnabled, adjudicateHotPick, reviewTip } from './ai.js';
 import { _batch, _progress } from './utils.js';
 
 // Over 2.5 hot picks ledger (fixture_predictions): every upcoming correlated
@@ -24,7 +25,8 @@ import { _batch, _progress } from './utils.js';
 const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
     'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model',
-    'tip_market', 'tip_price', 'tip_confidence', 'computed_at',
+    'tip_market', 'tip_price', 'tip_confidence', 'tip_breakdown', 'tip_skip_reason',
+    'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'computed_at',
 ];
 
 // O/U total-goals lines (mirrors markets.js OU_LINES)
@@ -126,7 +128,12 @@ export async function updateHotPicks() {
         .select('f.id', 'f.kickoff', 'f.home_team_id', 'f.away_team_id',
             'l.name as league', 'th.name as home_name', 'ta.name as away_name');
     console.debug(`Hot picks - ${settled} settled (${tips_settled} tips); ${targets.length} upcoming correlated fixtures to evaluate...`);
-    if (!targets.length) return { settled, tips_settled, fixtures: 0, written: 0, hot: 0, tips: 0, ai: { confirmed: 0, vetoed: 0, errors: 0 } };
+    if (!targets.length) {
+        return {
+            settled, tips_settled, fixtures: 0, written: 0, hot: 0, tips: 0, tips_skipped: 0,
+            ai: { confirmed: 0, vetoed: 0, errors: 0 }, tip_ai: { confirmed: 0, vetoed: 0, errors: 0 },
+        };
+    }
 
     const fixtureIds = targets.map(f => f.id);
     const teamIds = [...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))];
@@ -154,7 +161,8 @@ export async function updateHotPicks() {
         .map(p => [p.fixture_id, p]));
     // Existing rows: reuse AI verdicts when the evaluation is unchanged
     const existing = new Map((await db('fixture_predictions').whereIn('fixture_id', fixtureIds)
-        .select('fixture_id', 'score', 'ai_verdict', 'ai_reason', 'ai_model'))
+        .select('fixture_id', 'score', 'ai_verdict', 'ai_reason', 'ai_model',
+            'tip_market', 'tip_price', 'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model'))
         .map(p => [p.fixture_id, p]));
 
     const thresholds = {
@@ -166,7 +174,7 @@ export async function updateHotPicks() {
         h2hMinOverRate: config.HOTPICK_H2H_MIN_OVER_RATE,
     };
 
-    const rows = [], candidates = [];
+    const rows = [], candidates = [], tipCandidates = [];
     for (const f of targets) {
         const cutoff = new Date(f.kickoff).getTime();
         const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
@@ -186,25 +194,35 @@ export async function updateHotPicks() {
 
         // Safest bettable outcome across every canonical market (the "Tip"
         // column) - independent of the hot verdict, same leak-free windows.
-        const apiPct = apiPred && apiPred.percent_home != null && apiPred.percent_draw != null && apiPred.percent_away != null
-            ? {
-                home: Number(apiPred.percent_home) / 100,
-                draw: Number(apiPred.percent_draw) / 100,
-                away: Number(apiPred.percent_away) / 100,
-            }
-            : null;
-        const tip = bestTip({
-            ...groups,
-            home: teamOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
-            away: teamOutcomeAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
-            h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
-            apiPercents: apiPct,
-        }, {
-            teamWindow: thresholds.teamWindow,
-            minGames: thresholds.minGames,
-            minPrice: config.TIP_MIN_PRICE,
-            minConfidence: config.TIP_MIN_CONFIDENCE,
-        });
+        // Eligibility screens first: thin-evidence fixtures skip the tip
+        // computation entirely and record why (a market-only blend is just
+        // the bookmaker's own opinion - the prime false-positive source).
+        // The hot-gate goals aggregates carry the same qualifying sample
+        // sizes (same window/cutoff/vs-others semantics), so no extra work.
+        const elig = tipEligibility({ ...groups, home: inputs.home, away: inputs.away },
+            { minGames: thresholds.minGames });
+        let tip = null;
+        if (elig.eligible) {
+            const apiPct = apiPred && apiPred.percent_home != null && apiPred.percent_draw != null && apiPred.percent_away != null
+                ? {
+                    home: Number(apiPred.percent_home) / 100,
+                    draw: Number(apiPred.percent_draw) / 100,
+                    away: Number(apiPred.percent_away) / 100,
+                }
+                : null;
+            tip = bestTip({
+                ...groups,
+                home: teamOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
+                away: teamOutcomeAggregates(awayRows, f.away_team_id, f.home_team_id, cutoff, thresholds.teamWindow),
+                h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
+                apiPercents: apiPct,
+            }, {
+                teamWindow: thresholds.teamWindow,
+                minGames: thresholds.minGames,
+                minPrice: config.TIP_MIN_PRICE,
+                minConfidence: config.TIP_MIN_CONFIDENCE,
+            });
+        }
         const row = {
             fixture_id: f.id,
             market: 'O 2.5',
@@ -221,10 +239,18 @@ export async function updateHotPicks() {
             tip_market: tip?.market ?? null,
             tip_price: tip?.price ?? null,
             tip_confidence: tip?.confidence ?? null,
+            tip_breakdown: tip ? JSON.stringify(tip) : null,
+            // 'no_pick' = eligible but nothing cleared the price/confidence
+            // floors - distinguishable from "not enough data" in the UI
+            tip_skip_reason: (elig.eligible ? (tip ? null : 'no_pick') : elig.reason)?.substring(0, 64) ?? null,
+            tip_ai_verdict: null,
+            tip_ai_reason: null,
+            tip_ai_model: null,
             computed_at: db.fn.now(),
         };
         rows.push(row);
         if (out.hot) candidates.push({ f, row, inputs });
+        if (tip) tipCandidates.push({ f, row, tip });
     }
 
     // AI adjudication - only rule-passing candidates, optional and fail-open.
@@ -261,6 +287,49 @@ export async function updateHotPicks() {
         }, 1);
     }
 
+    // Tip AI review - top-confidence tips only, best first, capped per run.
+    // Same fail-open + verdict-reuse idiom as the hot adjudication; a veto
+    // FLAGS the tip (greyed in the UI) but never clears it - the outcome
+    // still settles, so the report can prove what the vetoes were worth.
+    const tipAi = { confirmed: 0, vetoed: 0, errors: 0 };
+    if (aiEnabled() && tipCandidates.length && config.TIP_AI_DAILY_CAP > 0) {
+        const shortlist = tipCandidates
+            .filter(c => c.tip.confidence >= config.TIP_AI_MIN_CONFIDENCE)
+            .sort((a, b) => b.tip.confidence - a.tip.confidence)
+            .slice(0, config.TIP_AI_DAILY_CAP);
+        if (shortlist.length) {
+            const tick = _progress('Hot picks - tip AI review');
+            await _batch(shortlist, async (c, i, len) => {
+                const prev = existing.get(c.f.id);
+                // Same tip as the last billed call: reuse the verdict
+                const unchanged = prev && ['confirm', 'veto'].includes(prev.tip_ai_verdict)
+                    && prev.tip_market === c.row.tip_market
+                    && Number(prev.tip_price) === c.row.tip_price;
+                let verdict;
+                if (unchanged) {
+                    verdict = { verdict: prev.tip_ai_verdict, reason: prev.tip_ai_reason, model: prev.tip_ai_model };
+                } else {
+                    try {
+                        verdict = await reviewTip({
+                            fixture: `${c.f.home_name} - ${c.f.away_name}`,
+                            kickoff: c.f.kickoff,
+                            league: c.f.league,
+                            tip: c.tip,
+                        });
+                    } catch (e) {
+                        console.warn(`[!] Tip AI review failed for fixture ${c.f.id} (tip kept): ${e?.message ?? e}`);
+                        verdict = { verdict: 'error', reason: null, model: config.HOTPICK_AI_MODEL };
+                    }
+                }
+                c.row.tip_ai_verdict = verdict.verdict;
+                c.row.tip_ai_reason = verdict.reason;
+                c.row.tip_ai_model = verdict.model;
+                tipAi[{ confirm: 'confirmed', veto: 'vetoed', error: 'errors' }[verdict.verdict]]++;
+                tick(len);
+            }, 1);
+        }
+    }
+
     // Single-statement upsert per chunk: no delete+insert, no deadlock exposure
     for (let i = 0; i < rows.length; i += 200) {
         await db('fixture_predictions').insert(rows.slice(i, i + 200))
@@ -272,8 +341,21 @@ export async function updateHotPicks() {
         written: rows.length,
         hot: rows.filter(r => r.hot).length,
         tips: rows.filter(r => r.tip_market != null).length,
+        tips_skipped: rows.filter(r => r.tip_skip_reason != null && r.tip_skip_reason !== 'no_pick').length,
         ai,
+        tip_ai: tipAi,
     };
+}
+
+// ROI / hit-rate / bucket report over the whole pick ledger (pure calc in
+// src/db/perf-rules.js). Backs GET /api/performance and the CLI action.
+export async function performanceSummary() {
+    const rows = await db('fixture_predictions as p')
+        .join('fixtures as f', 'f.id', 'p.fixture_id')
+        .where(q => q.where('p.hot', 1).orWhere('p.ai_verdict', 'veto').orWhereNotNull('p.tip_market'))
+        .select('f.kickoff', 'p.hot', 'p.score', 'p.outcome', 'p.over_price', 'p.ai_verdict',
+            'p.tip_market', 'p.tip_price', 'p.tip_confidence', 'p.tip_outcome', 'p.tip_ai_verdict');
+    return summarizePerformance(rows);
 }
 
 // Accuracy summary for the web header chip + hot list (GET /api/hotpicks).

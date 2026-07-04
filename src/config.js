@@ -36,6 +36,14 @@ const EnvSchema = z.object({
     OPENROUTER_API_KEY: z.string().min(1).optional(),
     OPENROUTER_URL: z.string().url().default('https://openrouter.ai/api/v1'),
     HOTPICK_AI_MODEL: z.string().default('openai/gpt-4o-mini'),
+    // Web-grounded AI: append `:online` (OpenRouter web plugin) to the model
+    // for BOTH adjudicators. Opt-in - each web search bills per call.
+    // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
+    HOTPICK_AI_WEB: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    // Tip AI review: only tips at/above this confidence, best-first, at most
+    // this many fresh verdicts per run (cached verdicts don't count).
+    TIP_AI_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.75),
+    TIP_AI_DAILY_CAP: z.coerce.number().int().min(0).default(20),
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)

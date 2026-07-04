@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    DEFAULT_TIP, teamOutcomeAggregates, h2hOutcomeAggregates, tipHit, bestTip,
+    DEFAULT_TIP, teamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, tipHit, bestTip,
 } from '../src/db/tip-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -211,4 +211,94 @@ test('bestTip defaults are sane', () => {
     assert.ok(DEFAULT_TIP.minConfidence >= 0.5);
     const sum = DEFAULT_TIP.weights.market + DEFAULT_TIP.weights.stats + DEFAULT_TIP.weights.api;
     assert.ok(Math.abs(sum - 1) < 1e-9);
+});
+
+// --- bestTip justification breakdown (persisted as tip_breakdown) ---
+
+test('bestTip carries evidence samples and renormalized weights', () => {
+    const seven = { n: 7, winRate: 0.857, drawRate: 0.143, lossRate: 0, overRates: null };
+    const out = bestTip({
+        x12: { 1: 1.5, X: 4.0, 2: 7.0 }, dc: null, ou: {},
+        home: seven, away: { ...seven, winRate: 0, lossRate: 0.857 },
+        h2h: { ...noH2h, n: 2 }, apiPercents: null,
+    });
+    assert.deepEqual(out.samples, { home_n: 7, away_n: 7, h2h_n: 2 });
+    // market 0.6 + stats 0.3 available -> renormalized to 2/3 and 1/3
+    assert.equal(out.weights.market, Math.round(0.6 / 0.9 * 10000) / 10000);
+    assert.equal(out.weights.stats, Math.round(0.3 / 0.9 * 10000) / 10000);
+    assert.equal(out.weights.api, null);
+    // Market-only blend: full weight on the market component
+    const solo = bestTip({ ...marketOnly, x12: { 1: 1.25, X: 6.0, 2: 9.0 }, dc: null, ou: {} });
+    assert.equal(solo.weights.market, 1);
+    assert.equal(solo.weights.stats, null);
+});
+
+test('bestTip lists up to two runners-up in confidence order, excluding the pick', () => {
+    const out = bestTip({
+        ...marketOnly,
+        x12: { 1: 1.25, X: 6.0, 2: 9.0 },
+        dc: { '1X': 1.22, X2: 2.4, 12: 1.3 },
+        ou: {},
+    });
+    assert.ok(Array.isArray(out.runners_up));
+    assert.ok(out.runners_up.length <= 2);
+    assert.ok(out.runners_up.every(r => r.market !== out.market));
+    for (let i = 1; i < out.runners_up.length; i++) {
+        assert.ok(out.runners_up[i - 1].confidence >= out.runners_up[i].confidence);
+    }
+    assert.ok(out.confidence >= (out.runners_up[0]?.confidence ?? 0));
+});
+
+// --- tipEligibility (evidence screen run BEFORE bestTip) ---
+// Contract: a fixture is only tippable when BOTH teams carry a qualifying
+// sample of at least minGames AND at least one full market group exists.
+// The reason marker is what the web UI surfaces (<= 64 chars).
+//
+// Marked todo while the rule body is a scaffold (user contribution pending
+// in src/db/tip-rules.js) - REMOVE the todo option once the rules land so
+// these become enforcing again.
+const TODO_ELIGIBILITY = { todo: 'awaiting the user-contributed eligibility rule body' };
+
+const games = n => ({ n });
+const fullBook = { x12: { 1: 1.5, X: 4.0, 2: 7.0 }, dc: null, ou: {} };
+
+test('tipEligibility rejects thin home history with a detailed reason', TODO_ELIGIBILITY, () => {
+    const out = tipEligibility({ ...fullBook, home: games(2), away: games(7) });
+    assert.equal(out.eligible, false);
+    assert.match(out.reason, /^insufficient_history/);
+    assert.match(out.reason, /home/);
+    assert.ok(out.reason.length <= 64);
+});
+
+test('tipEligibility rejects thin away history with a detailed reason', TODO_ELIGIBILITY, () => {
+    const out = tipEligibility({ ...fullBook, home: games(7), away: games(4) });
+    assert.equal(out.eligible, false);
+    assert.match(out.reason, /^insufficient_history/);
+    assert.match(out.reason, /away/);
+});
+
+test('tipEligibility rejects fixtures with no market group at all', TODO_ELIGIBILITY, () => {
+    const out = tipEligibility({ x12: null, dc: null, ou: {}, home: games(7), away: games(7) });
+    assert.equal(out.eligible, false);
+    assert.equal(out.reason, 'no_markets');
+});
+
+test('tipEligibility passes a well-evidenced fixture (any single group suffices)', TODO_ELIGIBILITY, () => {
+    assert.deepEqual(
+        tipEligibility({ ...fullBook, home: games(5), away: games(5) }),
+        { eligible: true, reason: null },
+    );
+    assert.equal(
+        tipEligibility({
+            x12: null, dc: null, ou: { 2.5: { over: 1.6, under: 2.3 } },
+            home: games(7), away: games(7),
+        }).eligible,
+        true,
+    );
+});
+
+test('tipEligibility honors a minGames override', TODO_ELIGIBILITY, () => {
+    const inputs = { ...fullBook, home: games(3), away: games(3) };
+    assert.equal(tipEligibility(inputs).eligible, false);
+    assert.equal(tipEligibility(inputs, { minGames: 3 }).eligible, true);
 });

@@ -207,6 +207,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
             'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
             'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
+            'fp.tip_breakdown', 'fp.tip_skip_reason', 'fp.tip_ai_verdict', 'fp.tip_ai_reason',
         );
 
     const data = await _hydrate(rows);
@@ -368,6 +369,10 @@ async function _hydrate(rows) {
             tip_price: r.tip_price == null ? null : Number(r.tip_price),
             tip_confidence: r.tip_confidence == null ? null : Number(r.tip_confidence),
             tip_outcome: r.tip_outcome ?? null,
+            tip_breakdown: _json(r.tip_breakdown),
+            tip_skip_reason: r.tip_skip_reason ?? null,
+            tip_ai_verdict: r.tip_ai_verdict ?? null,
+            tip_ai_reason: r.tip_ai_reason ?? null,
             markets,
             markets_stale,
             stats,

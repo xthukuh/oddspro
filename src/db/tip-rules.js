@@ -109,6 +109,32 @@ function _mean(components) {
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
+// Cheap evidence screen run BEFORE bestTip: a fixture without enough
+// independent evidence never gets a tip at all. Without it the blend silently
+// renormalizes to market-only - and the market component is the bookmaker's
+// own devigged opinion, which cannot beat the vig by itself (the prime
+// false-positive source this gate exists to kill).
+//   x12/dc/ou: market groups as passed to bestTip (null / {} when absent)
+//   home/away: any aggregates carrying the qualifying sample size `n`
+//              (the writer reuses the hot-gate teamGoalsAggregates results)
+// Returns { eligible: true, reason: null } or { eligible: false, reason }
+// where reason is a short marker surfaced by the web UI (<= 64 chars), e.g.
+// 'insufficient_history: home 2/5' or 'no_markets'.
+export function tipEligibility({ x12, dc, ou, home, away }, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    // TODO(user contribution): the eligibility rules are a betting-domain
+    // judgment call - which conditions disqualify a fixture, in what order,
+    // with what reason detail. Expected shape (~8 lines):
+    //   - either team's sample below t.minGames -> insufficient_history
+    //     (include the offending side(s) and counts in the reason);
+    //   - no market group at all (no x12, no dc, no O/U pair) -> no_markets;
+    //   - otherwise eligible.
+    // Placeholder passes everything through so live runs keep today's
+    // behavior until the real rules land (tests specify the contract).
+    void t; void x12; void dc; void ou; void home; void away;
+    return { eligible: true, reason: null };
+}
+
 // Did a settled fixture hit one canonical market? (tip settlement)
 export function tipHit(market, ftHome, ftAway) {
     const total = ftHome + ftAway;
@@ -132,8 +158,11 @@ export function tipHit(market, ftHome, ftAway) {
 //   ou: { [line]: { over, under } } (only lines with a full pair)
 //   home/away: teamOutcomeAggregates(); h2h: h2hOutcomeAggregates()
 //   apiPercents: { home, draw, away } fractions 0..1 | null
-// Returns { market, price, confidence, market_prob, stats_prob, api_prob }
-// or null when nothing clears the price and confidence floors.
+// Returns { market, price, confidence, market_prob, stats_prob, api_prob,
+// weights, samples, runners_up } - weights are the renormalized blend weights
+// actually applied, samples the evidence sizes, runners_up the next two
+// candidates (justification breakdown persisted as fixture_predictions
+// .tip_breakdown) - or null when nothing clears the price/confidence floors.
 export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
     const w = t.weights;
@@ -189,6 +218,12 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
             market_prob: _round(mkt),
             stats_prob: stats == null ? null : _round(stats),
             api_prob: apiP == null ? null : _round(apiP),
+            // Effective weights after renormalizing over the available parts
+            weights: {
+                market: _round(w.market / weight),
+                stats: stats == null ? null : _round(w.stats / weight),
+                api: apiP == null ? null : _round(w.api / weight),
+            },
         });
     };
 
@@ -208,5 +243,10 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
 
     if (!candidates.length) return null;
     candidates.sort((a, b) => b.confidence - a.confidence || b.price - a.price);
-    return candidates[0].confidence >= t.minConfidence ? candidates[0] : null;
+    if (candidates[0].confidence < t.minConfidence) return null;
+    return {
+        ...candidates[0],
+        samples: { home_n: home.n, away_n: away.n, h2h_n: h2h.n },
+        runners_up: candidates.slice(1, 3),
+    };
 }

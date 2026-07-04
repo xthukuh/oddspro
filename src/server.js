@@ -3,7 +3,7 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
-import { hotpicksSummary } from './hotpicks.js';
+import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { runDateRefresh } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 
@@ -57,6 +57,16 @@ app.get('/api/records', async (req, res, next) => {
 app.get('/api/hotpicks', async (req, res, next) => {
     try {
         res.json(await hotpicksSummary());
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/performance - flat-stake ROI / hit-rate / bucket report for tips
+// and hot picks (windows, confidence/market/edge buckets, AI-veto impact)
+app.get('/api/performance', async (req, res, next) => {
+    try {
+        res.json(await performanceSummary());
     } catch (e) {
         next(e);
     }
