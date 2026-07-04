@@ -2,34 +2,43 @@ import axios from 'axios';
 import { z } from 'zod';
 import { config } from './config.js';
 
-// Optional OpenRouter adjudicators, both fail-open (absent key or any API
+// Optional Google Gemini adjudicators, both fail-open (absent key or any API
 // failure keeps the rule-based verdict - the features never depend on the AI
 // being up), both confirm/veto only (the AI can never promote a pick):
 // - adjudicateHotPick: last gate for over-2.5 candidates that already passed
 //   every deduction rule (a handful of calls per day at most);
 // - reviewTip: same idea for the top-confidence tips (capped per run).
-// With HOTPICK_AI_WEB=1 the model slug gains `:online` (OpenRouter web
-// plugin), letting verdicts cite real-world context the warehouse cannot see
-// (injuries, rotation, dead rubbers). Each web search bills per call.
+// With HOTPICK_AI_WEB=1 requests attach Gemini's native google_search tool,
+// letting verdicts cite real-world context the warehouse cannot see
+// (injuries, rotation, dead rubbers). Grounded requests bill extra per call.
+// (Replaced OpenRouter 2026-07-04: stronger default reasoner + real Google
+// Search grounding; the stored ai_model tag records what produced a verdict.)
 
 export function aiEnabled() {
-    return Boolean(config.OPENROUTER_API_KEY);
+    return Boolean(config.GEMINI_API_KEY);
 }
 
-function _model() {
-    return config.HOTPICK_AI_MODEL + (config.HOTPICK_AI_WEB ? ':online' : '');
+// Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
+// switching model or grounding automatically re-adjudicates upcoming rows.
+export function aiModelTag() {
+    return config.HOTPICK_AI_MODEL + (config.HOTPICK_AI_WEB ? '+search' : '');
 }
 
-// OpenRouter response envelope (validated - external data)
-const ChatEnvelope = z.object({
-    choices: z.array(z.object({
-        message: z.object({ content: z.string() }),
+// Gemini generateContent response envelope (validated - external data).
+// Tolerant on purpose: grounded replies may split text across parts, and
+// safety-blocked candidates can arrive without content at all.
+const GeminiEnvelope = z.object({
+    candidates: z.array(z.object({
+        content: z.object({
+            parts: z.array(z.object({ text: z.string().optional() })).nullable().optional(),
+        }).nullable().optional(),
     })).min(1),
 });
 
 const Verdict = z.object({
     verdict: z.enum(['confirm', 'veto']),
-    reason: z.string(),
+    // Gemini sometimes omits the reason on confirms - tolerate it
+    reason: z.string().nullish().transform(v => v ?? ''),
 });
 
 // Extract the reply's JSON object, tolerating markdown code fences.
@@ -41,23 +50,28 @@ function _parseVerdict(content) {
 
 // One verdict round-trip: prompt in, { verdict, reason, model } out.
 // Throws on any failure; callers record ai_verdict 'error' and keep the rule
-// verdict (fail-open).
+// verdict (fail-open). No JSON response mode - it can't be combined with the
+// google_search tool, so the prompt demands JSON and _parseVerdict extracts.
 async function _adjudicate(prompt) {
-    const model = _model();
-    const res = await axios.post(`${config.OPENROUTER_URL}/chat/completions`, {
-        model,
-        temperature: 0,
-        messages: [{ role: 'user', content: prompt }],
-    }, {
-        headers: {
-            Authorization: `Bearer ${config.OPENROUTER_API_KEY}`,
-            'Content-Type': 'application/json',
+    const res = await axios.post(
+        `${config.GEMINI_URL}/models/${config.HOTPICK_AI_MODEL}:generateContent`,
+        {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0 },
+            ...(config.HOTPICK_AI_WEB ? { tools: [{ google_search: {} }] } : {}),
         },
-        timeout: 60_000, // web-grounded calls run searches before answering
-    });
-    const parsed = ChatEnvelope.parse(res.data);
-    const out = _parseVerdict(parsed.choices[0].message.content);
-    return { ...out, reason: out.reason.substring(0, 512), model };
+        {
+            headers: {
+                'x-goog-api-key': config.GEMINI_API_KEY,
+                'Content-Type': 'application/json',
+            },
+            timeout: 60_000, // grounded calls run searches before answering
+        },
+    );
+    const parsed = GeminiEnvelope.parse(res.data);
+    const content = (parsed.candidates[0].content?.parts ?? []).map(p => p.text ?? '').join('');
+    const out = _parseVerdict(content);
+    return { ...out, reason: out.reason.substring(0, 512), model: aiModelTag() };
 }
 
 // Ask the model to confirm or veto one over-2.5 candidate given the full

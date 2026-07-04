@@ -8,13 +8,13 @@ import {
 } from './db/goals-rules.js';
 import { teamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipHit } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
-import { aiEnabled, adjudicateHotPick, reviewTip } from './ai.js';
+import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai.js';
 import { _batch, _progress } from './utils.js';
 
 // Over 2.5 hot picks ledger (fixture_predictions): every upcoming correlated
 // fixture with a pre-match snapshot gets an evaluated row (signals kept for
 // calibration); `hot` marks full rule concurrence, optionally adjudicated by
-// the OpenRouter AI (env-gated, fail-open). Rows are upserted on every run
+// the Gemini AI (env-gated, fail-open). Rows are upserted on every run
 // while the fixture is upcoming; the `kickoff > NOW()` selection IS the
 // freeze - past fixtures are never selected again, so the pick that stood at
 // kickoff stands forever. Settlement (result_goals/outcome) is owned by the
@@ -259,11 +259,13 @@ export async function updateHotPicks() {
         const tick = _progress('Hot picks - AI adjudication');
         await _batch(candidates, async (c, i, len) => {
             const prev = existing.get(c.f.id);
+            // Same evaluation AND same model/grounding as the last billed
+            // call: reuse the verdict (model switches re-adjudicate)
             const unchanged = prev && ['confirm', 'veto'].includes(prev.ai_verdict)
-                && Number(prev.score) === c.row.score;
+                && Number(prev.score) === c.row.score
+                && prev.ai_model === aiModelTag();
             let verdict;
             if (unchanged) {
-                // Same evaluation as the last billed call: reuse the verdict
                 verdict = { verdict: prev.ai_verdict, reason: prev.ai_reason, model: prev.ai_model };
             } else {
                 try {
@@ -275,7 +277,7 @@ export async function updateHotPicks() {
                     });
                 } catch (e) {
                     console.warn(`[!] AI adjudication failed for fixture ${c.f.id} (rule verdict kept): ${e?.message ?? e}`);
-                    verdict = { verdict: 'error', reason: null, model: config.HOTPICK_AI_MODEL };
+                    verdict = { verdict: 'error', reason: null, model: aiModelTag() };
                 }
             }
             c.row.ai_verdict = verdict.verdict;
@@ -301,10 +303,12 @@ export async function updateHotPicks() {
             const tick = _progress('Hot picks - tip AI review');
             await _batch(shortlist, async (c, i, len) => {
                 const prev = existing.get(c.f.id);
-                // Same tip as the last billed call: reuse the verdict
+                // Same tip AND same model/grounding as the last billed call:
+                // reuse the verdict (model switches re-adjudicate)
                 const unchanged = prev && ['confirm', 'veto'].includes(prev.tip_ai_verdict)
                     && prev.tip_market === c.row.tip_market
-                    && Number(prev.tip_price) === c.row.tip_price;
+                    && Number(prev.tip_price) === c.row.tip_price
+                    && prev.tip_ai_model === aiModelTag();
                 let verdict;
                 if (unchanged) {
                     verdict = { verdict: prev.tip_ai_verdict, reason: prev.tip_ai_reason, model: prev.tip_ai_model };
@@ -318,7 +322,7 @@ export async function updateHotPicks() {
                         });
                     } catch (e) {
                         console.warn(`[!] Tip AI review failed for fixture ${c.f.id} (tip kept): ${e?.message ?? e}`);
-                        verdict = { verdict: 'error', reason: null, model: config.HOTPICK_AI_MODEL };
+                        verdict = { verdict: 'error', reason: null, model: aiModelTag() };
                     }
                 }
                 c.row.tip_ai_verdict = verdict.verdict;

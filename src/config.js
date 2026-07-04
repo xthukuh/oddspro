@@ -22,7 +22,7 @@ const EnvSchema = z.object({
     PREMATCH_TEAM_WINDOW: z.coerce.number().int().min(1).default(5),
     PREMATCH_H2H_WINDOW: z.coerce.number().int().min(1).default(5),
     // Over 2.5 hot picks: gate thresholds (defaults tuned by the backtest,
-    // scripts/backtest-hotpicks.js) + optional OpenRouter AI adjudicator
+    // scripts/backtest-hotpicks.js) + optional Google Gemini AI adjudicator
     HOTPICK_TEAM_WINDOW: z.coerce.number().int().min(1).default(DEFAULT_THRESHOLDS.teamWindow),
     HOTPICK_MIN_GAMES: z.coerce.number().int().min(1).default(DEFAULT_THRESHOLDS.minGames),
     HOTPICK_MIN_OVER_RATE: z.coerce.number().min(0).max(1).default(DEFAULT_THRESHOLDS.minOverRate),
@@ -32,12 +32,14 @@ const EnvSchema = z.object({
     // "Tip" column: safest bettable outcome floors (see src/db/tip-rules.js)
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
-    // AI adjudication is optional: no key = rules-only verdicts (fail-open)
-    OPENROUTER_API_KEY: z.string().min(1).optional(),
-    OPENROUTER_URL: z.string().url().default('https://openrouter.ai/api/v1'),
-    HOTPICK_AI_MODEL: z.string().default('openai/gpt-4o-mini'),
-    // Web-grounded AI: append `:online` (OpenRouter web plugin) to the model
-    // for BOTH adjudicators. Opt-in - each web search bills per call.
+    // AI adjudication is optional: no key = rules-only verdicts (fail-open).
+    // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
+    // 2026-07-04 - stronger reasoner + native Google Search grounding.
+    GEMINI_API_KEY: z.string().min(1).optional(),
+    GEMINI_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta'),
+    HOTPICK_AI_MODEL: z.string().default('gemini-2.5-flash'),
+    // Web-grounded AI: attach Gemini's google_search tool for BOTH
+    // adjudicators. Opt-in - grounded requests bill extra per call.
     // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
     HOTPICK_AI_WEB: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
     // Tip AI review: only tips at/above this confidence, best-first, at most
