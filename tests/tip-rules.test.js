@@ -253,16 +253,11 @@ test('bestTip lists up to two runners-up in confidence order, excluding the pick
 // Contract: a fixture is only tippable when BOTH teams carry a qualifying
 // sample of at least minGames AND at least one full market group exists.
 // The reason marker is what the web UI surfaces (<= 64 chars).
-//
-// Marked todo while the rule body is a scaffold (user contribution pending
-// in src/db/tip-rules.js) - REMOVE the todo option once the rules land so
-// these become enforcing again.
-const TODO_ELIGIBILITY = { todo: 'awaiting the user-contributed eligibility rule body' };
 
 const games = n => ({ n });
 const fullBook = { x12: { 1: 1.5, X: 4.0, 2: 7.0 }, dc: null, ou: {} };
 
-test('tipEligibility rejects thin home history with a detailed reason', TODO_ELIGIBILITY, () => {
+test('tipEligibility rejects thin home history with a detailed reason', () => {
     const out = tipEligibility({ ...fullBook, home: games(2), away: games(7) });
     assert.equal(out.eligible, false);
     assert.match(out.reason, /^insufficient_history/);
@@ -270,20 +265,20 @@ test('tipEligibility rejects thin home history with a detailed reason', TODO_ELI
     assert.ok(out.reason.length <= 64);
 });
 
-test('tipEligibility rejects thin away history with a detailed reason', TODO_ELIGIBILITY, () => {
+test('tipEligibility rejects thin away history with a detailed reason', () => {
     const out = tipEligibility({ ...fullBook, home: games(7), away: games(4) });
     assert.equal(out.eligible, false);
     assert.match(out.reason, /^insufficient_history/);
     assert.match(out.reason, /away/);
 });
 
-test('tipEligibility rejects fixtures with no market group at all', TODO_ELIGIBILITY, () => {
+test('tipEligibility rejects fixtures with no market group at all', () => {
     const out = tipEligibility({ x12: null, dc: null, ou: {}, home: games(7), away: games(7) });
     assert.equal(out.eligible, false);
     assert.equal(out.reason, 'no_markets');
 });
 
-test('tipEligibility passes a well-evidenced fixture (any single group suffices)', TODO_ELIGIBILITY, () => {
+test('tipEligibility passes a well-evidenced fixture (any single group suffices)', () => {
     assert.deepEqual(
         tipEligibility({ ...fullBook, home: games(5), away: games(5) }),
         { eligible: true, reason: null },
@@ -297,7 +292,7 @@ test('tipEligibility passes a well-evidenced fixture (any single group suffices)
     );
 });
 
-test('tipEligibility honors a minGames override', TODO_ELIGIBILITY, () => {
+test('tipEligibility honors a minGames override', () => {
     const inputs = { ...fullBook, home: games(3), away: games(3) };
     assert.equal(tipEligibility(inputs).eligible, false);
     assert.equal(tipEligibility(inputs, { minGames: 3 }).eligible, true);

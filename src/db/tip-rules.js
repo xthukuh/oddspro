@@ -122,16 +122,14 @@ function _mean(components) {
 // 'insufficient_history: home 2/5' or 'no_markets'.
 export function tipEligibility({ x12, dc, ou, home, away }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
-    // TODO(user contribution): the eligibility rules are a betting-domain
-    // judgment call - which conditions disqualify a fixture, in what order,
-    // with what reason detail. Expected shape (~8 lines):
-    //   - either team's sample below t.minGames -> insufficient_history
-    //     (include the offending side(s) and counts in the reason);
-    //   - no market group at all (no x12, no dc, no O/U pair) -> no_markets;
-    //   - otherwise eligible.
-    // Placeholder passes everything through so live runs keep today's
-    // behavior until the real rules land (tests specify the contract).
-    void t; void x12; void dc; void ou; void home; void away;
+    // ONE thin side already disqualifies: the stats support for any outcome
+    // blends both teams' evidence (a home-win tip needs home's win rate AND
+    // away's loss rate), so a single thin sample poisons the whole blend.
+    const thin = [];
+    if (home.n < t.minGames) thin.push(`home ${home.n}/${t.minGames}`);
+    if (away.n < t.minGames) thin.push(`away ${away.n}/${t.minGames}`);
+    if (thin.length) return { eligible: false, reason: `insufficient_history: ${thin.join(', ')}` };
+    if (!x12 && !dc && !Object.keys(ou ?? {}).length) return { eligible: false, reason: 'no_markets' };
     return { eligible: true, reason: null };
 }
 
