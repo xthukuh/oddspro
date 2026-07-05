@@ -30,6 +30,9 @@ export function skipLabel(reason) {
         const detail = reason.replace(/^insufficient_history:?\s*/, '');
         return `Insufficient data - not enough recent games on record${detail ? ` (${detail})` : ''}.`;
     }
+    if (reason.startsWith('context')) {
+        return 'Not tipped - friendly / youth / reserve game, rolling form is not valid evidence here.';
+    }
     return `No tip - ${reason}`;
 }
 
@@ -38,6 +41,46 @@ function Section({ title, children }) {
         <div className="mt-2 pt-2 border-t border-slate-100">
             <div className="font-medium text-slate-500 uppercase tracking-wide text-[10px] mb-1">{title}</div>
             {children}
+        </div>
+    );
+}
+
+// Structured v2 AI review extras: the model's own probability estimate,
+// per-check findings (context / team news / market) and grounding citations.
+// Pre-v2 rows carry only the one-line reason and render nothing here.
+function AiChecks({ review }) {
+    if (!review) return null;
+    const checks = review.checks && typeof review.checks === 'object'
+        ? Object.entries(review.checks).filter(([, v]) => v)
+        : [];
+    const sources = Array.isArray(review.sources) ? review.sources.filter(s => s?.uri) : [];
+    if (review.probability == null && !checks.length && !sources.length) return null;
+    return (
+        <div className="mt-1 space-y-0.5">
+            {review.probability != null && (
+                <div className="flex justify-between gap-2 text-slate-600">
+                    <span>AI's own probability</span>
+                    <span className="tabular-nums">{_pct(review.probability)}</span>
+                </div>
+            )}
+            {checks.map(([k, v]) => (
+                <div key={k} className="text-slate-500">
+                    <span className="text-slate-600 capitalize">{k.replace(/_/g, ' ')}:</span> {v}
+                </div>
+            ))}
+            {sources.length > 0 && (
+                <div className="text-slate-400">
+                    Sources:{' '}
+                    {sources.map((s, i) => (
+                        <span key={i}>
+                            {i > 0 && ', '}
+                            <a href={s.uri} target="_blank" rel="noreferrer" className="underline hover:text-slate-600">
+                                {s.title || 'source'}
+                            </a>
+                        </span>
+                    ))}
+                </div>
+            )}
         </div>
     );
 }
@@ -151,7 +194,9 @@ export default function TipPopover({ row, x, y, onClose }) {
                             Tip {row.tip_ai_verdict}{row.tip_ai_reason ? `: ${row.tip_ai_reason}` : ''}
                         </div>
                     )}
-                    {row.hot_reason && <div className="text-slate-600">Hot pick: {row.hot_reason}</div>}
+                    <AiChecks review={row.tip_ai_review} />
+                    {row.hot_reason && <div className="text-slate-600 mt-1">Hot pick: {row.hot_reason}</div>}
+                    <AiChecks review={row.hot_review} />
                 </Section>
             )}
         </div>

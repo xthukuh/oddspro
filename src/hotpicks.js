@@ -24,10 +24,14 @@ import { _batch, _progress } from './utils.js';
 // tip_outcome)
 const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
-    'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model',
+    'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model', 'ai_review',
     'tip_market', 'tip_price', 'tip_confidence', 'tip_breakdown', 'tip_skip_reason',
-    'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'computed_at',
+    'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'tip_ai_review', 'computed_at',
 ];
+
+// JSON column value from either a fresh verdict (object) or a reused DB row
+// (mysql2 returns JSON columns as strings).
+const _jsonCol = v => v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v));
 
 // O/U total-goals lines (mirrors markets.js OU_LINES)
 const OU_LINES = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
@@ -161,8 +165,8 @@ export async function updateHotPicks() {
         .map(p => [p.fixture_id, p]));
     // Existing rows: reuse AI verdicts when the evaluation is unchanged
     const existing = new Map((await db('fixture_predictions').whereIn('fixture_id', fixtureIds)
-        .select('fixture_id', 'score', 'ai_verdict', 'ai_reason', 'ai_model',
-            'tip_market', 'tip_price', 'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model'))
+        .select('fixture_id', 'score', 'ai_verdict', 'ai_reason', 'ai_model', 'ai_review',
+            'tip_market', 'tip_price', 'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'tip_ai_review'))
         .map(p => [p.fixture_id, p]));
 
     const thresholds = {
@@ -203,8 +207,9 @@ export async function updateHotPicks() {
         // the bookmaker's own opinion - the prime false-positive source).
         // Eligibility judges the UNCAPPED per-side pools so the skip reason
         // names the side that is actually thin (pairing would mask it).
+        // League name feeds the context gate (friendly/youth = no tip).
         const elig = tipEligibility(
-            { ...groups, home: { n: pair.pool.home_n }, away: { n: pair.pool.away_n } },
+            { ...groups, home: { n: pair.pool.home_n }, away: { n: pair.pool.away_n }, league: f.league },
             { minGames: thresholds.minGames });
         let tip = null;
         if (elig.eligible) {
@@ -226,6 +231,7 @@ export async function updateHotPicks() {
                 minGames: thresholds.minGames,
                 minPrice: config.TIP_MIN_PRICE,
                 minConfidence: config.TIP_MIN_CONFIDENCE,
+                minUnderLine: config.TIP_MIN_UNDER_LINE,
             });
         }
         const row = {
@@ -241,6 +247,7 @@ export async function updateHotPicks() {
             ai_verdict: null,
             ai_reason: null,
             ai_model: null,
+            ai_review: null,
             tip_market: tip?.market ?? null,
             tip_price: tip?.price ?? null,
             tip_confidence: tip?.confidence ?? null,
@@ -251,6 +258,7 @@ export async function updateHotPicks() {
             tip_ai_verdict: null,
             tip_ai_reason: null,
             tip_ai_model: null,
+            tip_ai_review: null,
             computed_at: db.fn.now(),
         };
         rows.push(row);
@@ -271,7 +279,7 @@ export async function updateHotPicks() {
                 && prev.ai_model === aiModelTag();
             let verdict;
             if (unchanged) {
-                verdict = { verdict: prev.ai_verdict, reason: prev.ai_reason, model: prev.ai_model };
+                verdict = { verdict: prev.ai_verdict, reason: prev.ai_reason, model: prev.ai_model, review: prev.ai_review };
             } else {
                 try {
                     verdict = await adjudicateHotPick({
@@ -282,12 +290,13 @@ export async function updateHotPicks() {
                     });
                 } catch (e) {
                     console.warn(`[!] AI adjudication failed for fixture ${c.f.id} (rule verdict kept): ${e?.message ?? e}`);
-                    verdict = { verdict: 'error', reason: null, model: aiModelTag() };
+                    verdict = { verdict: 'error', reason: null, model: aiModelTag(), review: null };
                 }
             }
             c.row.ai_verdict = verdict.verdict;
             c.row.ai_reason = verdict.reason;
             c.row.ai_model = verdict.model;
+            c.row.ai_review = _jsonCol(verdict.review);
             if (verdict.verdict === 'veto') c.row.hot = false; // AI can veto, never promote
             ai[{ confirm: 'confirmed', veto: 'vetoed', error: 'errors' }[verdict.verdict]]++;
             tick(len);
@@ -316,7 +325,7 @@ export async function updateHotPicks() {
                     && prev.tip_ai_model === aiModelTag();
                 let verdict;
                 if (unchanged) {
-                    verdict = { verdict: prev.tip_ai_verdict, reason: prev.tip_ai_reason, model: prev.tip_ai_model };
+                    verdict = { verdict: prev.tip_ai_verdict, reason: prev.tip_ai_reason, model: prev.tip_ai_model, review: prev.tip_ai_review };
                 } else {
                     try {
                         verdict = await reviewTip({
@@ -327,12 +336,13 @@ export async function updateHotPicks() {
                         });
                     } catch (e) {
                         console.warn(`[!] Tip AI review failed for fixture ${c.f.id} (tip kept): ${e?.message ?? e}`);
-                        verdict = { verdict: 'error', reason: null, model: aiModelTag() };
+                        verdict = { verdict: 'error', reason: null, model: aiModelTag(), review: null };
                     }
                 }
                 c.row.tip_ai_verdict = verdict.verdict;
                 c.row.tip_ai_reason = verdict.reason;
                 c.row.tip_ai_model = verdict.model;
+                c.row.tip_ai_review = _jsonCol(verdict.review);
                 tipAi[{ confirm: 'confirmed', veto: 'vetoed', error: 'errors' }[verdict.verdict]]++;
                 tick(len);
             }, 1);

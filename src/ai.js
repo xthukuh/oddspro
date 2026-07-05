@@ -1,57 +1,91 @@
 import axios from 'axios';
-import { z } from 'zod';
 import { config } from './config.js';
+import { parseAiReply } from './ai-parse.js';
 
 // Optional Google Gemini adjudicators, both fail-open (absent key or any API
 // failure keeps the rule-based verdict - the features never depend on the AI
 // being up), both confirm/veto only (the AI can never promote a pick):
-// - adjudicateHotPick: last gate for over-2.5 candidates that already passed
-//   every deduction rule (a handful of calls per day at most);
+// - adjudicateHotPick: independent second opinion on over-2.5 candidates
+//   that passed every deduction rule (a handful of calls per day at most);
 // - reviewTip: same idea for the top-confidence tips (capped per run).
 // With HOTPICK_AI_WEB=1 requests attach Gemini's native google_search tool,
 // letting verdicts cite real-world context the warehouse cannot see
-// (injuries, rotation, dead rubbers). Grounded requests bill extra per call.
-// (Replaced OpenRouter 2026-07-04: stronger default reasoner + real Google
-// Search grounding; the stored ai_model tag records what produced a verdict.)
+// (friendlies, injuries, rotation, dead rubbers). Grounded requests bill
+// extra per call. (Replaced OpenRouter 2026-07-04.)
+//
+// Prompt v2 (2026-07-05, tag suffix #p2): the v1 prompts anchored toward
+// confirmation ("they ALL passed... expected veto rate: low") and every
+// settled v1 hot veto was a market-vs-stats contradiction re-litigating the
+// rule engine's own numbers - net-negative (4 winners killed vs 1 loser).
+// v2 verdicts are research-driven instead: verify context and team news,
+// state an INDEPENDENT probability, then veto mechanically only when that
+// probability falls below the price's break-even (minus a margin) or a
+// verified concrete disqualifier exists. Numeric contradiction alone is
+// explicitly not a veto ground. Replies are structured (probability,
+// per-check findings, grounding citations) and persisted to the ai_review /
+// tip_ai_review JSON columns for the web popover.
+
+// Bumping this re-adjudicates upcoming rows (verdict reuse is keyed on the
+// model tag), so material prompt changes take effect without manual resets.
+const PROMPT_VERSION = 2;
 
 export function aiEnabled() {
     return Boolean(config.GEMINI_API_KEY);
 }
 
 // Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
-// switching model or grounding automatically re-adjudicates upcoming rows.
+// switching model, grounding or prompt version re-adjudicates automatically.
 export function aiModelTag() {
-    return config.HOTPICK_AI_MODEL + (config.HOTPICK_AI_WEB ? '+search' : '');
+    return config.HOTPICK_AI_MODEL
+        + (config.HOTPICK_AI_WEB ? '+search' : '')
+        + `#p${PROMPT_VERSION}`;
 }
 
-// Gemini generateContent response envelope (validated - external data).
-// Tolerant on purpose: grounded replies may split text across parts, and
-// safety-blocked candidates can arrive without content at all.
-const GeminiEnvelope = z.object({
-    candidates: z.array(z.object({
-        content: z.object({
-            parts: z.array(z.object({ text: z.string().optional() })).nullable().optional(),
-        }).nullable().optional(),
-    })).min(1),
-});
+// Veto margin under the break-even probability: the model's own estimate
+// must undercut break-even by at least this much before a veto (its
+// estimates are noisy; a hair below break-even is not a red flag).
+const VETO_MARGIN = 0.05;
 
-const Verdict = z.object({
-    verdict: z.enum(['confirm', 'veto']),
-    // Gemini sometimes omits the reason on confirms - tolerate it
-    reason: z.string().nullish().transform(v => v ?? ''),
-});
+const _breakEven = price => Math.round((1 / Number(price)) * 100) / 100;
 
-// Extract the reply's JSON object, tolerating markdown code fences.
-function _parseVerdict(content) {
-    const m = /\{[\s\S]*\}/.exec(content);
-    if (!m) throw new Error(`AI reply carried no JSON object: ${content}`);
-    return Verdict.parse(JSON.parse(m[0]));
+// The shared reply contract + verdict rule, parameterized per adjudicator.
+function _protocol({ outcome, breakEven }) {
+    const floor = Math.round((breakEven - VETO_MARGIN) * 100) / 100;
+    return [
+        'Review protocol - work through these steps in order:',
+        '1. CONTEXT - what kind of match is this really? Preseason or club friendly,',
+        '   youth/reserve sides, a cup dead rubber, end-of-season nothing-at-stake,',
+        '   severe weather, a neutral venue. If you can use web search, verify and',
+        '   summarize in checks.context. NEVER assert context you have not verified.',
+        '2. TEAM NEWS - verified injuries, suspensions, confirmed heavy rotation.',
+        '   Only from sources you actually consulted; otherwise write "not verified".',
+        '   Summarize in checks.team_news.',
+        `3. YOUR OWN PROBABILITY - estimate P(${outcome}) yourself from the facts`,
+        '   above plus anything verified in steps 1-2, BEFORE weighing the bookmaker',
+        '   price. Record it as `probability`; note the market comparison in',
+        '   checks.market.',
+        '',
+        'Verdict rule - apply it mechanically to your own estimate:',
+        `- veto when your probability is below ${floor} (break-even ${breakEven}`,
+        `  minus a ${VETO_MARGIN} noise margin), OR you verified a concrete`,
+        '  disqualifier in steps 1-2.',
+        '- confirm otherwise.',
+        '- A gap between the market price and the statistical form alone is NEVER a',
+        '  veto ground: the rule engine already weighed those same numbers. Your',
+        '  value is what the numbers cannot see.',
+        '',
+        'Reply with ONLY a JSON object, no other text:',
+        '{"verdict":"confirm"|"veto","probability":0.0-1.0,',
+        ' "checks":{"context":"...","team_news":"...","market":"..."},',
+        ' "reason":"one short sentence naming the decisive factor"}',
+    ];
 }
 
-// One verdict round-trip: prompt in, { verdict, reason, model } out.
+// One verdict round-trip: prompt in, { verdict, reason, model, review } out
+// (review = { probability, checks, sources } - persisted as JSON).
 // Throws on any failure; callers record ai_verdict 'error' and keep the rule
 // verdict (fail-open). No JSON response mode - it can't be combined with the
-// google_search tool, so the prompt demands JSON and _parseVerdict extracts.
+// google_search tool, so the prompt demands JSON and parseAiReply extracts.
 async function _adjudicate(prompt) {
     const res = await axios.post(
         `${config.GEMINI_URL}/models/${config.HOTPICK_AI_MODEL}:generateContent`,
@@ -68,25 +102,29 @@ async function _adjudicate(prompt) {
             timeout: 60_000, // grounded calls run searches before answering
         },
     );
-    const parsed = GeminiEnvelope.parse(res.data);
-    const content = (parsed.candidates[0].content?.parts ?? []).map(p => p.text ?? '').join('');
-    const out = _parseVerdict(content);
-    return { ...out, reason: out.reason.substring(0, 512), model: aiModelTag() };
+    const { verdict, probability, checks, reason, sources } = parseAiReply(res.data);
+    return {
+        verdict,
+        reason: reason.substring(0, 512),
+        model: aiModelTag(),
+        review: { probability, checks, sources },
+    };
 }
 
-// Ask the model to confirm or veto one over-2.5 candidate given the full
-// signal breakdown.
+// Independent second opinion on one over-2.5 candidate.
 //   { fixture, kickoff, league, home, away, h2h, market, api }
 //   home/away: teamGoalsAggregates() results; h2h: h2hGoalsAggregates()
 export async function adjudicateHotPick({ fixture, kickoff, league, home, away, h2h, market, api }) {
     const team = (label, t) =>
         `${label}: last ${t.n} games - avg total ${t.avgTotal}, over-2.5 rate ${t.overRate},`
         + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`;
+    const breakEven = market?.over ? _breakEven(market.over) : 0.5;
     const prompt = [
-        'You are the final reviewer of an over-2.5-goals shortlist. A strict rule engine',
-        'already verified every quantitative gate (rolling goal averages, over rates,',
-        'sample sizes, market probability floor, no contradictions) - they ALL passed.',
-        'Your only job is to catch qualitative false positives the thresholds cannot see.',
+        'You are an independent reviewer giving a second opinion on one candidate',
+        'football bet: OVER 2.5 total goals in the fixture below. A rule engine',
+        'selected it from quantitative form data alone. Do NOT assume the selection',
+        'is correct and do NOT re-check its arithmetic - judge the bet on your own',
+        'analysis of things the numbers cannot see.',
         '',
         `Fixture: ${fixture}`,
         `League: ${league ?? 'unknown'}`,
@@ -95,26 +133,10 @@ export async function adjudicateHotPick({ fixture, kickoff, league, home, away, 
         team('Away', away),
         `Head-to-head: ${h2h.n ? `last ${h2h.n} meetings - avg total ${h2h.avgTotal}, over-2.5 rate ${h2h.overRate}` : 'no prior meetings known'}`,
         `Bookmaker prices: over 2.5 = ${market?.over ?? 'n/a'}, under 2.5 = ${market?.under ?? 'n/a'}`
-        + ` (vig-removed P(over) = ${market?.impliedOver ?? 'n/a'})`,
+        + ` (vig-removed P(over) = ${market?.impliedOver ?? 'n/a'}; break-even P = ${breakEven})`,
         `API-Football prediction: ${api ?? 'no signal'}`,
         '',
-        'Veto ONLY when you can name a concrete red flag, for example:',
-        '- a scoring average that looks inflated by one anomalous blowout (high avg total',
-        '  but a much weaker over-2.5 rate on the same games);',
-        '- wildly asymmetric profiles (all the goals come from one side\'s games while the',
-        '  other side\'s games are tight and low-scoring);',
-        '- the market pricing sharply disagreeing with the statistical picture;',
-        '- team news you VERIFIED via web search (key attackers out, heavy rotation,',
-        '  a dead-rubber fixture) - only if you can actually browse; NEVER assert',
-        '  injuries, rotation or motivation you have not verified.',
-        'Do NOT veto because a value sits near its threshold, because the head-to-head',
-        'sample is thin or empty (that is neutral by design), because of assumed or',
-        'unverified team news, or out of general caution - the shortlist is',
-        'intentionally strict already and most candidates deserve confirmation.',
-        'Expected veto rate: low.',
-        '',
-        'Reply with ONLY a JSON object, no other text:',
-        '{"verdict":"confirm"|"veto","reason":"one short sentence"}',
+        ..._protocol({ outcome: 'over 2.5 goals', breakEven }),
     ].join('\n');
     return _adjudicate(prompt);
 }
@@ -134,50 +156,38 @@ function _tipLabel(market, home, away) {
     return ou ? `${ou[1] === 'O' ? 'over' : 'under'} ${ou[2]} total goals` : market;
 }
 
-// Ask the model to confirm or veto one high-confidence tip given the blend
-// breakdown bestTip produced.
+// Independent second opinion on one high-confidence tip. The prompt gives
+// the raw evidence (market probability, rolling-form support, samples) but
+// deliberately NOT our blended confidence - the reviewer must not anchor on
+// the score it is meant to check.
 //   { fixture, kickoff, league, tip } - tip is the bestTip() return
-//   (market/price/confidence/market_prob/stats_prob/api_prob/weights/samples)
 export async function reviewTip({ fixture, kickoff, league, tip }) {
     const pct = v => (v == null ? 'n/a' : `${Math.round(v * 100)}%`);
     const [home, away] = String(fixture).split(' - ');
+    const label = _tipLabel(tip.market, home, away);
+    const breakEven = _breakEven(tip.price);
     const prompt = [
-        'You are the final reviewer of a shortlist of high-confidence football betting',
-        'tips. A deduction engine already picked each tip as the safest bettable outcome',
-        'by blending the vig-removed bookmaker probability with rolling-form statistics',
-        'and API prediction percentages. Your only job is to catch qualitative false',
-        'positives the numbers cannot see.',
+        'You are an independent reviewer giving a second opinion on one candidate',
+        'football bet (the "tip" below). A deduction engine selected it from odds',
+        'and quantitative form data alone. Do NOT assume the selection is correct',
+        'and do NOT re-check its arithmetic - judge the bet on your own analysis of',
+        'things the numbers cannot see.',
         '',
         `Fixture: ${fixture}`,
         `League: ${league ?? 'unknown'}`,
         `Kickoff: ${kickoff}`,
-        `Tip: ${tip.market} (${_tipLabel(tip.market, home, away)}) @ ${tip.price}`,
-        `Blended confidence: ${pct(tip.confidence)} = market ${pct(tip.market_prob)}`
-        + ` (weight ${tip.weights?.market ?? 'n/a'}) + stats ${pct(tip.stats_prob)}`
-        + ` (weight ${tip.weights?.stats ?? 'n/a'}) + API ${pct(tip.api_prob)}`
-        + ` (weight ${tip.weights?.api ?? 'n/a'})`,
-        `Evidence samples: home last ${tip.samples?.home_n ?? '?'} games,`
-        + ` away last ${tip.samples?.away_n ?? '?'} games,`
-        + ` ${tip.samples?.h2h_n ?? 0} head-to-head meetings`,
+        `Tip: ${tip.market} (${label}) @ ${tip.price} (break-even P = ${breakEven})`,
+        `Evidence for the tipped outcome: vig-removed market P = ${pct(tip.market_prob)};`
+        + ` rolling-form support = ${pct(tip.stats_prob)} over the last`
+        + ` ${tip.samples?.home_n ?? '?'} (home) / ${tip.samples?.away_n ?? '?'} (away) games`
+        + ` and ${tip.samples?.h2h_n ?? 0} head-to-head meetings;`
+        + ` API-Football estimate = ${pct(tip.api_prob)}`,
         '',
-        'Veto ONLY when you can name a concrete red flag, for example:',
-        '- the statistical support sharply contradicting the market (a market-driven pick',
-        '  the recent form does not back at all);',
-        '- team news you VERIFIED via web search (key players injured or suspended, heavy',
-        '  squad rotation, a dead-rubber or already-decided tie) - only if you can',
-        '  actually browse; NEVER assert injuries, rotation or motivation you have not',
-        '  verified.',
-        'Before vetoing, check the DIRECTION of your reason: it must argue AGAINST the',
-        `tipped outcome. Example: this tip is "${tip.market}"; a factor that makes that`,
-        'outcome MORE likely (e.g. weaker scoring when the tip is an under) supports',
+        'Before any veto, check DIRECTION: your reason must argue AGAINST the tipped',
+        `outcome ("${label}"). A factor that makes that outcome MORE likely supports`,
         'confirmation, not a veto.',
-        'Do NOT veto because the head-to-head sample is thin (neutral by design), because',
-        'a value sits near a threshold, because of assumed or unverified team news, or',
-        'out of general caution - the shortlist is intentionally strict already and most',
-        'tips deserve confirmation. Expected veto rate: low.',
         '',
-        'Reply with ONLY a JSON object, no other text:',
-        '{"verdict":"confirm"|"veto","reason":"one short sentence"}',
+        ..._protocol({ outcome: `the tipped outcome: ${label}`, breakEven }),
     ].join('\n');
     return _adjudicate(prompt);
 }
