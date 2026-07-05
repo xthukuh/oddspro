@@ -1,9 +1,11 @@
 import { useState } from 'react';
 
-// Advanced query builder: AND-combined condition rows over the filterable
-// fields (base columns + odds market columns), applied server-side. Each
-// condition compares its field to a literal value OR to another column
-// (wire shape {key, op, col} - e.g. market '1' < market '2').
+// Advanced query builder: AND-combined condition rows over EVERY catalog
+// column - server-filterable fields (base + odds markets) run in SQL,
+// everything else (derived STATS columns, score) filters client-side via
+// filterValues.js; the builder itself doesn't care which side executes.
+// Each condition compares its field to a literal value OR to another
+// column (wire shape {key, op, col} - e.g. market '1' < market '2').
 
 const OPS = [
     ['eq', '='],
@@ -27,9 +29,15 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
             ? { key: f.key, op: f.op, col: f.col, value: '', mode: 'col' }
             : { ...f, mode: 'value' }))
         : [{ ...NEW_ROW }]);
-    const fields = [
-        ...catalog.base.filter(c => c.filterable).map(c => c.key),
-        ...catalog.markets.filter(c => c.filterable).map(c => c.key),
+    // Grouped field options: base keys read as-is; stats show their catalog
+    // label. `score` is client-filterable but lives outside the catalog
+    // (base column of the table, not of the API); stats already covered by
+    // a base key (league) are deduped.
+    const baseKeys = new Set(catalog.base.filter(c => c.filterable).map(c => c.key));
+    const groups = [
+        ['Base', [...[...baseKeys].map(k => ({ key: k, label: k })), { key: 'score', label: 'score' }]],
+        ['Markets', catalog.markets.filter(c => c.filterable).map(c => ({ key: c.key, label: c.key }))],
+        ['Stats', catalog.stats.filter(c => !baseKeys.has(c.key)).map(c => ({ key: c.key, label: c.label ?? c.key }))],
     ];
 
     const update = (i, patch) => setRows(rs => rs.map((r, j) => (j === i ? { ...r, ...patch } : r)));
@@ -50,7 +58,11 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                         onChange={e => update(i, { key: e.target.value })}
                         className="border border-slate-300 rounded px-2 py-1"
                     >
-                        {fields.map(f => <option key={f} value={f}>{f}</option>)}
+                        {groups.map(([label, opts]) => (
+                            <optgroup key={label} label={label}>
+                                {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
+                            </optgroup>
+                        ))}
                     </select>
                     <select
                         value={row.op}
@@ -81,8 +93,12 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                             className="border border-slate-300 rounded px-2 py-1 w-44"
                         >
                             <option value="" disabled>column…</option>
-                            {fields.filter(f => f !== row.key).map(f => (
-                                <option key={f} value={f}>{f}</option>
+                            {groups.map(([label, opts]) => (
+                                <optgroup key={label} label={label}>
+                                    {opts.filter(o => o.key !== row.key).map(o => (
+                                        <option key={o.key} value={o.key}>{o.label}</option>
+                                    ))}
+                                </optgroup>
                             ))}
                         </select>
                     ) : (

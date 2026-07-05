@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { applyClientFilters, splitFilters } from './filterValues.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
@@ -28,6 +29,32 @@ function _load(key) {
 }
 
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
+
+// Footer scoreboard: settled over-2.5 hot-pick / tip hit rates over the
+// displayed rows, counted once per canonical fixture (each provider row
+// duplicates the same fixture_predictions data). AI-vetoed tips count -
+// they stay on record and settle; /api/performance isolates veto impact.
+function _hitRates(rows) {
+    const seen = new Set();
+    const hot = { hits: 0, settled: 0 }, tips = { hits: 0, settled: 0 };
+    for (const r of rows) {
+        if (seen.has(r.api_id)) continue;
+        seen.add(r.api_id);
+        if (r.hot && (r.hot_outcome === 'hit' || r.hot_outcome === 'miss')) {
+            hot.settled += 1;
+            if (r.hot_outcome === 'hit') hot.hits += 1;
+        }
+        if (r.tip_market && (r.tip_outcome === 'hit' || r.tip_outcome === 'miss')) {
+            tips.settled += 1;
+            if (r.tip_outcome === 'hit') tips.hits += 1;
+        }
+    }
+    return { hot, tips };
+}
+
+const _rate = ({ hits, settled }) => (settled
+    ? `${hits}/${settled} (${(hits / settled * 100).toFixed(1)}%)`
+    : '—');
 
 // Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
 // the cleared all-dates view) so reload / back / forward keep the navigation.
@@ -75,6 +102,28 @@ export default function App() {
         const valid = new Set(catalog.stats.map(c => c.key));
         return keys.filter(k => valid.has(k));
     }, [statKeys, catalog]);
+    // Server/client filter split: conditions on derived STATS columns (or
+    // score) can't run in SQL - they filter locally over the loaded rows.
+    // Until the catalog arrives filters can only be [] (the builder needs
+    // the catalog to render), so the fallback split is moot but safe.
+    const { server: serverFilters, client: clientFilters } = useMemo(
+        () => (catalog ? splitFilters(filters, catalog) : { server: filters, client: [] }),
+        [filters, catalog],
+    );
+    // Column descriptors for the client engine: the FULL catalog (plus the
+    // table-only score column), independent of visible-column selections -
+    // hidden columns still filter because rows carry every field.
+    const filterColumns = useMemo(() => (catalog ? [
+        ...catalog.base.map(c => ({ key: c.key, group: 'base' })),
+        { key: 'score', group: 'base' },
+        ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
+        ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
+    ] : []), [catalog]);
+    const rows = useMemo(
+        () => applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
+        [result, clientFilters, filterColumns],
+    );
+    const rates = useMemo(() => _hitRates(rows), [rows]);
     // Known bookmakers come from the catalog; null selection = all visible
     const providers = catalog?.providers ?? [];
     const selectedProviders = useMemo(() => {
@@ -83,13 +132,16 @@ export default function App() {
         return providerKeys.filter(p => valid.has(p));
     }, [providerKeys, providers]);
 
-    // Records whenever the query shape changes (or a refresh lands new data)
+    // Records whenever the SERVER query shape changes (or a refresh lands
+    // new data). Client-only filter edits re-filter locally, never refetch:
+    // the effect keys on the serialized server subset, not `filters`.
+    const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
         let stale = false;
         setLoading(true);
         fetchRecords({
             date: date || 'all',
-            filters,
+            filters: serverFilters,
             completed: showCompleted,
             // Only constrain when a strict subset is chosen
             providers: providerKeys && selectedProviders.length < providers.length ? selectedProviders : null,
@@ -102,7 +154,7 @@ export default function App() {
             .catch(e => !stale && setError(String(e.message ?? e)))
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
-    }, [date, filters, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
+    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
@@ -289,7 +341,7 @@ export default function App() {
             <main className="p-4">
                 <DataTable
                     catalog={catalog}
-                    rows={result?.data ?? []}
+                    rows={rows}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
                     columnOrder={columnOrder}
@@ -299,7 +351,24 @@ export default function App() {
                     linkProviders={linkProviders}
                 />
                 <div className="py-3 text-sm text-slate-500">
-                    {result?.total ?? 0} record{result?.total === 1 ? '' : 's'}
+                    <span>
+                        {rows.length}{clientFilters.length ? ` of ${result?.total ?? 0}` : ''}
+                        {' '}record{(clientFilters.length ? result?.total : rows.length) === 1 ? '' : 's'}
+                    </span>
+                    <span className="mx-2 text-slate-300">·</span>
+                    <span
+                        className="cursor-help"
+                        title="Over 2.5 hot picks shown: settled hits / settled picks (unique fixtures; pending picks excluded)"
+                    >
+                        🔥 O2.5: {_rate(rates.hot)}
+                    </span>
+                    <span className="mx-2 text-slate-300">·</span>
+                    <span
+                        className="cursor-help"
+                        title="Tips shown: settled hits / settled tips (unique fixtures; pending tips excluded, AI-vetoed included)"
+                    >
+                        Tips: {_rate(rates.tips)}
+                    </span>
                 </div>
             </main>
 
