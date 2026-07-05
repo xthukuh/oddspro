@@ -6,6 +6,9 @@
 
 import { useMemo, useRef, useState } from 'react';
 import { sortRows } from '../sortValues.js';
+// Shared pure scorer (also used server-side) - vite's fs.allow covers the
+// out-of-root import; one implementation, no client/server drift.
+import { magicSortRows } from '../../../src/db/magic-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 
 const PROVIDER_STYLE = {
@@ -288,7 +291,7 @@ function _marketCell(row, key) {
     return <span className="text-slate-300">-</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, loading, linkProviders }) {
+export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, magic, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
 
     // Tip justification popover, anchored at the click point (one at a time)
@@ -318,7 +321,12 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         });
     }, [catalog, rows, marketKeys, statKeys, columnOrder]);
 
-    const sorted = useMemo(() => sortRows(rows, sort, columns), [rows, sort, columns]);
+    // Magic sort (most-likely-to-win first; tipless/vetoed rows sink) takes
+    // precedence over the column-sort chain - App guarantees only one is set.
+    const sorted = useMemo(
+        () => (magic ? magicSortRows(rows, magic.id, magic.calibration) : sortRows(rows, sort, columns)),
+        [rows, sort, columns, magic],
+    );
     const order = new Map(sort.map((s, i) => [s.key, { ...s, i }]));
     const tint = new Map();
     for (const row of rows) {

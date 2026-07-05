@@ -32,6 +32,15 @@ export async function fetchRecords({ date, filters, completed, providers }) {
     });
 }
 
+// Magic sort: top tip-ranking strategies by backtested 4-leg slip survival
+// + the calibration object the client scores today's rows with:
+//   { generated_at, sample: { settled, days, eligible_days, min_days,
+//     sufficient }, strategies: [{ id, label, low_sample, stats }],
+//     calibration }
+export async function fetchMagicSort() {
+    return _get('/api/magic-sort');
+}
+
 // Start refreshing a date's data. A 409 (refresh already running) also
 // resolves to the in-flight job state - callers just track it.
 export async function startRefresh(date) {

@@ -8,5 +8,10 @@ export default defineConfig({
     server: {
         port: 5173,
         proxy: { '/api': 'http://localhost:3001' },
+        // The table imports the shared pure scorer from ../src/db/ (one
+        // magic-sort implementation server + client); the dev server's fs
+        // guard must allow reads above web/. Build needs no config - Rollup
+        // follows relative imports anywhere.
+        fs: { allow: ['..'] },
     },
 });

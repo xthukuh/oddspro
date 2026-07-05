@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { fetchColumns, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { applyClientFilters, splitFilters } from './filterValues.js';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
+import MagicMenu from './components/MagicMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
@@ -18,6 +19,8 @@ const LS_LINKS = 'oddspro.links.unavailable';
 const LS_PROVIDERS = 'oddspro.providers.visible';
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
+// Active magic-sort strategy id (header ✨ menu; null = normal order)
+const LS_MAGIC = 'oddspro.magic.strategy';
 
 function _load(key) {
     try {
@@ -74,6 +77,9 @@ export default function App() {
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
     const [sort, setSort] = useState([]);
+    const [magicId, setMagicId] = useState(() => localStorage.getItem(LS_MAGIC) || null);
+    const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
+    const [magicError, setMagicError] = useState(null);
     const [filters, setFilters] = useState([]);
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
@@ -87,6 +93,21 @@ export default function App() {
     useEffect(() => {
         fetchColumns().then(setCatalog).catch(e => setError(String(e.message ?? e)));
     }, []);
+    // Magic-sort strategies once (server caches per day). A failure only
+    // degrades the ✨ menu - the table itself is unaffected.
+    useEffect(() => {
+        fetchMagicSort().then(setMagicData).catch(e => setMagicError(String(e.message ?? e)));
+    }, []);
+    // Persisted strategy id revalidates against the fetched list (catalog-
+    // sanitizer idiom): a renamed/retired strategy falls back to normal order.
+    const activeMagic = useMemo(
+        () => (magicId && magicData?.strategies.some(s => s.id === magicId) ? magicId : null),
+        [magicId, magicData],
+    );
+    const magic = useMemo(
+        () => (activeMagic ? { id: activeMagic, calibration: magicData.calibration } : null),
+        [activeMagic, magicData],
+    );
     // Persisted keys are filtered against the loaded catalog so selections
     // that no longer exist (e.g. status moved to base columns) don't render
     // ghost columns; localStorage itself is left untouched.
@@ -194,10 +215,24 @@ export default function App() {
         }
     };
 
+    // Exactly one ordering mechanism is ever active: picking a strategy
+    // clears the column sort, any header click clears magic (below).
+    const saveMagic = useCallback(id => {
+        setMagicId(id);
+        if (id) {
+            localStorage.setItem(LS_MAGIC, id);
+            setSort([]);
+        } else {
+            localStorage.removeItem(LS_MAGIC);
+        }
+    }, []);
+
     // Header click: plain = single toggle desc/asc/off (descending first -
     // "best" values on top); shift = multi-sort chain. Sorting is client-side
     // (the table holds the whole selection), so clicks never hit the network.
     const onSort = useCallback((key, additive) => {
+        setMagicId(null);
+        localStorage.removeItem(LS_MAGIC);
         setSort(prev => {
             const found = prev.find(s => s.key === key);
             const next = found
@@ -309,6 +344,12 @@ export default function App() {
                         ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
                         : 'Refresh'}
                 </button>
+                <MagicMenu
+                    data={magicData}
+                    error={magicError}
+                    active={activeMagic}
+                    onPick={saveMagic}
+                />
                 <button
                     onClick={() => setShowFilters(v => !v)}
                     className={`cursor-pointer px-3 py-1 rounded border text-sm ${showFilters || filters.length
@@ -347,6 +388,7 @@ export default function App() {
                     columnOrder={columnOrder}
                     sort={sort}
                     onSort={onSort}
+                    magic={magic}
                     loading={loading}
                     linkProviders={linkProviders}
                 />
