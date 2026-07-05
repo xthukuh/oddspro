@@ -533,7 +533,11 @@ export async function fetchApisportsStandings() {
     await _batch(pairs, async ({ league_id, season }) => {
         const items = await _get('/standings', { league: league_id, season });
         const groups = items?.[0]?.league?.standings ?? [];
-        const rows = [], teams = new Map();
+        // Keyed by the standings unique tuple (team_id|group_name; league+season
+        // are constant here) so an in-response duplicate - some leagues, e.g.
+        // MLS Next Pro, emit a team twice under an identically-labelled group -
+        // collapses to one row instead of tripping the unique constraint.
+        const byKey = new Map(), teams = new Map();
         for (const group of groups) {
             for (const raw of group) {
                 // Placeholder rows (TBD playoff/bracket slots) carry null team
@@ -541,11 +545,12 @@ export async function fetchApisportsStandings() {
                 if (!raw?.team?.id) continue;
                 const r = StandingRow.parse(raw);
                 teams.set(r.team.id, { id: r.team.id, name: r.team.name, logo: r.team.logo ?? null });
-                rows.push({
+                const group_name = r.group ?? '';
+                byKey.set(`${r.team.id}|${group_name}`, {
                     league_id,
                     season,
                     team_id: r.team.id,
-                    group_name: r.group ?? '',
+                    group_name,
                     rank: r.rank,
                     points: r.points,
                     goals_diff: r.goalsDiff,
@@ -561,6 +566,7 @@ export async function fetchApisportsStandings() {
                 });
             }
         }
+        const rows = [...byKey.values()];
         if (!rows.length) {
             counts.empty++; // cups/friendlies have no table
             return;
