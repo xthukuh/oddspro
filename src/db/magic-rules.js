@@ -267,17 +267,17 @@ function _rankDay(pool, strategy, cal) {
             || String(a.tip.market).localeCompare(String(b.tip.market)));
 }
 
-// TODO(user): rank strategies for the dropdown - the betting-domain call.
-// a/b: { id, label, low_sample, stats } where stats is
-//   { days, survived, survival, profit, roi, avg_odds,
-//     quartile: { n, hits, rate } }         (rates/roi null when unsettled)
-// Return <0 to put `a` first. Trade-offs to weigh: survival is THE target
-// metric but coarse (one bit per day); quartile.rate is finer-grained and
-// stabler on few days; roi rewards surviving at higher combined odds.
-// Metrics may be null - nulls should lose. Ties fall through to id order
-// (determinism is handled by the caller).
+// Dropdown ranking policy (user decision, 2026-07-06): survival first -
+// faithful to the headline metric - with quartile rate breaking the frequent
+// survival ties while replay days are few, and roi (surviving at higher
+// combined odds) as the last word. Null metrics lose; ties fall through to
+// id order (determinism is handled by the caller).
 function compareStrategies(a, b) {
-    return 0;
+    const s = (x, k) => x.stats[k] ?? -Infinity;
+    const q = x => x.stats.quartile.rate ?? -Infinity;
+    return (s(b, 'survival') - s(a, 'survival'))
+        || (q(b) - q(a))
+        || (s(b, 'roi') - s(a, 'roi'));
 }
 
 const _tierRank = (entries, minDays) => [...entries].sort((a, b) => {

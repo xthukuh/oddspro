@@ -315,6 +315,37 @@ test('report carries the documented shape', () => {
     assert.deepEqual(Object.keys(out.calibration), ['settled', 'global_rate', 'shrink_k', 'bands', 'groups', 'cells', 'lines', 'prices']);
 });
 
-// NOTE: assertions pinning the ORDER of the returned top-5 (which strategy
-// outranks which) land together with the compareStrategies body - the
-// ranking trade-off is a user decision (see the TODO in magic-rules.js).
+// --- strategy ranking (survival -> quartile rate -> roi, a user decision) ---
+
+test('strategies rank by survival, then quartile rate, then roi', () => {
+    // 5 days x 5 candidates, engineered so 'confidence' (ranks the miss
+    // last every day) survives more slips than 'edge' (chases the one
+    // high-priced tip, which is the day's miss on days 4-5).
+    const rows = [];
+    for (let d = 1; d <= 5; d++) {
+        for (let i = 0; i < 4; i++) {
+            rows.push(row({ day: `2026-07-0${d}`, tip_confidence: 0.8 - i * 0.05, tip_outcome: 'hit' }));
+        }
+        // Low-confidence long shot: top edge score (0.5x3-1) but a miss late on
+        rows.push(row({
+            day: `2026-07-0${d}`, tip_confidence: 0.5, tip_price: 3,
+            tip_outcome: d >= 4 ? 'miss' : 'hit',
+        }));
+    }
+    const ids = simulateStrategies(rows, { topN: 10 }).strategies.map(s => s.id);
+    assert.ok(ids.indexOf('confidence') < ids.indexOf('edge'),
+        'higher survival must outrank');
+});
+
+test('replayed strategies always outrank never-replayed ones (day tier)', () => {
+    // 5 one-tip days: no slips anywhere, quartile only - every strategy has
+    // days=0, so the tier guard is exercised and id order decides.
+    const rows = Array.from({ length: 5 }, (_, d) => row({ day: `2026-07-0${d + 1}` }));
+    const out = simulateStrategies(rows, { topN: 10 });
+    assert.ok(out.strategies.every(s => s.stats.days === 0));
+    assert.deepEqual(
+        out.strategies.map(s => s.id),
+        [...out.strategies.map(s => s.id)].sort(),
+        'all-equal metrics fall through to deterministic id order',
+    );
+});
