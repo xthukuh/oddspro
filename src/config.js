@@ -32,6 +32,7 @@ const EnvSchema = z.object({
     // "Tip" column: safest bettable outcome floors (see src/db/tip-rules.js)
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
+    TIP_MIN_UNDER_LINE: z.coerce.number().min(0).default(DEFAULT_TIP.minUnderLine),
     // AI adjudication is optional: no key = rules-only verdicts (fail-open).
     // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
     // 2026-07-04 - stronger reasoner + native Google Search grounding.

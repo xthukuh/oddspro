@@ -134,6 +134,10 @@ export function summarizePerformance(rows, now = Date.now()) {
             buckets: {
                 confidence: _buckets(tips, b => confidenceBand(b.confidence)),
                 market: _buckets(tips, b => marketGroup(b.market)),
+                // Per-line O/U slice: the 2026-07-05 failure analysis localized
+                // tip losses to specific lines (near-Unders, tail-Overs); this
+                // keeps each line's ROI measurable after the gates.
+                ou_line: _buckets(tips.filter(b => /^[OU] /.test(String(b.market ?? ''))), b => b.market),
                 edge: _buckets(tips, _edgeLabel),
             },
             ai_impact: _aiImpact(tipsVetoed),

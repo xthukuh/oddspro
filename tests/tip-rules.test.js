@@ -196,11 +196,13 @@ test('bestTip O/U uses over-rate support and its complement for unders', () => {
     assert.equal(out.market, 'O 2.5');
     assert.equal(out.stats_prob, 0.714);
     const underish = { ...overish, overRates: { ...overish.overRates, 2.5: 0.143 } };
+    // U 2.5 sits below the default minUnderLine floor - override to exercise
+    // the complement math the floor otherwise suppresses
     const under = bestTip({
         x12: null, dc: null,
         ou: { 2.5: { over: 2.6, under: 1.5 } },
         home: underish, away: underish, h2h: noH2h, apiPercents: null,
-    });
+    }, { minUnderLine: 2.5 });
     assert.equal(under.market, 'U 2.5');
     assert.equal(under.stats_prob, Math.round((1 - 0.143) * 10000) / 10000);
 });
@@ -317,4 +319,84 @@ test('tipEligibility honors a minGames override', () => {
     const inputs = { ...fullBook, home: games(3), away: games(3) };
     assert.equal(tipEligibility(inputs).eligible, false);
     assert.equal(tipEligibility(inputs, { minGames: 3 }).eligible, true);
+});
+
+// --- tipEligibility context gate (friendly / youth / reserve leagues) ---
+// Rolling form windows say nothing about preseason exhibitions or youth
+// sides - the 2026-07-05 failure analysis located -14.12u of the -15.60u
+// settled tip loss in these leagues.
+
+test('tipEligibility rejects friendly and youth/reserve leagues outright', () => {
+    const excluded = [
+        'Friendlies Clubs', 'Friendlies', 'Friendlies Women',
+        'Brasileiro U20 A', 'UEFA U19 Championship - Women', 'Npl Nsw U20',
+        'Youth Championship', 'Reserve League', 'Estadual Junior U20',
+    ];
+    for (const league of excluded) {
+        const out = tipEligibility({ ...fullBook, home: games(7), away: games(7), league });
+        assert.equal(out.eligible, false, league);
+        assert.match(out.reason, /^context/, league);
+        assert.ok(out.reason.length <= 64);
+    }
+});
+
+test('tipEligibility context gate runs before the history screen', () => {
+    // Thin history AND excluded context: the context reason wins
+    const out = tipEligibility({ ...fullBook, home: games(0), away: games(0), league: 'Friendlies Clubs' });
+    assert.match(out.reason, /^context/);
+});
+
+test('tipEligibility context gate has no false positives on real league names', () => {
+    const kept = [
+        'USL League Two', 'K League 1', 'China League One', 'Ligue 1',
+        'Serie D', 'Primera B Metropolitana', 'Western Australia State League 1',
+        'Super Liga', 'Segunda División', '1. Liga',
+    ];
+    for (const league of kept) {
+        assert.equal(
+            tipEligibility({ ...fullBook, home: games(7), away: games(7), league }).eligible,
+            true, league,
+        );
+    }
+});
+
+test('tipEligibility without a league behaves exactly as before', () => {
+    assert.deepEqual(
+        tipEligibility({ ...fullBook, home: games(5), away: games(5), league: null }),
+        { eligible: true, reason: null },
+    );
+    assert.deepEqual(
+        tipEligibility({ ...fullBook, home: games(5), away: games(5) }),
+        { eligible: true, reason: null },
+    );
+});
+
+// --- bestTip Under line floor ---
+// Near-Unders (U 2.5/U 3.5) bet against goals with no demonstrated edge:
+// 61.9% realized vs 78.1% break-even over the 2026-07-04 settled cohort.
+
+test('bestTip suppresses Under tips below the minUnderLine floor', () => {
+    const strongUnder35 = { 3.5: { over: 3.4, under: 1.3 } };
+    // Only a near-Under would qualify -> no tip at all under the default floor
+    assert.equal(bestTip({ ...marketOnly, x12: null, dc: null, ou: strongUnder35 }), null);
+    // Overriding the floor restores the candidate
+    const lenient = bestTip({ ...marketOnly, x12: null, dc: null, ou: strongUnder35 }, { minUnderLine: 3.5 });
+    assert.equal(lenient.market, 'U 3.5');
+    // U 4.5 and above still allowed by default; Overs never affected
+    const tail = bestTip({ ...marketOnly, x12: null, dc: null, ou: { 4.5: { over: 4.2, under: 1.25 } } });
+    assert.equal(tail.market, 'U 4.5');
+    const over = bestTip({ ...marketOnly, x12: null, dc: null, ou: { 2.5: { over: 1.55, under: 2.45 } } });
+    assert.equal(over.market, 'O 2.5');
+});
+
+test('bestTip yields to the runner-up market when the near-Under is suppressed', () => {
+    // U 3.5 tops the sort at ~0.754; with it suppressed, 12 (~0.721) wins
+    const inputs = {
+        ...marketOnly,
+        x12: { 1: 2.4, X: 3.4, 2: 2.9 },
+        dc: { '1X': 1.35, X2: 1.5, 12: 1.28 },
+        ou: { 3.5: { over: 3.8, under: 1.24 } },
+    };
+    assert.equal(bestTip(inputs, { minUnderLine: 3.5 }).market, 'U 3.5');
+    assert.equal(bestTip(inputs).market, '12');
 });

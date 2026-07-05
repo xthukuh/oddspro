@@ -18,9 +18,19 @@ export const DEFAULT_TIP = {
     h2hMinMeetings: 3,   // minimum meetings before H2H rates count as evidence
     minPrice: 1.2,       // tips priced below this pay too little to matter
     minConfidence: 0.5,  // no tip at all below this blend
+    minUnderLine: 4.5,   // no Under tips below this line (near-Unders bet against
+                         // goals with no demonstrated edge: 61.9% realized vs
+                         // 78.1% break-even over the 2026-07-04 cohort)
     // Blend weights, renormalized over the components actually available
     weights: { market: 0.6, stats: 0.3, api: 0.1 },
 };
+
+// League names whose history evidence is invalid for tipping: preseason
+// friendlies (rotated squads, mismatched tiers - form windows come from last
+// competitive season) and youth/reserve competitions (erratic lineups).
+// Validated against all 296 warehouse league names 2026-07-05: 21 matches,
+// all genuine, no false positives ("USL League Two", "K League 1" pass).
+export const TIP_CONTEXT_EXCLUDE = /friendl|\bu-?\d{2}\b|youth|reserve|junior/i;
 
 // Full-time total-goals lines (mirrors markets.js OU_LINES)
 const OU_LINES = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
@@ -129,11 +139,19 @@ function _mean(components) {
 //   x12/dc/ou: market groups as passed to bestTip (null / {} when absent)
 //   home/away: any aggregates carrying the qualifying sample size `n`
 //              (the writer reuses the hot-gate teamGoalsAggregates results)
+//   league: league name (optional) - friendly/youth/reserve competitions are
+//           ineligible outright, the biggest settled-loss driver found in the
+//           2026-07-05 failure analysis (-14.12u of -15.60u)
 // Returns { eligible: true, reason: null } or { eligible: false, reason }
 // where reason is a short marker surfaced by the web UI (<= 64 chars), e.g.
 // 'insufficient_history: home 2/5' or 'no_markets'.
-export function tipEligibility({ x12, dc, ou, home, away }, opts = {}) {
+export function tipEligibility({ x12, dc, ou, home, away, league }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
+    // Context invalidity trumps sample size: rolling form says nothing about
+    // a preseason exhibition or a youth side's next lineup.
+    if (league != null && TIP_CONTEXT_EXCLUDE.test(league)) {
+        return { eligible: false, reason: 'context: friendly/youth league' };
+    }
     // ONE thin side already disqualifies: the stats support for any outcome
     // blends both teams' evidence (a home-win tip needs home's win rate AND
     // away's loss rate), so a single thin sample poisons the whole blend.
@@ -248,7 +266,11 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
         if (!probs) continue;
         const over = statsOver(Number(line));
         consider(`O ${line}`, pair.over, probs[0], over, null);
-        consider(`U ${line}`, pair.under, probs[1], over == null ? null : 1 - over, null);
+        // Near-Unders are excluded (see DEFAULT_TIP.minUnderLine); suppressed
+        // lines simply yield to the next-best candidate.
+        if (Number(line) >= t.minUnderLine) {
+            consider(`U ${line}`, pair.under, probs[1], over == null ? null : 1 - over, null);
+        }
     }
 
     if (!candidates.length) return null;

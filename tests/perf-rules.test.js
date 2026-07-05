@@ -109,6 +109,20 @@ test('buckets split settled tips by confidence band, market group and edge sign'
     assert.equal(b.edge.negative.profit, -1);
 });
 
+test('ou_line bucket slices O/U tips by exact line, ignoring result markets', () => {
+    const rows = [
+        tip({ tip_market: 'U 4.5', tip_price: 1.25, tip_outcome: 'hit' }),
+        tip({ tip_market: 'U 4.5', tip_price: 1.30, tip_outcome: 'miss' }),
+        tip({ tip_market: 'O 2.5', tip_price: 1.35, tip_outcome: 'hit' }),
+        tip({ tip_market: '1X', tip_outcome: 'hit' }), // result market: not in ou_line
+    ];
+    const b = summarizePerformance(rows, NOW).tips.buckets;
+    assert.deepEqual(Object.keys(b.ou_line).sort(), ['O 2.5', 'U 4.5']);
+    assert.equal(b.ou_line['U 4.5'].picks, 2);
+    assert.equal(b.ou_line['U 4.5'].profit, Math.round((0.25 - 1) * 10000) / 10000);
+    assert.equal(b.ou_line['O 2.5'].picks, 1);
+});
+
 // --- AI-veto impact (vetoed picks settle but are excluded from headlines) ---
 
 test('AI-vetoed tips are excluded from windows and reported as impact', () => {
@@ -149,6 +163,6 @@ test('summary carries the documented top-level shape', () => {
     assert.deepEqual(Object.keys(out), ['generated_at', 'tips', 'hotpicks']);
     assert.deepEqual(Object.keys(out.tips), ['windows', 'buckets', 'ai_impact']);
     assert.deepEqual(Object.keys(out.tips.windows), ['7d', '30d', 'all']);
-    assert.deepEqual(Object.keys(out.tips.buckets), ['confidence', 'market', 'edge']);
+    assert.deepEqual(Object.keys(out.tips.buckets), ['confidence', 'market', 'ou_line', 'edge']);
     assert.deepEqual(Object.keys(out.hotpicks.buckets), ['confidence', 'edge']);
 });
