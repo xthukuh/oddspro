@@ -4,6 +4,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
+import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 
@@ -67,6 +68,17 @@ app.get('/api/hotpicks', async (req, res, next) => {
 app.get('/api/performance', async (req, res, next) => {
     try {
         res.json(await performanceSummary());
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/magic-sort - top tip-ranking strategies by 4-leg slip survival
+// (backtest over settled tips) + the live calibration the web table scores
+// today's rows with. Cached per day; ?refresh=1 recomputes.
+app.get('/api/magic-sort', async (req, res, next) => {
+    try {
+        res.json(await magicSortCached(req.query.refresh === '1'));
     } catch (e) {
         next(e);
     }
