@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { applyClientFilters, splitFilters } from './filterValues.js';
+import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
@@ -86,6 +87,7 @@ export default function App() {
     const [loading, setLoading] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
+    const [showSlips, setShowSlips] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
 
@@ -351,6 +353,13 @@ export default function App() {
                     onPick={saveMagic}
                 />
                 <button
+                    onClick={() => setShowSlips(true)}
+                    title="Betslip playground - build virtual multi-bet slips from the day's tips"
+                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                >
+                    Slips
+                </button>
+                <button
                     onClick={() => setShowFilters(v => !v)}
                     className={`cursor-pointer px-3 py-1 rounded border text-sm ${showFilters || filters.length
                         ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
@@ -413,6 +422,16 @@ export default function App() {
                     </span>
                 </div>
             </main>
+
+            {showSlips && (
+                <BetslipPlayground
+                    rows={rows}
+                    magic={magic}
+                    calibration={magicData?.calibration ?? null}
+                    date={date || 'all'}
+                    onClose={() => setShowSlips(false)}
+                />
+            )}
 
             {showSettings && catalog && (
                 <SettingsModal
