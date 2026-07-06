@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb,
-    STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, simulateStrategies,
+    STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -375,4 +375,40 @@ test('slipOutcome: pending legs stay open; legacy legs without outcome are pendi
         { state: 'open', settled: 1, total: 2, broken: [] });
     assert.deepEqual(slipOutcome([]), { state: 'open', settled: 0, total: 0, broken: [] });
     assert.deepEqual(slipOutcome(null), { state: 'open', settled: 0, total: 0, broken: [] });
+});
+
+// --- slipTotals (playground totals bar) ---
+
+test('slipTotals: staked/returned/profit over a mixed book at flat stake', () => {
+    const slips = [
+        // won: 2.0 x 1.5 = 3.0 odds -> returns 300 at stake 100
+        { legs: [{ api_id: 1, price: 2.0, outcome: 'hit' }, { api_id: 2, price: 1.5, outcome: 'hit' }] },
+        // lost: stake burned regardless of the pending leg
+        { legs: [{ api_id: 3, price: 1.8, outcome: 'miss' }, { api_id: 4, price: 1.4 }] },
+        // open: not settled, excluded from profit
+        { legs: [{ api_id: 5, price: 1.6, outcome: 'hit' }, { api_id: 6, price: 1.3 }] },
+    ];
+    assert.deepEqual(slipTotals(slips, 100), {
+        slips: 3, won: 1, lost: 1, open: 1,
+        staked: 300, returned: 300,
+        profit: 100, // 300 returned - 200 settled stakes; open stake not yet lost
+    });
+});
+
+test('slipTotals: empty slip cards are not bets; empty/null input is all zeros', () => {
+    const zero = { slips: 0, won: 0, lost: 0, open: 0, staked: 0, returned: 0, profit: 0 };
+    assert.deepEqual(slipTotals([{ legs: [] }, { legs: null }], 50), zero);
+    assert.deepEqual(slipTotals([], 50), zero);
+    assert.deepEqual(slipTotals(null, 50), zero);
+});
+
+test('slipTotals: all-lost book is a pure negative of settled stakes', () => {
+    const slips = [
+        { legs: [{ api_id: 1, price: 3.0, outcome: 'miss' }] },
+        { legs: [{ api_id: 2, price: 2.0, outcome: 'miss' }] },
+    ];
+    const t = slipTotals(slips, 25);
+    assert.equal(t.returned, 0);
+    assert.equal(t.profit, -50);
+    assert.equal(t.staked, 50);
 });

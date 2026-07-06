@@ -270,6 +270,29 @@ export function slipOutcome(legs) {
     return { state, settled, total: list.length, broken };
 }
 
+// Playground totals over a book of slips at flat stake: every non-empty slip
+// stakes once (empty cards aren't bets), `returned` sums the WON slips'
+// virtual payouts, and `profit` covers settled slips only - an open slip's
+// stake is not yet lost (the UI shows the open count instead).
+export function slipTotals(slips, stake = 1) {
+    const t = { slips: 0, won: 0, lost: 0, open: 0, staked: 0, returned: 0, profit: 0 };
+    for (const slip of Array.isArray(slips) ? slips : []) {
+        const legs = Array.isArray(slip?.legs) ? slip.legs : [];
+        if (!legs.length) continue;
+        t.slips++;
+        const { state } = slipOutcome(legs);
+        if (state === 'won') {
+            t.won++;
+            t.returned += slipSummary(legs, stake).payout;
+        } else if (state === 'lost') t.lost++;
+        else t.open++;
+    }
+    t.staked = _round(t.slips * stake);
+    t.returned = _round(t.returned);
+    t.profit = _round(t.returned - (t.won + t.lost) * stake);
+    return t;
+}
+
 // Rank one day's candidates under a strategy: score desc with a fully
 // deterministic tiebreak (confidence desc, price asc, market asc).
 function _rankDay(pool, strategy, cal) {
