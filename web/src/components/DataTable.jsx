@@ -5,7 +5,7 @@
 // column pins left only while the real one is scrolled out of view.
 
 import { useMemo, useRef, useState } from 'react';
-import { sortRows } from '../sortValues.js';
+import { sortRows, sortValue } from '../sortValues.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { magicSortRows } from '../../../src/db/magic-rules.js';
@@ -161,14 +161,33 @@ const CELL_TITLES = {
     away_goals_oth: row => (row.away_goals_oth ? HEADER_META.away_goals_oth.info : null),
 };
 
+// Columns whose sort value is DERIVED from the displayed text (form ->
+// points, "gf/ga (avg)" -> avg, score -> total goals, tip -> confidence +
+// hot bonus, fs: stats -> H+A sum). Plain numbers, dates and odds prices
+// are skipped - the display IS the value.
+const SORT_HINT_KEYS = new Set(['score', 'tip', 'home_form', 'away_form', 'h2h',
+    'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
+
+// "⇅ sorts as: <derived value>" - the exact value sorting/filtering uses
+// (same sortValue call), so the hint can never disagree with the ordering.
+function _sortHint(row, col) {
+    if (!SORT_HINT_KEYS.has(col.key) && !col.key.startsWith('fs:')) return null;
+    const v = sortValue(row, col);
+    if (v == null) return null;
+    return `⇅ sorts as: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`;
+}
+
 function _cellTitle(row, col) {
     const fn = CELL_TITLES[col.key];
-    if (fn) return fn(row) ?? undefined;
-    if (col.group === 'market') return _marketInfo(col.key) ?? undefined;
-    if (col.key.startsWith('fs:')) {
-        return row.stats?.[col.key] != null ? 'Home / Away - post-match statistic' : undefined;
-    }
-    return undefined;
+    const base = fn
+        ? fn(row)
+        : col.group === 'market'
+            ? _marketInfo(col.key)
+            : col.key.startsWith('fs:') && row.stats?.[col.key] != null
+                ? 'Home / Away - post-match statistic'
+                : null;
+    const hint = _sortHint(row, col);
+    return [base, hint].filter(Boolean).join('\n') || undefined;
 }
 
 // Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
