@@ -141,3 +141,22 @@ test('conditions AND-combine; unknown op rejects the row', () => {
     assert.equal(out.length, 1);
     assert.equal(applyClientFilters(rows, [{ key: 'goals', op: 'nope', value: '2' }], COLUMNS).length, 0);
 });
+
+test('tip: like matches the tip market text, comparisons use confidence', () => {
+    const rows = [
+        row({ tip_market: 'O 2.5', tip_confidence: 0.8 }),
+        row({ tip_market: '1X', tip_confidence: 0.6 }),
+        row({ tip_market: null, tip_confidence: null }),
+    ];
+    const cols = [...COLUMNS, { key: 'tip', group: 'base' }];
+    // contains matches what the cell displays (server parity: fp.tip_market)
+    assert.deepEqual(
+        applyClientFilters(rows, [{ key: 'tip', op: 'like', value: 'o 2' }], cols).map(r => r.tip_market),
+        ['O 2.5']);
+    // numeric ops keep comparing the blended confidence
+    assert.deepEqual(
+        applyClientFilters(rows, [{ key: 'tip', op: 'gte', value: '0.7' }], cols).map(r => r.tip_market),
+        ['O 2.5']);
+    // tipless rows never match either form
+    assert.equal(applyClientFilters(rows, [{ key: 'tip', op: 'like', value: '' }], cols).length, 2);
+});

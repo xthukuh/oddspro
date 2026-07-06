@@ -255,6 +255,21 @@ export function slipSummary(legs, stake = 1) {
     };
 }
 
+// Grade a slip from its legs' settled tip outcomes (backtest mode): every
+// leg hit -> won; any miss -> lost (a pending leg cannot save it); else
+// open. Legacy stored legs without an `outcome` field count as pending.
+export function slipOutcome(legs) {
+    const list = Array.isArray(legs) ? legs : [];
+    let settled = 0;
+    const broken = [];
+    for (const leg of list) {
+        if (leg?.outcome === 'hit') settled++;
+        else if (leg?.outcome === 'miss') { settled++; broken.push(leg.api_id); }
+    }
+    const state = broken.length ? 'lost' : (list.length && settled === list.length ? 'won' : 'open');
+    return { state, settled, total: list.length, broken };
+}
+
 // Rank one day's candidates under a strategy: score desc with a fully
 // deterministic tiebreak (confidence desc, price asc, market asc).
 function _rankDay(pool, strategy, cal) {

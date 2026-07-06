@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb,
-    STRATEGIES, scoreTip, magicSortRows, slipSummary, simulateStrategies,
+    STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, simulateStrategies,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -348,4 +348,31 @@ test('replayed strategies always outrank never-replayed ones (day tier)', () => 
         [...out.strategies.map(s => s.id)].sort(),
         'all-equal metrics fall through to deterministic id order',
     );
+});
+
+// --- slipOutcome (betslip backtest grader) ---
+
+test('slipOutcome: all legs hit -> won', () => {
+    const legs = [
+        { api_id: 1, outcome: 'hit' },
+        { api_id: 2, outcome: 'hit' },
+    ];
+    assert.deepEqual(slipOutcome(legs), { state: 'won', settled: 2, total: 2, broken: [] });
+});
+
+test('slipOutcome: any miss -> lost immediately, names the broken legs', () => {
+    const legs = [
+        { api_id: 1, outcome: 'hit' },
+        { api_id: 2, outcome: 'miss' },
+        { api_id: 3, outcome: null }, // pending leg cannot save a broken slip
+    ];
+    assert.deepEqual(slipOutcome(legs), { state: 'lost', settled: 2, total: 3, broken: [2] });
+});
+
+test('slipOutcome: pending legs stay open; legacy legs without outcome are pending', () => {
+    assert.deepEqual(
+        slipOutcome([{ api_id: 1, outcome: 'hit' }, { api_id: 2 }]),
+        { state: 'open', settled: 1, total: 2, broken: [] });
+    assert.deepEqual(slipOutcome([]), { state: 'open', settled: 0, total: 0, broken: [] });
+    assert.deepEqual(slipOutcome(null), { state: 'open', settled: 0, total: 0, broken: [] });
 });

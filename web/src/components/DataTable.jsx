@@ -5,10 +5,10 @@
 // column pins left only while the real one is scrolled out of view.
 
 import { useMemo, useRef, useState } from 'react';
-import { sortRows } from '../sortValues.js';
+import { sortRows, sortValue } from '../sortValues.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
-import { magicSortRows } from '../../../src/db/magic-rules.js';
+import { magicSortRows, scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 
 const PROVIDER_STYLE = {
@@ -161,14 +161,33 @@ const CELL_TITLES = {
     away_goals_oth: row => (row.away_goals_oth ? HEADER_META.away_goals_oth.info : null),
 };
 
+// Columns whose sort value is DERIVED from the displayed text (form ->
+// points, "gf/ga (avg)" -> avg, score -> total goals, tip -> confidence +
+// hot bonus, fs: stats -> H+A sum). Plain numbers, dates and odds prices
+// are skipped - the display IS the value.
+const SORT_HINT_KEYS = new Set(['score', 'tip', 'home_form', 'away_form', 'h2h',
+    'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
+
+// "⇅ sorts as: <derived value>" - the exact value sorting/filtering uses
+// (same sortValue call), so the hint can never disagree with the ordering.
+function _sortHint(row, col) {
+    if (!SORT_HINT_KEYS.has(col.key) && !col.key.startsWith('fs:')) return null;
+    const v = sortValue(row, col);
+    if (v == null) return null;
+    return `⇅ sorts as: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`;
+}
+
 function _cellTitle(row, col) {
     const fn = CELL_TITLES[col.key];
-    if (fn) return fn(row) ?? undefined;
-    if (col.group === 'market') return _marketInfo(col.key) ?? undefined;
-    if (col.key.startsWith('fs:')) {
-        return row.stats?.[col.key] != null ? 'Home / Away - post-match statistic' : undefined;
-    }
-    return undefined;
+    const base = fn
+        ? fn(row)
+        : col.group === 'market'
+            ? _marketInfo(col.key)
+            : col.key.startsWith('fs:') && row.stats?.[col.key] != null
+                ? 'Home / Away - post-match statistic'
+                : null;
+    const hint = _sortHint(row, col);
+    return [base, hint].filter(Boolean).join('\n') || undefined;
 }
 
 // Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
@@ -291,6 +310,14 @@ function _marketCell(row, key) {
     return <span className="text-slate-300">-</span>;
 }
 
+// Magic column cell: the row's rank under the active strategy + its raw
+// score (strategies keep their native scales - no fake percentages).
+function _magicCell(row, meta) {
+    const m = meta?.info.get(row.api_id);
+    if (!m) return <span className="text-slate-300">—</span>;
+    return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
+}
+
 export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, magic, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
 
@@ -327,6 +354,32 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         () => (magic ? magicSortRows(rows, magic.id, magic.calibration) : sortRows(rows, sort, columns)),
         [rows, sort, columns, magic],
     );
+
+    // Magic column data: rank per unique fixture (provider rows share it)
+    // in the magic order, plus the raw strategy score. Null score = tipless/
+    // vetoed row - shows an em dash and shares the sunk tail.
+    const magicMeta = useMemo(() => {
+        if (!magic) return null;
+        const label = STRATEGIES.find(s => s.id === magic.id)?.label ?? magic.id;
+        const info = new Map(); // api_id -> { rank, score } | null
+        let n = 0;
+        for (const row of sorted) {
+            if (info.has(row.api_id)) continue;
+            const score = scoreTip(row, magic.id, magic.calibration);
+            info.set(row.api_id, score == null ? null : { rank: ++n, score });
+        }
+        return { label, info };
+    }, [magic, sorted]);
+
+    // While magic is active a synthetic score column sits immediately left
+    // of Tip (ephemeral: not in the catalog, order persistence or settings).
+    const displayColumns = useMemo(() => {
+        if (!magicMeta) return columns;
+        const col = { key: 'magic', label: '✨', group: 'base' };
+        const i = columns.findIndex(c => c.key === 'tip');
+        return i < 0 ? [...columns, col] : [...columns.slice(0, i), col, ...columns.slice(i)];
+    }, [columns, magicMeta]);
+
     const order = new Map(sort.map((s, i) => [s.key, { ...s, i }]));
     const tint = new Map();
     for (const row of rows) {
@@ -340,7 +393,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // would clear the TOTAL width of the currently-inserted pins - adding or
     // removing a pin moves the real columns and the threshold by the same
     // amount, so the states never oscillate at the boundary.
-    const PIN_KEYS = ['score', 'tip'];
+    const PIN_KEYS = ['score', 'magic', 'tip'];
     const containerRef = useRef(null);
     const pinThRefs = useRef({}); // key -> the real column's <th>
     const [pinState, setPinState] = useState({}); // key -> pinned?
@@ -366,12 +419,12 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // Pins keep the columns' own (drag-order) relative order and stack with
     // cumulative left offsets so they never overlap.
     let pinLeft = 0;
-    const pins = columns.filter(c => pinState[c.key]).map(c => {
+    const pins = displayColumns.filter(c => pinState[c.key]).map(c => {
         const p = { ...c, pin: true, left: pinLeft };
         pinLeft += pinThRefs.current[c.key]?.offsetWidth ?? 0;
         return p;
     });
-    const pinned = pins.length ? [...pins, ...columns] : columns;
+    const pinned = pins.length ? [...pins, ...displayColumns] : displayColumns;
 
     return (
         <>
@@ -403,9 +456,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                     ref={!col.pin && PIN_KEYS.includes(col.key)
                                         ? el => { pinThRefs.current[col.key] = el; }
                                         : undefined}
-                                    onClick={e => onSort(col.key, e.shiftKey)}
-                                    className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium cursor-pointer hover:bg-slate-100 ${col.group === 'market' ? 'text-center' : ''}`}
-                                    title={`${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
+                                    onClick={col.key === 'magic' ? undefined : e => onSort(col.key, e.shiftKey)}
+                                    className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-slate-100'} ${col.group === 'market' ? 'text-center' : ''}`}
+                                    title={col.key === 'magic'
+                                        ? `Magic sort: ${magicMeta?.label} - #rank · strategy score`
+                                        : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
                                 >
                                     {meta?.short ?? col.label}
                                     {s && (
@@ -434,7 +489,9 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                         ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
                                         : ''}`}
                                 >
-                                    {col.group === 'market' ? _marketCell(row, col.key) : _cell(row, col.key, links, openTip)}
+                                    {col.key === 'magic' ? _magicCell(row, magicMeta)
+                                        : col.group === 'market' ? _marketCell(row, col.key)
+                                        : _cell(row, col.key, links, openTip)}
                                 </td>
                             ))}
                         </tr>

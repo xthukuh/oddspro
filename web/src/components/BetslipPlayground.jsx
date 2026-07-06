@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
-import { estimateLegProb, magicSortRows, slipSummary, tipView } from '../../../src/db/magic-rules.js';
+import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, tipView } from '../../../src/db/magic-rules.js';
 
-// Betslip playground: build VIRTUAL multi-bet slips from the day's pending
-// tips - drag a candidate onto a slip card (or use its + button), tune the
+// Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
+// drag a candidate onto a slip card (or use its + button), tune the
 // stake / leg / odds limits, and read combined odds, potential payout and
 // the calibrated survival estimate per slip. Client-only simulation, no
-// real betting. Candidates come pre-ranked by the active magic strategy
-// (blend confidence when none), so "Fill from top" is a one-click best slip.
+// real betting. Settled tips are candidates too (backtest mode: past dates
+// replay at frozen tip prices and grade their slips WON/LOST). Candidates
+// come pre-ranked by the active magic strategy (blend confidence when
+// none), so "Fill from top" is a one-click best slip.
 
 const LS_SLIPS = 'oddspro.betslips';
 const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, minOdds: 2.5 };
@@ -46,15 +48,17 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
         localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips }));
     }, [date, config, slips]);
 
-    // Slip candidates: the table's pending, non-vetoed tips - one per
-    // canonical fixture - ranked by the active magic strategy.
+    // Slip candidates: the table's non-vetoed tips - one per canonical
+    // fixture - ranked by the active magic strategy. Settled tips are
+    // included (backtest mode: past dates replay at their frozen tip
+    // prices); their outcome grades the slip.
     const candidates = useMemo(() => {
         const seen = new Set();
         const unique = [];
         for (const r of rows) {
             if (seen.has(r.api_id)) continue;
             seen.add(r.api_id);
-            if (r.tip_market != null && r.tip_outcome == null && r.tip_ai_verdict !== 'veto') unique.push(r);
+            if (r.tip_market != null && r.tip_ai_verdict !== 'veto') unique.push(r);
         }
         return magicSortRows(unique, magic?.id ?? 'confidence', magic?.calibration ?? calibration).map(r => ({
             api_id: r.api_id,
@@ -62,6 +66,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
             market: r.tip_market,
             price: r.tip_price,
             prob: estimateLegProb(tipView(r), calibration),
+            outcome: r.tip_outcome ?? null,
         }));
     }, [rows, magic, calibration]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
@@ -146,10 +151,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                 </div>
 
                 <div className="flex gap-4 min-h-0 grow">
-                    {/* Candidates: pending tips ranked best-first */}
+                    {/* Candidates: the view's tips ranked best-first (settled included) */}
                     <div className="w-2/5 min-w-0 flex flex-col">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
-                            Tips <span className="text-slate-400 font-normal">({candidates.length} pending, best first{magic ? ' · magic' : ''})</span>
+                            Tips <span className="text-slate-400 font-normal">({candidates.length}, best first{magic ? ' · magic' : ''})</span>
                         </h3>
                         <div className="grow overflow-y-auto border border-slate-200 rounded p-1">
                             {candidates.map(c => (
@@ -172,11 +177,13 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                     <span className="truncate grow" title={c.fixture}>{c.fixture}</span>
                                     <span className="font-medium whitespace-nowrap">{c.market}</span>
                                     <span className="tabular-nums">{c.price?.toFixed(2) ?? '—'}</span>
+                                    {c.outcome === 'hit' && <span className="text-emerald-600 font-bold">✓</span>}
+                                    {c.outcome === 'miss' && <span className="text-rose-600 font-bold">✗</span>}
                                     <span className="tabular-nums text-slate-500" title="Calibrated win estimate">{_pct(c.prob)}</span>
                                 </div>
                             ))}
                             {!candidates.length && (
-                                <div className="p-2 text-sm text-slate-400">No pending tips on this view.</div>
+                                <div className="p-2 text-sm text-slate-400">No tips on this view.</div>
                             )}
                         </div>
                     </div>
@@ -187,6 +194,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                         <div className="grow overflow-y-auto space-y-3 pr-1">
                             {slips.map(slip => {
                                 const sum = slipSummary(slip.legs, config.stake);
+                                const verdict = slipOutcome(slip.legs);
                                 const over = slip.legs.length > config.maxLegs;
                                 const under = slip.legs.length > 0 && sum.odds < config.minOdds;
                                 return (
@@ -222,14 +230,17 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                         {slip.legs.map(l => (
                                             <div
                                                 key={l.api_id}
-                                                className={`flex items-center gap-2 text-xs py-0.5 ${live.has(l.api_id) ? '' : 'opacity-50'}`}
+                                                className={`flex items-center gap-2 text-xs py-0.5 ${live.has(l.api_id) ? '' : 'opacity-50'} ${
+                                                    verdict.broken.includes(l.api_id) ? 'text-rose-600' : ''}`}
                                             >
                                                 <span className="truncate grow" title={l.fixture}>{l.fixture}</span>
                                                 {!live.has(l.api_id) && (
-                                                    <span className="text-amber-600" title="No longer a pending tip on this view">gone</span>
+                                                    <span className="text-amber-600" title="No longer a tip on this view">gone</span>
                                                 )}
                                                 <span className="font-medium whitespace-nowrap">{l.market}</span>
                                                 <span className="tabular-nums">{l.price?.toFixed(2) ?? '—'}</span>
+                                                {l.outcome === 'hit' && <span className="text-emerald-600 font-bold">✓</span>}
+                                                {l.outcome === 'miss' && <span className="text-rose-600 font-bold">✗</span>}
                                                 <span className="tabular-nums text-slate-500">{_pct(l.prob)}</span>
                                                 <button
                                                     onClick={() => removeLeg(slip.id, l.api_id)}
@@ -243,6 +254,17 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                             <div className="text-xs text-slate-400 py-1">Drag tips here (or use their + button).</div>
                                         )}
                                         <div className="flex flex-wrap gap-x-4 gap-y-0.5 mt-1 pt-1 border-t border-slate-100 text-xs tabular-nums">
+                                            {verdict.state === 'won' && (
+                                                <span className="text-emerald-700 font-semibold">WON · paid {sum.payout.toFixed(2)}</span>
+                                            )}
+                                            {verdict.state === 'lost' && (
+                                                <span className="text-rose-600 font-semibold">
+                                                    LOST · {verdict.broken.length} leg{verdict.broken.length > 1 ? 's' : ''} broke it
+                                                </span>
+                                            )}
+                                            {verdict.state === 'open' && verdict.settled > 0 && (
+                                                <span className="text-slate-500">alive · {verdict.settled}/{verdict.total} settled</span>
+                                            )}
                                             <span>odds <b>{sum.odds.toFixed(2)}</b></span>
                                             <span>payout <b>{sum.payout.toFixed(2)}</b></span>
                                             <span title="Product of the legs' calibrated win estimates (assumes independence)">
