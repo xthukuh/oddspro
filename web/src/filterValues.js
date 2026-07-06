@@ -53,8 +53,10 @@ function _compare(a, b) {
 }
 
 // Raw (displayed) value for `like`: the underlying field text, so e.g.
-// `home_form like WWW` matches the letters, not the derived points.
+// `home_form like WWW` matches the letters, not the derived points. The
+// tip column's text is its market pick (server parity: like -> tip_market).
 function _raw(row, col) {
+    if (col.key === 'tip') return row.tip_market ?? null;
     if (col.group === 'market') return row.markets?.[col.key] ?? null;
     if (col.key.startsWith('fs:')) return row.stats?.[col.key] ?? null;
     return row[col.key] ?? null;
