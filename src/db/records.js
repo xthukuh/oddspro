@@ -31,8 +31,9 @@ const BASE_FIELDS = {
     // entry are NULL, not 0.
     hot: { sql: 'fp.hot', type: 'number' },
     hot_score: { sql: 'fp.score', type: 'number' },
-    // "Tip" column sorts/filters by its blended confidence (0..1)
-    tip: { sql: 'fp.tip_confidence', type: 'number' },
+    // "Tip" column sorts/filters by its blended confidence (0..1); `like`
+    // conditions match the tip market TEXT instead (what the cell displays)
+    tip: { sql: 'fp.tip_confidence', like_sql: 'fp.tip_market', type: 'number' },
     // Odds refresh time / betting-closed time ("Locked At" = completed_at)
     updated_at: { sql: 'm.updated_at', type: 'datetime' },
     locked_at: { sql: 'm.completed_at', type: 'datetime' },
@@ -95,9 +96,14 @@ export async function columnCatalog() {
 
 // Resolve a sort/filter key to an orderable SQL target, adding a LEFT JOIN
 // pivot subquery per referenced market column (one join per key, reused).
-function _sqlTarget(query, key, joined) {
+// `op` is the filter operator: a base field with a `like_sql` text target
+// resolves there for `like` conditions (e.g. tip -> fp.tip_market).
+function _sqlTarget(query, key, joined, op = null) {
     const base = BASE_FIELDS[key];
-    if (base) return base.raw ? db.raw(base.sql) : base.sql;
+    if (base) {
+        if (op === 'like' && base.like_sql) return base.like_sql;
+        return base.raw ? db.raw(base.sql) : base.sql;
+    }
     if (!isMarketKey(key)) return null;
     let alias = joined.get(key);
     if (!alias) {
@@ -124,10 +130,18 @@ function _json(value) {
     }
 }
 
-// Coerce a filter value by field type (market columns are numeric prices)
-function _coerce(key, value) {
+// Coerce a filter value by field type (market columns are numeric prices).
+// `like` values stay text (string-contains works on any column); numeric
+// comparisons reject unparsable input - mysql2 would otherwise serialize
+// NaN as a bare SQL token ("Unknown column 'NaN'").
+function _coerce(key, value, op) {
     const type = BASE_FIELDS[key]?.type ?? 'number';
-    return type === 'number' ? Number(value) : String(value);
+    if (op === 'like' || type !== 'number') return String(value);
+    const n = Number(value);
+    if (Number.isNaN(n)) {
+        throw new TypeError(`Invalid numeric filter value for ${key}: ${JSON.stringify(value)}`);
+    }
+    return n;
 }
 
 // Query correlated records: paginated + multi-sort + filtered.
@@ -167,7 +181,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
 
     const joined = new Map();
     for (const f of Array.isArray(filters) ? filters : []) {
-        const target = _sqlTarget(query, f?.key, joined);
+        const target = _sqlTarget(query, f?.key, joined, f?.op);
         if (!target) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
         if (f?.col != null) {
             // Column-to-column comparison: the RHS resolves like the LHS
@@ -180,7 +194,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         } else {
             const apply = FILTER_OPS[f?.op];
             if (!apply) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
-            apply(query, target, _coerce(f.key, f.value));
+            apply(query, target, _coerce(f.key, f.value, f.op));
         }
     }
 
