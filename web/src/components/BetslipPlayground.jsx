@@ -106,6 +106,12 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
         setSlips(prev => prev.filter(s => s.id !== id));
         if (activeId === id) setActiveId(null);
     };
+    // Wipe the whole book at once - frees every tip, so "Fill from top"
+    // re-enables. No confirm: slips are virtual and one click rebuilds them.
+    const clearSlips = () => {
+        setSlips(() => []);
+        setActiveId(null);
+    };
     const renameSlip = (id, name) => setSlips(prev => prev.map(s => (s.id === id ? { ...s, name } : s)));
     const addLeg = (slipId, candidate) => {
         if (!candidate) return;
@@ -165,6 +171,14 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                         Hide used
                     </label>
                     <div className="grow" />
+                    <button
+                        onClick={clearSlips}
+                        disabled={!slips.length}
+                        title="Remove all slips at once (their tips become available again)"
+                        className="cursor-pointer px-3 py-1.5 rounded border border-slate-300 text-sm text-slate-600 hover:bg-red-50 hover:border-red-300 hover:text-red-700 disabled:opacity-50"
+                    >
+                        Clear slips
+                    </button>
                     <button
                         onClick={() => addSlip()}
                         className="cursor-pointer px-3 py-1.5 rounded border border-slate-300 text-sm hover:bg-slate-50"
@@ -332,6 +346,14 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                 </span>
                                 <span>staked <b>{totals.staked.toFixed(2)}</b></span>
                                 <span>returned <b>{totals.returned.toFixed(2)}</b></span>
+                                {totals.open > 0 && (
+                                    <span
+                                        className="text-sky-700"
+                                        title="What the open (unsettled) slips would pay if every pending leg landed"
+                                    >
+                                        potential <b>{totals.potential.toFixed(2)}</b>
+                                    </span>
+                                )}
                                 <span
                                     className={totals.profit >= 0 ? 'text-emerald-700' : 'text-red-600'}
                                     title="Returned minus stakes of settled slips - open slips' stakes are not yet lost"

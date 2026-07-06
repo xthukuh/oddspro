@@ -392,11 +392,12 @@ test('slipTotals: staked/returned/profit over a mixed book at flat stake', () =>
         slips: 3, won: 1, lost: 1, open: 1,
         staked: 300, returned: 300,
         profit: 100, // 300 returned - 200 settled stakes; open stake not yet lost
+        potential: 208, // open slip 1.6 x 1.3 = 2.08 odds -> 208 if it lands
     });
 });
 
 test('slipTotals: empty slip cards are not bets; empty/null input is all zeros', () => {
-    const zero = { slips: 0, won: 0, lost: 0, open: 0, staked: 0, returned: 0, profit: 0 };
+    const zero = { slips: 0, won: 0, lost: 0, open: 0, staked: 0, returned: 0, profit: 0, potential: 0 };
     assert.deepEqual(slipTotals([{ legs: [] }, { legs: null }], 50), zero);
     assert.deepEqual(slipTotals([], 50), zero);
     assert.deepEqual(slipTotals(null, 50), zero);
