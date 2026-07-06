@@ -11,7 +11,7 @@ import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, tipView } fro
 // none), so "Fill from top" is a one-click best slip.
 
 const LS_SLIPS = 'oddspro.betslips';
-const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, minOdds: 2.5 };
+const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, minOdds: 2.5, hideUsed: true };
 
 const _id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const _pct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
@@ -71,6 +71,14 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     }, [rows, magic, calibration]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
+    // Tips already sitting on any slip: "Fill from top" ALWAYS skips them, so
+    // each click autogenerates the next distinct slip (ranks 1-4, then 5-8, …)
+    // until the day's tips are exhausted; the Hide-used toggle additionally
+    // hides them from the list below. Removing a slip/leg frees its tips.
+    const usedIds = useMemo(() => new Set(slips.flatMap(s => s.legs.map(l => l.api_id))), [slips]);
+    const unused = useMemo(() => candidates.filter(c => !usedIds.has(c.api_id)), [candidates, usedIds]);
+    const shown = config.hideUsed ? unused : candidates;
+
     const setConfig = (key, raw, bounds) => {
         const n = _numInput(raw, bounds);
         if (n != null) setState(s => ({ ...s, config: { ...s.config, [key]: n } }));
@@ -82,7 +90,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
         setSlips(prev => [...prev, slip]);
         setActiveId(slip.id);
     };
-    const fillFromTop = () => addSlip(candidates.slice(0, config.maxLegs));
+    const fillFromTop = () => addSlip(unused.slice(0, config.maxLegs));
     const removeSlip = id => {
         setSlips(prev => prev.filter(s => s.id !== id));
         if (activeId === id) setActiveId(null);
@@ -133,6 +141,17 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                             />
                         </label>
                     ))}
+                    <label
+                        className="flex items-center gap-1.5 pb-1.5 text-xs text-slate-600 cursor-pointer select-none"
+                        title="Hide tips already placed on a slip from the list below (Fill from top always skips them)"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={config.hideUsed}
+                            onChange={() => setState(s => ({ ...s, config: { ...s.config, hideUsed: !s.config.hideUsed } }))}
+                        />
+                        Hide used
+                    </label>
                     <div className="grow" />
                     <button
                         onClick={() => addSlip()}
@@ -142,8 +161,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     </button>
                     <button
                         onClick={fillFromTop}
-                        disabled={!candidates.length}
-                        title={`New slip from the ${config.maxLegs} top-ranked tips`}
+                        disabled={!unused.length}
+                        title={unused.length
+                            ? `New slip from the ${Math.min(config.maxLegs, unused.length)} top-ranked unused tips (${unused.length} left)`
+                            : 'All tips are already on slips'}
                         className="cursor-pointer px-3 py-1.5 rounded bg-sky-600 text-white text-sm hover:bg-sky-500 disabled:opacity-50"
                     >
                         ✨ Fill from top
@@ -154,10 +175,12 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
                     <div className="w-2/5 min-w-0 flex flex-col">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
-                            Tips <span className="text-slate-400 font-normal">({candidates.length}, best first{magic ? ' · magic' : ''})</span>
+                            Tips <span className="text-slate-400 font-normal">
+                                ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{magic ? ' · magic' : ''})
+                            </span>
                         </h3>
                         <div className="grow overflow-y-auto border border-slate-200 rounded p-1">
-                            {candidates.map(c => (
+                            {shown.map(c => (
                                 <div
                                     key={c.api_id}
                                     draggable
@@ -182,8 +205,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                     <span className="tabular-nums text-slate-500" title="Calibrated win estimate">{_pct(c.prob)}</span>
                                 </div>
                             ))}
-                            {!candidates.length && (
-                                <div className="p-2 text-sm text-slate-400">No tips on this view.</div>
+                            {!shown.length && (
+                                <div className="p-2 text-sm text-slate-400">
+                                    {candidates.length ? 'All tips are on slips.' : 'No tips on this view.'}
+                                </div>
                             )}
                         </div>
                     </div>
