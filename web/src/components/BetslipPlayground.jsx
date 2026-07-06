@@ -1,12 +1,14 @@
 import { useEffect, useMemo, useState } from 'react';
 import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, tipView } from '../../../src/db/magic-rules.js';
 
-// Betslip playground: build VIRTUAL multi-bet slips from the day's pending
-// tips - drag a candidate onto a slip card (or use its + button), tune the
+// Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
+// drag a candidate onto a slip card (or use its + button), tune the
 // stake / leg / odds limits, and read combined odds, potential payout and
 // the calibrated survival estimate per slip. Client-only simulation, no
-// real betting. Candidates come pre-ranked by the active magic strategy
-// (blend confidence when none), so "Fill from top" is a one-click best slip.
+// real betting. Settled tips are candidates too (backtest mode: past dates
+// replay at frozen tip prices and grade their slips WON/LOST). Candidates
+// come pre-ranked by the active magic strategy (blend confidence when
+// none), so "Fill from top" is a one-click best slip.
 
 const LS_SLIPS = 'oddspro.betslips';
 const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, minOdds: 2.5 };
@@ -149,7 +151,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                 </div>
 
                 <div className="flex gap-4 min-h-0 grow">
-                    {/* Candidates: pending tips ranked best-first */}
+                    {/* Candidates: the view's tips ranked best-first (settled included) */}
                     <div className="w-2/5 min-w-0 flex flex-col">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
                             Tips <span className="text-slate-400 font-normal">({candidates.length}, best first{magic ? ' · magic' : ''})</span>
@@ -181,7 +183,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                 </div>
                             ))}
                             {!candidates.length && (
-                                <div className="p-2 text-sm text-slate-400">No pending tips on this view.</div>
+                                <div className="p-2 text-sm text-slate-400">No tips on this view.</div>
                             )}
                         </div>
                     </div>
