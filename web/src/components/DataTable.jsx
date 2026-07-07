@@ -5,10 +5,11 @@
 // column pins left only while the real one is scrolled out of view.
 
 import { useMemo, useRef, useState } from 'react';
-import { sortRows, sortValue } from '../sortValues.js';
+import { sortValue } from '../sortValues.js';
+import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
-import { magicSortRows, scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
+import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 
 const PROVIDER_STYLE = {
@@ -318,7 +319,7 @@ function _magicCell(row, meta) {
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, sort, onSort, magic, loading, linkProviders }) {
+export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders }) {
     const links = new Set(linkProviders ?? []);
 
     // Tip justification popover, anchored at the click point (one at a time)
@@ -348,28 +349,31 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         });
     }, [catalog, rows, marketKeys, statKeys, columnOrder]);
 
-    // Magic sort (most-likely-to-win first; tipless/vetoed rows sink) takes
-    // precedence over the column-sort chain - App guarantees only one is set.
+    // One ordering for the whole unified chain (column sorts + magic
+    // strategies interleaved by priority); tipless/vetoed rows sink on magic
+    // entries, nulls sink on column entries.
     const sorted = useMemo(
-        () => (magic ? magicSortRows(rows, magic.id, magic.calibration) : sortRows(rows, sort, columns)),
-        [rows, sort, columns, magic],
+        () => orderRows(rows, chain, columns, cal),
+        [rows, chain, columns, cal],
     );
 
-    // Magic column data: rank per unique fixture (provider rows share it)
-    // in the magic order, plus the raw strategy score. Null score = tipless/
-    // vetoed row - shows an em dash and shares the sunk tail.
+    // The magic column tracks the highest-priority magic entry in the chain
+    // (if any). Score from that strategy; rank per unique fixture in the FINAL
+    // combined order. Null score = tipless/vetoed row - shows an em dash and
+    // shares the sunk tail.
+    const primaryMagicId = chain.find(e => e.type === 'magic')?.id;
     const magicMeta = useMemo(() => {
-        if (!magic) return null;
-        const label = STRATEGIES.find(s => s.id === magic.id)?.label ?? magic.id;
+        if (!primaryMagicId) return null;
+        const label = STRATEGIES.find(s => s.id === primaryMagicId)?.label ?? primaryMagicId;
         const info = new Map(); // api_id -> { rank, score } | null
         let n = 0;
         for (const row of sorted) {
             if (info.has(row.api_id)) continue;
-            const score = scoreTip(row, magic.id, magic.calibration);
+            const score = scoreTip(row, primaryMagicId, cal);
             info.set(row.api_id, score == null ? null : { rank: ++n, score });
         }
         return { label, info };
-    }, [magic, sorted]);
+    }, [primaryMagicId, cal, sorted]);
 
     // While magic is active a synthetic score column sits immediately left
     // of Tip (ephemeral: not in the catalog, order persistence or settings).
@@ -380,7 +384,13 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         return i < 0 ? [...columns, col] : [...columns.slice(0, i), col, ...columns.slice(i)];
     }, [columns, magicMeta]);
 
-    const order = new Map(sort.map((s, i) => [s.key, { ...s, i }]));
+    // Column-header sort indicators: each column entry's priority index across
+    // the WHOLE chain; the magic column shows the primary magic entry's slot.
+    const order = new Map();
+    chain.forEach((e, i) => { if (e.type === 'column') order.set(e.key, { dir: e.dir, i }); });
+    const magicPos = chain.findIndex(e => e.type === 'magic');
+    const magicLabels = chain.filter(e => e.type === 'magic')
+        .map(e => STRATEGIES.find(s => s.id === e.id)?.label ?? e.id);
     const tint = new Map();
     for (const row of rows) {
         if (!tint.has(row.api_id)) tint.set(row.api_id, ROW_TINTS[tint.size % ROW_TINTS.length]);
@@ -432,7 +442,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`overflow-auto max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`overflow-auto max-h-[calc(100vh-11rem)] sm:max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
@@ -459,15 +469,18 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                     onClick={col.key === 'magic' ? undefined : e => onSort(col.key, e.shiftKey)}
                                     className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-slate-100'} ${col.group === 'market' ? 'text-center' : ''}`}
                                     title={col.key === 'magic'
-                                        ? `Magic sort: ${magicMeta?.label} - #rank · strategy score`
-                                        : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to sort (desc first) - shift-click for multi-sort`}
+                                        ? `Magic sort${magicLabels.length > 1 ? `s (${magicLabels.length})` : ''}: ${magicLabels.join(', ')} - #rank · strategy score`
+                                        : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
                                 >
                                     {meta?.short ?? col.label}
                                     {s && (
                                         <span className="ml-1 text-sky-600">
                                             {s.dir === 'asc' ? '▲' : '▼'}
-                                            {sort.length > 1 && <sup>{s.i + 1}</sup>}
+                                            {chain.length > 1 && <sup>{s.i + 1}</sup>}
                                         </span>
+                                    )}
+                                    {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
+                                        <sup className="ml-0.5 text-sky-600">{magicPos + 1}</sup>
                                     )}
                                 </th>
                             );

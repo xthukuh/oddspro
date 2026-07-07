@@ -49,9 +49,9 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
             : { key: r.key, op: r.op, value: r.value })));
 
     return (
-        <div className="border-b border-slate-200 bg-white px-4 py-3 text-sm">
+        <div className="border-b border-slate-200 bg-white px-2 md:px-4 py-3 text-sm">
             {rows.map((row, i) => (
-                <div key={i} className="flex items-center justify-end gap-2 mb-2">
+                <div key={i} className="flex flex-wrap items-center sm:justify-end gap-2 mb-2">
                     <span className="text-slate-400">{i ? 'and' : 'where'}</span>
                     <select
                         value={row.key}
@@ -90,7 +90,7 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                         <select
                             value={row.col ?? ''}
                             onChange={e => update(i, { col: e.target.value })}
-                            className="border border-slate-300 rounded px-2 py-1 w-44"
+                            className="border border-slate-300 rounded px-2 py-1 w-full sm:w-44"
                         >
                             <option value="" disabled>column…</option>
                             {groups.map(([label, opts]) => (
@@ -107,7 +107,7 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                             onChange={e => update(i, { value: e.target.value })}
                             onKeyDown={e => e.key === 'Enter' && apply()}
                             placeholder="value"
-                            className="border border-slate-300 rounded px-2 py-1 w-44"
+                            className="border border-slate-300 rounded px-2 py-1 w-full sm:w-44"
                         />
                     )}
                     <button

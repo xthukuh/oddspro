@@ -2,10 +2,11 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { applyClientFilters, splitFilters } from './filterValues.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
-import DataTable from './components/DataTable.jsx';
+import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import SortPills from './components/SortPills.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -20,8 +21,13 @@ const LS_LINKS = 'oddspro.links.unavailable';
 const LS_PROVIDERS = 'oddspro.providers.visible';
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
-// Active magic-sort strategy id (header ✨ menu; null = normal order)
+// Legacy single magic-strategy id (superseded by the unified sort chain below;
+// still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
+// Unified sort chain: column sorts AND magic strategies in one prioritized
+// list (index 0 = highest priority). Entries are { type:'column', key, dir }
+// or { type:'magic', id }.
+const LS_SORT = 'oddspro.sort';
 
 function _load(key) {
     try {
@@ -32,7 +38,34 @@ function _load(key) {
     }
 }
 
+// Load the persisted sort chain; one-time migrate the legacy magic key.
+function _loadSort() {
+    const raw = _load(LS_SORT);
+    if (raw) {
+        return raw.filter(e => e && (
+            (e.type === 'column' && typeof e.key === 'string')
+            || (e.type === 'magic' && typeof e.id === 'string')
+        ));
+    }
+    const legacy = localStorage.getItem(LS_MAGIC);
+    if (legacy) {
+        const seed = [{ type: 'magic', id: legacy }];
+        localStorage.setItem(LS_SORT, JSON.stringify(seed));
+        localStorage.removeItem(LS_MAGIC);
+        return seed;
+    }
+    return [];
+}
+
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
+
+// Display an ISO date as DD-MM-YYYY; tooltip spells it out (noon-anchored to
+// dodge tz day-shift). Native <input type="date"> can't be reformatted, so a
+// formatted label is overlaid on a transparent picker input in the header.
+const _ddmmyyyy = iso => { const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}`; };
+const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+});
 
 // Footer scoreboard: settled over-2.5 hot-pick / tip hit rates over the
 // displayed rows, counted once per canonical fixture (each provider row
@@ -77,8 +110,7 @@ export default function App() {
     const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
-    const [sort, setSort] = useState([]);
-    const [magicId, setMagicId] = useState(() => localStorage.getItem(LS_MAGIC) || null);
+    const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
     const [magicError, setMagicError] = useState(null);
     const [filters, setFilters] = useState([]);
@@ -100,15 +132,18 @@ export default function App() {
     useEffect(() => {
         fetchMagicSort().then(setMagicData).catch(e => setMagicError(String(e.message ?? e)));
     }, []);
-    // Persisted strategy id revalidates against the fetched list (catalog-
-    // sanitizer idiom): a renamed/retired strategy falls back to normal order.
-    const activeMagic = useMemo(
-        () => (magicId && magicData?.strategies.some(s => s.id === magicId) ? magicId : null),
-        [magicId, magicData],
-    );
-    const magic = useMemo(
-        () => (activeMagic ? { id: activeMagic, calibration: magicData.calibration } : null),
-        [activeMagic, magicData],
+    // Persisted magic entries revalidate against the fetched strategy list
+    // (catalog-sanitizer idiom): a renamed/retired strategy drops out of the
+    // chain. Column entries pass through - orderRows tolerates unknown keys.
+    const activeChain = useMemo(() => {
+        if (!magicData) return sortChain;
+        const ids = new Set(magicData.strategies.map(s => s.id));
+        return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id));
+    }, [sortChain, magicData]);
+    const cal = magicData?.calibration ?? null;
+    const activeMagicIds = useMemo(
+        () => activeChain.filter(e => e.type === 'magic').map(e => e.id),
+        [activeChain],
     );
     // Persisted keys are filtered against the loaded catalog so selections
     // that no longer exist (e.g. status moved to base columns) don't render
@@ -217,36 +252,59 @@ export default function App() {
         }
     };
 
-    // Exactly one ordering mechanism is ever active: picking a strategy
-    // clears the column sort, any header click clears magic (below).
-    const saveMagic = useCallback(id => {
-        setMagicId(id);
-        if (id) {
-            localStorage.setItem(LS_MAGIC, id);
-            setSort([]);
-        } else {
-            localStorage.removeItem(LS_MAGIC);
-        }
-    }, []);
-
-    // Header click: plain = single toggle desc/asc/off (descending first -
-    // "best" values on top); shift = multi-sort chain. Sorting is client-side
-    // (the table holds the whole selection), so clicks never hit the network.
-    const onSort = useCallback((key, additive) => {
-        setMagicId(null);
-        localStorage.removeItem(LS_MAGIC);
-        setSort(prev => {
-            const found = prev.find(s => s.key === key);
-            const next = found
-                ? found.dir === 'desc'
-                    ? { key, dir: 'asc' }
-                    : null // asc -> remove
-                : { key, dir: 'desc' };
-            if (!additive) return next ? [next] : [];
-            const rest = prev.filter(s => s.key !== key);
-            return next ? [...rest, next] : rest;
+    // Every chain mutation persists (paired-save idiom)
+    const setSortChainPersist = useCallback(updater => {
+        setSortChain(prev => {
+            const next = typeof updater === 'function' ? updater(prev) : updater;
+            localStorage.setItem(LS_SORT, JSON.stringify(next));
+            return next;
         });
     }, []);
+
+    // Header click: additive by default - cycle THIS column (desc -> asc ->
+    // removed) while leaving the rest of the chain (columns and magic) intact;
+    // a new column appends at the lowest priority. Shift-click isolates to just
+    // this column (fast reset). Sorting is client-side (the table holds the
+    // whole selection), so clicks never hit the network.
+    const onSort = useCallback((key, isolate) => setSortChainPersist(prev => {
+        const found = prev.find(e => e.type === 'column' && e.key === key);
+        const next = found
+            ? found.dir === 'desc'
+                ? { type: 'column', key, dir: 'asc' }
+                : null // asc -> remove
+            : { type: 'column', key, dir: 'desc' };
+        if (isolate) return next ? [next] : [];
+        const rest = prev.filter(e => !(e.type === 'column' && e.key === key));
+        return next ? [...rest, next] : rest;
+    }), [setSortChainPersist]);
+
+    // Magic menu: toggle a strategy in/out of the chain (multiple allowed);
+    // clear drops every magic entry but keeps the column sorts.
+    const onToggleMagic = useCallback(id => setSortChainPersist(prev => (
+        prev.some(e => e.type === 'magic' && e.id === id)
+            ? prev.filter(e => !(e.type === 'magic' && e.id === id))
+            : [...prev, { type: 'magic', id }]
+    )), [setSortChainPersist]);
+    const onClearMagic = useCallback(
+        () => setSortChainPersist(prev => prev.filter(e => e.type !== 'magic')),
+        [setSortChainPersist],
+    );
+
+    // Settings drag-list reorder + pill/list removal (match by identity fields
+    // so it works regardless of object reference)
+    const onReorderChain = useCallback(next => setSortChainPersist(next), [setSortChainPersist]);
+    const onRemoveEntry = useCallback(entry => setSortChainPersist(prev => prev.filter(e => (
+        !(e.type === entry.type && (e.type === 'magic' ? e.id === entry.id : e.key === entry.key))
+    ))), [setSortChainPersist]);
+
+    // Human label for a chain entry (pills + settings drag list)
+    const entryLabel = useCallback(e => {
+        if (e.type === 'magic') return `✨ ${magicData?.strategies.find(s => s.id === e.id)?.label ?? e.id}`;
+        const base = BASE_COLUMNS.find(c => c.key === e.key);
+        if (base) return base.label;
+        const stat = catalog?.stats.find(c => c.key === e.key);
+        return stat?.label ?? e.key; // markets use their key as the label
+    }, [magicData, catalog]);
 
     // Navigate dates keeping state and URL in sync (today = clean URL)
     const changeDate = useCallback(d => {
@@ -289,29 +347,36 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
-            <header className="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center gap-2">
+            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-wrap items-center gap-1.5 md:gap-2">
                 <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
-                <span className="text-slate-400 text-xs">
+                <span className="hidden sm:inline text-slate-400 text-xs">
                     By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
                 </span>
                 <div className="grow" />
                 { date === TODAY ? null : (
                     <button
                         onClick={() => changeDate(TODAY)}
-                        className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                        title="Jump to today"
+                        className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                     >
-                        Today
+                        <span className="sm:hidden">⌂</span><span className="hidden sm:inline">Today</span>
                     </button>
                 )}
                 <button
                     onClick={() => changeDate(PREV_DATE)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
                     disabled={date <= MIN_DATE}
                     title={`Previous (${PREV_DATE})`}
                 >
                     &#10094;
                 </button>
-                <label className="flex items-center gap-2 text-sm">
+                {/* Formatted DD-MM-YYYY label over a transparent native picker
+                    (native date inputs can't be reformatted); tooltip spells the
+                    full day. Clearing the picker shows all dates. */}
+                <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
+                    <span className="pointer-events-none bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-sm tabular-nums">
+                        {date ? _ddmmyyyy(date) : 'All dates'}
+                    </span>
                     <input
                         type="date"
                         value={date}
@@ -320,13 +385,13 @@ export default function App() {
                         onFocus={e => e.target.showPicker?.()}
                         onClick={e => e.target.showPicker?.()}
                         onChange={e => changeDate(e.target.value)}
-                        className="date-input-dark cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
-                        title="Clear to show all dates"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        aria-label="Select date (clear to show all dates)"
                     />
                 </label>
                 <button
                     onClick={() => changeDate(NEXT_DATE)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
                     disabled={date >= MAX_DATE}
                     title={`Next (${NEXT_DATE})`}
                 >
@@ -338,41 +403,55 @@ export default function App() {
                     title={date
                         ? 'Re-fetch fixtures, results & odds for this date'
                         : 'Pick a date to refresh'}
-                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${refresh?.running
+                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${refresh?.running
                         ? 'bg-amber-600 border-amber-500 cursor-wait'
                         : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                 >
-                    {refresh?.running
-                        ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                        : 'Refresh'}
+                    <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
+                    <span className="hidden sm:inline">
+                        {refresh?.running
+                            ? ` Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                            : ' Refresh'}
+                    </span>
                 </button>
                 <MagicMenu
                     data={magicData}
                     error={magicError}
-                    active={activeMagic}
-                    onPick={saveMagic}
+                    activeIds={activeMagicIds}
+                    onToggle={onToggleMagic}
+                    onClearMagic={onClearMagic}
                 />
                 <button
                     onClick={() => setShowSlips(true)}
                     title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                 >
-                    Slips
+                    🧾<span className="hidden sm:inline"> Slips</span>
                 </button>
                 <button
                     onClick={() => setShowFilters(v => !v)}
-                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${showFilters || filters.length
+                    title="Filter the table rows"
+                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${showFilters || filters.length
                         ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
                 >
-                    Filters{filters.length ? ` (${filters.length})` : ''}
+                    <span className="sm:hidden">▽{filters.length ? ` ${filters.length}` : ''}</span>
+                    <span className="hidden sm:inline">Filters{filters.length ? ` (${filters.length})` : ''}</span>
                 </button>
                 <button
                     onClick={() => setShowSettings(true)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    title="Display settings"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                 >
-                    Settings
+                    ⚙<span className="hidden sm:inline"> Settings</span>
                 </button>
             </header>
+
+            <SortPills
+                chain={activeChain}
+                entryLabel={entryLabel}
+                onRemove={onRemoveEntry}
+                onClear={() => onReorderChain([])}
+            />
 
             {showFilters && catalog && (
                 <FilterBuilder
@@ -395,9 +474,9 @@ export default function App() {
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
                     columnOrder={columnOrder}
-                    sort={sort}
+                    chain={activeChain}
+                    cal={cal}
                     onSort={onSort}
-                    magic={magic}
                     loading={loading}
                     linkProviders={linkProviders}
                 />
@@ -426,7 +505,9 @@ export default function App() {
             {showSlips && (
                 <BetslipPlayground
                     rows={rows}
-                    magic={magic}
+                    chain={activeChain}
+                    cal={cal}
+                    columns={filterColumns}
                     calibration={magicData?.calibration ?? null}
                     date={date || 'all'}
                     onClose={() => setShowSlips(false)}
@@ -443,6 +524,10 @@ export default function App() {
                     visibleProviders={selectedProviders}
                     linkProviders={linkProviders}
                     showCompleted={showCompleted}
+                    sortChain={activeChain}
+                    entryLabel={entryLabel}
+                    onReorderSort={onReorderChain}
+                    onRemoveSort={onRemoveEntry}
                     onMarkets={saveMarkets}
                     onStats={saveStats}
                     onOrder={saveOrder}

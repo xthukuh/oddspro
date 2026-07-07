@@ -1,17 +1,21 @@
-import { useEffect, useMemo, useState } from 'react';
-import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { buildSlips, estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import { orderRows } from '../ordering.js';
+import NumberInput from './NumberInput.jsx';
 
 // Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
 // drag a candidate onto a slip card (or use its + button), tune the
-// stake / leg / odds limits, and read combined odds, potential payout and
-// the calibrated survival estimate per slip. Client-only simulation, no
+// stake / leg / target-odds limits, and read combined odds, potential payout
+// and the calibrated survival estimate per slip. Client-only simulation, no
 // real betting. Settled tips are candidates too (backtest mode: past dates
 // replay at frozen tip prices and grade their slips WON/LOST). Candidates
-// come pre-ranked by the active magic strategy (blend confidence when
-// none), so "Fill from top" is a one-click best slip.
+// follow the table's sort order (blend confidence when none). Autogeneration
+// (Fill from top, + New slip, Auto mode) packs the ranked tips into slips
+// that each close once their combined odds reach Target odds.
 
 const LS_SLIPS = 'oddspro.betslips';
-const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, minOdds: 2.5, hideUsed: true };
+// maxSlips 0 = unlimited; auto = rebuild slips on config change (default off).
+const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, targetOdds: 2.5, maxSlips: 0, hideUsed: true, auto: false };
 
 const _id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const _pct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
@@ -22,6 +26,9 @@ function _loadSlips(date) {
     try {
         const v = JSON.parse(localStorage.getItem(LS_SLIPS));
         const config = { ...DEFAULT_CONFIG, ...(v && typeof v.config === 'object' ? v.config : {}) };
+        // Migrate the old "Min odds" limit to "Target odds" (same number)
+        if (config.minOdds != null && v?.config?.targetOdds == null) config.targetOdds = config.minOdds;
+        delete config.minOdds;
         const slips = v?.date === date && Array.isArray(v.slips)
             ? v.slips.filter(s => s && typeof s === 'object' && Array.isArray(s.legs))
             : [];
@@ -31,14 +38,11 @@ function _loadSlips(date) {
     }
 }
 
-function _numInput(value, { min, max, int }) {
-    let n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    if (int) n = Math.round(n);
-    return Math.min(max, Math.max(min, n));
-}
+// Wrap buildSlips leg-arrays into named slip objects numbered from `start`
+const _wrap = (legArrays, start) => legArrays.map((legs, i) => ({ id: _id(), name: `Slip ${start + i}`, legs }));
 
-export default function BetslipPlayground({ rows, magic, calibration, date, onClose }) {
+export default function BetslipPlayground({ rows, chain, cal, columns, calibration, date, onClose }) {
+    const hasMagic = chain?.some(e => e.type === 'magic');
     const [{ config, slips }, setState] = useState(() => _loadSlips(date));
     const [activeId, setActiveId] = useState(() => _loadSlips(date).slips[0]?.id ?? null);
     const [drag, setDrag] = useState(null); // dragged candidate api_id
@@ -48,10 +52,19 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
         localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips }));
     }, [date, config, slips]);
 
+    // The modal no longer closes on backdrop click (slips are easy to lose by
+    // a stray click) - Escape and the x button are the close paths.
+    useEffect(() => {
+        const onKey = e => e.key === 'Escape' && onClose();
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [onClose]);
+
     // Slip candidates: the table's non-vetoed tips - one per canonical
-    // fixture - ranked by the active magic strategy. Settled tips are
-    // included (backtest mode: past dates replay at their frozen tip
-    // prices); their outcome grades the slip.
+    // fixture - in the SAME order the table shows (the unified sort chain);
+    // with no active sort they fall back to blend-confidence best-first.
+    // Settled tips are included (backtest mode: past dates replay at their
+    // frozen tip prices); their outcome grades the slip.
     const candidates = useMemo(() => {
         const seen = new Set();
         const unique = [];
@@ -60,7 +73,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
             seen.add(r.api_id);
             if (r.tip_market != null && r.tip_ai_verdict !== 'veto') unique.push(r);
         }
-        return magicSortRows(unique, magic?.id ?? 'confidence', magic?.calibration ?? calibration).map(r => ({
+        const ranked = chain?.length
+            ? orderRows(unique, chain, columns, cal)
+            : magicSortRows(unique, 'confidence', calibration);
+        return ranked.map(r => ({
             api_id: r.api_id,
             fixture: r.fixture,
             market: r.tip_market,
@@ -68,7 +84,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
             prob: estimateLegProb(tipView(r), calibration),
             outcome: r.tip_outcome ?? null,
         }));
-    }, [rows, magic, calibration]);
+    }, [rows, chain, columns, cal, calibration]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
     // Tips already sitting on any slip: "Fill from top" ALWAYS skips them, so
@@ -78,27 +94,32 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     const usedIds = useMemo(() => new Set(slips.flatMap(s => s.legs.map(l => l.api_id))), [slips]);
     const unused = useMemo(() => candidates.filter(c => !usedIds.has(c.api_id)), [candidates, usedIds]);
     const shown = config.hideUsed ? unused : candidates;
+    const fillOpts = { maxLegs: config.maxLegs, targetOdds: config.targetOdds, maxSlips: config.maxSlips };
 
-    const setConfig = (key, raw, bounds) => {
-        const n = _numInput(raw, bounds);
-        if (n != null) setState(s => ({ ...s, config: { ...s.config, [key]: n } }));
-    };
+    // NumberInput commits an already-clamped number
+    const setConfig = (key, n) => setState(s => ({ ...s, config: { ...s.config, [key]: n } }));
     const setSlips = fn => setState(s => ({ ...s, slips: fn(s.slips) }));
 
-    const addSlip = (legs = []) => {
-        const slip = { id: _id(), name: `Slip ${slips.length + 1}`, legs };
+    // Slips Fill-from-top would create from the current unused pool (drives the
+    // button count/enable and the fill itself).
+    const plannedFill = useMemo(
+        () => buildSlips(unused, fillOpts),
+        [unused, config.maxLegs, config.targetOdds, config.maxSlips],
+    );
+
+    // + New slip prefills ONE slip from the next unused top-ranked tips (both
+    // modes) - empty when nothing is unused, so manual drag still works.
+    const addSlip = () => {
+        const legs = buildSlips(unused, { ...fillOpts, maxSlips: 1 })[0] ?? [];
+        const [slip] = _wrap([legs], slips.length + 1);
         setSlips(prev => [...prev, slip]);
         setActiveId(slip.id);
     };
-    // One click drains the WHOLE unused pool into successive maxLegs-sized
-    // slips (ranked order preserved; the last slip takes the remainder) -
-    // the day's complete autogenerated set.
+    // One click packs the WHOLE unused pool (best first) into slips that each
+    // close at Target odds or Max legs, capped by Max slips.
     const fillFromTop = () => {
-        if (!unused.length) return;
-        const created = [];
-        for (let i = 0; i < unused.length; i += config.maxLegs) {
-            created.push({ id: _id(), name: `Slip ${slips.length + created.length + 1}`, legs: unused.slice(i, i + config.maxLegs) });
-        }
+        if (!plannedFill.length) return;
+        const created = _wrap(plannedFill, slips.length + 1);
         setSlips(prev => [...prev, ...created]);
         setActiveId(created[0].id);
     };
@@ -128,12 +149,37 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     const activeSlip = slips.find(s => s.id === activeId) ?? slips[0] ?? null;
     const totals = useMemo(() => slipTotals(slips, config.stake), [slips, config.stake]);
 
+    // Auto mode: rebuild the whole book from the ranked candidates whenever the
+    // limits or the tip pool change. Debounced 200ms with a 500ms max wait so
+    // fast edits don't thrash; blank and 0 collapse to the same value (|| 0) so
+    // clearing then re-typing a field causes no extra regeneration. Stake is
+    // excluded - it changes payouts, not slip composition.
+    const autoKey = config.auto ? JSON.stringify({
+        maxLegs: config.maxLegs || 0,
+        targetOdds: config.targetOdds || 0,
+        maxSlips: config.maxSlips || 0,
+        pool: candidates.map(c => c.api_id),
+    }) : null;
+    const timer = useRef(null);
+    const burstStart = useRef(0);
+    useEffect(() => {
+        if (autoKey == null) return; // manual mode - leave slips alone
+        const now = Date.now();
+        if (!burstStart.current) burstStart.current = now;
+        const delay = Math.min(200, Math.max(0, 500 - (now - burstStart.current)));
+        clearTimeout(timer.current);
+        timer.current = setTimeout(() => {
+            burstStart.current = 0;
+            const created = _wrap(buildSlips(candidates, fillOpts), 1);
+            setSlips(() => created);
+            setActiveId(created[0]?.id ?? null);
+        }, delay);
+        return () => clearTimeout(timer.current);
+    }, [autoKey]);
+
     return (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
-            <div
-                className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-5"
-                onClick={e => e.stopPropagation()}
-            >
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-2 md:p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] md:max-h-[85vh] flex flex-col p-3 md:p-5">
                 <div className="flex items-center mb-3">
                     <h2 className="text-lg font-semibold">Betslip playground</h2>
                     <span className="ml-3 text-xs text-slate-400">virtual slips - nothing is placed</span>
@@ -145,20 +191,34 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     {[
                         ['Stake / slip', 'stake', { min: 1, max: 1_000_000 }, 'w-24'],
                         ['Max legs', 'maxLegs', { min: 1, max: 20, int: true }, 'w-16'],
-                        ['Min odds', 'minOdds', { min: 1, max: 1000 }, 'w-20'],
-                    ].map(([label, key, bounds, w]) => (
-                        <label key={key} className="flex flex-col gap-1 text-xs text-slate-600">
+                        ['Target odds', 'targetOdds', { min: 1, max: 1000 }, 'w-20',
+                            'Autogeneration closes a slip once its combined odds reach this'],
+                        ['Max slips', 'maxSlips', { min: 0, max: 100, int: true }, 'w-16',
+                            'Cap the number of slips autogeneration creates (0 = unlimited)'],
+                    ].map(([label, key, bounds, w, hint]) => (
+                        <label key={key} className="flex flex-col gap-1 text-xs text-slate-600" title={hint}>
                             {label}
-                            <input
-                                type="number"
+                            <NumberInput
                                 value={config[key]}
+                                onCommit={n => setConfig(key, n)}
                                 min={bounds.min}
-                                step={key === 'maxLegs' ? 1 : 0.1}
-                                onChange={e => setConfig(key, e.target.value, bounds)}
+                                max={bounds.max}
+                                int={bounds.int}
                                 className={`${w} border border-slate-300 rounded px-2 py-1 text-sm`}
                             />
                         </label>
                     ))}
+                    <label
+                        className="flex items-center gap-1.5 pb-1.5 text-xs text-slate-600 cursor-pointer select-none"
+                        title="Auto mode rebuilds the slips from the tips whenever you change a limit (debounced)"
+                    >
+                        <input
+                            type="checkbox"
+                            checked={config.auto}
+                            onChange={() => setState(s => ({ ...s, config: { ...s.config, auto: !s.config.auto } }))}
+                        />
+                        Auto
+                    </label>
                     <label
                         className="flex items-center gap-1.5 pb-1.5 text-xs text-slate-600 cursor-pointer select-none"
                         title="Hide tips already placed on a slip from the list below (Fill from top always skips them)"
@@ -187,9 +247,9 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     </button>
                     <button
                         onClick={fillFromTop}
-                        disabled={!unused.length}
-                        title={unused.length
-                            ? `Autogenerate ${Math.ceil(unused.length / config.maxLegs)} slip${unused.length > config.maxLegs ? 's' : ''} from all ${unused.length} unused tips (best first, ${config.maxLegs} legs each)`
+                        disabled={!plannedFill.length}
+                        title={plannedFill.length
+                            ? `Autogenerate ${plannedFill.length} slip${plannedFill.length > 1 ? 's' : ''} from ${unused.length} unused tip${unused.length > 1 ? 's' : ''} (best first, ≤${config.maxLegs} legs, target ${config.targetOdds})`
                             : 'All tips are already on slips'}
                         className="cursor-pointer px-3 py-1.5 rounded bg-sky-600 text-white text-sm hover:bg-sky-500 disabled:opacity-50"
                     >
@@ -197,12 +257,12 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     </button>
                 </div>
 
-                <div className="flex gap-4 min-h-0 grow">
+                <div className="flex flex-col md:flex-row gap-4 min-h-0 grow">
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
-                    <div className="w-2/5 min-w-0 flex flex-col">
+                    <div className="w-full md:w-2/5 min-w-0 flex flex-col min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
                             Tips <span className="text-slate-400 font-normal">
-                                ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{magic ? ' · magic' : ''})
+                                ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
                             </span>
                         </h3>
                         <div className="grow overflow-y-auto border border-slate-200 rounded p-1">
@@ -240,14 +300,14 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     </div>
 
                     {/* Slips: drop targets */}
-                    <div className="w-3/5 min-w-0 flex flex-col">
+                    <div className="w-full md:w-3/5 min-w-0 flex flex-col min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">Slips</h3>
                         <div className="grow overflow-y-auto space-y-3 pr-1">
                             {slips.map(slip => {
                                 const sum = slipSummary(slip.legs, config.stake);
                                 const verdict = slipOutcome(slip.legs);
                                 const over = slip.legs.length > config.maxLegs;
-                                const under = slip.legs.length > 0 && sum.odds < config.minOdds;
+                                const under = slip.legs.length > 0 && sum.odds < config.targetOdds;
                                 return (
                                     <div
                                         key={slip.id}
@@ -324,7 +384,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                                             <span className={sum.ev >= 0 ? 'text-emerald-700' : 'text-red-600'}>
                                                 EV <b>{sum.ev >= 0 ? '+' : ''}{(sum.ev * 100).toFixed(1)}%</b>
                                             </span>
-                                            {under && <span className="text-amber-600">⚠ below min odds {config.minOdds}</span>}
+                                            {under && <span className="text-amber-600">⚠ below target {config.targetOdds}</span>}
                                             {over && <span className="text-red-600">⚠ over {config.maxLegs} legs</span>}
                                         </div>
                                     </div>
