@@ -162,20 +162,29 @@ const CELL_TITLES = {
     away_goals_oth: row => (row.away_goals_oth ? HEADER_META.away_goals_oth.info : null),
 };
 
-// Columns whose sort value is DERIVED from the displayed text (form ->
-// points, "gf/ga (avg)" -> avg, score -> total goals, tip -> confidence +
-// hot bonus, fs: stats -> H+A sum). Plain numbers, dates and odds prices
-// are skipped - the display IS the value.
-const SORT_HINT_KEYS = new Set(['score', 'tip', 'home_form', 'away_form', 'h2h',
+// Text columns whose DERIVED sort value is otherwise hidden get it rendered
+// inline as a "<value>:<text>" prefix (form -> points, "2W-1D-0L" -> points,
+// score -> total goals, fs: stat -> H+A sum). The prefix reuses the same
+// sortValue() call, so the shown number is exactly what sorting/filtering uses.
+const PREFIX_KEYS = new Set(['score', 'home_form', 'away_form', 'h2h']);
+const _isPrefixed = key => PREFIX_KEYS.has(key) || key.startsWith('fs:');
+
+// Rounded derived value for the inline prefix / tooltip hint.
+const _sortNum = v => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v);
+
+// Columns still relying on the "⇅ sorts as:" tooltip (sort value NOT shown
+// inline): tip (its own rich cell) and the rolling-goals columns (avg already
+// visible in parentheses).
+const SORT_HINT_KEYS = new Set(['tip',
     'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
 
 // "⇅ sorts as: <derived value>" - the exact value sorting/filtering uses
 // (same sortValue call), so the hint can never disagree with the ordering.
 function _sortHint(row, col) {
-    if (!SORT_HINT_KEYS.has(col.key) && !col.key.startsWith('fs:')) return null;
+    if (!SORT_HINT_KEYS.has(col.key)) return null;
     const v = sortValue(row, col);
     if (v == null) return null;
-    return `⇅ sorts as: ${typeof v === 'number' ? Math.round(v * 1000) / 1000 : v}`;
+    return `⇅ sorts as: ${_sortNum(v)}`;
 }
 
 function _cellTitle(row, col) {
@@ -211,7 +220,8 @@ function _hotBadge(row) {
     );
 }
 
-function _cell(row, key, linkProviders, openTip) {
+function _cell(row, col, linkProviders, openTip) {
+    const key = col.key;
     if (key === 'start_time') return _time(row.start_time);
     if (key === 'updated_at' || key === 'locked_at') {
         return row[key] ? _time(row[key]) : <span className="text-slate-300">-</span>;
@@ -291,7 +301,15 @@ function _cell(row, key, linkProviders, openTip) {
         );
     }
     const value = key.startsWith('fs:') ? row.stats[key] : row[key];
-    return value ?? <span className="text-slate-300">-</span>;
+    if (value == null) return <span className="text-slate-300">-</span>;
+    // Prefix text columns with their hidden derived sort value (e.g. 8:LWWWD).
+    if (_isPrefixed(key)) {
+        const v = sortValue(row, col);
+        if (v != null) {
+            return <><span className="text-slate-400">{_sortNum(v)}:</span>{value}</>;
+        }
+    }
+    return value;
 }
 
 // Odds cell: fresh price, or the greyed last-seen price of a market that
@@ -504,7 +522,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                 >
                                     {col.key === 'magic' ? _magicCell(row, magicMeta)
                                         : col.group === 'market' ? _marketCell(row, col.key)
-                                        : _cell(row, col.key, links, openTip)}
+                                        : _cell(row, col, links, openTip)}
                                 </td>
                             ))}
                         </tr>

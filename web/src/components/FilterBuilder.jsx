@@ -15,10 +15,15 @@ const OPS = [
     ['lt', '<'],
     ['lte', '≤'],
     ['like', 'contains'],
+    ['not-contains', 'not contains'],
+    ['in', 'in'],
+    ['not-in', 'not in'],
 ];
 
-// `like` has no column-to-column form (server rejects it)
-const COL_OPS = OPS.filter(([op]) => op !== 'like');
+// Value-only ops (text substring / CSV set membership) have no column-to-column
+// form - the server rejects it. `in`/`not-in` take a CSV list, quotes optional.
+const VALUE_ONLY = new Set(['like', 'not-contains', 'in', 'not-in']);
+const COL_OPS = OPS.filter(([op]) => !VALUE_ONLY.has(op));
 
 const NEW_ROW = { key: '1', op: 'gte', value: '', mode: 'value' };
 
@@ -76,7 +81,7 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                     <button
                         onClick={() => update(i, row.mode === 'col'
                             ? { mode: 'value' }
-                            : { mode: 'col', ...(row.op === 'like' ? { op: 'gte' } : {}) })}
+                            : { mode: 'col', ...(VALUE_ONLY.has(row.op) ? { op: 'gte' } : {}) })}
                         className={`px-2 py-1 rounded border text-xs ${row.mode === 'col'
                             ? 'border-sky-500 bg-sky-50 text-sky-700'
                             : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
@@ -106,7 +111,10 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
                             value={row.value}
                             onChange={e => update(i, { value: e.target.value })}
                             onKeyDown={e => e.key === 'Enter' && apply()}
-                            placeholder="value"
+                            placeholder={row.op === 'in' || row.op === 'not-in' ? '"a","b",c' : 'value'}
+                            title={row.op === 'in' || row.op === 'not-in'
+                                ? 'Comma-separated list; wrap an item in quotes to include commas/spaces'
+                                : undefined}
                             className="border border-slate-300 rounded px-2 py-1 w-full sm:w-44"
                         />
                     )}

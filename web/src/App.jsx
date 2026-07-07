@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
-import { applyClientFilters, splitFilters } from './filterValues.js';
+import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
@@ -21,6 +21,11 @@ const LS_LINKS = 'oddspro.links.unavailable';
 const LS_PROVIDERS = 'oddspro.providers.visible';
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
+// Settled-outcome display toggles (settings; all default off, client-side over
+// the loaded day): hide winning tips / hide losing tips / keep only clean markets
+const LS_HIDE_HITS = 'oddspro.show.hideHits';
+const LS_HIDE_MISS = 'oddspro.show.hideMiss';
+const LS_NO_MISS = 'oddspro.show.noMiss';
 // Legacy single magic-strategy id (superseded by the unified sort chain below;
 // still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
@@ -109,6 +114,9 @@ export default function App() {
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
     const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
+    const [hideHits, setHideHits] = useState(() => localStorage.getItem(LS_HIDE_HITS) === '1');
+    const [hideMiss, setHideMiss] = useState(() => localStorage.getItem(LS_HIDE_MISS) === '1');
+    const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
     const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
@@ -177,9 +185,14 @@ export default function App() {
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
+    // Advanced-filter the loaded rows, then apply the settled-outcome toggles
+    // (Hide hits / Hide miss / No miss) over what survives.
     const rows = useMemo(
-        () => applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
-        [result, clientFilters, filterColumns],
+        () => applyOutcomeToggles(
+            applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
+            { hideHits, hideMiss, noMiss },
+        ),
+        [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
     );
     const rates = useMemo(() => _hitRates(rows), [rows]);
     // Known bookmakers come from the catalog; null selection = all visible
@@ -336,6 +349,18 @@ export default function App() {
     const saveShowCompleted = value => {
         setShowCompleted(value);
         localStorage.setItem(LS_COMPLETED, value ? '1' : '0');
+    };
+    const saveHideHits = value => {
+        setHideHits(value);
+        localStorage.setItem(LS_HIDE_HITS, value ? '1' : '0');
+    };
+    const saveHideMiss = value => {
+        setHideMiss(value);
+        localStorage.setItem(LS_HIDE_MISS, value ? '1' : '0');
+    };
+    const saveNoMiss = value => {
+        setNoMiss(value);
+        localStorage.setItem(LS_NO_MISS, value ? '1' : '0');
     };
 
     const TODAY = _today();
@@ -524,6 +549,9 @@ export default function App() {
                     visibleProviders={selectedProviders}
                     linkProviders={linkProviders}
                     showCompleted={showCompleted}
+                    hideHits={hideHits}
+                    hideMiss={hideMiss}
+                    noMiss={noMiss}
                     sortChain={activeChain}
                     entryLabel={entryLabel}
                     onReorderSort={onReorderChain}
@@ -534,6 +562,9 @@ export default function App() {
                     onVisibleProviders={saveProviders}
                     onLinkProviders={saveLinkProviders}
                     onShowCompleted={saveShowCompleted}
+                    onHideHits={saveHideHits}
+                    onHideMiss={saveHideMiss}
+                    onNoMiss={saveNoMiss}
                     onClose={() => setShowSettings(false)}
                 />
             )}
