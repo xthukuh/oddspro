@@ -299,6 +299,33 @@ export function slipTotals(slips, stake = 1) {
     return t;
 }
 
+// Chunk an ordered candidate pool into slip leg-arrays for the playground's
+// autogeneration. A slip closes as soon as its combined odds reach targetOdds
+// (early), or it hits maxLegs (hard cap). maxSlips caps how many slips are
+// created (leftover tips stay unused); maxSlips <= 0 means unlimited. A pool
+// exhausted before targetOdds leaves the final slip under target (the caller
+// still shows its below-target warning). Returns leg-arrays; the caller wraps
+// each into a slip object (id/name).
+export function buildSlips(pool, { maxLegs = 4, targetOdds = 0, maxSlips = 0 } = {}) {
+    const list = Array.isArray(pool) ? pool : [];
+    const legs = Math.max(1, Math.round(maxLegs) || 1);
+    const cap = Math.round(maxSlips) || 0;
+    const out = [];
+    let i = 0;
+    while (i < list.length && (cap <= 0 || out.length < cap)) {
+        const slip = [];
+        let odds = 1;
+        while (i < list.length && slip.length < legs) {
+            const leg = list[i++];
+            slip.push(leg);
+            odds *= _num(leg?.price) ?? 1;
+            if (targetOdds > 0 && odds >= targetOdds) break; // target reached -> close slip
+        }
+        out.push(slip);
+    }
+    return out;
+}
+
 // Rank one day's candidates under a strategy: score desc with a fully
 // deterministic tiebreak (confidence desc, price asc, market asc).
 function _rankDay(pool, strategy, cal) {

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb,
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
+    buildSlips,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -412,4 +413,45 @@ test('slipTotals: all-lost book is a pure negative of settled stakes', () => {
     assert.equal(t.returned, 0);
     assert.equal(t.profit, -50);
     assert.equal(t.staked, 50);
+});
+
+// --- buildSlips (playground autogeneration) ---
+
+// Pool of 6 tips at increasing prices; ids double as sanity anchors.
+const POOL = [
+    { api_id: 1, price: 1.5 }, { api_id: 2, price: 1.4 }, { api_id: 3, price: 1.6 },
+    { api_id: 4, price: 1.3 }, { api_id: 5, price: 2.0 }, { api_id: 6, price: 1.7 },
+];
+const slipIds = slips => slips.map(s => s.map(l => l.api_id));
+
+test('buildSlips: no target chunks the whole pool into maxLegs-sized slips', () => {
+    const out = buildSlips(POOL, { maxLegs: 4, targetOdds: 0, maxSlips: 0 });
+    assert.deepEqual(slipIds(out), [[1, 2, 3, 4], [5, 6]]); // last slip takes the remainder
+});
+
+test('buildSlips: a slip closes early once combined odds reach targetOdds', () => {
+    // 1.5 x 1.4 = 2.10 >= 2.0 -> close after 2 legs; then 1.6 x 1.3 = 2.08 -> close;
+    // then 2.0 alone already >= 2.0 -> close; then 1.7 alone ends the pool.
+    const out = buildSlips(POOL, { maxLegs: 4, targetOdds: 2.0, maxSlips: 0 });
+    assert.deepEqual(slipIds(out), [[1, 2], [3, 4], [5], [6]]);
+});
+
+test('buildSlips: maxLegs is a hard cap even when target is unreachable', () => {
+    const out = buildSlips(POOL, { maxLegs: 2, targetOdds: 100, maxSlips: 0 });
+    assert.deepEqual(slipIds(out), [[1, 2], [3, 4], [5, 6]]);
+});
+
+test('buildSlips: maxSlips stops creation, leaving later tips unused', () => {
+    const out = buildSlips(POOL, { maxLegs: 2, targetOdds: 0, maxSlips: 2 });
+    assert.deepEqual(slipIds(out), [[1, 2], [3, 4]]); // ids 5,6 left out
+});
+
+test('buildSlips: pool exhausted before target leaves a final under-target slip', () => {
+    const out = buildSlips([{ api_id: 1, price: 1.2 }, { api_id: 2, price: 1.1 }], { maxLegs: 4, targetOdds: 5 });
+    assert.deepEqual(slipIds(out), [[1, 2]]); // 1.2 x 1.1 = 1.32 < 5, but the pool ran out
+});
+
+test('buildSlips: empty / non-array pool yields no slips', () => {
+    assert.deepEqual(buildSlips([], { maxLegs: 4 }), []);
+    assert.deepEqual(buildSlips(null, { maxLegs: 4 }), []);
 });
