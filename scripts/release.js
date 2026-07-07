@@ -28,20 +28,19 @@ function die(msg) {
     process.exit(1);
 }
 
-// git.exe resolves directly on PATH on every platform - never needs a shell.
-// npm is npm.cmd on Windows; resolving the binary name directly (rather than
-// shell:true) avoids Node's shell-argument-escaping pitfall entirely (spaces
-// in args get silently word-split under shell:true unless hand-quoted).
-const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
-
-// Run a git/npm command; captures stdout+stderr by default, streams live when
-// `live` is set (test/build - the user wants to see progress).
-function run(cmd, cmdArgs, { cwd = REPO_ROOT, live = false, env = process.env } = {}) {
+// git.exe resolves directly on PATH on every platform - spawn it WITHOUT a
+// shell (multi-word args like commit messages must never pass through
+// shell:true's word-splitting - Node doesn't auto-quote them). npm is a .cmd
+// wrapper on Windows, which Node's spawn can only launch via a shell; its own
+// args here (test/run/build:web) are simple single tokens with no spaces, so
+// shell:true is safe specifically for those calls.
+function run(cmd, cmdArgs, { cwd = REPO_ROOT, live = false, env = process.env, shell = false } = {}) {
     const res = spawnSync(cmd, cmdArgs, {
         cwd,
         stdio: live ? 'inherit' : 'pipe',
         encoding: 'utf8',
         env,
+        shell,
     });
     if (res.error) die(`${cmd} ${cmdArgs.join(' ')} failed to start: ${res.error.message}`);
     return res;
@@ -49,6 +48,10 @@ function run(cmd, cmdArgs, { cwd = REPO_ROOT, live = false, env = process.env } 
 
 function git(gitArgs, opts) {
     return run('git', gitArgs, opts);
+}
+
+function npm(npmArgs, opts) {
+    return run('npm', npmArgs, { ...opts, shell: process.platform === 'win32' });
 }
 
 function gitOk(gitArgs, opts) {
@@ -75,12 +78,12 @@ if (dirty) {
 }
 
 console.log(`[release] running tests...`);
-if (run(NPM, ['test'], { live: true }).status !== 0) die('npm test failed - aborting, nothing released.');
+if (npm(['test'], { live: true }).status !== 0) die('npm test failed - aborting, nothing released.');
 
 console.log(`[release] building web frontend...`);
 const buildEnv = { ...process.env };
 if (config.API_TOKEN) buildEnv.VITE_API_TOKEN = config.API_TOKEN; // keep server/frontend token in sync
-if (run(NPM, ['run', 'build:web'], { live: true, env: buildEnv }).status !== 0) die('npm run build:web failed - aborting, nothing released.');
+if (npm(['run', 'build:web'], { live: true, env: buildEnv }).status !== 0) die('npm run build:web failed - aborting, nothing released.');
 const distPath = path.join(REPO_ROOT, 'web', 'dist');
 if (!existsSync(path.join(distPath, 'index.html'))) die('web/dist/index.html missing after build - aborting.');
 
