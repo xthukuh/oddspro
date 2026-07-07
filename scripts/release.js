@@ -136,8 +136,13 @@ if (archiveResult instanceof Error) die(archiveResult.message);
 
 cpSync(distPath, path.join(WORKTREE, 'web', 'dist'), { recursive: true });
 
-gitOk(['add', '-A'], { cwd: WORKTREE });
-gitOk(['add', '-f', 'web/dist'], { cwd: WORKTREE }); // force past the archived .gitignore's dist/ rule
+// -f: without it, `git add -A` silently skips any path matching .gitignore -
+// including files main genuinely tracks (e.g. x-*-output.xx.json matches
+// **.xx*) that just got untracked by the `git rm -r .` above and now LOOK
+// like fresh ignored files. The worktree only ever contains exactly what
+// `git archive` produced plus web/dist (never .env/node_modules/etc, since
+// those were never in the archive) - forcing the whole add is safe.
+gitOk(['add', '-f', '-A', '.'], { cwd: WORKTREE });
 
 // --- 4. Commit / push / no-op detection ---------------------------------
 
