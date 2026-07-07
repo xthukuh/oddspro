@@ -9,7 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 const _pct = v => (v == null ? '—' : `${Math.round(v * 100)}%`);
 const _roi = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`);
 
-export default function MagicMenu({ data, error, active, onPick }) {
+export default function MagicMenu({ data, error, activeIds, onToggle, onClearMagic }) {
     const [open, setOpen] = useState(false);
     const ref = useRef(null);
 
@@ -25,20 +25,17 @@ export default function MagicMenu({ data, error, active, onPick }) {
 
     const strategies = data?.strategies ?? [];
     const sample = data?.sample;
-    const pick = id => {
-        onPick(id);
-        setOpen(false);
-    };
+    const active = new Set(activeIds ?? []);
 
     return (
         <div className="relative inline-block" ref={ref}>
             <button
                 onClick={() => setOpen(v => !v)}
-                title="Sort tips most-likely-to-win first (backtested ranking strategies)"
-                className={`cursor-pointer px-3 py-1 rounded border text-sm ${active
+                title="Sort tips most-likely-to-win first (backtested ranking strategies) - toggle one or more"
+                className={`cursor-pointer px-3 py-1 rounded border text-sm ${active.size
                     ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
             >
-                ✨ Magic
+                ✨ Magic{active.size > 1 ? ` (${active.size})` : ''}
             </button>
             {open && (
                 <div className="absolute right-0 z-40 mt-1 w-80 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2">
@@ -52,9 +49,9 @@ export default function MagicMenu({ data, error, active, onPick }) {
                     {strategies.map(s => (
                         <button
                             key={s.id}
-                            onClick={() => pick(s.id)}
+                            onClick={() => onToggle(s.id)}
                             className={`cursor-pointer block w-full text-left px-2 py-1.5 rounded hover:bg-slate-50 ${
-                                s.id === active ? 'bg-sky-50' : ''}`}
+                                active.has(s.id) ? 'bg-sky-50' : ''}`}
                         >
                             <span className="flex items-center text-sm">
                                 <span className="font-medium">{s.label}</span>
@@ -66,7 +63,7 @@ export default function MagicMenu({ data, error, active, onPick }) {
                                         ⚠ small sample
                                     </span>
                                 )}
-                                {s.id === active && <span className="ml-auto text-sky-600">✓</span>}
+                                {active.has(s.id) && <span className="ml-auto text-sky-600">✓</span>}
                             </span>
                             <span className="block text-xs text-slate-500 tabular-nums">
                                 slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
@@ -79,11 +76,11 @@ export default function MagicMenu({ data, error, active, onPick }) {
                         <div className="px-1 py-1 text-sm text-slate-400">No settled tips to rank yet.</div>
                     )}
                     <button
-                        onClick={() => pick(null)}
-                        disabled={!active}
+                        onClick={() => { onClearMagic(); setOpen(false); }}
+                        disabled={!active.size}
                         className="cursor-pointer block w-full text-left px-2 py-1.5 mt-1 border-t border-slate-100 text-sm text-slate-600 hover:bg-slate-50 disabled:opacity-50 disabled:cursor-default"
                     >
-                        Reset to normal order
+                        Clear magic sorts
                     </button>
                     {sample && (
                         <div className="px-1 pt-1 text-xs text-slate-400">

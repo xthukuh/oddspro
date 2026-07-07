@@ -39,8 +39,53 @@ function ColumnOrder({ columns, onOrder }) {
     );
 }
 
+// Vertical drag-to-reorder list of the active sort chain (column sorts + magic
+// strategies) in priority order - same HTML5 DnD idiom as ColumnOrder, keyed
+// on a stable per-entry id. x removes an entry.
+function SortOrder({ chain, entryLabel, onReorder, onRemove }) {
+    const [drag, setDrag] = useState(null); // dragged entry key
+    const keyOf = e => (e.type === 'magic' ? `magic:${e.id}` : `col:${e.key}`);
+    const dropAt = k => {
+        if (!drag || drag === k) return;
+        const rest = chain.filter(e => keyOf(e) !== drag);
+        const dragged = chain.find(e => keyOf(e) === drag);
+        rest.splice(rest.findIndex(e => keyOf(e) === k), 0, dragged);
+        onReorder(rest);
+    };
+    return (
+        <div className="flex flex-col gap-1">
+            {chain.map((e, i) => (
+                <div
+                    key={keyOf(e)}
+                    draggable
+                    onDragStart={() => setDrag(keyOf(e))}
+                    onDragEnd={() => setDrag(null)}
+                    onDragOver={ev => ev.preventDefault()}
+                    onDrop={ev => { ev.preventDefault(); dropAt(keyOf(e)); }}
+                    className={`flex items-center gap-2 px-2 py-1 rounded border text-xs bg-white
+                        ${drag === keyOf(e) ? 'opacity-40 border-sky-400' : 'border-slate-300'}`}
+                    title="Drag to change sort priority"
+                >
+                    <span className="text-slate-400 cursor-grab">⠿</span>
+                    <span className="text-slate-400 tabular-nums">{i + 1}</span>
+                    <span className="grow">{entryLabel(e)}</span>
+                    {e.type === 'column' && <span className="text-sky-600">{e.dir === 'asc' ? '▲' : '▼'}</span>}
+                    <button
+                        onClick={() => onRemove(e)}
+                        className="cursor-pointer text-slate-400 hover:text-red-600 leading-none"
+                        title="Remove this sort"
+                    >
+                        &times;
+                    </button>
+                </div>
+            ))}
+        </div>
+    );
+}
+
 export default function SettingsModal({
     catalog, marketKeys, statKeys, columnOrder, providers, visibleProviders, linkProviders, showCompleted,
+    sortChain, entryLabel, onReorderSort, onRemoveSort,
     onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
@@ -125,6 +170,22 @@ export default function SettingsModal({
                     </label>
                     <p className="text-xs text-slate-500 mt-1">Untick to see upcoming matches only.</p>
                 </section>
+
+                {sortChain?.length > 0 && (
+                    <section className="mb-5">
+                        <div className="flex items-center gap-3 mb-2">
+                            <h3 className="font-medium text-slate-700">Sort priority</h3>
+                            <div className="grow" />
+                            <span className="text-xs text-slate-400">drag to reorder · top wins</span>
+                        </div>
+                        <SortOrder
+                            chain={sortChain}
+                            entryLabel={entryLabel}
+                            onReorder={onReorderSort}
+                            onRemove={onRemoveSort}
+                        />
+                    </section>
+                )}
 
                 <div className="text-right">
                     <button onClick={onClose} className="px-4 py-1.5 rounded bg-slate-800 text-white text-sm hover:bg-slate-700">

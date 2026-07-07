@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import { orderRows } from '../ordering.js';
 import NumberInput from './NumberInput.jsx';
 
 // Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
@@ -32,7 +33,8 @@ function _loadSlips(date) {
     }
 }
 
-export default function BetslipPlayground({ rows, magic, calibration, date, onClose }) {
+export default function BetslipPlayground({ rows, chain, cal, columns, calibration, date, onClose }) {
+    const hasMagic = chain?.some(e => e.type === 'magic');
     const [{ config, slips }, setState] = useState(() => _loadSlips(date));
     const [activeId, setActiveId] = useState(() => _loadSlips(date).slips[0]?.id ?? null);
     const [drag, setDrag] = useState(null); // dragged candidate api_id
@@ -51,9 +53,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     }, [onClose]);
 
     // Slip candidates: the table's non-vetoed tips - one per canonical
-    // fixture - ranked by the active magic strategy. Settled tips are
-    // included (backtest mode: past dates replay at their frozen tip
-    // prices); their outcome grades the slip.
+    // fixture - in the SAME order the table shows (the unified sort chain);
+    // with no active sort they fall back to blend-confidence best-first.
+    // Settled tips are included (backtest mode: past dates replay at their
+    // frozen tip prices); their outcome grades the slip.
     const candidates = useMemo(() => {
         const seen = new Set();
         const unique = [];
@@ -62,7 +65,10 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
             seen.add(r.api_id);
             if (r.tip_market != null && r.tip_ai_verdict !== 'veto') unique.push(r);
         }
-        return magicSortRows(unique, magic?.id ?? 'confidence', magic?.calibration ?? calibration).map(r => ({
+        const ranked = chain?.length
+            ? orderRows(unique, chain, columns, cal)
+            : magicSortRows(unique, 'confidence', calibration);
+        return ranked.map(r => ({
             api_id: r.api_id,
             fixture: r.fixture,
             market: r.tip_market,
@@ -70,7 +76,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
             prob: estimateLegProb(tipView(r), calibration),
             outcome: r.tip_outcome ?? null,
         }));
-    }, [rows, magic, calibration]);
+    }, [rows, chain, columns, cal, calibration]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
     // Tips already sitting on any slip: "Fill from top" ALWAYS skips them, so
@@ -199,7 +205,7 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     <div className="w-2/5 min-w-0 flex flex-col">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
                             Tips <span className="text-slate-400 font-normal">
-                                ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{magic ? ' · magic' : ''})
+                                ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
                             </span>
                         </h3>
                         <div className="grow overflow-y-auto border border-slate-200 rounded p-1">
