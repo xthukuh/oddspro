@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import NumberInput from './NumberInput.jsx';
 
 // Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
 // drag a candidate onto a slip card (or use its + button), tune the
@@ -31,13 +32,6 @@ function _loadSlips(date) {
     }
 }
 
-function _numInput(value, { min, max, int }) {
-    let n = Number(value);
-    if (!Number.isFinite(n)) return null;
-    if (int) n = Math.round(n);
-    return Math.min(max, Math.max(min, n));
-}
-
 export default function BetslipPlayground({ rows, magic, calibration, date, onClose }) {
     const [{ config, slips }, setState] = useState(() => _loadSlips(date));
     const [activeId, setActiveId] = useState(() => _loadSlips(date).slips[0]?.id ?? null);
@@ -47,6 +41,14 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     useEffect(() => {
         localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips }));
     }, [date, config, slips]);
+
+    // The modal no longer closes on backdrop click (slips are easy to lose by
+    // a stray click) - Escape and the x button are the close paths.
+    useEffect(() => {
+        const onKey = e => e.key === 'Escape' && onClose();
+        document.addEventListener('keydown', onKey);
+        return () => document.removeEventListener('keydown', onKey);
+    }, [onClose]);
 
     // Slip candidates: the table's non-vetoed tips - one per canonical
     // fixture - ranked by the active magic strategy. Settled tips are
@@ -79,10 +81,8 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     const unused = useMemo(() => candidates.filter(c => !usedIds.has(c.api_id)), [candidates, usedIds]);
     const shown = config.hideUsed ? unused : candidates;
 
-    const setConfig = (key, raw, bounds) => {
-        const n = _numInput(raw, bounds);
-        if (n != null) setState(s => ({ ...s, config: { ...s.config, [key]: n } }));
-    };
+    // NumberInput commits an already-clamped number
+    const setConfig = (key, n) => setState(s => ({ ...s, config: { ...s.config, [key]: n } }));
     const setSlips = fn => setState(s => ({ ...s, slips: fn(s.slips) }));
 
     const addSlip = (legs = []) => {
@@ -129,11 +129,8 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
     const totals = useMemo(() => slipTotals(slips, config.stake), [slips, config.stake]);
 
     return (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
-            <div
-                className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-5"
-                onClick={e => e.stopPropagation()}
-            >
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-5">
                 <div className="flex items-center mb-3">
                     <h2 className="text-lg font-semibold">Betslip playground</h2>
                     <span className="ml-3 text-xs text-slate-400">virtual slips - nothing is placed</span>
@@ -149,12 +146,12 @@ export default function BetslipPlayground({ rows, magic, calibration, date, onCl
                     ].map(([label, key, bounds, w]) => (
                         <label key={key} className="flex flex-col gap-1 text-xs text-slate-600">
                             {label}
-                            <input
-                                type="number"
+                            <NumberInput
                                 value={config[key]}
+                                onCommit={n => setConfig(key, n)}
                                 min={bounds.min}
-                                step={key === 'maxLegs' ? 1 : 0.1}
-                                onChange={e => setConfig(key, e.target.value, bounds)}
+                                max={bounds.max}
+                                int={bounds.int}
                                 className={`${w} border border-slate-300 rounded px-2 py-1 text-sm`}
                             />
                         </label>

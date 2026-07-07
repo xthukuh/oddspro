@@ -52,7 +52,7 @@ export default function SettingsModal({
     const providerOptions = providers.map(p => ({ key: p, label: p, default: true }));
 
     return (
-        <div className="fixed inset-0 z-20 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4" onClick={onClose}>
             <div
                 className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-5"
                 onClick={e => e.stopPropagation()}

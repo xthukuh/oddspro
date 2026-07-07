@@ -41,7 +41,7 @@ export default function MagicMenu({ data, error, active, onPick }) {
                 ✨ Magic
             </button>
             {open && (
-                <div className="absolute right-0 z-30 mt-1 w-80 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2">
+                <div className="absolute right-0 z-40 mt-1 w-80 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2">
                     <div className="px-1 pb-2 mb-1 border-b border-slate-100 text-xs text-slate-500">
                         Tip rankings replayed against every settled day: build the
                         top-4 slip each strategy would have picked, settle it at
