@@ -16,6 +16,18 @@ import { closeDb } from './db/connection.js';
 const app = express();
 app.disable('x-powered-by');
 
+// Optional bearer-token guard: X-Requested-With (below) only stops a plain
+// cross-origin form/navigation - once this server is on a public domain,
+// anyone who finds the URL could POST /api/refresh directly (triggers live
+// scrapes/API-Football calls). Unset by default - zero effect on today's
+// LAN-only (API_HOST=127.0.0.1) deployment.
+if (config.API_TOKEN) {
+    app.use('/api', (req, res, next) => {
+        if (req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
+        res.status(401).json({ error: 'Unauthorized' });
+    });
+}
+
 // Parse a JSON-encoded query param (sort/filters), tolerating absence
 function _json(value, fallback) {
     if (value == null || value === '') return fallback;
@@ -98,9 +110,16 @@ const refreshJob = {
     summary: null,
 };
 
+// Per-date cooldown: date -> ms timestamp of its last finished run (success or
+// failure - either way it already spent API quota/scrape hits). Blocks
+// re-triggering the SAME date for REFRESH_COOLDOWN_MINUTES; other dates are
+// unaffected (the single-slot lock above already serializes actual runs).
+const refreshCooldown = new Map();
+
 // POST /api/refresh?date=YYYY-MM-DD - start refreshing a date's data
 // (fixtures, results, odds, link, stats). 409 with the in-flight job when one
-// is already running; the response is always the current job state.
+// is already running, 429 while that date is on cooldown; the response is
+// always the current job state (429 also carries retry_after_seconds).
 app.post('/api/refresh', (req, res) => {
     // CSRF guard: custom headers force a CORS preflight cross-origin, which
     // this server never approves - only same-origin callers can set this.
@@ -112,6 +131,15 @@ app.post('/api/refresh', (req, res) => {
         return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
     }
     if (refreshJob.running) return res.status(409).json(refreshJob);
+    const cooldownMs = config.REFRESH_COOLDOWN_MINUTES * 60_000;
+    const lastFinished = refreshCooldown.get(date);
+    if (cooldownMs > 0 && lastFinished && (Date.now() - lastFinished) < cooldownMs) {
+        const retry_after_seconds = Math.ceil((cooldownMs - (Date.now() - lastFinished)) / 1000);
+        return res.status(429).json({
+            error: `Refresh cooldown active for ${date} - try again in ${Math.ceil(retry_after_seconds / 60)}m.`,
+            retry_after_seconds,
+        });
+    }
     Object.assign(refreshJob, {
         running: true,
         date,
@@ -131,6 +159,7 @@ app.post('/api/refresh', (req, res) => {
             refreshJob.running = false;
             refreshJob.step = null;
             refreshJob.finished_at = new Date().toISOString();
+            refreshCooldown.set(date, Date.now());
         });
     res.status(202).json(refreshJob);
 });

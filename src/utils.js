@@ -1,4 +1,13 @@
 // Shared helpers used by all fetchers (extracted from betpawa.js/betika.js).
+import { config } from './config.js';
+
+// Verbose timestamped logging, no-op unless DEBUG=1 (.env) - the primary
+// diagnostic channel on hosts with no SSH/live tailing (e.g. cPanel cron).
+export function debugLog(...args) {
+    if (!config.DEBUG) return;
+    const t = new Date().toISOString().substring(11, 23); // HH:mm:ss.sss
+    console.debug(`[dbg ${t}]`, ...args);
+}
 
 // Helper - Get positive integer (returns `undefined` when invalid)
 export function _pint(value) {

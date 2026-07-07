@@ -54,6 +54,10 @@ cache/
 # Backtest harness trial outputs (config+metrics JSON; reproducible from configs)
 experiments/
 
+# Deployment (scripts/release.js, scripts/db-export.js - see docs/DEPLOYMENT.md)
+backups/
+.deploy-worktree/
+
 # Custom
 **.xx*
 .playwright-mcp/

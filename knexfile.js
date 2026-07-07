@@ -11,8 +11,8 @@ export default {
         charset: config.DB_CHARSET,
     },
     pool: {
-        min: 0,
-        max: 10,
+        min: config.DB_POOL_MIN,
+        max: config.DB_POOL_MAX,
         // Stored datetimes are EAT wall-clock; align session NOW() to match.
         afterCreate: (conn, done) => conn.query("SET time_zone = '+03:00'", err => done(err, conn)),
     },

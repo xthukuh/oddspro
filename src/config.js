@@ -51,6 +51,26 @@ const EnvSchema = z.object({
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)
     API_HOST: z.string().default('127.0.0.1'),
+    // Optional: require `Authorization: Bearer <token>` on /api/* (server.js).
+    // Unset = today's behavior (same-origin X-Requested-With check only).
+    API_TOKEN: z.string().min(1).optional(),
+    // knex pool sizing (knexfile.js). Defaults preserve the existing hardcoded
+    // 0/10. The cron pipeline and the always-on server are separate processes
+    // with separate pools - shared hosting connection caps may need this lower.
+    DB_POOL_MIN: z.coerce.number().int().min(0).default(0),
+    DB_POOL_MAX: z.coerce.number().int().min(1).default(10),
+    // Verbose per-step timing logs (src/pipeline.js) via src/utils.js#debugLog.
+    // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
+    DEBUG: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    // POST /api/refresh per-date cooldown (server.js): blocks re-triggering
+    // the SAME date again until this many minutes after its last run finished
+    // (success or failure). 0 = disabled (today's behavior).
+    REFRESH_COOLDOWN_MINUTES: z.coerce.number().min(0).default(60),
 });
 
-export const config = EnvSchema.parse(process.env);
+// PORT is the convention Passenger/most Node PaaS hosts use to hand the app
+// its assigned port; API_PORT wins if the user also sets it explicitly.
+const rawEnv = { ...process.env };
+if (!rawEnv.API_PORT && rawEnv.PORT) rawEnv.API_PORT = rawEnv.PORT;
+
+export const config = EnvSchema.parse(rawEnv);

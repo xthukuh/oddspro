@@ -1,12 +1,17 @@
 // Typed wrappers over the oddspro API (:3001, proxied via vite in dev).
 
+// Baked in at build time (scripts/release.js mirrors the server's API_TOKEN
+// into VITE_API_TOKEN so they never drift). Unset locally - no-op.
+const API_TOKEN = import.meta.env.VITE_API_TOKEN || null;
+const _authHeaders = () => API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+
 async function _get(path, params = {}) {
     const search = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
         if (v != null && v !== '') search.set(k, v);
     }
     const qs = search.toString();
-    const res = await fetch(qs ? `${path}?${qs}` : path);
+    const res = await fetch(qs ? `${path}?${qs}` : path, { headers: _authHeaders() });
     const body = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
     return body;
@@ -46,7 +51,7 @@ export async function fetchMagicSort() {
 export async function startRefresh(date) {
     const res = await fetch(`/api/refresh?date=${encodeURIComponent(date)}`, {
         method: 'POST',
-        headers: { 'X-Requested-With': 'fetch' }, // CSRF guard (see server.js)
+        headers: { 'X-Requested-With': 'fetch', ..._authHeaders() }, // CSRF guard (see server.js)
     });
     const body = await res.json().catch(() => ({}));
     if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);

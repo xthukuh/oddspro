@@ -61,6 +61,9 @@ npm test                            # offline node:test suite (no DB / live APIs
 (the full sweep) daily at 08:00, appending to `logs/pipeline.log` (gitignored). Manage it with
 `schtasks /query|/change|/delete /tn oddspro-pipeline`.
 
+**cPanel deployment:** see `docs/DEPLOYMENT.md` for the shared-hosting deployment guide
+(git-based deploy via a `deploy` branch, no SSH required).
+
 ## Web UI
 
 `npm run serve` + `npm run build:web` serve a React 19 / Vite 6 / Tailwind 4 datatable on :3001:

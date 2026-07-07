@@ -5,7 +5,7 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
-import { _date, _dtime } from './utils.js';
+import { _date, _dtime, debugLog } from './utils.js';
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
@@ -34,7 +34,13 @@ export async function runStartPipeline(days_ahead_ = null) {
         _dtime(new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)).substring(0, 10)
     );
     let step = 0;
-    const _step = label => console.debug(`\n[start ${++step}/${STEPS}] ${label}`);
+    const pipelineStarted = Date.now();
+    let stepStarted = pipelineStarted;
+    const _step = label => {
+        if (step) debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
+        console.debug(`\n[start ${++step}/${STEPS}] ${label}`);
+        stepStarted = Date.now();
+    };
     console.debug(`[start] Full pipeline - ${dates.length} date(s): ${dates.join(', ')}...`);
 
     _step('API-Football fixtures (canonical base records)');
@@ -84,6 +90,8 @@ export async function runStartPipeline(days_ahead_ = null) {
     const k = await updateHotPicks();
     console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
 
+    debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
+    debugLog(`total pipeline time ${Date.now() - pipelineStarted}ms`);
     console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
 }
 
@@ -96,9 +104,15 @@ export async function runStartPipeline(days_ahead_ = null) {
 export async function runDateRefresh(date_, onStep = null) {
     const dt = _dtime(_date(date_)).substring(0, 10);
     const today = _dtime(_date()).substring(0, 10);
+    const refreshStarted = Date.now();
+    let stepStarted = refreshStarted;
+    let lastLabel = null;
     const _step = label => {
+        if (lastLabel) debugLog(`refresh ${dt}: ${lastLabel} done in ${Date.now() - stepStarted}ms`);
         console.debug(`[refresh ${dt}] ${label}...`);
         if (typeof onStep === 'function') onStep(label);
+        lastLabel = label;
+        stepStarted = Date.now();
     };
     const summary = { date: dt };
 
@@ -143,6 +157,8 @@ export async function runDateRefresh(date_, onStep = null) {
         summary.hotpicks = (await updateHotPicks()).hot;
     }
 
+    if (lastLabel) debugLog(`refresh ${dt}: ${lastLabel} done in ${Date.now() - stepStarted}ms`);
+    debugLog(`refresh ${dt}: total time ${Date.now() - refreshStarted}ms`);
     summary.quota_remaining = apisportsQuotaRemaining();
     console.debug(`[refresh ${dt}] Done - ${JSON.stringify(summary)}`);
     return summary;
