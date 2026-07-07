@@ -178,8 +178,8 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     }, [autoKey]);
 
     return (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-4">
-            <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[85vh] flex flex-col p-5">
+        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-2 md:p-4">
+            <div className="bg-white rounded-lg shadow-xl w-full max-w-5xl max-h-[90vh] md:max-h-[85vh] flex flex-col p-3 md:p-5">
                 <div className="flex items-center mb-3">
                     <h2 className="text-lg font-semibold">Betslip playground</h2>
                     <span className="ml-3 text-xs text-slate-400">virtual slips - nothing is placed</span>
@@ -257,9 +257,9 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     </button>
                 </div>
 
-                <div className="flex gap-4 min-h-0 grow">
+                <div className="flex flex-col md:flex-row gap-4 min-h-0 grow">
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
-                    <div className="w-2/5 min-w-0 flex flex-col">
+                    <div className="w-full md:w-2/5 min-w-0 flex flex-col min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
                             Tips <span className="text-slate-400 font-normal">
                                 ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
@@ -300,7 +300,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     </div>
 
                     {/* Slips: drop targets */}
-                    <div className="w-3/5 min-w-0 flex flex-col">
+                    <div className="w-full md:w-3/5 min-w-0 flex flex-col min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">Slips</h3>
                         <div className="grow overflow-y-auto space-y-3 pr-1">
                             {slips.map(slip => {

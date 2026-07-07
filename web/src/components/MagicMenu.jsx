@@ -32,10 +32,10 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
             <button
                 onClick={() => setOpen(v => !v)}
                 title="Sort tips most-likely-to-win first (backtested ranking strategies) - toggle one or more"
-                className={`cursor-pointer px-3 py-1 rounded border text-sm ${active.size
+                className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${active.size
                     ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
             >
-                ✨ Magic{active.size > 1 ? ` (${active.size})` : ''}
+                ✨<span className="hidden sm:inline"> Magic</span>{active.size > 1 ? ` (${active.size})` : ''}
             </button>
             {open && (
                 <div className="absolute right-0 z-40 mt-1 w-80 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2">

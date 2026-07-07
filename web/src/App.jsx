@@ -59,6 +59,14 @@ function _loadSort() {
 
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
+// Display an ISO date as DD-MM-YYYY; tooltip spells it out (noon-anchored to
+// dodge tz day-shift). Native <input type="date"> can't be reformatted, so a
+// formatted label is overlaid on a transparent picker input in the header.
+const _ddmmyyyy = iso => { const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}`; };
+const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
+});
+
 // Footer scoreboard: settled over-2.5 hot-pick / tip hit rates over the
 // displayed rows, counted once per canonical fixture (each provider row
 // duplicates the same fixture_predictions data). AI-vetoed tips count -
@@ -339,29 +347,36 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
-            <header className="bg-slate-900 text-white px-4 py-3 flex flex-wrap items-center gap-2">
+            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-wrap items-center gap-1.5 md:gap-2">
                 <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
-                <span className="text-slate-400 text-xs">
+                <span className="hidden sm:inline text-slate-400 text-xs">
                     By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
                 </span>
                 <div className="grow" />
                 { date === TODAY ? null : (
                     <button
                         onClick={() => changeDate(TODAY)}
-                        className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                        title="Jump to today"
+                        className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                     >
-                        Today
+                        <span className="sm:hidden">⌂</span><span className="hidden sm:inline">Today</span>
                     </button>
                 )}
                 <button
                     onClick={() => changeDate(PREV_DATE)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
                     disabled={date <= MIN_DATE}
                     title={`Previous (${PREV_DATE})`}
                 >
                     &#10094;
                 </button>
-                <label className="flex items-center gap-2 text-sm">
+                {/* Formatted DD-MM-YYYY label over a transparent native picker
+                    (native date inputs can't be reformatted); tooltip spells the
+                    full day. Clearing the picker shows all dates. */}
+                <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
+                    <span className="pointer-events-none bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-sm tabular-nums">
+                        {date ? _ddmmyyyy(date) : 'All dates'}
+                    </span>
                     <input
                         type="date"
                         value={date}
@@ -370,13 +385,13 @@ export default function App() {
                         onFocus={e => e.target.showPicker?.()}
                         onClick={e => e.target.showPicker?.()}
                         onChange={e => changeDate(e.target.value)}
-                        className="date-input-dark cursor-pointer bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white"
-                        title="Clear to show all dates"
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                        aria-label="Select date (clear to show all dates)"
                     />
                 </label>
                 <button
                     onClick={() => changeDate(NEXT_DATE)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
                     disabled={date >= MAX_DATE}
                     title={`Next (${NEXT_DATE})`}
                 >
@@ -388,13 +403,16 @@ export default function App() {
                     title={date
                         ? 'Re-fetch fixtures, results & odds for this date'
                         : 'Pick a date to refresh'}
-                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${refresh?.running
+                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${refresh?.running
                         ? 'bg-amber-600 border-amber-500 cursor-wait'
                         : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                 >
-                    {refresh?.running
-                        ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                        : 'Refresh'}
+                    <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
+                    <span className="hidden sm:inline">
+                        {refresh?.running
+                            ? ` Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                            : ' Refresh'}
+                    </span>
                 </button>
                 <MagicMenu
                     data={magicData}
@@ -406,22 +424,25 @@ export default function App() {
                 <button
                     onClick={() => setShowSlips(true)}
                     title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                 >
-                    Slips
+                    🧾<span className="hidden sm:inline"> Slips</span>
                 </button>
                 <button
                     onClick={() => setShowFilters(v => !v)}
-                    className={`cursor-pointer px-3 py-1 rounded border text-sm ${showFilters || filters.length
+                    title="Filter the table rows"
+                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${showFilters || filters.length
                         ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
                 >
-                    Filters{filters.length ? ` (${filters.length})` : ''}
+                    <span className="sm:hidden">▽{filters.length ? ` ${filters.length}` : ''}</span>
+                    <span className="hidden sm:inline">Filters{filters.length ? ` (${filters.length})` : ''}</span>
                 </button>
                 <button
                     onClick={() => setShowSettings(true)}
-                    className="cursor-pointer px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    title="Display settings"
+                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
                 >
-                    Settings
+                    ⚙<span className="hidden sm:inline"> Settings</span>
                 </button>
             </header>
 
