@@ -4,6 +4,7 @@ Deploying oddspro to a shared cPanel host via cPanel's **Setup Node.js App** too
 
 ## 1. Overview
 
+- **Three-branch model.** `dev` is where ongoing development happens; `main` is reserved for production-ready releases (merge `dev` → `main` when ready to ship); `deploy` (see below) is the built artifact `scripts/release.js` produces FROM `main` and the only branch cPanel's Git Version Control ever pulls. `scripts/release.js` defaults to sourcing from `main` (`--branch <name>` overrides) — run it after merging `dev` → `main`, not directly from `dev`.
 - **Single-directory git model.** cPanel's Git Version Control "Repository Path" is the same directory as the Node app's "Application Root" — no separate staging/promote directory. Git history is the rollback mechanism.
 - **A dedicated `deploy` branch** (not `main`) is what cPanel pulls. `main` stays the normal dev branch, exactly as today (`web/dist` gitignored). `deploy` is release-snapshot-only — `main`'s tracked tree plus a freshly-built `web/dist` — produced by `node scripts/release.js`. **The server never runs Vite/Tailwind on the shared host**; the frontend always ships prebuilt.
 - **`.cpanel.yml`** (repo root) drives the "Deploy HEAD Commit" button: creates runtime dirs, `npm install --omit=dev`, `npm run migrate`, touches `tmp/restart.txt` (Passenger's restart convention).
