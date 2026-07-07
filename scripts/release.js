@@ -28,14 +28,20 @@ function die(msg) {
     process.exit(1);
 }
 
+// git.exe resolves directly on PATH on every platform - never needs a shell.
+// npm is npm.cmd on Windows; resolving the binary name directly (rather than
+// shell:true) avoids Node's shell-argument-escaping pitfall entirely (spaces
+// in args get silently word-split under shell:true unless hand-quoted).
+const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
 // Run a git/npm command; captures stdout+stderr by default, streams live when
 // `live` is set (test/build - the user wants to see progress).
-function run(cmd, cmdArgs, { cwd = REPO_ROOT, live = false } = {}) {
+function run(cmd, cmdArgs, { cwd = REPO_ROOT, live = false, env = process.env } = {}) {
     const res = spawnSync(cmd, cmdArgs, {
         cwd,
         stdio: live ? 'inherit' : 'pipe',
         encoding: 'utf8',
-        shell: process.platform === 'win32',
+        env,
     });
     if (res.error) die(`${cmd} ${cmdArgs.join(' ')} failed to start: ${res.error.message}`);
     return res;
@@ -69,13 +75,12 @@ if (dirty) {
 }
 
 console.log(`[release] running tests...`);
-if (run('npm', ['test'], { live: true }).status !== 0) die('npm test failed - aborting, nothing released.');
+if (run(NPM, ['test'], { live: true }).status !== 0) die('npm test failed - aborting, nothing released.');
 
 console.log(`[release] building web frontend...`);
 const buildEnv = { ...process.env };
 if (config.API_TOKEN) buildEnv.VITE_API_TOKEN = config.API_TOKEN; // keep server/frontend token in sync
-const buildRes = spawnSync('npm', ['run', 'build:web'], { cwd: REPO_ROOT, stdio: 'inherit', env: buildEnv, shell: process.platform === 'win32' });
-if (buildRes.status !== 0) die('npm run build:web failed - aborting, nothing released.');
+if (run(NPM, ['run', 'build:web'], { live: true, env: buildEnv }).status !== 0) die('npm run build:web failed - aborting, nothing released.');
 const distPath = path.join(REPO_ROOT, 'web', 'dist');
 if (!existsSync(path.join(distPath, 'index.html'))) die('web/dist/index.html missing after build - aborting.');
 
