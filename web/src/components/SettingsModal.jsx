@@ -85,8 +85,10 @@ function SortOrder({ chain, entryLabel, onReorder, onRemove }) {
 
 export default function SettingsModal({
     catalog, marketKeys, statKeys, columnOrder, providers, visibleProviders, linkProviders, showCompleted,
+    hideHits, hideMiss, noMiss,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
-    onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted, onClose,
+    onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted,
+    onHideHits, onHideMiss, onNoMiss, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
     const orderedColumns = applyOrder([
@@ -169,6 +171,41 @@ export default function SettingsModal({
                         <span>Show completed games</span>
                     </label>
                     <p className="text-xs text-slate-500 mt-1">Untick to see upcoming matches only.</p>
+
+                    <h4 className="text-sm text-slate-600 mt-3 mb-1">Settled tips</h4>
+                    <div className="flex flex-col gap-1.5">
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={hideHits}
+                                onChange={e => onHideHits(e.target.checked)}
+                                className="accent-sky-600"
+                            />
+                            <span>Hide hits <span className="text-slate-400">— show only losing &amp; upcoming tips</span></span>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={hideMiss}
+                                onChange={e => onHideMiss(e.target.checked)}
+                                className="accent-sky-600"
+                            />
+                            <span>Hide miss <span className="text-slate-400">— show only winning &amp; upcoming tips</span></span>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={noMiss}
+                                onChange={e => onNoMiss(e.target.checked)}
+                                className="accent-sky-600"
+                            />
+                            <span>No miss <span className="text-slate-400">— hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span></span>
+                        </label>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-1">
+                        Ticking both Hide hits and Hide miss shows upcoming/ongoing games only. These
+                        read best with Show completed on.
+                    </p>
                 </section>
 
                 {sortChain?.length > 0 && (

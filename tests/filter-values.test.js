@@ -1,6 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { serverKeys, splitFilters, applyClientFilters } from '../web/src/filterValues.js';
+import {
+    serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
+} from '../web/src/filterValues.js';
 
 // Catalog shaped like GET /api/columns: base/markets are server-filterable,
 // stats never are (derived in JS during hydration).
@@ -159,4 +161,66 @@ test('tip: like matches the tip market text, comparisons use confidence', () => 
         ['O 2.5']);
     // tipless rows never match either form
     assert.equal(applyClientFilters(rows, [{ key: 'tip', op: 'like', value: '' }], cols).length, 2);
+});
+
+test('not-contains inverts the substring match; null raw is excluded', () => {
+    const rows = [row({ home_form: 'LWWWD' }), row({ home_form: 'DLLDL' }), row({ home_form: null })];
+    const out = applyClientFilters(rows, [{ key: 'home_form', op: 'not-contains', value: 'w' }], COLUMNS);
+    assert.deepEqual(out.map(r => r.home_form), ['DLLDL']);
+});
+
+test('in / not-in match the tip market text via a CSV list', () => {
+    const rows = [
+        row({ tip_market: 'O 2.5' }),
+        row({ tip_market: '1X' }),
+        row({ tip_market: 'O 0.5' }),
+        row({ tip_market: null }),
+    ];
+    const cols = [...COLUMNS, { key: 'tip', group: 'base' }];
+    assert.deepEqual(
+        applyClientFilters(rows, [{ key: 'tip', op: 'in', value: '"O 2.5","1X"' }], cols).map(r => r.tip_market),
+        ['O 2.5', '1X']);
+    // not-in excludes the listed markets; the null-tip row is excluded too
+    assert.deepEqual(
+        applyClientFilters(rows, [{ key: 'tip', op: 'not-in', value: '"O 2.5","1X"' }], cols).map(r => r.tip_market),
+        ['O 0.5']);
+});
+
+test('in normalizes numbers, so a market price matches its CSV item', () => {
+    const rows = [row({ markets: { 1: 2.1 } }), row({ markets: { 1: 3.0 } }), row({ markets: { 1: 1.8 } })];
+    const out = applyClientFilters(rows, [{ key: '1', op: 'in', value: '2.1,3.0' }], COLUMNS);
+    assert.deepEqual(out.map(r => r.markets[1]), [2.1, 3.0]);
+});
+
+// --- settled-outcome display toggles ------------------------------------
+const tipRow = (over = {}) => row({ tip_market: 'O 2.5', tip_outcome: null, ...over });
+
+test('hideHits/hideMiss drop that settled class; unsettled always passes', () => {
+    const rows = [
+        tipRow({ api_id: 1, tip_outcome: 'hit' }),
+        tipRow({ api_id: 2, tip_outcome: 'miss' }),
+        tipRow({ api_id: 3, tip_outcome: null }), // upcoming
+    ];
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideHits: true }).map(r => r.api_id), [2, 3]);
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideMiss: true }).map(r => r.api_id), [1, 3]);
+    // both -> only upcoming/ongoing remain
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideHits: true, hideMiss: true }).map(r => r.api_id), [3]);
+    // all-off is a no-op (same array reference)
+    assert.equal(applyOutcomeToggles(rows, {}), rows);
+});
+
+test('noMiss keeps clean-market rows (+upcoming), drops failed markets and tipless', () => {
+    const rows = [
+        tipRow({ api_id: 1, tip_market: 'O 2.5', tip_outcome: 'hit' }),
+        tipRow({ api_id: 2, tip_market: 'O 2.5', tip_outcome: 'miss' }), // fails the market
+        tipRow({ api_id: 3, tip_market: '1X', tip_outcome: 'hit' }),
+        tipRow({ api_id: 4, tip_market: 'O 1.5', tip_outcome: null }), // clean upcoming
+        tipRow({ api_id: 5, tip_market: '1X', tip_outcome: null }), // clean upcoming
+        tipRow({ api_id: 6, tip_market: null, tip_outcome: null }), // tipless
+    ];
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { noMiss: true }).map(r => r.api_id), [3, 4, 5]);
 });

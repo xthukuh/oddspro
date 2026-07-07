@@ -1,6 +1,7 @@
 import { db } from './connection.js';
 import { MARKET_COLUMNS, isMarketKey, marketKey, whereMarket } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
+import { parseFilterList } from './filter-csv.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -68,10 +69,18 @@ const FILTER_OPS = {
     lt: (q, col, v) => q.where(col, '<', v),
     lte: (q, col, v) => q.where(col, '<=', v),
     like: (q, col, v) => q.where(col, 'like', `%${v}%`),
+    'not-contains': (q, col, v) => q.where(col, 'not like', `%${v}%`),
+    // `v` is a coerced array (see _coerceList); NULL rows drop (NOT IN semantics)
+    in: (q, col, v) => q.whereIn(col, v),
+    'not-in': (q, col, v) => q.whereNotIn(col, v),
 };
 
+// Text/set ops resolve to a base field's `like_sql` text target (e.g. tip ->
+// fp.tip_market) instead of its numeric sort target, and their values stay text.
+const TEXT_TARGET_OPS = new Set(['like', 'not-contains', 'in', 'not-in']);
+
 // Column-to-column comparison operators for `{key, op, col}` filters
-// (RHS is another column, not a literal); `like` intentionally excluded.
+// (RHS is another column, not a literal); text/set ops intentionally excluded.
 const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
 // Column catalog consumed by the settings modal (and the CSV default set).
@@ -101,7 +110,7 @@ export async function columnCatalog() {
 function _sqlTarget(query, key, joined, op = null) {
     const base = BASE_FIELDS[key];
     if (base) {
-        if (op === 'like' && base.like_sql) return base.like_sql;
+        if (TEXT_TARGET_OPS.has(op) && base.like_sql) return base.like_sql;
         return base.raw ? db.raw(base.sql) : base.sql;
     }
     if (!isMarketKey(key)) return null;
@@ -131,12 +140,12 @@ function _json(value) {
 }
 
 // Coerce a filter value by field type (market columns are numeric prices).
-// `like` values stay text (string-contains works on any column); numeric
-// comparisons reject unparsable input - mysql2 would otherwise serialize
+// `like`/`not-contains` values stay text (string-contains works on any column);
+// numeric comparisons reject unparsable input - mysql2 would otherwise serialize
 // NaN as a bare SQL token ("Unknown column 'NaN'").
 function _coerce(key, value, op) {
     const type = BASE_FIELDS[key]?.type ?? 'number';
-    if (op === 'like' || type !== 'number') return String(value);
+    if (op === 'like' || op === 'not-contains' || type !== 'number') return String(value);
     const n = Number(value);
     if (Number.isNaN(n)) {
         throw new TypeError(`Invalid numeric filter value for ${key}: ${JSON.stringify(value)}`);
@@ -144,10 +153,32 @@ function _coerce(key, value, op) {
     return n;
 }
 
+// Coerce an `in` / `not-in` CSV value into an array of typed items. Items are
+// text when the field routes to a text target (tip's like_sql) or is a string
+// column; numeric otherwise (markets, numeric base fields) - same NaN guard as
+// _coerce. An empty list is rejected (would match nothing / everything).
+function _coerceList(key, value, op) {
+    const items = parseFilterList(value);
+    if (!items.length) {
+        throw new TypeError(`Empty ${op} list for ${key}: ${JSON.stringify(value)}`);
+    }
+    const base = BASE_FIELDS[key];
+    const text = base ? (base.like_sql != null || base.type !== 'number') : false;
+    if (text) return items.map(String);
+    return items.map(it => {
+        const n = Number(it);
+        if (Number.isNaN(n)) {
+            throw new TypeError(`Invalid numeric filter item for ${key}: ${JSON.stringify(it)}`);
+        }
+        return n;
+    });
+}
+
 // Query correlated records: paginated + multi-sort + filtered.
 //   date: 'YYYY-MM-DD' | Date | null (null = all dates)
 //   sort: [{key, dir:'asc'|'desc'}] over base fields + market columns
-//   filters: [{key, op, value}] with ops eq/ne/gt/gte/lt/lte/like
+//   filters: [{key, op, value}] with ops eq/ne/gt/gte/lt/lte/like/not-contains
+//   /in/not-in (in/not-in take a CSV-list value via parseFilterList)
 //   completed: false hides concluded games (terminal fixture status or a
 //   completed match) - the web "Show completed games" settings toggle
 //   providers: array limiting rows to those bookmakers (default: all)
@@ -194,7 +225,10 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         } else {
             const apply = FILTER_OPS[f?.op];
             if (!apply) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
-            apply(query, target, _coerce(f.key, f.value, f.op));
+            const value = (f.op === 'in' || f.op === 'not-in')
+                ? _coerceList(f.key, f.value, f.op)
+                : _coerce(f.key, f.value, f.op);
+            apply(query, target, value);
         }
     }
 
