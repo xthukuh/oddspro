@@ -1,7 +1,7 @@
 // Typed wrappers over the oddspro API (:3001, proxied via vite in dev).
 
-// Baked in at build time (scripts/release.js mirrors the server's API_TOKEN
-// into VITE_API_TOKEN so they never drift). Unset locally - no-op.
+// Baked in at build time from VITE_API_TOKEN (set it in .env to match the
+// server's API_TOKEN before `npm run build:web`). Unset locally - no-op.
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || null;
 const _authHeaders = () => API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
 

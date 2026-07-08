@@ -11,16 +11,39 @@ const _roi = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Math.round(v * 100
 
 export default function MagicMenu({ data, error, activeIds, onToggle, onClearMagic }) {
     const [open, setOpen] = useState(false);
+    const [pos, setPos] = useState({ top: 0, left: 8 });
     const ref = useRef(null);
+    const btnRef = useRef(null);
 
-    // Close on any press outside the control
+    // Anchor the panel to the VIEWPORT (not the button): measure the button on
+    // open, right-align the panel under it, then clamp its `left` so the WHOLE
+    // panel stays on-screen (a right-positioned edge alone still clips left when
+    // the button sits near the left). Survives any header layout / flex-wrap -
+    // the old `absolute right-0` clipped whenever the button wasn't near the edge.
+    const toggle = () => {
+        if (!open && btnRef.current) {
+            const r = btnRef.current.getBoundingClientRect();
+            const vw = window.innerWidth;
+            const panelW = Math.min(320, vw - 16); // w-80, capped to the viewport
+            const left = Math.min(Math.max(8, r.right - panelW), vw - panelW - 8);
+            setPos({ top: r.bottom + 4, left });
+        }
+        setOpen(v => !v);
+    };
+
+    // Close on any press outside the control, or on resize (rect goes stale)
     useEffect(() => {
         if (!open) return;
         const close = e => {
             if (!ref.current?.contains(e.target)) setOpen(false);
         };
+        const onResize = () => setOpen(false);
         document.addEventListener('mousedown', close);
-        return () => document.removeEventListener('mousedown', close);
+        window.addEventListener('resize', onResize);
+        return () => {
+            document.removeEventListener('mousedown', close);
+            window.removeEventListener('resize', onResize);
+        };
     }, [open]);
 
     const strategies = data?.strategies ?? [];
@@ -30,15 +53,20 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
     return (
         <div className="relative inline-block" ref={ref}>
             <button
-                onClick={() => setOpen(v => !v)}
+                ref={btnRef}
+                onClick={toggle}
+                aria-label={`Magic sort${active.size ? ` (${active.size} active)` : ''}`}
                 title="Sort tips most-likely-to-win first (backtested ranking strategies) - toggle one or more"
-                className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${active.size
+                className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center gap-0.5 rounded-md border text-lg leading-none ${active.size
                     ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
             >
-                ✨<span className="hidden sm:inline"> Magic</span>{active.size > 1 ? ` (${active.size})` : ''}
+                ✨{active.size > 1 ? <span className="text-xs tabular-nums">{active.size}</span> : null}
             </button>
             {open && (
-                <div className="absolute right-0 z-40 mt-1 w-80 bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2">
+                <div
+                    style={{ top: pos.top, left: pos.left }}
+                    className="fixed z-50 w-80 max-w-[calc(100vw-1rem)] max-h-[70vh] overflow-y-auto bg-white text-slate-800 border border-slate-200 rounded-lg shadow-xl p-2"
+                >
                     <div className="px-1 pb-2 mb-1 border-b border-slate-100 text-xs text-slate-500">
                         Tip rankings replayed against every settled day: build the
                         top-4 slip each strategy would have picked, settle it at

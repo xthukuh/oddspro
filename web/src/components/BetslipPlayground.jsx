@@ -257,15 +257,19 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     </button>
                 </div>
 
-                <div className="flex flex-col md:flex-row gap-4 min-h-0 grow">
+                {/* On mobile this whole region scrolls as ONE column (the Tips
+                    list is height-capped so a long list can't bury the Slips
+                    below it); on md+ it's two side-by-side independently-scrolling
+                    panes. */}
+                <div className="flex flex-col md:flex-row gap-4 min-h-0 grow overflow-y-auto md:overflow-visible">
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
-                    <div className="w-full md:w-2/5 min-w-0 flex flex-col min-h-0">
+                    <div className="w-full md:w-2/5 min-w-0 flex flex-col md:min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">
                             Tips <span className="text-slate-400 font-normal">
                                 ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
                             </span>
                         </h3>
-                        <div className="grow overflow-y-auto border border-slate-200 rounded p-1">
+                        <div className="max-h-[38vh] md:max-h-none md:grow overflow-y-auto border border-slate-200 rounded p-1">
                             {shown.map(c => (
                                 <div
                                     key={c.api_id}
@@ -300,9 +304,9 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     </div>
 
                     {/* Slips: drop targets */}
-                    <div className="w-full md:w-3/5 min-w-0 flex flex-col min-h-0">
+                    <div className="w-full md:w-3/5 min-w-0 flex flex-col md:min-h-0">
                         <h3 className="text-sm font-medium text-slate-700 mb-1">Slips</h3>
-                        <div className="grow overflow-y-auto space-y-3 pr-1">
+                        <div className="space-y-3 pr-1 md:grow md:overflow-y-auto">
                             {slips.map(slip => {
                                 const sum = slipSummary(slip.legs, config.stake);
                                 const verdict = slipOutcome(slip.legs);

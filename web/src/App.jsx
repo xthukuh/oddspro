@@ -4,6 +4,7 @@ import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterV
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
+import HelpModal from './components/HelpModal.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import SortPills from './components/SortPills.jsx';
@@ -62,12 +63,17 @@ function _loadSort() {
     return [];
 }
 
+// Stable empty-array reference for null-catalog fallbacks - a fresh `[]` per
+// render would churn downstream memos/effect deps (see the providers note).
+const EMPTY_PROVIDERS = [];
+
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
-// Display an ISO date as DD-MM-YYYY; tooltip spells it out (noon-anchored to
-// dodge tz day-shift). Native <input type="date"> can't be reformatted, so a
-// formatted label is overlaid on a transparent picker input in the header.
-const _ddmmyyyy = iso => { const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}`; };
+// Display an ISO date compactly as D/M/YYYY (no leading zeros); tooltip spells
+// it out (noon-anchored to dodge tz day-shift). Native <input type="date">
+// can't be reformatted, so a formatted label is overlaid on a transparent
+// picker input in the header.
+const _dmy = iso => { const [y, m, d] = iso.split('-'); return `${+d}/${+m}/${y}`; };
 const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
 });
@@ -128,6 +134,7 @@ export default function App() {
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
+    const [showHelp, setShowHelp] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
 
@@ -195,8 +202,13 @@ export default function App() {
         [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
     );
     const rates = useMemo(() => _hitRates(rows), [rows]);
-    // Known bookmakers come from the catalog; null selection = all visible
-    const providers = catalog?.providers ?? [];
+    // Known bookmakers come from the catalog; null selection = all visible.
+    // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
+    // not a fresh `[]`): a new array each render would change the
+    // selectedProviders memo and the records-effect deps every render, which
+    // on a failed catalog fetch spins an infinite refetch loop (see the
+    // "records effect" note below).
+    const providers = catalog?.providers ?? EMPTY_PROVIDERS;
     const selectedProviders = useMemo(() => {
         if (!providerKeys) return providers;
         const valid = new Set(providers);
@@ -206,6 +218,9 @@ export default function App() {
     // Records whenever the SERVER query shape changes (or a refresh lands
     // new data). Client-only filter edits re-filter locally, never refetch:
     // the effect keys on the serialized server subset, not `filters`.
+    // NOTE: every dep here must be reference-stable across renders (strings,
+    // numbers, or memoized arrays) - an unstable dep would refetch on its own
+    // setState, and on a failing request that becomes an infinite refetch loop.
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
         let stale = false;
@@ -226,6 +241,14 @@ export default function App() {
             .finally(() => !stale && setLoading(false));
         return () => { stale = true; };
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
+
+    // Auto-dismiss the error banner after 3s (it's also manually closable).
+    // A new error resets the timer; clearing on unmount avoids a stray setState.
+    useEffect(() => {
+        if (!error) return;
+        const id = setTimeout(() => setError(null), 3000);
+        return () => clearTimeout(id);
+    }, [error]);
 
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
@@ -372,103 +395,122 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
-            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-wrap items-center gap-1.5 md:gap-2">
-                <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
-                <span className="inline text-slate-400 text-xs">
-                    By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
-                </span>
-                <div className="grow" />
-                { date === TODAY ? null : (
+            {/* Two-tier responsive topbar: brand + merged date-nav on one line,
+                action buttons on the next below md (single row from md up). */}
+            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-col gap-2 md:flex-row md:items-center">
+                <div className="flex items-center gap-2">
+                    {/* The SVG badge's background is #0f172a (= bg-slate-900,
+                        the topbar) so it blends in; the sky border + white "OP"
+                        are what read against the bar. */}
+                    <a href="/" title="ODDS PRO" className="shrink-0 hover:opacity-80">
+                        <img src="/icon.svg" alt="Odds Pro" className="h-8 w-8" />
+                    </a>
+                    {/* Merged segmented date-nav: [⌂] [‹] [ D/M/YYYY ] [›]. The
+                        centre cell is a transparent native picker under a
+                        formatted label (native date inputs can't be reformatted);
+                        tooltip spells the full day, clearing shows all dates. */}
+                    <div className="inline-flex items-stretch overflow-hidden rounded-md border border-slate-700 bg-slate-800 text-sm">
+                        {date !== TODAY && (
+                            <button
+                                onClick={() => changeDate(TODAY)}
+                                title="Jump to today"
+                                className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700"
+                            >
+                                ⌂
+                            </button>
+                        )}
+                        <button
+                            onClick={() => changeDate(PREV_DATE)}
+                            disabled={date <= MIN_DATE}
+                            title={`Previous (${PREV_DATE})`}
+                            className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                            &#8249;
+                        </button>
+                        <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
+                            <span className="pointer-events-none min-w-[6.5rem] px-3 py-1 text-center tabular-nums">
+                                {date ? _dmy(date) : 'All dates'}
+                            </span>
+                            <input
+                                type="date"
+                                value={date}
+                                min={MIN_DATE}
+                                max={MAX_DATE}
+                                onFocus={e => e.target.showPicker?.()}
+                                onClick={e => e.target.showPicker?.()}
+                                onChange={e => changeDate(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                aria-label="Select date (clear to show all dates)"
+                            />
+                        </label>
+                        <button
+                            onClick={() => changeDate(NEXT_DATE)}
+                            disabled={date >= MAX_DATE}
+                            title={`Next (${NEXT_DATE})`}
+                            className="cursor-pointer border-l border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                            &#8250;
+                        </button>
+                    </div>
+                </div>
+                {/* App-header style action bar: icon-only buttons (Android/iOS
+                    convention) with uniform touch targets + accessible labels;
+                    text lives in tooltips/aria-label, not on the chrome. */}
+                <div className="flex items-center justify-between gap-1.5 md:ml-auto md:justify-end">
                     <button
-                        onClick={() => changeDate(TODAY)}
-                        title="Jump to today"
-                        className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                        onClick={onRefresh}
+                        disabled={!date || refresh?.running}
+                        aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
+                        title={refresh?.running
+                            ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                            : date ? 'Re-fetch fixtures, results & odds for this date' : 'Pick a date to refresh'}
+                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none ${refresh?.running
+                            ? 'bg-amber-600 border-amber-500 cursor-wait'
+                            : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                     >
-                        <span className="sm:hidden">⌂</span><span className="hidden sm:inline">Today</span>
+                        <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
                     </button>
-                )}
-                <button
-                    onClick={() => changeDate(PREV_DATE)}
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
-                    disabled={date <= MIN_DATE}
-                    title={`Previous (${PREV_DATE})`}
-                >
-                    &#10094;
-                </button>
-                {/* Formatted DD-MM-YYYY label over a transparent native picker
-                    (native date inputs can't be reformatted); tooltip spells the
-                    full day. Clearing the picker shows all dates. */}
-                <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
-                    <span className="pointer-events-none bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-sm tabular-nums">
-                        {date ? _ddmmyyyy(date) : 'All dates'}
-                    </span>
-                    <input
-                        type="date"
-                        value={date}
-                        min={MIN_DATE}
-                        max={MAX_DATE}
-                        onFocus={e => e.target.showPicker?.()}
-                        onClick={e => e.target.showPicker?.()}
-                        onChange={e => changeDate(e.target.value)}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        aria-label="Select date (clear to show all dates)"
+                    <MagicMenu
+                        data={magicData}
+                        error={magicError}
+                        activeIds={activeMagicIds}
+                        onToggle={onToggleMagic}
+                        onClearMagic={onClearMagic}
                     />
-                </label>
-                <button
-                    onClick={() => changeDate(NEXT_DATE)}
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
-                    disabled={date >= MAX_DATE}
-                    title={`Next (${NEXT_DATE})`}
-                >
-                    &#10095;
-                </button>
-                <button
-                    onClick={onRefresh}
-                    disabled={!date || refresh?.running}
-                    title={date
-                        ? 'Re-fetch fixtures, results & odds for this date'
-                        : 'Pick a date to refresh'}
-                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${refresh?.running
-                        ? 'bg-amber-600 border-amber-500 cursor-wait'
-                        : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                >
-                    <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
-                    <span className="hidden sm:inline">
-                        {refresh?.running
-                            ? ` Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                            : ' Refresh'}
-                    </span>
-                </button>
-                <MagicMenu
-                    data={magicData}
-                    error={magicError}
-                    activeIds={activeMagicIds}
-                    onToggle={onToggleMagic}
-                    onClearMagic={onClearMagic}
-                />
-                <button
-                    onClick={() => setShowSlips(true)}
-                    title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
-                >
-                    🧾<span className="hidden sm:inline"> Slips</span>
-                </button>
-                <button
-                    onClick={() => setShowFilters(v => !v)}
-                    title="Filter the table rows"
-                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${showFilters || filters.length
-                        ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
-                >
-                    <span className="sm:hidden">▽{filters.length ? ` ${filters.length}` : ''}</span>
-                    <span className="hidden sm:inline">Filters{filters.length ? ` (${filters.length})` : ''}</span>
-                </button>
-                <button
-                    onClick={() => setShowSettings(true)}
-                    title="Display settings"
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
-                >
-                    ⚙<span className="hidden sm:inline"> Settings</span>
-                </button>
+                    <button
+                        onClick={() => setShowSlips(true)}
+                        aria-label="Betslip playground"
+                        title="Betslip playground - build virtual multi-bet slips from the day's tips"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        🧾
+                    </button>
+                    <button
+                        onClick={() => setShowFilters(v => !v)}
+                        aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`}
+                        title="Filter the table rows"
+                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center gap-0.5 rounded-md border text-lg leading-none ${showFilters || filters.length
+                            ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
+                    >
+                        ▽{filters.length ? <span className="text-xs tabular-nums">{filters.length}</span> : null}
+                    </button>
+                    <button
+                        onClick={() => setShowHelp(true)}
+                        aria-label="Help"
+                        title="Help - what Odds Pro does + demo video"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none font-semibold bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        ?
+                    </button>
+                    <button
+                        onClick={() => setShowSettings(true)}
+                        aria-label="Display settings"
+                        title="Display settings"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        ⚙
+                    </button>
+                </div>
             </header>
 
             <SortPills
@@ -487,8 +529,16 @@ export default function App() {
             )}
 
             {error && (
-                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm">
-                    {error}
+                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm flex items-start gap-2" role="alert">
+                    <span className="grow">{error}</span>
+                    <button
+                        onClick={() => setError(null)}
+                        aria-label="Dismiss error"
+                        title="Dismiss"
+                        className="cursor-pointer shrink-0 text-red-400 hover:text-red-700 text-lg leading-none"
+                    >
+                        &times;
+                    </button>
                 </div>
             )}
 
@@ -538,6 +588,8 @@ export default function App() {
                     onClose={() => setShowSlips(false)}
                 />
             )}
+
+            {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
 
             {showSettings && catalog && (
                 <SettingsModal

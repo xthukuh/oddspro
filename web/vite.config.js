@@ -1,17 +1,56 @@
-import { defineConfig } from 'vite';
+import { defineConfig, loadEnv } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+// Repo root (one up from web/) - the project's .env and package.json live there.
+const repoRoot = fileURLToPath(new URL('..', import.meta.url));
+const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'));
 
 // Dev server on :5173 proxies /api/* to the oddspro API server (:3001).
-export default defineConfig({
-    plugins: [react(), tailwindcss()],
-    server: {
-        port: 5173,
-        proxy: { '/api': 'http://localhost:3001' },
-        // The table imports the shared pure scorer from ../src/db/ (one
-        // magic-sort implementation server + client); the dev server's fs
-        // guard must allow reads above web/. Build needs no config - Rollup
-        // follows relative imports anywhere.
-        fs: { allow: ['..'] },
-    },
+export default defineConfig(({ command, mode }) => {
+    // Only VITE_-prefixed vars (loadEnv's default) are read from the root .env,
+    // so DB/API secrets are never touched. These are client-only branding
+    // values baked into the build (like VITE_API_TOKEN, which must match the
+    // server's API_TOKEN - both are set in .env before `npm run build:web`).
+    const env = loadEnv(mode, repoRoot);
+    const title = `${env.VITE_APP_NAME || 'Odds Pro'} v${pkg.version}`;
+    const gaId = env.VITE_GA_ID;
+
+    return {
+        plugins: [
+            react(),
+            tailwindcss(),
+            {
+                // Bake the env-driven <title> into index.html, and inject the
+                // Google Analytics snippet for PRODUCTION builds only (never the
+                // dev server) so local traffic stays out of analytics.
+                name: 'oddspro-html-env',
+                transformIndexHtml(html) {
+                    html = html.replace(/<title>[\s\S]*?<\/title>/, `<title>${title}</title>`);
+                    if (command === 'build' && gaId) {
+                        const ga = `<script async src="https://www.googletagmanager.com/gtag/js?id=${gaId}"></script>\n`
+                            + `    <script>\n`
+                            + `        window.dataLayer = window.dataLayer || [];\n`
+                            + `        function gtag() { dataLayer.push(arguments); }\n`
+                            + `        gtag('js', new Date());\n`
+                            + `        gtag('config', '${gaId}');\n`
+                            + `    </script>\n`;
+                        html = html.replace('</head>', `    ${ga}</head>`);
+                    }
+                    return html;
+                },
+            },
+        ],
+        server: {
+            port: 5173,
+            proxy: { '/api': 'http://localhost:3001' },
+            // The table imports the shared pure scorer from ../src/db/ (one
+            // magic-sort implementation server + client); the dev server's fs
+            // guard must allow reads above web/. Build needs no config - Rollup
+            // follows relative imports anywhere.
+            fs: { allow: ['..'] },
+        },
+    };
 });
