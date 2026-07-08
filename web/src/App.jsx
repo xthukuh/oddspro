@@ -8,6 +8,7 @@ import HelpModal from './components/HelpModal.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import SortPills from './components/SortPills.jsx';
+import Tooltip from './components/Tooltip.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -201,7 +202,10 @@ export default function App() {
         ),
         [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
     );
-    const rates = useMemo(() => _hitRates(rows), [rows]);
+    // Day-level hit-rate scoreboard: computed over the whole loaded selection
+    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
+    // picks and stays stable when you filter or hide rows in the view.
+    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
     // not a fresh `[]`): a new array each render would change the
@@ -555,26 +559,30 @@ export default function App() {
                     loading={loading}
                     linkProviders={linkProviders}
                 />
-                <div className="py-3 text-sm text-slate-500">
-                    <span>
-                        {rows.length}{clientFilters.length ? ` of ${result?.total ?? 0}` : ''}
-                        {' '}record{(clientFilters.length ? result?.total : rows.length) === 1 ? '' : 's'}
-                    </span>
-                    <span className="mx-2 text-slate-300">·</span>
-                    <span
-                        className="cursor-help"
-                        title="Over 2.5 hot picks shown: settled hits / settled picks (unique fixtures; pending picks excluded)"
-                    >
-                        🔥 O2.5: {_rate(rates.hot)}
-                    </span>
-                    <span className="mx-2 text-slate-300">·</span>
-                    <span
-                        className="cursor-help"
-                        title="Tips shown: settled hits / settled tips (unique fixtures; pending tips excluded, AI-vetoed included)"
-                    >
-                        Tips: {_rate(rates.tips)}
-                    </span>
-                </div>
+                {/* Footer stacks vertically on small screens, inline (with
+                    dot separators) from sm up. Record count shows the day's
+                    total by default and shown/total when the view is filtered;
+                    the hit-rate scoreboard is day-level regardless of filters. */}
+                {(() => {
+                    const total = result?.data?.length ?? 0;
+                    const filtered = rows.length !== total;
+                    return (
+                        <div className="py-3 text-sm text-slate-500 flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
+                            <span>
+                                {filtered ? `${rows.length}/${total}` : total}
+                                {' '}record{total === 1 && !filtered ? '' : 's'}
+                            </span>
+                            <span className="hidden sm:inline text-slate-300">·</span>
+                            <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
+                                <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
+                            </Tooltip>
+                            <span className="hidden sm:inline text-slate-300">·</span>
+                            <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
+                                <span>Tips: {_rate(dayRates.tips)}</span>
+                            </Tooltip>
+                        </div>
+                    );
+                })()}
             </main>
 
             {showSlips && (
