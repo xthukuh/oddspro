@@ -5,8 +5,12 @@ Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — on
 ## 1. Overview
 
 - **Two branches, no `deploy` branch.** `dev` is where development happens; `main` is the stable/production-ready line (merge `dev` → `main` when ready). You deploy by building **whichever branch you're shipping** locally and uploading the result — there is no separate release/promote branch.
-- **The frontend is always prebuilt locally.** `npm run build:web` produces `web/dist` (gitignored); `src/server.js` serves it. **The shared host never runs Vite/Tailwind** — it only runs Node.
-- **Manual upload is the deploy mechanism.** You upload the project tree (source + prebuilt `web/dist`) into the Node app's Application Root via File Manager (or FTP). Git history on `dev`/`main` is your rollback reference; keep a zip of the last-known-good upload for a fast revert.
+- **Two upload archives, split by role** (produced by `npm run package:deploy`, see §3):
+  - **Backend → the Node app's Application Root** (e.g. `oddspro-app`): `oddspro-app_<ts>.zip` — the tracked source tree minus `web/` (no `node_modules`, `.env`, or `web/dist`). This is the Passenger/Node app that serves `/api/*`.
+  - **Frontend → `public_html`**: `oddspro-web_<ts>.zip` — the built `web/dist` **contents** (index.html, `assets/`, favicons) at the zip root. Apache/LiteSpeed serves these statically; requests that don't match a static file fall through to the Node app (so `/api/*` reaches Passenger).
+- **The frontend is always prebuilt locally.** `npm run build:web` produces `web/dist` (gitignored). **The shared host never runs Vite/Tailwind** — it only runs Node.
+- **Manual upload is the deploy mechanism** (cPanel File Manager → Upload → Extract). Git history on `dev`/`main` is your rollback reference; keep the last-known-good zips for a fast revert.
+- **`scripts/package-deploy.js`** (`npm run package:deploy`) builds both zips into `release/` (gitignored). Dependency-free: the backend zip is `git archive` of HEAD (commit first — uncommitted edits aren't included, and it warns you); the frontend zip is your freshly-built `web/dist`.
 - **`scripts/db-export.js`** dumps the local MySQL/MariaDB database (gzip, no `CREATE DATABASE`) for a one-time phpMyAdmin import on the new host.
 - **`scripts/pipeline-cron.sh`** is the Linux/cPanel equivalent of `scripts/pipeline-task.cmd`, with a `flock` overlap guard cron jobs need.
 
@@ -23,15 +27,23 @@ Do these **in order**:
 1. **MySQL**: cPanel → MySQL® Databases → create a database and user (cPanel prefixes both with your account name, e.g. `cpaneluser_oddspro` / `cpaneluser_dbuser`). Grant the user all privileges on the database. Note the exact prefixed names.
 2. **Export the local DB**: `node scripts/db-export.js` → writes `backups/oddspro_<timestamp>.sql.gz` (gitignored).
 3. **Import**: cPanel → phpMyAdmin → select the new database → Import → upload the `.gz` (imported natively, no manual decompression). This carries the full schema **and** the populated `knex_migrations` table, so no migrations are needed on first boot.
-4. **Build the frontend locally**: set any branding/token vars in your local `.env` first (`VITE_GA_ID`, `VITE_APP_NAME`, and `VITE_API_TOKEN` if you plan to use `API_TOKEN` — see §6), then run `npm test` and `npm run build:web`. Confirm `web/dist/index.html` exists and (for a prod build) contains your title/GA/favicon links.
+4. **Build + package locally**: set any branding/token vars in your local `.env` first (`VITE_GA_ID`, `VITE_APP_NAME`, `VITE_DEMO_VIDEO_URL`, and `VITE_API_TOKEN` if you plan to use `API_TOKEN` — see §6), then:
+   ```sh
+   npm test          # optional but recommended
+   npm run build:web # produces web/dist with your VITE_* baked in
+   npm run package:deploy   # -> release/oddspro-app_<ts>.zip + release/oddspro-web_<ts>.zip
+   ```
+   (Commit first — the backend zip is built from HEAD and the script warns on uncommitted tracked changes.)
 5. **Create the Node app**: cPanel → Setup Node.js App → Create:
    - Node.js version: highest available ≥ 18 (prefer 20/22).
    - Application mode: **Production**.
-   - Application root: a directory (Passenger's app root — e.g. `oddspro-app`, outside `public_html` unless your host requires otherwise).
+   - Application root: a directory (Passenger's app root — e.g. `oddspro-app`, outside `public_html`).
    - Application URL: the domain/subdomain root — **no subpath** (`web/dist`'s asset URLs are root-absolute; `vite.config.js` sets no `base`).
    - Application startup file: `src/server.js`.
-6. **Upload the project**: locally, zip the repo tree **excluding** `node_modules/`, `.git/`, `.env`, `tmp/`, `logs/`, `backups/`, and **including** the freshly-built `web/dist/`. Upload the zip into the Application Root via File Manager and Extract (or push the same files over FTP).
-7. **Create `.env`**: via File Manager, in the Application Root, from `.env.example`:
+6. **Upload the two archives** via cPanel File Manager (Upload → then Extract in place):
+   - `oddspro-app_<ts>.zip` → the **Application Root** (`oddspro-app`).
+   - `oddspro-web_<ts>.zip` → **`public_html`**.
+7. **Create `.env`**: via File Manager, in the **Application Root**, from `.env.example`:
    - `DB_*`: the cPanel-prefixed MySQL creds from step 1.
    - `X_APISPORTS_KEY` (and any other keys you use locally, e.g. `GEMINI_API_KEY`).
    - `DB_POOL_MAX`: start conservative, e.g. `3` (see §6).
@@ -48,8 +60,8 @@ Do these **in order**:
 
 For any future change:
 
-1. Locally: commit to `dev` (or `main`), run `npm test`, then `npm run build:web`.
-2. Upload the changed files into the Application Root via File Manager, overwriting — at minimum the rebuilt `web/dist/`, plus any changed `src/` / `knexfile.js` / `package.json`. (A full re-zip-and-extract of the same exclusion set from §3.6 is the simplest, foolproof option.)
+1. Locally: commit to `dev` (or `main`), then `npm test && npm run build:web && npm run package:deploy`.
+2. Upload + Extract via File Manager, overwriting: `oddspro-app_<ts>.zip` → Application Root, `oddspro-web_<ts>.zip` → `public_html`. (If only the frontend changed, you can upload just the web zip; if only backend, just the app zip.)
 3. If `package.json` dependencies changed: **"Run NPM Install"** again. If a migration was added: apply it (see §5, Migrations).
 4. **Restart** the app via the Setup Node.js App UI.
 5. Smoke-test (§5).
@@ -64,7 +76,7 @@ For any future change:
 
 **Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (b) translating the migration and running its SQL in phpMyAdmin. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying.
 
-**Rollback:** keep the previous known-good upload zip; re-extract it into the Application Root and restart. The corresponding commit on `dev`/`main` is the source-of-truth to rebuild from if you no longer have the zip.
+**Rollback:** keep the previous known-good `release/` zips (both the `-app` and `-web` archives); re-extract them into the Application Root / `public_html` and restart. The corresponding commit on `dev`/`main` is the source-of-truth to rebuild from if you no longer have the zips.
 
 ## 6. Troubleshooting / risk appendix
 
