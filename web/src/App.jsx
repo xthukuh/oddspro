@@ -374,7 +374,7 @@ export default function App() {
         <div className="min-h-screen bg-slate-100 text-slate-800">
             <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-wrap items-center gap-1.5 md:gap-2">
                 <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
-                <span className="hidden sm:inline text-slate-400 text-xs">
+                <span className="inline text-slate-400 text-xs">
                     By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
                 </span>
                 <div className="grow" />
