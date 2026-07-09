@@ -14,6 +14,9 @@
 //    ranked, settle that virtual slip at real prices - and ranks strategies
 //    by slip survival. Leave-one-day-out calibration keeps a calibrated
 //    strategy from grading its own answers. Backtests, not forecasts.
+// Plus the safe-only selection (safeQualifies/safeSelection): strict gates +
+// per-day cap that cherry-pick multi-bet slip legs for the web's Safe-only
+// toggle. Thresholds in DEFAULT_SAFE, re-tuned via scripts/analyze-safe-tips.js.
 import { confidenceBand, marketGroup } from './perf-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0; // + 0 normalizes -0
@@ -122,6 +125,18 @@ export function estimateLegProb(tip, cal) {
 
 const _bd = tip => tip.breakdown ?? {};
 
+const _agreementParts = tip => [_bd(tip).market_prob, _bd(tip).stats_prob, _bd(tip).api_prob]
+    .map(_num).filter(v => v != null);
+
+// Consensus worst case: the weakest of the blend components that exist -
+// a tip everything likes beats a tip one signal loves. Null when the
+// breakdown carries no components (pre-2026-07-04 rows).
+export function tipAgreement(tip) {
+    if (!tip) return null;
+    const parts = _agreementParts(tip);
+    return parts.length ? Math.min(...parts) : null;
+}
+
 // Candidate ranking strategies. Every scorer is total: fallback chains end
 // at blend confidence (always set on a tip), so missing tip_breakdown or an
 // empty calibration degrades, never throws. score() may return null - the
@@ -147,13 +162,7 @@ export const STRATEGIES = [
     {
         id: 'agreement',
         label: 'Component agreement',
-        // Consensus worst case: the weakest of the blend components that
-        // exist - a tip everything likes beats a tip one signal loves.
-        score: tip => {
-            const parts = [_bd(tip).market_prob, _bd(tip).stats_prob, _bd(tip).api_prob]
-                .map(_num).filter(v => v != null);
-            return parts.length ? Math.min(...parts) : tip.confidence;
-        },
+        score: tip => tipAgreement(tip) ?? tip.confidence,
     },
     {
         id: 'edge',
@@ -237,6 +246,61 @@ export function magicSortRows(rows, strategyId, cal) {
         if (vb == null) return -1;
         return vb - va;
     });
+}
+
+// Safe-only selection gates (Safety Net Protocol, 2026-07-09). Seeded from a
+// 547-settled-tip probe: agree >= .72 with all 3 components = 82.5% leg rate
+// (n=40); the 'market' strategy led the 7-day replay (survival 4/7,
+// top-quartile 81.8%). Literals on purpose - the web imports this module
+// verbatim, env overrides would silently diverge client/server. Re-tune via
+// scripts/analyze-safe-tips.js as data grows.
+export const DEFAULT_SAFE = {
+    strategy: 'market',   // ranking that decides who wins the per-day cap
+    minParts: 3,          // all three blend components must be present
+    minAgreement: 0.72,   // floor on min(market_prob, stats_prob, api_prob)
+    maxPrice: 1.6,        // short-priced legs only (1.2 floor set at generation)
+    maxPerDay: 3,         // quality over quantity - zero qualifiers = no bet
+};
+
+// One tip's pass/fail against the safe gates. Vetoed, tipless and
+// thin-breakdown rows (no components recorded) always fail.
+export function safeQualifies(row, opts = DEFAULT_SAFE) {
+    const o = { ...DEFAULT_SAFE, ...opts };
+    const tip = tipView(row);
+    if (!tip || tip.vetoed) return false;
+    if (_agreementParts(tip).length < o.minParts) return false;
+    const agree = tipAgreement(tip);
+    if (agree == null || agree < o.minAgreement) return false;
+    return tip.price != null && tip.price <= o.maxPrice;
+}
+
+// The day's safe slip legs: one row per canonical fixture (provider rows
+// share the fixture's tip - first row represents it), gate-filtered, ranked
+// per day by the pinned strategy and capped at maxPerDay. Callers filter a
+// table by membership (Set of api_id), never by the returned rows alone.
+export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
+    const o = { ...DEFAULT_SAFE, ...opts };
+    const seen = new Set();
+    const byDay = new Map();
+    for (const r of Array.isArray(rows) ? rows : []) {
+        const key = r?.api_id ?? r; // ledger rows are already one per fixture
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!safeQualifies(r, o)) continue;
+        const day = String(r.day ?? r.start_time ?? '').slice(0, 10);
+        let list = byDay.get(day);
+        if (!list) byDay.set(day, list = []);
+        list.push(r);
+    }
+    const out = [];
+    for (const day of [...byDay.keys()].sort()) {
+        const ranked = byDay.get(day)
+            .map(row => ({ row, tip: tipView(row), score: scoreTip(row, o.strategy, cal) }))
+            .filter(e => Number.isFinite(e.score))
+            .sort(_rankCompare);
+        out.push(...ranked.slice(0, Math.max(1, o.maxPerDay)).map(e => e.row));
+    }
+    return out;
 }
 
 // Virtual multi-bet math over legs [{ price, prob }]: combined odds, payout,
@@ -326,16 +390,21 @@ export function buildSlips(pool, { maxLegs = 4, targetOdds = 0, maxSlips = 0 } =
     return out;
 }
 
-// Rank one day's candidates under a strategy: score desc with a fully
-// deterministic tiebreak (confidence desc, price asc, market asc).
+// Fully deterministic ranking tiebreak over { tip, score } entries: score
+// desc, then confidence desc, price asc, market asc. Shared by the replay's
+// day ranking and the safe selection so both order identically.
+const _rankCompare = (a, b) => (b.score - a.score)
+    || ((b.tip.confidence ?? 0) - (a.tip.confidence ?? 0))
+    || ((a.tip.price ?? 0) - (b.tip.price ?? 0))
+    || String(a.tip.market).localeCompare(String(b.tip.market));
+
+// Rank one day's candidates under a strategy: score desc with the shared
+// deterministic tiebreak.
 function _rankDay(pool, strategy, cal) {
     return pool
         .map(tip => ({ tip, score: strategy.score(tip, cal) }))
         .filter(e => Number.isFinite(e.score))
-        .sort((a, b) => (b.score - a.score)
-            || ((b.tip.confidence ?? 0) - (a.tip.confidence ?? 0))
-            || ((a.tip.price ?? 0) - (b.tip.price ?? 0))
-            || String(a.tip.market).localeCompare(String(b.tip.market)));
+        .sort(_rankCompare);
 }
 
 // Dropdown ranking policy (user decision, 2026-07-06): survival first -
@@ -395,6 +464,7 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
     const results = STRATEGIES.map(strategy => {
         let slipDays = 0, survived = 0, profit = 0, oddsSum = 0;
         const quartile = { n: 0, hits: 0 };
+        const streak = { days: 0, sum: 0, best: 0 };
         for (const day of days) {
             const pool = byDay.get(day).filter(t => !t.vetoed);
             const ranked = _rankDay(pool, strategy, lodo.get(day));
@@ -406,6 +476,18 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
                 quartile.n++;
                 if (e.tip.outcome === 'hit') quartile.hits++;
             }
+            // Hit streak from the top of the day's ranking: how deep a
+            // straight top-down slip could have gone before the first miss.
+            // Display-only for now - fold into the ranking policy once the
+            // replay covers >30 days.
+            let run = 0;
+            for (const e of ranked) {
+                if (e.tip.outcome !== 'hit') break;
+                run++;
+            }
+            streak.days++;
+            streak.sum += run;
+            if (run > streak.best) streak.best = run;
             if (ranked.length < legs) continue;
             const slip = ranked.slice(0, legs);
             const odds = slip.reduce((p, e) => p * (e.tip.price ?? 1), 1);
@@ -429,6 +511,11 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
                     n: quartile.n,
                     hits: quartile.hits,
                     rate: quartile.n ? _round(quartile.hits / quartile.n) : null,
+                },
+                streak: {
+                    days: streak.days,
+                    avg: streak.days ? _round(streak.sum / streak.days) : null,
+                    best: streak.best,
                 },
             },
         };

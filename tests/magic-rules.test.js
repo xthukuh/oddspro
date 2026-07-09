@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb,
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
-    buildSlips,
+    buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -177,6 +177,83 @@ test('magicSortRows sorts score desc, sinks nulls, keeps ties stable', () => {
     assert.deepEqual([tipless, b2, vetoed, b1, a].map(r => r.api_id), [5, 3, 4, 2, 1], 'input untouched');
 });
 
+// --- safe selection (Safety Net Protocol gates + per-day cap) ---
+
+// A row that clears every DEFAULT_SAFE gate: 3 components, min 0.75 >= 0.72,
+// price 1.25 <= 1.6, not vetoed.
+const safe = (over = {}) => row({
+    api_id: 1, tip_outcome: null, tip_price: 1.25,
+    tip_breakdown: { market_prob: 0.8, stats_prob: 0.75, api_prob: 0.78 },
+    ...over,
+});
+
+test('tipAgreement is the min of present components, null without any', () => {
+    assert.equal(tipAgreement(tipView(safe())), 0.75);
+    assert.equal(tipAgreement(tipView(safe({ tip_breakdown: { market_prob: 0.8 } }))), 0.8);
+    assert.equal(tipAgreement(tipView(safe({ tip_breakdown: null }))), null);
+    assert.equal(tipAgreement(null), null);
+});
+
+test('safeQualifies rejects each gate violation individually', () => {
+    assert.equal(safeQualifies(safe()), true);
+    assert.equal(safeQualifies(safe({ tip_ai_verdict: 'veto' })), false);
+    assert.equal(safeQualifies(safe({ tip_market: null })), false);
+    assert.equal(safeQualifies(safe({ tip_breakdown: null })), false);          // pre-2026-07-04 rows
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } })), false); // 2 of 3 parts
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.7, api_prob: 0.78 } })), false); // agree 0.70 < 0.72
+    assert.equal(safeQualifies(safe({ tip_price: 1.7 })), false);
+    assert.equal(safeQualifies(safe({ tip_price: null })), false);
+    // partial opts merge over DEFAULT_SAFE
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } }), { minParts: 2 }), true);
+});
+
+test('safeQualifies normalizes DECIMAL strings and JSON-string breakdowns', () => {
+    assert.equal(safeQualifies(safe({
+        tip_price: '1.25', tip_confidence: '0.7500',
+        tip_breakdown: '{"market_prob":0.8,"stats_prob":0.75,"api_prob":0.78}',
+    })), true);
+});
+
+test('safeSelection collapses provider duplicates to one pick per api_id', () => {
+    const rows = [
+        safe({ api_id: 7, provider: 'betpawa' }),
+        safe({ api_id: 7, provider: 'betika' }),
+        safe({ api_id: 8 }),
+    ];
+    const picks = safeSelection(rows, null);
+    assert.deepEqual(picks.map(r => r.api_id), [7, 8]);
+    assert.equal(picks[0].provider, 'betpawa'); // first row represents the fixture
+});
+
+test('safeSelection ranks by the pinned strategy and caps per day', () => {
+    // market_prob decides under DEFAULT_SAFE.strategy = 'market'
+    const rows = [3, 1, 4, 2, 5].map(i => safe({
+        api_id: i,
+        tip_breakdown: { market_prob: 0.72 + i * 0.01, stats_prob: 0.75, api_prob: 0.78 },
+    }));
+    const picks = safeSelection(rows, null);
+    assert.deepEqual(picks.map(r => r.api_id), [5, 4, 3]); // top 3 by market_prob
+    assert.deepEqual(safeSelection(rows, null, { maxPerDay: 1 }).map(r => r.api_id), [5]);
+});
+
+test('safeSelection honors an alternative ranking strategy', () => {
+    // A leads on market_prob, B leads on agreement (min component)
+    const a = safe({ api_id: 1, tip_breakdown: { market_prob: 0.9, stats_prob: 0.73, api_prob: 0.74 } });
+    const b = safe({ api_id: 2, tip_breakdown: { market_prob: 0.8, stats_prob: 0.79, api_prob: 0.78 } });
+    assert.deepEqual(safeSelection([a, b], null, { maxPerDay: 1 }).map(r => r.api_id), [1]);
+    assert.deepEqual(safeSelection([a, b], null, { maxPerDay: 1, strategy: 'agreement' }).map(r => r.api_id), [2]);
+});
+
+test('safeSelection caps per day independently, using start_time when day is absent', () => {
+    const rows = [
+        safe({ api_id: 1, day: null, start_time: '2026-07-01 15:00:00' }),
+        safe({ api_id: 2, day: null, start_time: '2026-07-01 17:00:00' }),
+        safe({ api_id: 3, day: null, start_time: '2026-07-02 15:00:00' }),
+    ];
+    const picks = safeSelection(rows, null, { maxPerDay: 1 });
+    assert.deepEqual(picks.map(r => r.api_id), [1, 3]); // one per day, day order
+});
+
 // --- slip math ---
 
 test('slipSummary multiplies prices and probabilities', () => {
@@ -299,6 +376,7 @@ test('empty ledger yields a null-stat report without crashing', () => {
     assert.equal(out.strategies.length, 5);
     assert.equal(out.strategies[0].stats.days, 0);
     assert.equal(out.strategies[0].stats.survival, null);
+    assert.deepEqual(out.strategies[0].stats.streak, { days: 0, avg: null, best: 0 });
     assert.equal(out.calibration.settled, 0);
 });
 
@@ -311,9 +389,24 @@ test('report carries the documented shape', () => {
     assert.deepEqual(Object.keys(s), ['id', 'label', 'low_sample', 'stats']);
     assert.deepEqual(
         Object.keys(s.stats),
-        ['days', 'survived', 'survival', 'profit', 'roi', 'avg_odds', 'quartile'],
+        ['days', 'survived', 'survival', 'profit', 'roi', 'avg_odds', 'quartile', 'streak'],
     );
+    assert.deepEqual(Object.keys(s.stats.streak), ['days', 'avg', 'best']);
     assert.deepEqual(Object.keys(out.calibration), ['settled', 'global_rate', 'shrink_k', 'bands', 'groups', 'cells', 'lines', 'prices']);
+});
+
+test('streak counts depth-before-first-miss from the top of each day', () => {
+    // Day 1 ranked by confidence: hit, hit, miss, hit -> streak 2 (the hit
+    // behind the miss must not count). Day 2: all four hit -> streak 4.
+    const rows = [
+        ...[0, 1, 2, 3].map(i => row({
+            day: '2026-07-01', tip_confidence: 0.8 - i * 0.05,
+            tip_outcome: i === 2 ? 'miss' : 'hit',
+        })),
+        ...[0, 1, 2, 3].map(i => row({ day: '2026-07-02', tip_confidence: 0.8 - i * 0.05 })),
+    ];
+    const conf = simulateStrategies(rows, { topN: 10 }).strategies.find(s => s.id === 'confidence');
+    assert.deepEqual(conf.stats.streak, { days: 2, avg: 3, best: 4 });
 });
 
 // --- strategy ranking (survival -> quartile rate -> roi, a user decision) ---
