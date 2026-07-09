@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
 import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
+import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
@@ -29,6 +30,9 @@ const LS_COMPLETED = 'oddspro.show.completed';
 const LS_HIDE_HITS = 'oddspro.show.hideHits';
 const LS_HIDE_MISS = 'oddspro.show.hideMiss';
 const LS_NO_MISS = 'oddspro.show.noMiss';
+// Safe-only toggle (settings; default off): keep only the day's safest slip
+// legs per the shared safeSelection gates (magic-rules DEFAULT_SAFE)
+const LS_SAFE_ONLY = 'oddspro.show.safeOnly';
 // Legacy single magic-strategy id (superseded by the unified sort chain below;
 // still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
@@ -132,6 +136,7 @@ export default function App() {
     const [hideHits, setHideHits] = useState(() => localStorage.getItem(LS_HIDE_HITS) === '1');
     const [hideMiss, setHideMiss] = useState(() => localStorage.getItem(LS_HIDE_MISS) === '1');
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
+    const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
     const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
@@ -210,15 +215,23 @@ export default function App() {
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
+    // Safe picks are day-level over the whole loaded selection (result.data),
+    // NOT the filtered rows - other toggles/filters must not change who wins
+    // the per-day cap, and the footer count stays honest. One representative
+    // row per fixture; the table filters by api_id membership.
+    const safePicks = useMemo(() => safeSelection(result?.data ?? [], cal), [result, cal]);
     // Advanced-filter the loaded rows, then apply the settled-outcome toggles
-    // (Hide hits / Hide miss / No miss) over what survives.
-    const rows = useMemo(
-        () => applyOutcomeToggles(
+    // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
+    // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
+    const rows = useMemo(() => {
+        const base = applyOutcomeToggles(
             applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
             { hideHits, hideMiss, noMiss },
-        ),
-        [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
-    );
+        );
+        if (!safeOnly) return base;
+        const ids = new Set(safePicks.map(r => r.api_id));
+        return base.filter(r => ids.has(r.api_id));
+    }, [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks]);
     // Day-level hit-rate scoreboard: computed over the whole loaded selection
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
@@ -473,6 +486,10 @@ export default function App() {
         setNoMiss(value);
         localStorage.setItem(LS_NO_MISS, value ? '1' : '0');
     };
+    const saveSafeOnly = value => {
+        setSafeOnly(value);
+        localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
+    };
 
     const TODAY = _today();
     const DAY_MS = 86400000;
@@ -682,6 +699,10 @@ export default function App() {
                         <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
                             <span>Tips: {_rate(dayRates.tips)}</span>
                         </Tooltip>
+                        <span className="text-slate-300">·</span>
+                        <Tooltip content="Games that pass the strict safety checks for multi-bet slips: all three signals (bookmaker odds, team form, expert data) point the same way, short odds, best 3 per day. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.">
+                            <span className={safeOnly ? 'text-sky-600' : ''}>🛡 Safe: {safePicks.length}</span>
+                        </Tooltip>
                         {(last || refresh?.running) && (
                             <Tooltip content={refresh?.running
                                 ? `Refreshing (${refresh.mode ?? 'manual'})${refresh.step ? ` — ${refresh.step}` : ''}…`
@@ -725,6 +746,7 @@ export default function App() {
                     hideHits={hideHits}
                     hideMiss={hideMiss}
                     noMiss={noMiss}
+                    safeOnly={safeOnly}
                     sortChain={activeChain}
                     entryLabel={entryLabel}
                     onReorderSort={onReorderChain}
@@ -738,6 +760,7 @@ export default function App() {
                     onHideHits={saveHideHits}
                     onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss}
+                    onSafeOnly={saveSafeOnly}
                     onClose={() => setShowSettings(false)}
                 />
             )}

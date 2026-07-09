@@ -10,7 +10,7 @@ import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
-import TipPopover, { skipLabel } from './TipPopover.jsx';
+import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
 
 const PROVIDER_STYLE = {
@@ -49,7 +49,7 @@ const HEADER_META = {
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
     goals: { info: 'Total goals at full time' },
-    tip: { info: 'Safest bettable outcome + blended confidence - 🔥 marks an over-2.5 hot pick' },
+    tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
     status: { info: 'Fixture status' },
     updated_at: { info: 'Last bookmaker odds refresh' },
     locked_at: { info: 'Betting closed - odds frozen and final' },
@@ -218,9 +218,10 @@ function _hotBadge(row) {
     if (!row.hot) return null;
     const detail = row.hot_reason
         ?? (Array.isArray(row.hot_signals)
-            ? row.hot_signals.map(s => `${s.key}: ${s.value ?? '-'}`).join(' · ')
+            ? row.hot_signals.map(s => `${SIGNAL_LABEL[s.key] ?? s.key}: ${signalValue(s.key, s.value) ?? '-'}`).join('\n')
             : '');
-    const title = `Over 2.5 hot pick${row.hot_score != null ? ` (score ${row.hot_score})` : ''}${detail ? ` - ${detail}` : ''}`;
+    const title = `Likely 3+ goals game (over 2.5 hot pick${row.hot_score != null ? `, score ${row.hot_score}` : ''})`
+        + `${detail ? `\n${detail}` : ''}\nClick the tip for the full checks`;
     return (
         <span className="mr-1 cursor-help" title={title}>
             🔥

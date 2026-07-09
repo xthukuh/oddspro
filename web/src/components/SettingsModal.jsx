@@ -85,10 +85,10 @@ function SortOrder({ chain, entryLabel, onReorder, onRemove }) {
 
 export default function SettingsModal({
     catalog, marketKeys, statKeys, columnOrder, providers, visibleProviders, linkProviders, showCompleted,
-    hideHits, hideMiss, noMiss,
+    hideHits, hideMiss, noMiss, safeOnly,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted,
-    onHideHits, onHideMiss, onNoMiss, onClose,
+    onHideHits, onHideMiss, onNoMiss, onSafeOnly, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
     const orderedColumns = applyOrder([
@@ -200,6 +200,15 @@ export default function SettingsModal({
                                 className="accent-sky-600"
                             />
                             <span>No miss <span className="text-slate-400">— hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span></span>
+                        </label>
+                        <label className="flex items-center gap-2 text-sm cursor-pointer">
+                            <input
+                                type="checkbox"
+                                checked={safeOnly}
+                                onChange={e => onSafeOnly(e.target.checked)}
+                                className="accent-sky-600"
+                            />
+                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: all three signals agree, short odds, best 3 per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
                         </label>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">

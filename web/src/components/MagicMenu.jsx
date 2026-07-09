@@ -93,9 +93,17 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                                 )}
                                 {active.has(s.id) && <span className="ml-auto text-sky-600">✓</span>}
                             </span>
-                            <span className="block text-xs text-slate-500 tabular-nums">
+                            <span
+                                className="block text-xs text-slate-500 tabular-nums"
+                                title={'What each number means (replayed on past days):\n'
+                                    + '· slips - days a 4-game multi-bet built from this ranking\'s top picks won\n'
+                                    + '· top picks - how often its highest-ranked tips actually won\n'
+                                    + '· streak - wins in a row from the top of the list (average / best day)\n'
+                                    + '· ROI - average profit per day, in stakes (+100% = doubled the stake)'}
+                            >
                                 slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
                                 {' · '}top picks {s.stats.quartile.hits}/{s.stats.quartile.n} ({_pct(s.stats.quartile.rate)})
+                                {' · '}streak {s.stats.streak?.avg ?? '—'}/{s.stats.streak?.best ?? '—'}
                                 {' · '}ROI {_roi(s.stats.roi)}
                             </span>
                         </button>

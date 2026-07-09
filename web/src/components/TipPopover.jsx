@@ -1,15 +1,25 @@
 import { useEffect } from 'react';
+import { safeQualifies } from '../../../src/db/magic-rules.js';
 
 // Tip justification popover: the persisted bestTip breakdown rendered as a
 // deterministic reasoning ledger - blend components with their effective
 // (renormalized) weights, evidence sample sizes, runner-up candidates - plus
-// the over-2.5 gate audit and any AI verdicts. Opened by clicking a tip
-// cell; closes on Esc or any press outside (same idiom as MultiSelect).
+// the over-2.5 gate audit and any AI verdicts. Everything is phrased for a
+// layman reader; the raw numbers stay visible beside the plain wording.
+// Opened by clicking a tip cell; closes on Esc or any press outside (same
+// idiom as MultiSelect).
 
 const _pct = v => (v == null ? '-' : `${Math.round(v * 100)}%`);
 
 // Gate-audit values arrive raw (e.g. an unrounded implied probability)
 const _num = v => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v ?? '-');
+
+// Plain-language strength word for a probability (confidence or blend part)
+const _strength = v => (v == null ? null
+    : v >= 0.8 ? 'very strong'
+    : v >= 0.7 ? 'strong'
+    : v >= 0.6 ? 'fair'
+    : 'weak');
 
 const MARKET_LABEL = {
     1: 'Home win', X: 'Draw', 2: 'Away win',
@@ -20,6 +30,25 @@ function _label(market) {
     const m = /^([OU]) (\d+(?:\.\d+)?)$/.exec(market ?? '');
     return m ? `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals` : market;
 }
+
+// Layman labels for the over-2.5 gate-audit signal keys (goals-rules.js);
+// unknown keys fall back to the raw key so new gates still render. Exported
+// for the table's 🔥 badge tooltip - one glossary, no drift.
+export const SIGNAL_LABEL = {
+    home_sample: 'Home team: games on record',
+    away_sample: 'Away team: games on record',
+    home_avg_total: 'Home team: avg goals per game',
+    away_avg_total: 'Away team: avg goals per game',
+    home_over_rate: 'Home team: games with 3+ goals',
+    away_over_rate: 'Away team: games with 3+ goals',
+    market_implied_over: 'Odds say 3+ goals chance',
+    h2h_over_rate: 'Past meetings with 3+ goals',
+    api_prediction: 'Expert data check',
+};
+// Rate-style signals read best as percentages; counts/averages stay raw.
+export const signalValue = (key, v) => (
+    /_rate$|implied_over$/.test(key) && typeof v === 'number' ? _pct(v) : _num(v)
+);
 
 // Human phrasing for a stored tip_skip_reason marker
 export function skipLabel(reason) {
@@ -59,7 +88,7 @@ function AiChecks({ review }) {
         <div className="mt-1 space-y-0.5">
             {review.probability != null && (
                 <div className="flex justify-between gap-2 text-slate-600">
-                    <span>AI's own probability</span>
+                    <span>AI's own estimate of the win chance</span>
                     <span className="tabular-nums">{_pct(review.probability)}</span>
                 </div>
             )}
@@ -85,13 +114,16 @@ function AiChecks({ review }) {
     );
 }
 
-// One blend component line: probability x effective weight
+// One blend component line: what the signal is, its chance estimate, and how
+// much of the final verdict it carried (renormalized weight as a percentage).
 function Blend({ name, prob, weight, note }) {
     return (
         <div className="flex justify-between gap-2">
             <span className="text-slate-600">{name}{note ? <span className="text-slate-400"> - {note}</span> : null}</span>
             <span className="tabular-nums">
-                {prob == null ? <span className="text-slate-400">no evidence</span> : <>{_pct(prob)} <span className="text-slate-400">x {weight}</span></>}
+                {prob == null
+                    ? <span className="text-slate-400">no data</span>
+                    : <>{_pct(prob)}{weight != null && <span className="text-slate-400"> · {Math.round(weight * 100)}% of verdict</span>}</>}
             </span>
         </div>
     );
@@ -140,25 +172,39 @@ export default function TipPopover({ row, x, y, onClose }) {
                         {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓ hit</span>}
                         {row.tip_outcome === 'miss' && <span className="text-rose-600 font-bold"> ✗ miss</span>}
                     </div>
+                    {safeQualifies(row) && (
+                        <div
+                            className="mt-1 text-sky-700"
+                            title="Passes the Safe-only checks: bookmaker odds, recent form and expert data all rate it highly, and the odds are short. See Settings → Safe only."
+                        >
+                            🛡 Safe pick - all three signals agree
+                        </div>
+                    )}
                     {b ? (
-                        <Section title={`Confidence blend - ${_pct(row.tip_confidence)}`}>
-                            <Blend name="Market" prob={b.market_prob} weight={b.weights?.market} note="vig-removed price" />
-                            <Blend name="Stats" prob={b.stats_prob} weight={b.weights?.stats} note="rolling form" />
-                            <Blend name="API" prob={b.api_prob} weight={b.weights?.api} note="API-Football" />
+                        <Section title="Why this tip">
+                            <div className="mb-1 text-slate-600">
+                                Overall confidence <span className="font-semibold tabular-nums">{_pct(row.tip_confidence)}</span>
+                                {_strength(row.tip_confidence) && <span className="text-slate-400"> ({_strength(row.tip_confidence)})</span>}
+                                , blended from three independent signals:
+                            </div>
+                            <Blend name="Bookmaker odds" prob={b.market_prob} weight={b.weights?.market} note="chance the price itself implies" />
+                            <Blend name="Recent form" prob={b.stats_prob} weight={b.weights?.stats} note="both teams' last games" />
+                            <Blend name="Expert data" prob={b.api_prob} weight={b.weights?.api} note="API-Football prediction" />
                             {b.samples && (
                                 <div className="mt-1 text-slate-500">
-                                    Evidence: home last {b.samples.home_n}, away last {b.samples.away_n}, H2H {b.samples.h2h_n} meetings
+                                    Based on the home team's last {b.samples.home_n} and away team's last{' '}
+                                    {b.samples.away_n} games{b.samples.h2h_n ? ` + ${b.samples.h2h_n} past meetings between them` : ''}.
                                 </div>
                             )}
                         </Section>
                     ) : (
-                        <div className="mt-1 text-slate-400">No stored breakdown - this tip predates justification tracking.</div>
+                        <div className="mt-1 text-slate-400">No stored reasoning - this tip predates justification tracking.</div>
                     )}
                     {b?.runners_up?.length > 0 && (
-                        <Section title="Runners-up">
+                        <Section title="Close alternatives (not picked)">
                             {b.runners_up.map(r => (
                                 <div key={r.market} className="flex justify-between gap-2 text-slate-600">
-                                    <span>{r.market} @ {r.price?.toFixed ? r.price.toFixed(2) : r.price}</span>
+                                    <span>{r.market} <span className="text-slate-400">- {_label(r.market)}</span> @ {r.price?.toFixed ? r.price.toFixed(2) : r.price}</span>
                                     <span className="tabular-nums">{_pct(r.confidence)}</span>
                                 </div>
                             ))}
@@ -170,12 +216,15 @@ export default function TipPopover({ row, x, y, onClose }) {
             )}
 
             {signals.length > 0 && (
-                <Section title={`Over-2.5 gate audit${row.hot ? ' - 🔥 hot pick' : ''}`}>
+                <Section title={`Will both teams score freely? (over 2.5 checks)${row.hot ? ' - 🔥 hot pick' : ''}`}>
+                    <div className="mb-1 text-slate-500">
+                        Every check must pass (needed value in grey) for the 🔥 over-2.5 flag:
+                    </div>
                     {signals.map(s => (
                         <div key={s.key} className="flex justify-between gap-2">
-                            <span className="text-slate-600">{s.key}</span>
+                            <span className="text-slate-600">{SIGNAL_LABEL[s.key] ?? s.key}</span>
                             <span className="tabular-nums">
-                                {_num(s.value)} <span className="text-slate-400">/ {_num(s.threshold)}</span>{' '}
+                                {signalValue(s.key, s.value)} <span className="text-slate-400">/ {signalValue(s.key, s.threshold)}</span>{' '}
                                 {s.pass ? <span className="text-emerald-600">✓</span> : <span className="text-rose-600">✗</span>}
                             </span>
                         </div>
@@ -184,10 +233,15 @@ export default function TipPopover({ row, x, y, onClose }) {
             )}
 
             {(row.tip_ai_verdict || row.hot_reason) && (
-                <Section title="AI review">
+                <Section title="AI double-check">
                     {row.tip_ai_verdict && (
                         <div className={vetoed ? 'text-rose-600' : 'text-slate-600'}>
-                            Tip {row.tip_ai_verdict}{row.tip_ai_reason ? `: ${row.tip_ai_reason}` : ''}
+                            {vetoed
+                                ? 'AI advises against this tip'
+                                : row.tip_ai_verdict === 'confirm'
+                                    ? 'AI agrees with this tip'
+                                    : 'AI check failed to run (tip stands on the rules alone)'}
+                            {row.tip_ai_reason ? `: ${row.tip_ai_reason}` : ''}
                         </div>
                     )}
                     <AiChecks review={row.tip_ai_review} />
