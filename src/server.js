@@ -6,6 +6,7 @@ import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
+import { refreshStatus, startJob, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
 import { closeDb } from './db/connection.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -96,30 +97,24 @@ app.get('/api/magic-sort', async (req, res, next) => {
     }
 });
 
-// Single-slot refresh job state - one refresh at a time: parallel refreshes
-// would deadlock on InnoDB delete+insert gap locks (same rule as `_batch`
-// DB-writing concurrency 1), and a second sweep of the same date is wasted
-// server hits anyway.
-const refreshJob = {
-    running: false,
-    date: null,
-    step: null,
-    started_at: null,
-    finished_at: null,
-    error: null,
-    summary: null,
-};
+// Single-slot refresh job state lives in src/auto-refresh.js - one shared
+// guard for manual AND scheduled runs: parallel refreshes would deadlock on
+// InnoDB delete+insert gap locks (same rule as `_batch` DB-writing
+// concurrency 1), and a second sweep of the same date is wasted server hits.
 
-// Per-date cooldown: date -> ms timestamp of its last finished run (success or
-// failure - either way it already spent API quota/scrape hits). Blocks
-// re-triggering the SAME date for REFRESH_COOLDOWN_MINUTES; other dates are
-// unaffected (the single-slot lock above already serializes actual runs).
+// Per-date MANUAL cooldown: date -> ms timestamp of its last finished manual
+// run (success or failure - either way it already spent API quota/scrape
+// hits). Blocks re-triggering the SAME date for REFRESH_COOLDOWN_MINUTES;
+// other dates are unaffected. Auto runs stamp only the success freshness map
+// (auto-refresh.js) - a 10-minute light cadence stamping THIS map would keep
+// today permanently on manual cooldown.
 const refreshCooldown = new Map();
 
 // POST /api/refresh?date=YYYY-MM-DD - start refreshing a date's data
 // (fixtures, results, odds, link, stats). 409 with the in-flight job when one
-// is already running, 429 while that date is on cooldown; the response is
-// always the current job state (429 also carries retry_after_seconds).
+// is already running (manual or scheduled), 200 {fresh:true} when the date
+// was successfully refreshed within REFRESH_CACHE_MINUTES (no re-run), 429
+// while that date is on manual cooldown (carries retry_after_seconds).
 app.post('/api/refresh', (req, res) => {
     // CSRF guard: custom headers force a CORS preflight cross-origin, which
     // this server never approves - only same-origin callers can set this.
@@ -130,7 +125,18 @@ app.post('/api/refresh', (req, res) => {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
         return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
     }
-    if (refreshJob.running) return res.status(409).json(refreshJob);
+    if (refreshStatus().running) return res.status(409).json(refreshStatus());
+    // Cache reuse: a recent successful run (auto or manual) already covered
+    // this date - answer "fresh" so the client just reloads what it has.
+    const cacheMs = config.REFRESH_CACHE_MINUTES * 60_000;
+    const freshAt = lastFreshAt(date);
+    if (cacheMs > 0 && freshAt && (Date.now() - freshAt) < cacheMs) {
+        return res.json({
+            ...refreshStatus(),
+            fresh: true,
+            last_refreshed_at: new Date(freshAt).toISOString(),
+        });
+    }
     const cooldownMs = config.REFRESH_COOLDOWN_MINUTES * 60_000;
     const lastFinished = refreshCooldown.get(date);
     if (cooldownMs > 0 && lastFinished && (Date.now() - lastFinished) < cooldownMs) {
@@ -140,32 +146,22 @@ app.post('/api/refresh', (req, res) => {
             retry_after_seconds,
         });
     }
-    Object.assign(refreshJob, {
-        running: true,
-        date,
-        step: 'starting',
-        started_at: new Date().toISOString(),
-        finished_at: null,
-        error: null,
-        summary: null,
+    const started = startJob({
+        mode: 'manual',
+        dates: [date],
+        run: onStep => runDateRefresh(date, onStep),
+        onFinish: () => refreshCooldown.set(date, Date.now()),
     });
-    runDateRefresh(date, step => { refreshJob.step = step; })
-        .then(summary => { refreshJob.summary = summary; })
-        .catch(e => {
-            refreshJob.error = String(e?.message ?? e);
-            console.error(e);
-        })
-        .finally(() => {
-            refreshJob.running = false;
-            refreshJob.step = null;
-            refreshJob.finished_at = new Date().toISOString();
-            refreshCooldown.set(date, Date.now());
-        });
-    res.status(202).json(refreshJob);
+    // Race with a scheduler tick claiming the slot between the check above
+    // and here - same answer as the up-front running check.
+    if (!started) return res.status(409).json(refreshStatus());
+    res.status(202).json(refreshStatus());
 });
 
-// GET /api/refresh - poll the refresh job state
-app.get('/api/refresh', (req, res) => res.json(refreshJob));
+// GET /api/refresh - poll the refresh job state + freshness signal
+// (data_version bumps on every successful run; last_success carries its
+// mode/dates so clients reload only when their loaded date is in scope)
+app.get('/api/refresh', (req, res) => res.json(refreshStatus()));
 
 // Built frontend (npm run build:web) with SPA fallback for non-/api routes
 const dist = path.resolve('web', 'dist');
@@ -186,11 +182,13 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 
 const server = app.listen(config.API_PORT, config.API_HOST, () => {
     console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
+    startAutoRefresh();
 });
 
-// Graceful shutdown - close the HTTP server and the knex pool
+// Graceful shutdown - stop the scheduler, close the HTTP server and the pool
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
+        stopAutoRefresh();
         server.close(() => closeDb().finally(() => process.exit(0)));
     });
 }

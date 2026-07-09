@@ -82,9 +82,10 @@ async function _loadMarkets(fixtureIds) {
     return groups;
 }
 
-// Settle + (re)compute hot picks for all upcoming correlated fixtures.
-export async function updateHotPicks() {
-    // Settle first: canonical final scores decide hit/miss exactly once.
+// Settle pending hot-pick and tip outcomes from canonical final scores -
+// hit/miss decided exactly once. Cheap (pure SQL + tipHit loop, no external
+// fetches, no AI), so the auto-refresh light pass can call it standalone.
+export async function settleHotPicks() {
     const finalsIn = FINAL_STATUSES.map(() => '?').join(',');
     const [settledRes] = await db.raw(
         `UPDATE fixture_predictions p JOIN fixtures f ON f.id = p.fixture_id
@@ -118,6 +119,13 @@ export async function updateHotPicks() {
         }
     }
     const tips_settled = tipHits.length + tipMisses.length;
+    return { settled, tips_settled };
+}
+
+// Settle + (re)compute hot picks for all upcoming correlated fixtures.
+export async function updateHotPicks() {
+    // Settle first: canonical final scores decide hit/miss exactly once.
+    const { settled, tips_settled } = await settleHotPicks();
 
     // The pre-match snapshot EXISTS guard also guarantees the history
     // backfill ran for these fixtures (pipeline order), so the rolling
