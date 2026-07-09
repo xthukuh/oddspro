@@ -17,6 +17,7 @@ Redesign the oddspro dashboard so it **looks and feels like a native iPadOS app*
 3. **Light + dark**, following the device's `prefers-color-scheme`, with a `data-theme` override hook. One token system, not two skins.
 4. **Shared pure modules untouched** (`src/db/magic-rules.js`, `web/src/ordering.js`, `filterValues.js`, `sortValues.js`, `freshness.js`, `numberInput.js`). The offline `node:test` suite must stay green — the redesign never edits logic those tests cover.
 5. **Follow repo conventions:** ES modules, 4-space indent, single quotes, semicolons; Tailwind 4; "uncomplicated (simple but functional)" design philosophy; targeted/minimal changes.
+6. **Aesthetics-only — current behavior always wins.** Change look, not behavior. Wherever the prototype's structure differs from the current app's interactions, the **current app wins**. Confirmed example: the prototype left-fixes ID/Start/Fixture, but the app keeps its **Score/Tip** left-pinned columns + hysteresis untouched (user-confirmed 2026-07-09). When any restyle risks altering behavior, **ask rather than assume**.
 
 ## 3. Decisions log (from brainstorming)
 
@@ -52,7 +53,9 @@ Authoritative **light** values are from the v3 prototype; **dark** values are th
 | `--bg-elevated` | `#FFFFFF` | `#1C1C1E` | grouped bg under cards |
 | `--surface` | `#FFFFFF` | `#1C1C1E` | card / table / sheet |
 | `--surface-2` | `#F2F2F7` | `#2C2C2E` | nested / row-hover |
-| `--chrome` | `rgba(249,249,250,.92)` | `rgba(30,30,32,.86)` | translucent nav/footer |
+| `--chrome` | `rgba(249,249,250,.92)` | `rgba(30,30,32,.86)` | translucent footer |
+| `--nav-bg` | `#FFFFFF` | `#1C1C1E` | distinct toolbar surface |
+| `--logo` | `#5856dc` | `#FFFFFF` | theme-adaptive brand mark |
 | `--label` | `#000000` | `#FFFFFF` | primary text |
 | `--label-2` | `rgba(60,60,67,.6)` | `rgba(235,235,245,.6)` | secondary text |
 | `--label-3` | `rgba(60,60,67,.3)` | `rgba(235,235,245,.3)` | tertiary / placeholder |
@@ -90,8 +93,8 @@ Error/notice banners keep their current placement (between nav and main) restyle
 
 ## 7. Surface-by-surface redesign
 
-**Nav bar** — 3-zone `grid-template-columns:1fr auto 1fr`, translucent `--chrome` + blur.
-- *Left:* `Odds Pro` wordmark (17px/600) — logo `img` optional alongside.
+**Nav bar** — 3-zone `grid-template-columns:1fr auto 1fr`. **Distinct background** so the toolbar reads as its own bar, clearly separated from the content/table view below — a dedicated nav surface (`--nav-bg`: light `#FFFFFF`, dark `#1C1C1E`) with the `0.5px` bottom separator **and a subtle drop shadow**, plus the blur for depth (not the near-transparent chrome tint that blends into the background).
+- *Left:* the **theme-adaptive `[OP]` logo** (no "Odds Pro" text) — the brand mark rendered in **purple `#5856dc` on light / white on dark** (inline SVG filled via a `--logo` CSS var, so it flips with both `prefers-color-scheme` and the `data-theme` override). It is a **home link that resets to today** (`changeDate(TODAY)`, SPA nav — mirrors the current logo's home behavior). Source variants live in `web/icon-svgs/` (transparent-bg color/white fronts).
 - *Center:* `‹  [date ▾]  ›`. Prev/next are SVG chevrons; the date button (17px/600 + chevron) toggles the calendar popover. Preserve existing bounds (min `2026-07-02`, max +7d), URL round-trip (`?date=`), `popstate`, and the cleared "All dates" state.
 - *Right:* SVG icon buttons (40px targets, `--accent-soft` hover) in order **refresh · magic · slips · filters**, a `0.5px` divider, then **help · settings**. Magic + filters show an active tint + count when engaged (parity with today's sky-highlight + count badge). Refresh spins while running and keeps all current disabled/`aria-label`/title states.
 
@@ -111,7 +114,7 @@ Error/notice banners keep their current placement (between nav and main) restyle
 
 **Sheets** — a shared iOS sheet shell: centered card over `rgba(0,0,0,.28)` + backdrop blur, `op-sheet-in`/`op-fade` animation, × close, **Escape + backdrop-click to dismiss** (matches current modal dismiss rules), `z-40` above sticky chrome. Wraps:
 - *Settings* — Table columns (collapsible Odds-markets / Stats chip panels via `MultiSelect` semantics), draggable Column-order chips (⠿), Providers (visible / unavailable-links panels), Behavior (Show completed), Settled tips (Hide hits / Hide miss / No miss / 🛡 Safe only), Sort priority reorder. Full parity with `SettingsModal.jsx`. Blue **Done** button.
-- *Filters* — WHERE/AND condition rows (field select · op select · value input · remove), "+ Add condition", Clear / **Apply**. Full op set preserved (`= ≠ > ≥ ≤`, contains/not-contains, in/not-in) and the server/client split.
+- *Filters* — restyle the **existing `FilterBuilder` into the iOS sheet chrome only**. Keep its current controls, options, layout logic, and behavior verbatim (WHERE/AND rows, the full op set `= ≠ > ≥ ≤` / contains / not-contains / in / not-in, field grouping, CSV-list handling, server/client split, "+ Add condition", Clear / **Apply**). **No filter behavior/enhancement changes this session** — filter enhancements are explicitly deferred to a future session (user-confirmed 2026-07-09).
 - *Slips* — Betslip playground: config row (Stake / Max legs / Target odds / Max slips + Auto/Manual + Clear / + New slip / ✨ Fill-from-top), two-pane Tips-pool | Slips grid, per-slip odds/payout/survival/EV, totals, empty state. Full parity with `BetslipPlayground.jsx`; persists per date.
 - *Help* — restyled `HelpModal.jsx` (intro, icon legend, demo-video placeholder, credit).
 
