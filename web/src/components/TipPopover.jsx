@@ -67,8 +67,8 @@ export function skipLabel(reason) {
 
 function Section({ title, children }) {
     return (
-        <div className="mt-2 pt-2 border-t border-slate-100">
-            <div className="font-medium text-slate-500 uppercase tracking-wide text-[10px] mb-1">{title}</div>
+        <div className="mt-2 pt-2 border-t border-hairline">
+            <div className="font-medium text-label-2 uppercase tracking-wide text-[10px] mb-1">{title}</div>
             {children}
         </div>
     );
@@ -87,23 +87,23 @@ function AiChecks({ review }) {
     return (
         <div className="mt-1 space-y-0.5">
             {review.probability != null && (
-                <div className="flex justify-between gap-2 text-slate-600">
+                <div className="flex justify-between gap-2 text-label">
                     <span>AI's own estimate of the win chance</span>
                     <span className="tabular-nums">{_pct(review.probability)}</span>
                 </div>
             )}
             {checks.map(([k, v]) => (
-                <div key={k} className="text-slate-500">
-                    <span className="text-slate-600 capitalize">{k.replace(/_/g, ' ')}:</span> {v}
+                <div key={k} className="text-label-2">
+                    <span className="text-label capitalize">{k.replace(/_/g, ' ')}:</span> {v}
                 </div>
             ))}
             {sources.length > 0 && (
-                <div className="text-slate-400">
+                <div className="text-label-3">
                     Sources:{' '}
                     {sources.map((s, i) => (
                         <span key={i}>
                             {i > 0 && ', '}
-                            <a href={s.uri} target="_blank" rel="noreferrer" className="underline hover:text-slate-600">
+                            <a href={s.uri} target="_blank" rel="noreferrer" className="underline hover:text-label">
                                 {s.title || 'source'}
                             </a>
                         </span>
@@ -119,11 +119,11 @@ function AiChecks({ review }) {
 function Blend({ name, prob, weight, note }) {
     return (
         <div className="flex justify-between gap-2">
-            <span className="text-slate-600">{name}{note ? <span className="text-slate-400"> - {note}</span> : null}</span>
+            <span className="text-label">{name}{note ? <span className="text-label-3"> - {note}</span> : null}</span>
             <span className="tabular-nums">
                 {prob == null
-                    ? <span className="text-slate-400">no data</span>
-                    : <>{_pct(prob)}{weight != null && <span className="text-slate-400"> · {Math.round(weight * 100)}% of verdict</span>}</>}
+                    ? <span className="text-label-3">no data</span>
+                    : <>{_pct(prob)}{weight != null && <span className="text-label-3"> · {Math.round(weight * 100)}% of verdict</span>}</>}
             </span>
         </div>
     );
@@ -155,26 +155,26 @@ export default function TipPopover({ row, x, y, onClose }) {
         <div className="fixed inset-0 z-40" onClick={onClose} />
         <div
             style={style}
-            className="fixed z-50 w-80 max-h-[25rem] overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-3 text-xs"
+            className="fixed z-50 w-80 max-h-[25rem] overflow-y-auto bg-surface text-label border border-separator-2 rounded-2xl shadow-2xl p-3 text-xs"
         >
             <div className="flex items-start justify-between gap-2">
-                <div className="font-medium text-slate-700">{row.fixture_api ?? row.fixture}</div>
-                <button type="button" onClick={onClose} className="text-slate-400 hover:text-slate-600 cursor-pointer leading-none">✕</button>
+                <div className="font-medium text-label">{row.fixture_api ?? row.fixture}</div>
+                <button type="button" onClick={onClose} className="text-label-3 hover:text-label cursor-pointer leading-none">✕</button>
             </div>
 
             {row.tip_market ? (
                 <>
-                    <div className={`mt-1 text-sm ${vetoed ? 'text-slate-400' : ''}`}>
+                    <div className={`mt-1 text-sm ${vetoed ? 'text-label-3' : ''}`}>
                         <span className={`font-semibold ${vetoed ? 'line-through' : ''}`}>
                             {row.tip_market}{row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}
                         </span>
-                        <span className="text-slate-500"> - {_label(row.tip_market)}</span>
-                        {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓ hit</span>}
-                        {row.tip_outcome === 'miss' && <span className="text-rose-600 font-bold"> ✗ miss</span>}
+                        <span className="text-label-2"> - {_label(row.tip_market)}</span>
+                        {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓ hit</span>}
+                        {row.tip_outcome === 'miss' && <span className="text-miss font-bold"> ✗ miss</span>}
                     </div>
                     {safeQualifies(row) && (
                         <div
-                            className="mt-1 text-sky-700"
+                            className="mt-1 text-accent"
                             title="Passes the Safe-only checks: the available signals (bookmaker odds, recent form, expert data) agree with none weak, and the odds are short. See Settings → Safe only."
                         >
                             🛡 Safe pick - the signals agree
@@ -182,29 +182,29 @@ export default function TipPopover({ row, x, y, onClose }) {
                     )}
                     {b ? (
                         <Section title="Why this tip">
-                            <div className="mb-1 text-slate-600">
+                            <div className="mb-1 text-label">
                                 Overall confidence <span className="font-semibold tabular-nums">{_pct(row.tip_confidence)}</span>
-                                {_strength(row.tip_confidence) && <span className="text-slate-400"> ({_strength(row.tip_confidence)})</span>}
+                                {_strength(row.tip_confidence) && <span className="text-label-3"> ({_strength(row.tip_confidence)})</span>}
                                 , blended from three independent signals:
                             </div>
                             <Blend name="Bookmaker odds" prob={b.market_prob} weight={b.weights?.market} note="chance the price itself implies" />
                             <Blend name="Recent form" prob={b.stats_prob} weight={b.weights?.stats} note="both teams' last games" />
                             <Blend name="Expert data" prob={b.api_prob} weight={b.weights?.api} note="API-Football prediction" />
                             {b.samples && (
-                                <div className="mt-1 text-slate-500">
+                                <div className="mt-1 text-label-2">
                                     Based on the home team's last {b.samples.home_n} and away team's last{' '}
                                     {b.samples.away_n} games{b.samples.h2h_n ? ` + ${b.samples.h2h_n} past meetings between them` : ''}.
                                 </div>
                             )}
                         </Section>
                     ) : (
-                        <div className="mt-1 text-slate-400">No stored reasoning - this tip predates justification tracking.</div>
+                        <div className="mt-1 text-label-3">No stored reasoning - this tip predates justification tracking.</div>
                     )}
                     {b?.runners_up?.length > 0 && (
                         <Section title="Close alternatives (not picked)">
                             {b.runners_up.map(r => (
-                                <div key={r.market} className="flex justify-between gap-2 text-slate-600">
-                                    <span>{r.market} <span className="text-slate-400">- {_label(r.market)}</span> @ {r.price?.toFixed ? r.price.toFixed(2) : r.price}</span>
+                                <div key={r.market} className="flex justify-between gap-2 text-label">
+                                    <span>{r.market} <span className="text-label-3">- {_label(r.market)}</span> @ {r.price?.toFixed ? r.price.toFixed(2) : r.price}</span>
                                     <span className="tabular-nums">{_pct(r.confidence)}</span>
                                 </div>
                             ))}
@@ -212,20 +212,20 @@ export default function TipPopover({ row, x, y, onClose }) {
                     )}
                 </>
             ) : (
-                <div className="mt-1 text-slate-500">{skipLabel(row.tip_skip_reason) ?? 'No tip for this fixture.'}</div>
+                <div className="mt-1 text-label-2">{skipLabel(row.tip_skip_reason) ?? 'No tip for this fixture.'}</div>
             )}
 
             {signals.length > 0 && (
                 <Section title={`Will both teams score freely? (over 2.5 checks)${row.hot ? ' - 🔥 hot pick' : ''}`}>
-                    <div className="mb-1 text-slate-500">
+                    <div className="mb-1 text-label-2">
                         Every check must pass (needed value in grey) for the 🔥 over-2.5 flag:
                     </div>
                     {signals.map(s => (
                         <div key={s.key} className="flex justify-between gap-2">
-                            <span className="text-slate-600">{SIGNAL_LABEL[s.key] ?? s.key}</span>
+                            <span className="text-label">{SIGNAL_LABEL[s.key] ?? s.key}</span>
                             <span className="tabular-nums">
-                                {signalValue(s.key, s.value)} <span className="text-slate-400">/ {signalValue(s.key, s.threshold)}</span>{' '}
-                                {s.pass ? <span className="text-emerald-600">✓</span> : <span className="text-rose-600">✗</span>}
+                                {signalValue(s.key, s.value)} <span className="text-label-3">/ {signalValue(s.key, s.threshold)}</span>{' '}
+                                {s.pass ? <span className="text-hit">✓</span> : <span className="text-miss">✗</span>}
                             </span>
                         </div>
                     ))}
@@ -235,7 +235,7 @@ export default function TipPopover({ row, x, y, onClose }) {
             {(row.tip_ai_verdict || row.hot_reason) && (
                 <Section title="AI double-check">
                     {row.tip_ai_verdict && (
-                        <div className={vetoed ? 'text-rose-600' : 'text-slate-600'}>
+                        <div className={vetoed ? 'text-miss' : 'text-label'}>
                             {vetoed
                                 ? 'AI advises against this tip'
                                 : row.tip_ai_verdict === 'confirm'
@@ -245,7 +245,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                         </div>
                     )}
                     <AiChecks review={row.tip_ai_review} />
-                    {row.hot_reason && <div className="text-slate-600 mt-1">Hot pick: {row.hot_reason}</div>}
+                    {row.hot_reason && <div className="text-label mt-1">Hot pick: {row.hot_reason}</div>}
                     <AiChecks review={row.hot_review} />
                 </Section>
             )}

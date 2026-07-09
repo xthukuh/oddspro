@@ -14,8 +14,8 @@ import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.j
 import Tooltip from './Tooltip.jsx';
 
 const PROVIDER_STYLE = {
-    betpawa: 'bg-emerald-100 text-emerald-800',
-    betika: 'bg-sky-100 text-sky-800',
+    betpawa: 'bg-hit/15 text-hit',
+    betika: 'bg-accent-soft text-accent',
 };
 
 // Base columns are always shown (README temp-csv order); match_url folds
@@ -38,7 +38,7 @@ export const BASE_COLUMNS = [
 // first-appearance order: the same fixture shown once per provider shares a
 // tone, adjacent fixtures always differ. Opaque classes on purpose - the
 // sticky Score cell reuses them to cover content scrolling underneath.
-const ROW_TINTS = ['bg-white', 'bg-slate-100'];
+const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
 
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
@@ -225,8 +225,8 @@ function _hotBadge(row) {
     return (
         <span className="mr-1 cursor-help" title={title}>
             🔥
-            {row.hot_outcome === 'hit' && <span className="text-emerald-600 font-bold">✓</span>}
-            {row.hot_outcome === 'miss' && <span className="text-rose-600 font-bold">✗</span>}
+            {row.hot_outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
+            {row.hot_outcome === 'miss' && <span className="text-miss font-bold">✗</span>}
         </span>
     );
 }
@@ -235,7 +235,7 @@ function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
     if (key === 'start_time') return _time(row.start_time);
     if (key === 'updated_at' || key === 'locked_at') {
-        return row[key] ? _time(row[key]) : <span className="text-slate-300">-</span>;
+        return row[key] ? _time(row[key]) : <span className="text-label-3">-</span>;
     }
     if (key === 'tip') {
         // Safest bettable outcome + blended confidence; 🔥 marks the fixture
@@ -245,10 +245,10 @@ function _cell(row, col, linkProviders, openTip) {
             // Distinguish "not enough data" (eligibility skip) from "no value
             // found" ('no_pick') and from old rows without a stored reason.
             const reason = row.tip_skip_reason;
-            if (!reason) return <span className="text-slate-300">-</span>;
+            if (!reason) return <span className="text-label-3">-</span>;
             return (
                 <span
-                    className="text-slate-300 italic cursor-pointer"
+                    className="text-label-3 italic cursor-pointer"
                     title={`${skipLabel(reason)}\nClick for details`}
                     onClick={e => openTip(row, e)}
                 >
@@ -272,14 +272,14 @@ function _cell(row, col, linkProviders, openTip) {
         const missed = row.tip_outcome === 'miss';
         return (
             <span
-                className={`whitespace-nowrap cursor-pointer ${missed ? 'text-rose-600' : vetoed ? 'text-slate-400' : ''}`}
+                className={`whitespace-nowrap cursor-pointer ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}
                 title={title}
                 onClick={e => openTip(row, e)}
             >
                 {row.hot ? '🔥 ' : ''}
                 <span className={`font-medium ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                {pct && !compact && <span className={missed || vetoed ? '' : 'text-slate-500'}> · {pct}</span>}
-                {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
+                {pct && !compact && <span className={missed || vetoed ? '' : 'text-label-2'}> · {pct}</span>}
+                {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓</span>}
                 {missed && <span className="font-bold"> ✗</span>}
             </span>
         );
@@ -301,7 +301,7 @@ function _cell(row, col, linkProviders, openTip) {
             return (
                 <>
                     {badge}
-                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline">
+                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
                         {row.fixture}
                     </a>
                 </>
@@ -315,12 +315,12 @@ function _cell(row, col, linkProviders, openTip) {
         );
     }
     const value = key.startsWith('fs:') ? row.stats[key] : row[key];
-    if (value == null) return <span className="text-slate-300">-</span>;
+    if (value == null) return <span className="text-label-3">-</span>;
     // Prefix text columns with their hidden derived sort value (e.g. 8:LWWWD).
     if (_isPrefixed(key)) {
         const v = sortValue(row, col);
         if (v != null) {
-            return <><span className="text-slate-400">{_sortNum(v)}:</span>{value}</>;
+            return <><span className="text-label-3">{_sortNum(v)}:</span>{value}</>;
         }
     }
     return value;
@@ -335,19 +335,19 @@ function _marketCell(row, key) {
     const fresh = row.markets[key];
     if (fresh != null) {
         return frozen
-            ? <span className="text-slate-400" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>
+            ? <span className="text-label-3" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>
             : fresh.toFixed(2);
     }
     const stale = row.markets_stale?.[key];
-    if (stale != null) return <span className="text-slate-400" title="No longer offered">{stale.toFixed(2)}</span>;
-    return <span className="text-slate-300">-</span>;
+    if (stale != null) return <span className="text-label-3" title="No longer offered">{stale.toFixed(2)}</span>;
+    return <span className="text-label-3">-</span>;
 }
 
 // Magic column cell: the row's rank under the active strategy + its raw
 // score (strategies keep their native scales - no fake percentages).
 function _magicCell(row, meta) {
     const m = meta?.info.get(row.api_id);
-    if (!m) return <span className="text-slate-300">—</span>;
+    if (!m) return <span className="text-label-3">—</span>;
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
@@ -495,11 +495,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`flex-1 min-h-0 overflow-auto bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface rounded-2xl border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
-                    <tr className="text-left text-slate-600 select-none">
+                    <tr className="text-left text-label-2 select-none">
                         {pinned.map(col => {
                             const s = order.get(col.key);
                             const meta = HEADER_META[col.key];
@@ -510,8 +510,8 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             // cells themselves (tr backgrounds/borders don't
                             // stick); a pinned corner cell wins both axes.
                             const sticky = col.pin
-                                ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
-                                : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_#e2e8f0]';
+                                ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_var(--separator-2)]'
+                                : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_var(--separator-2)]';
                             return (
                                 <th
                                     key={col.pin ? `pin:${col.key}` : col.key}
@@ -520,20 +520,20 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                         ? el => { pinThRefs.current[col.key] = el; }
                                         : undefined}
                                     onClick={col.key === 'magic' ? undefined : e => onSort(col.key, e.shiftKey)}
-                                    className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-slate-100'} ${col.group === 'market' ? 'text-center' : ''}`}
+                                    className={`${sticky} bg-surface-2 px-2.5 py-2 font-semibold ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' ? 'text-center' : ''}`}
                                     title={col.key === 'magic'
                                         ? `Magic sort${magicLabels.length > 1 ? `s (${magicLabels.length})` : ''}: ${magicLabels.join(', ')} - #rank · strategy score`
                                         : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
                                 >
                                     {meta?.short ?? col.label}
                                     {s && (
-                                        <span className="ml-1 text-sky-600">
+                                        <span className="ml-1 text-accent">
                                             {s.dir === 'asc' ? '▲' : '▼'}
                                             {chain.length > 1 && <sup>{s.i + 1}</sup>}
                                         </span>
                                     )}
                                     {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
-                                        <sup className="ml-0.5 text-sky-600">{magicPos + 1}</sup>
+                                        <sup className="ml-0.5 text-accent">{magicPos + 1}</sup>
                                     )}
                                 </th>
                             );
@@ -544,7 +544,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     {sorted.map(row => (
                         <tr
                             key={row.match_id}
-                            className={`group border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
+                            className={`group border-b border-hairline ${tint.get(row.api_id) ?? ''} hover:bg-fill`}
                         >
                             {pinned.map(col => {
                                 const content = col.key === 'magic' ? _magicCell(row, magicMeta)
@@ -560,8 +560,8 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                         key={col.pin ? `pin:${col.key}` : col.key}
                                         title={wrap ? undefined : cellTitle}
                                         style={col.pin ? { left: col.left } : undefined}
-                                        className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
-                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
+                                        className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
+                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:bg-fill shadow-[inset_-1px_0_0_var(--separator-2)]`
                                             : ''}`}
                                     >
                                         {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}
@@ -572,7 +572,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     ))}
                     {!rows.length && (
                         <tr>
-                            <td colSpan={pinned.length} className="px-2 py-8 text-center text-slate-400">
+                            <td colSpan={pinned.length} className="px-2 py-8 text-center text-label-3">
                                 {loading ? 'Loading...' : 'No correlated records for this selection.'}
                             </td>
                         </tr>
