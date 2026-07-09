@@ -85,7 +85,7 @@ function SortOrder({ chain, entryLabel, onReorder, onRemove }) {
 
 export default function SettingsModal({
     catalog, marketKeys, statKeys, columnOrder, providers, visibleProviders, linkProviders, showCompleted,
-    hideHits, hideMiss, noMiss, safeOnly,
+    hideHits, hideMiss, noMiss, safeOnly, safeMaxPerDay = 3,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     onMarkets, onStats, onOrder, onVisibleProviders, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onSafeOnly, onClose,
@@ -208,7 +208,7 @@ export default function SettingsModal({
                                 onChange={e => onSafeOnly(e.target.checked)}
                                 className="accent-sky-600"
                             />
-                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: signals in agreement (none weak), short odds, best 3 per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
+                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
                         </label>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">

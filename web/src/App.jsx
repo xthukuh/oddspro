@@ -179,6 +179,10 @@ export default function App() {
         return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id));
     }, [sortChain, magicData]);
     const cal = magicData?.calibration ?? null;
+    // Safe-only policy served from the API (SAFE_* env → DEFAULT_SAFE fallback);
+    // undefined until magic-sort loads, when safeSelection uses its own defaults.
+    const safeCfg = magicData?.safe ?? null;
+    const safeCap = safeCfg?.maxPerDay ?? 3;
     const activeMagicIds = useMemo(
         () => activeChain.filter(e => e.type === 'magic').map(e => e.id),
         [activeChain],
@@ -219,7 +223,10 @@ export default function App() {
     // NOT the filtered rows - other toggles/filters must not change who wins
     // the per-day cap, and the footer count stays honest. One representative
     // row per fixture; the table filters by api_id membership.
-    const safePicks = useMemo(() => safeSelection(result?.data ?? [], cal), [result, cal]);
+    const safePicks = useMemo(
+        () => safeSelection(result?.data ?? [], cal, safeCfg ?? undefined),
+        [result, cal, safeCfg],
+    );
     // Advanced-filter the loaded rows, then apply the settled-outcome toggles
     // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
     // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
@@ -700,7 +707,7 @@ export default function App() {
                             <span>Tips: {_rate(dayRates.tips)}</span>
                         </Tooltip>
                         <span className="text-slate-300">·</span>
-                        <Tooltip content="Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best 3 per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.">
+                        <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
                             <span className={safeOnly ? 'text-sky-600' : ''}>🛡 Safe: {safePicks.length}</span>
                         </Tooltip>
                         {(last || refresh?.running) && (
@@ -747,6 +754,7 @@ export default function App() {
                     hideMiss={hideMiss}
                     noMiss={noMiss}
                     safeOnly={safeOnly}
+                    safeMaxPerDay={safeCap}
                     sortChain={activeChain}
                     entryLabel={entryLabel}
                     onReorderSort={onReorderChain}

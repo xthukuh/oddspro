@@ -63,9 +63,17 @@ exciting and quietly hand the edge back.
    the edge.
 5. **Never chase.** After a losing slip the next stake is *smaller* (1–2% of
    the now-smaller bankroll), not bigger.
-6. **Weekly:** run `node scripts/analyze-safe-tips.js`. Change `DEFAULT_SAFE`
-   (src/db/magic-rules.js) only when a combo beats the shipped row on leg
-   rate AND volume AND slip survival — leg rate alone overfits.
+6. **Weekly:** run `node scripts/analyze-safe-tips.js`. Change the safe policy
+   only when a combo beats the shipped row on leg rate AND volume AND slip
+   survival — leg rate alone overfits. Apply it via `.env` (`SAFE_MAX_PER_DAY`,
+   `SAFE_STRATEGY`, `SAFE_MIN_PARTS`, `SAFE_MIN_AGREEMENT`, `SAFE_MAX_PRICE`)
+   and restart `npm run serve` — no code edit or web rebuild needed. The
+   `DEFAULT_SAFE` literals in `src/db/magic-rules.js` are only the fallback.
+
+`SAFE_MAX_PER_DAY` is the everyday knob: raise it to bet more of the day's
+safe pool, lower it to bet only the very top. The gate thresholds
+(`SAFE_MIN_*`, `SAFE_STRATEGY`, `SAFE_MAX_PRICE`) decide what *counts* as safe —
+tune those from the script, not by feel.
 
 ## What to expect (variance honesty)
 

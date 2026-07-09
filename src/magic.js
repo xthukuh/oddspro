@@ -1,5 +1,17 @@
 import { db } from './db/connection.js';
 import { simulateStrategies } from './db/magic-rules.js';
+import { config } from './config.js';
+
+// The Safe-only policy (DEFAULT_SAFE overridden by SAFE_* env), shipped to the
+// client so the browser's 🛡 toggle uses the SAME gates/cap as the server-side
+// config - the module's literals are only the fallback when this is absent.
+const safePolicy = () => ({
+    strategy: config.SAFE_STRATEGY,
+    minParts: config.SAFE_MIN_PARTS,
+    minAgreement: config.SAFE_MIN_AGREEMENT,
+    maxPrice: config.SAFE_MAX_PRICE,
+    maxPerDay: config.SAFE_MAX_PER_DAY,
+});
 
 // Magic-sort loader: replay the candidate tip-ranking strategies against
 // every settled tip (src/db/magic-rules.js) and serve the top strategies +
@@ -29,7 +41,7 @@ export async function settledTipRows() {
 export async function magicSortSummary() {
     const rows = await settledTipRows();
     // tipView (magic-rules) coerces DECIMAL strings and parses breakdown JSON
-    return { generated_at: new Date().toISOString(), ...simulateStrategies(rows) };
+    return { generated_at: new Date().toISOString(), safe: safePolicy(), ...simulateStrategies(rows) };
 }
 
 // Per-day in-memory cache: the settled ledger only grows when the hotpicks

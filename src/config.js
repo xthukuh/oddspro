@@ -2,6 +2,7 @@ import 'dotenv/config';
 import { z } from 'zod';
 import { DEFAULT_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
+import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
@@ -81,6 +82,17 @@ const EnvSchema = z.object({
     // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
     // date was successfully refreshed - any mode - within this window. 0 = off.
     REFRESH_CACHE_MINUTES: z.coerce.number().min(0).default(5),
+    // Safe-only slip-leg selection (the web's 🛡 Safe-only toggle). Defaults =
+    // DEFAULT_SAFE in src/db/magic-rules.js; the browser can't read .env, so
+    // these are shipped to the client via /api/magic-sort (server and client
+    // agree - no divergence). SAFE_MAX_PER_DAY is the "how many per day" knob;
+    // the gate thresholds are best tuned from scripts/analyze-safe-tips.js.
+    SAFE_STRATEGY: z.string().default(DEFAULT_SAFE.strategy)
+        .refine(v => STRATEGIES.some(s => s.id === v), 'SAFE_STRATEGY must be a known magic strategy id'),
+    SAFE_MIN_PARTS: z.coerce.number().int().min(1).max(3).default(DEFAULT_SAFE.minParts),
+    SAFE_MIN_AGREEMENT: z.coerce.number().min(0).max(1).default(DEFAULT_SAFE.minAgreement),
+    SAFE_MAX_PRICE: z.coerce.number().min(1).default(DEFAULT_SAFE.maxPrice),
+    SAFE_MAX_PER_DAY: z.coerce.number().int().min(1).default(DEFAULT_SAFE.maxPerDay),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app
