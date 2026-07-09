@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { shouldReloadForJob } from './freshness.js';
 import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
@@ -105,6 +106,13 @@ const _rate = ({ hits, settled }) => (settled
     ? `${hits}/${settled} (${(hits / settled * 100).toFixed(1)}%)`
     : '—');
 
+// 'HH:MM' local wall-clock for the status bar's last-refresh stamp
+const _hm = iso => {
+    const d = new Date(iso);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 // Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
 // the cleared all-dates view) so reload / back / forward keep the navigation.
 const _dateFromUrl = () => {
@@ -138,6 +146,15 @@ export default function App() {
     const [showHelp, setShowHelp] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
+    const [notice, setNotice] = useState(null); // transient neutral banner
+    // Freshness signal plumbing: last seen data_version (null until the first
+    // poll - the baseline observation must not reload), whether the next
+    // records load is a silent background one (skip the loading dim), and the
+    // current date for interval callbacks (they must not re-subscribe per date).
+    const lastVersionRef = useRef(null);
+    const silentRef = useRef(false);
+    const dateRef = useRef(date);
+    useEffect(() => { dateRef.current = date; }, [date]);
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -228,7 +245,9 @@ export default function App() {
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
         let stale = false;
-        setLoading(true);
+        // Silent background reloads (auto-refresh landed new data) skip the
+        // loading dim - the table just updates in place.
+        if (!silentRef.current) setLoading(true);
         fetchRecords({
             date: date || 'all',
             filters: serverFilters,
@@ -242,7 +261,10 @@ export default function App() {
                 setError(null);
             })
             .catch(e => !stale && setError(String(e.message ?? e)))
-            .finally(() => !stale && setLoading(false));
+            .finally(() => {
+                silentRef.current = false;
+                if (!stale) setLoading(false);
+            });
         return () => { stale = true; };
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
@@ -254,6 +276,13 @@ export default function App() {
         return () => clearTimeout(id);
     }, [error]);
 
+    // Same auto-dismiss for the neutral notice ("Already fresh ...").
+    useEffect(() => {
+        if (!notice) return;
+        const id = setTimeout(() => setNotice(null), 3000);
+        return () => clearTimeout(id);
+    }, [notice]);
+
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
         const onPop = () => setDate(_dateFromUrl() ?? _today());
@@ -261,12 +290,50 @@ export default function App() {
         return () => window.removeEventListener('popstate', onPop);
     }, []);
 
-    // Pick up a refresh already in flight (e.g. page reloaded mid-refresh)
-    useEffect(() => {
-        fetchRefreshStatus().then(st => st?.running && setRefresh(st)).catch(() => {});
+    // Freshness gate: reload (silently) when the server's data_version moved
+    // AND the successful run's scope covers the loaded date. The FIRST
+    // observed version is just the baseline - a page load or server restart
+    // must not trigger a reload of data we already fetched.
+    const maybeReload = useCallback(st => {
+        if (st == null || typeof st.data_version !== 'number') return;
+        if (lastVersionRef.current === null) {
+            lastVersionRef.current = st.data_version;
+            return;
+        }
+        if (st.running || st.data_version === lastVersionRef.current) return;
+        lastVersionRef.current = st.data_version;
+        if (shouldReloadForJob(st.last_success, dateRef.current)) {
+            silentRef.current = true;
+            setRefreshTick(t => t + 1);
+        }
     }, []);
 
-    // Poll the refresh job while it runs; reload records when it finishes
+    // Slow freshness poll (always on): the in-process scheduler refreshes
+    // data server-side on its own cadence - this is how every connected
+    // client learns about it. Also adopts a refresh already in flight on
+    // mount (e.g. page reloaded mid-refresh).
+    useEffect(() => {
+        let stale = false;
+        const poll = async () => {
+            try {
+                const st = await fetchRefreshStatus();
+                if (stale) return;
+                setRefresh(st);
+                maybeReload(st);
+            } catch {
+                // transient poll failure - next interval retries
+            }
+        };
+        poll();
+        const id = setInterval(poll, 60_000);
+        return () => { stale = true; clearInterval(id); };
+    }, [maybeReload]);
+
+    // Fast poll while a job runs (manual or scheduled - the ⟳ button spins
+    // for both). Manual completions reload unconditionally (the user asked;
+    // even a failed run may have landed partial data) and surface errors;
+    // auto completions go through the silent freshness gate - their failures
+    // belong to logs/auto-refresh.log, not the UI.
     useEffect(() => {
         if (!refresh?.running) return;
         const id = setInterval(async () => {
@@ -274,19 +341,36 @@ export default function App() {
                 const st = await fetchRefreshStatus();
                 setRefresh(st);
                 if (!st.running) {
-                    setRefreshTick(t => t + 1);
-                    if (st.error) setError(`Refresh failed: ${st.error}`);
+                    if (st.mode === 'manual') {
+                        if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
+                        setRefreshTick(t => t + 1);
+                        if (st.error) setError(`Refresh failed: ${st.error}`);
+                    } else {
+                        maybeReload(st);
+                    }
                 }
             } catch {
                 // transient poll failure - keep polling
             }
         }, 2000);
         return () => clearInterval(id);
-    }, [refresh?.running]);
+    }, [refresh?.running, maybeReload]);
 
     const onRefresh = async () => {
         try {
-            setRefresh(await startRefresh(date));
+            const body = await startRefresh(date);
+            if (body?.fresh) {
+                // Server-side cache says this date was refreshed moments ago -
+                // no new run; just reload what we show and say so.
+                if (typeof body.data_version === 'number') lastVersionRef.current = body.data_version;
+                const mins = body.last_refreshed_at
+                    ? Math.max(1, Math.round((Date.now() - new Date(body.last_refreshed_at).getTime()) / 60_000))
+                    : null;
+                setNotice(`Already fresh${mins ? ` — refreshed ${mins}m ago` : ''}. Reloading the view.`);
+                setRefreshTick(t => t + 1);
+                return;
+            }
+            setRefresh(body);
         } catch (e) {
             setError(String(e.message ?? e));
         }
@@ -546,7 +630,21 @@ export default function App() {
                 </div>
             )}
 
-            <main className="p-4">
+            {notice && (
+                <div className="m-4 px-4 py-2 rounded border border-sky-300 bg-sky-50 text-sky-700 text-sm flex items-start gap-2" role="status">
+                    <span className="grow">{notice}</span>
+                    <button
+                        onClick={() => setNotice(null)}
+                        aria-label="Dismiss notice"
+                        title="Dismiss"
+                        className="cursor-pointer shrink-0 text-sky-400 hover:text-sky-700 text-lg leading-none"
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
+
+            <main className="p-4 pb-10">
                 <DataTable
                     catalog={catalog}
                     rows={rows}
@@ -558,32 +656,47 @@ export default function App() {
                     onSort={onSort}
                     loading={loading}
                     linkProviders={linkProviders}
+                    scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
-                {/* Footer stacks vertically on small screens, inline (with
-                    dot separators) from sm up. Record count shows the day's
-                    total by default and shown/total when the view is filtered;
-                    the hit-rate scoreboard is day-level regardless of filters. */}
-                {(() => {
-                    const total = result?.data?.length ?? 0;
-                    const filtered = rows.length !== total;
-                    return (
-                        <div className="py-3 text-sm text-slate-500 flex flex-col gap-1 sm:flex-row sm:flex-wrap sm:items-center sm:gap-x-2">
-                            <span>
-                                {filtered ? `${rows.length}/${total}` : total}
-                                {' '}record{total === 1 && !filtered ? '' : 's'}
-                            </span>
-                            <span className="hidden sm:inline text-slate-300">·</span>
-                            <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
-                                <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
-                            </Tooltip>
-                            <span className="hidden sm:inline text-slate-300">·</span>
-                            <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
-                                <span>Tips: {_rate(dayRates.tips)}</span>
-                            </Tooltip>
-                        </div>
-                    );
-                })()}
             </main>
+
+            {/* Bottom status bar (fixed, z-30 - under the z-40 modals): record
+                count, the day-level hit-rate scoreboard and the last refresh
+                time. Small text with a subtle lift shadow, wraps on narrow
+                screens; <main> reserves pb-10 so content clears it. */}
+            {(() => {
+                const total = result?.data?.length ?? 0;
+                const filtered = rows.length !== total;
+                const last = refresh?.last_success;
+                return (
+                    <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-100/90 backdrop-blur border-t border-slate-300 px-3 py-1 text-xs text-slate-500 [text-shadow:0_1px_0_rgba(255,255,255,0.7)] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span>
+                            {filtered ? `${rows.length}/${total}` : total}
+                            {' '}record{total === 1 && !filtered ? '' : 's'}
+                        </span>
+                        <span className="text-slate-300">·</span>
+                        <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
+                            <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
+                        </Tooltip>
+                        <span className="text-slate-300">·</span>
+                        <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
+                            <span>Tips: {_rate(dayRates.tips)}</span>
+                        </Tooltip>
+                        {(last || refresh?.running) && (
+                            <Tooltip content={refresh?.running
+                                ? `Refreshing (${refresh.mode ?? 'manual'})${refresh.step ? ` — ${refresh.step}` : ''}…`
+                                : `Last data refresh: ${new Date(last.at).toLocaleString()} (${last.mode})`}>
+                                <span className="ml-auto tabular-nums">
+                                    <span className={refresh?.running ? 'inline-block animate-pulse' : ''}>⟳</span>
+                                    {' '}{refresh?.running
+                                        ? (refresh.step ?? 'refreshing')
+                                        : _hm(last.at)}
+                                </span>
+                            </Tooltip>
+                        )}
+                    </div>
+                );
+            })()}
 
             {showSlips && (
                 <BetslipPlayground

@@ -4,7 +4,7 @@
 // Sticky chrome: the header row pins to the top, and a duplicate Score
 // column pins left only while the real one is scrolled out of view.
 
-import { useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sortValue } from '../sortValues.js';
 import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
@@ -90,6 +90,10 @@ const STATUS_INFO = {
     AWD: 'Awarded (technical result)', WO: 'Walkover',
 };
 
+// Statuses whose tooltip appends the live minute (HT is self-describing;
+// finals keep their last seen elapsed, which must not render as live).
+const LIVE_MINUTE = new Set(['1H', '2H', 'ET', 'BT', 'P', 'LIVE']);
+
 // Rearrange columns by the persisted key order (settings drag control):
 // ordered keys first, anything new/unknown keeps its natural position after.
 export function applyOrder(columns, order) {
@@ -148,7 +152,12 @@ const CELL_TITLES = {
             _dt(row.locked_at ?? row.updated_at),
         ].filter(Boolean).join('\n');
     },
-    status: row => STATUS_INFO[row.status] ?? null,
+    status: row => {
+        const info = STATUS_INFO[row.status] ?? null;
+        return info && LIVE_MINUTE.has(row.status) && row.elapsed != null
+            ? `${info} — ${row.elapsed}'`
+            : info;
+    },
     updated_at: row => _dt(row.updated_at),
     locked_at: row => _dt(row.locked_at),
     home_rank: row => (row.home_rank != null ? `${row.home_team ?? 'Home'} - current league rank` : null),
@@ -341,7 +350,7 @@ function _magicCell(row, meta) {
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders }) {
+export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey }) {
     const links = new Set(linkProviders ?? []);
 
     // Tip justification popover, anchored at the click point (one at a time)
@@ -432,9 +441,27 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     const containerRef = useRef(null);
     const pinThRefs = useRef({}); // key -> the real column's <th>
     const [pinState, setPinState] = useState({}); // key -> pinned?
+    // Scroll preservation across data reloads: silent background refreshes
+    // replace `rows` in place - the view must not jump. A scrollKey change
+    // (date/server-filter navigation) is an intentional reset to the top.
+    const posRef = useRef({ top: 0, left: 0 });
+    const scrollKeyRef = useRef(scrollKey);
+    useLayoutEffect(() => {
+        const cont = containerRef.current;
+        if (!cont) return;
+        if (scrollKeyRef.current !== scrollKey) {
+            scrollKeyRef.current = scrollKey;
+            posRef.current = { top: 0, left: 0 };
+            cont.scrollTo(0, 0);
+        } else {
+            cont.scrollTop = posRef.current.top;
+            cont.scrollLeft = posRef.current.left;
+        }
+    }, [rows, scrollKey]);
     const onScroll = () => {
         const cont = containerRef.current;
         if (!cont) return;
+        posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
         const contLeft = cont.getBoundingClientRect().left;
         setPinState(prev => {
             const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
@@ -467,7 +494,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`overflow-auto max-h-[calc(100vh-11rem)] sm:max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`overflow-auto max-h-[calc(100vh-13rem)] sm:max-h-[calc(100vh-10.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
