@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import MultiSelect from './MultiSelect.jsx';
+import Sheet, { SheetClose } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 
 // Settings dialog, organized into three compact sections:
@@ -27,11 +28,11 @@ function ColumnOrder({ columns, onOrder }) {
                     onDragEnd={() => setDrag(null)}
                     onDragOver={e => e.preventDefault()}
                     onDrop={e => { e.preventDefault(); dropAt(c.key); }}
-                    className={`cursor-grab select-none px-2 py-0.5 rounded border text-xs bg-white
-                        ${drag === c.key ? 'opacity-40 border-sky-400' : 'border-slate-300 hover:border-slate-400'}`}
+                    className={`cursor-grab select-none px-2 py-0.5 rounded border text-xs bg-surface
+                        ${drag === c.key ? 'opacity-40 border-accent' : 'border-separator hover:border-label-3'}`}
                     title="Drag to reposition this column"
                 >
-                    <span className="text-slate-400 mr-1">⠿</span>
+                    <span className="text-label-3 mr-1">⠿</span>
                     {c.label}
                 </span>
             ))}
@@ -62,17 +63,17 @@ function SortOrder({ chain, entryLabel, onReorder, onRemove }) {
                     onDragEnd={() => setDrag(null)}
                     onDragOver={ev => ev.preventDefault()}
                     onDrop={ev => { ev.preventDefault(); dropAt(keyOf(e)); }}
-                    className={`flex items-center gap-2 px-2 py-1 rounded border text-xs bg-white
-                        ${drag === keyOf(e) ? 'opacity-40 border-sky-400' : 'border-slate-300'}`}
+                    className={`flex items-center gap-2 px-2 py-1 rounded border text-xs bg-surface
+                        ${drag === keyOf(e) ? 'opacity-40 border-accent' : 'border-separator'}`}
                     title="Drag to change sort priority"
                 >
-                    <span className="text-slate-400 cursor-grab">⠿</span>
-                    <span className="text-slate-400 tabular-nums">{i + 1}</span>
+                    <span className="text-label-3 cursor-grab">⠿</span>
+                    <span className="text-label-3 tabular-nums">{i + 1}</span>
                     <span className="grow">{entryLabel(e)}</span>
-                    {e.type === 'column' && <span className="text-sky-600">{e.dir === 'asc' ? '▲' : '▼'}</span>}
+                    {e.type === 'column' && <span className="text-accent">{e.dir === 'asc' ? '▲' : '▼'}</span>}
                     <button
                         onClick={() => onRemove(e)}
-                        className="cursor-pointer text-slate-400 hover:text-red-600 leading-none"
+                        className="cursor-pointer text-label-3 hover:text-miss leading-none"
                         title="Remove this sort"
                     >
                         &times;
@@ -99,19 +100,17 @@ export default function SettingsModal({
     const providerOptions = providers.map(p => ({ key: p, label: p, default: true }));
 
     return (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-2 md:p-4" onClick={onClose}>
-            <div
-                className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] md:max-h-[85vh] overflow-y-auto p-4 md:p-5"
-                onClick={e => e.stopPropagation()}
-            >
-                <div className="flex items-center mb-4">
-                    <h2 className="text-lg font-semibold">Display settings</h2>
-                    <div className="grow" />
-                    <button onClick={onClose} className="text-slate-500 hover:text-slate-800 text-xl leading-none">&times;</button>
+        <Sheet onClose={onClose} className="max-w-2xl">
+            <div className="flex flex-col max-h-[92vh]">
+                <div className="flex items-center gap-3 px-6 pt-5 pb-3">
+                    <h2 className="text-[22px] font-extrabold tracking-tight">Display settings</h2>
+                    <div className="flex-1" />
+                    <SheetClose onClose={onClose} />
                 </div>
+                <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-3">
 
                 <section className="mb-5">
-                    <h3 className="font-medium text-slate-700 mb-2">Table columns</h3>
+                    <h3 className="font-medium text-label mb-2">Table columns</h3>
                     <div className="flex flex-wrap gap-2 mb-3">
                         <MultiSelect
                             label="Odds markets"
@@ -127,9 +126,9 @@ export default function SettingsModal({
                         />
                     </div>
                     <div className="flex items-center gap-3 mb-2">
-                        <h4 className="text-sm text-slate-600">Column order</h4>
+                        <h4 className="text-sm text-label-2">Column order</h4>
                         <div className="grow" />
-                        <button onClick={() => onOrder(null)} className="text-xs text-sky-700 hover:underline">
+                        <button onClick={() => onOrder(null)} className="text-xs text-accent hover:underline">
                             Reset order
                         </button>
                     </div>
@@ -137,7 +136,7 @@ export default function SettingsModal({
                 </section>
 
                 <section className="mb-5">
-                    <h3 className="font-medium text-slate-700 mb-2">Providers</h3>
+                    <h3 className="font-medium text-label mb-2">Providers</h3>
                     <div className="flex flex-wrap gap-2 mb-2">
                         <MultiSelect
                             label="Visible providers"
@@ -152,7 +151,7 @@ export default function SettingsModal({
                             onChange={onLinkProviders}
                         />
                     </div>
-                    <p className="text-xs text-slate-500">
+                    <p className="text-xs text-label-2">
                         Visible providers filter the table rows. Unavailable matches (concluded, or no
                         markets left) are unlinked by default - enable a provider to keep its links
                         anyway (betpawa serves concluded match pages for ~6h).
@@ -160,58 +159,58 @@ export default function SettingsModal({
                 </section>
 
                 <section className="mb-5">
-                    <h3 className="font-medium text-slate-700 mb-2">Behavior</h3>
+                    <h3 className="font-medium text-label mb-2">Behavior</h3>
                     <label className="flex items-center gap-2 text-sm cursor-pointer">
                         <input
                             type="checkbox"
                             checked={showCompleted}
                             onChange={e => onShowCompleted(e.target.checked)}
-                            className="accent-sky-600"
+                            className="accent-accent"
                         />
                         <span>Show completed games</span>
                     </label>
-                    <p className="text-xs text-slate-500 mt-1">Untick to see upcoming matches only.</p>
+                    <p className="text-xs text-label-2 mt-1">Untick to see upcoming matches only.</p>
 
-                    <h4 className="text-sm text-slate-600 mt-3 mb-1">Settled tips</h4>
+                    <h4 className="text-sm text-label-2 mt-3 mb-1">Settled tips</h4>
                     <div className="flex flex-col gap-1.5">
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                             <input
                                 type="checkbox"
                                 checked={hideHits}
                                 onChange={e => onHideHits(e.target.checked)}
-                                className="accent-sky-600"
+                                className="accent-accent"
                             />
-                            <span>Hide hits <span className="text-slate-400">— show only losing &amp; upcoming tips</span></span>
+                            <span>Hide hits <span className="text-label-3">— show only losing &amp; upcoming tips</span></span>
                         </label>
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                             <input
                                 type="checkbox"
                                 checked={hideMiss}
                                 onChange={e => onHideMiss(e.target.checked)}
-                                className="accent-sky-600"
+                                className="accent-accent"
                             />
-                            <span>Hide miss <span className="text-slate-400">— show only winning &amp; upcoming tips</span></span>
+                            <span>Hide miss <span className="text-label-3">— show only winning &amp; upcoming tips</span></span>
                         </label>
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                             <input
                                 type="checkbox"
                                 checked={noMiss}
                                 onChange={e => onNoMiss(e.target.checked)}
-                                className="accent-sky-600"
+                                className="accent-accent"
                             />
-                            <span>No miss <span className="text-slate-400">— hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span></span>
+                            <span>No miss <span className="text-label-3">— hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span></span>
                         </label>
                         <label className="flex items-center gap-2 text-sm cursor-pointer">
                             <input
                                 type="checkbox"
                                 checked={safeOnly}
                                 onChange={e => onSafeOnly(e.target.checked)}
-                                className="accent-sky-600"
+                                className="accent-accent"
                             />
-                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
+                            <span>🛡 Safe only <span className="text-label-3">— only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
                         </label>
                     </div>
-                    <p className="text-xs text-slate-500 mt-1">
+                    <p className="text-xs text-label-2 mt-1">
                         Ticking both Hide hits and Hide miss shows upcoming/ongoing games only. These
                         read best with Show completed on.
                     </p>
@@ -220,9 +219,9 @@ export default function SettingsModal({
                 {sortChain?.length > 0 && (
                     <section className="mb-5">
                         <div className="flex items-center gap-3 mb-2">
-                            <h3 className="font-medium text-slate-700">Sort priority</h3>
+                            <h3 className="font-medium text-label">Sort priority</h3>
                             <div className="grow" />
-                            <span className="text-xs text-slate-400">drag to reorder · top wins</span>
+                            <span className="text-xs text-label-3">drag to reorder · top wins</span>
                         </div>
                         <SortOrder
                             chain={sortChain}
@@ -233,12 +232,13 @@ export default function SettingsModal({
                     </section>
                 )}
 
-                <div className="text-right">
-                    <button onClick={onClose} className="px-4 py-1.5 rounded bg-slate-800 text-white text-sm hover:bg-slate-700">
+                </div>
+                <div className="flex justify-end px-6 py-3 border-t border-separator-2">
+                    <button onClick={onClose} className="cursor-pointer h-10 px-6 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90">
                         Done
                     </button>
                 </div>
             </div>
-        </div>
+        </Sheet>
     );
 }

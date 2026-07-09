@@ -38,17 +38,17 @@ export default function MultiSelect({ label, options, selected, onChange }) {
             <button
                 type="button"
                 onClick={() => setOpen(v => !v)}
-                className="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded border border-slate-300 bg-white text-sm hover:bg-slate-50"
+                className="cursor-pointer flex items-center gap-2 px-3 py-1.5 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill"
             >
                 <span>{label}</span>
-                <span className="text-slate-500 tabular-nums">{selected.length}/{options.length}</span>
-                <span className={`text-slate-400 text-xs transition-transform ${open ? 'rotate-180' : ''}`}>▼</span>
+                <span className="text-accent tabular-nums">{selected.length}/{options.length}</span>
+                <span className={`text-label-3 text-xs transition-transform ${open ? 'rotate-180' : ''}`}>▼</span>
             </button>
             {open && (
-                <div className="absolute z-30 mt-1 w-64 max-h-72 overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-2">
-                    <div className="flex gap-3 px-1 pb-2 mb-1 border-b border-slate-100">
+                <div className="absolute z-30 mt-1 w-64 max-h-72 overflow-y-auto bg-surface text-label border border-separator-2 rounded-xl shadow-2xl p-2">
+                    <div className="flex gap-3 px-1 pb-2 mb-1 border-b border-hairline">
                         {actions.map(([name, fn]) => (
-                            <button key={name} type="button" onClick={fn} className="text-xs text-sky-700 hover:underline">
+                            <button key={name} type="button" onClick={fn} className="text-xs text-accent hover:underline">
                                 {name}
                             </button>
                         ))}
@@ -56,18 +56,18 @@ export default function MultiSelect({ label, options, selected, onChange }) {
                     {options.map(o => (
                         <label
                             key={o.key}
-                            className="flex items-center gap-2 text-sm cursor-pointer px-1 py-0.5 rounded hover:bg-slate-50"
+                            className="flex items-center gap-2 text-sm cursor-pointer px-1 py-0.5 rounded hover:bg-fill"
                         >
                             <input
                                 type="checkbox"
                                 checked={set.has(o.key)}
                                 onChange={() => toggle(o.key)}
-                                className="accent-sky-600"
+                                className="accent-accent"
                             />
                             <span>{o.label}</span>
                         </label>
                     ))}
-                    {!options.length && <span className="block text-sm text-slate-400 px-1 py-1">Nothing available yet.</span>}
+                    {!options.length && <span className="block text-sm text-label-3 px-1 py-1">Nothing available yet.</span>}
                 </div>
             )}
         </div>

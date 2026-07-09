@@ -608,11 +608,6 @@ export default function App() {
                         <button onClick={() => setNotice(null)} aria-label="Dismiss notice" title="Dismiss" className="cursor-pointer shrink-0 text-accent/70 hover:text-accent text-lg leading-none">&times;</button>
                     </div>
                 )}
-                {showFilters && catalog && (
-                    <div className="shrink-0">
-                        <FilterBuilder catalog={catalog} filters={filters} onApply={setFilters} />
-                    </div>
-                )}
                 <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
                 <DataTable
                     catalog={catalog}
@@ -661,6 +656,12 @@ export default function App() {
                 <Sheet onClose={() => setShowMagic(false)} className="max-w-md">
                     <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
                         onToggle={onToggleMagic} onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+                </Sheet>
+            )}
+
+            {showFilters && catalog && (
+                <Sheet onClose={() => setShowFilters(false)} className="max-w-2xl">
+                    <FilterBuilder catalog={catalog} filters={filters} onApply={setFilters} onClose={() => setShowFilters(false)} />
                 </Sheet>
             )}
 

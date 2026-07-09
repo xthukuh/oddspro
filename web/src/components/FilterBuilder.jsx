@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { SheetClose } from './Sheet.jsx';
 
 // Advanced query builder: AND-combined condition rows over EVERY catalog
 // column - server-filterable fields (base + odds markets) run in SQL,
@@ -27,7 +28,9 @@ const COL_OPS = OPS.filter(([op]) => !VALUE_ONLY.has(op));
 
 const NEW_ROW = { key: '1', op: 'gte', value: '', mode: 'value' };
 
-export default function FilterBuilder({ catalog, filters, onApply }) {
+const selCls = 'border border-separator bg-fill text-label rounded-[10px] h-9 px-2 text-sm outline-none';
+
+export default function FilterBuilder({ catalog, filters, onApply, onClose }) {
     // Applied filters round-trip into row state; mode is inferred from `col`
     const [rows, setRows] = useState(filters.length
         ? filters.map(f => ('col' in f
@@ -54,97 +57,93 @@ export default function FilterBuilder({ catalog, filters, onApply }) {
             : { key: r.key, op: r.op, value: r.value })));
 
     return (
-        <div className="border-b border-slate-200 bg-white px-2 md:px-4 py-3 text-sm">
-            {rows.map((row, i) => (
-                <div key={i} className="flex flex-wrap items-center sm:justify-end gap-2 mb-2">
-                    <span className="text-slate-400">{i ? 'and' : 'where'}</span>
-                    <select
-                        value={row.key}
-                        onChange={e => update(i, { key: e.target.value })}
-                        className="border border-slate-300 rounded px-2 py-1"
-                    >
-                        {groups.map(([label, opts]) => (
-                            <optgroup key={label} label={label}>
-                                {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
-                            </optgroup>
-                        ))}
-                    </select>
-                    <select
-                        value={row.op}
-                        onChange={e => update(i, { op: e.target.value })}
-                        className="border border-slate-300 rounded px-2 py-1"
-                    >
-                        {(row.mode === 'col' ? COL_OPS : OPS).map(([op, label]) => (
-                            <option key={op} value={op}>{label}</option>
-                        ))}
-                    </select>
-                    <button
-                        onClick={() => update(i, row.mode === 'col'
-                            ? { mode: 'value' }
-                            : { mode: 'col', ...(VALUE_ONLY.has(row.op) ? { op: 'gte' } : {}) })}
-                        className={`px-2 py-1 rounded border text-xs ${row.mode === 'col'
-                            ? 'border-sky-500 bg-sky-50 text-sky-700'
-                            : 'border-slate-300 text-slate-500 hover:bg-slate-50'}`}
-                        title={row.mode === 'col'
-                            ? 'Comparing to another column - switch to a value'
-                            : 'Compare to another column instead of a value'}
-                    >
-                        {row.mode === 'col' ? 'col' : 'val'}
-                    </button>
-                    {row.mode === 'col' ? (
-                        <select
-                            value={row.col ?? ''}
-                            onChange={e => update(i, { col: e.target.value })}
-                            className="border border-slate-300 rounded px-2 py-1 w-full sm:w-44"
-                        >
-                            <option value="" disabled>column…</option>
+        <div className="flex flex-col max-h-[92vh]">
+            <div className="flex items-center gap-3 px-6 pt-5 pb-2">
+                <h2 className="text-[22px] font-extrabold tracking-tight">Filters</h2>
+                <span className="text-[13px] text-label-2 hidden sm:inline">narrow the table by any column</span>
+                <div className="flex-1" />
+                <SheetClose onClose={onClose} />
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto px-6 py-2 text-sm">
+                {rows.map((row, i) => (
+                    <div key={i} className="flex flex-wrap items-center gap-2 mb-2.5">
+                        <span className="text-label-2 w-10 text-right">{i ? 'and' : 'where'}</span>
+                        <select value={row.key} onChange={e => update(i, { key: e.target.value })} className={selCls}>
                             {groups.map(([label, opts]) => (
                                 <optgroup key={label} label={label}>
-                                    {opts.filter(o => o.key !== row.key).map(o => (
-                                        <option key={o.key} value={o.key}>{o.label}</option>
-                                    ))}
+                                    {opts.map(o => <option key={o.key} value={o.key}>{o.label}</option>)}
                                 </optgroup>
                             ))}
                         </select>
-                    ) : (
-                        <input
-                            value={row.value}
-                            onChange={e => update(i, { value: e.target.value })}
-                            onKeyDown={e => e.key === 'Enter' && apply()}
-                            placeholder={row.op === 'in' || row.op === 'not-in' ? '"a","b",c' : 'value'}
-                            title={row.op === 'in' || row.op === 'not-in'
-                                ? 'Comma-separated list; wrap an item in quotes to include commas/spaces'
-                                : undefined}
-                            className="border border-slate-300 rounded px-2 py-1 w-full sm:w-44"
-                        />
-                    )}
-                    <button
-                        onClick={() => setRows(rs => rs.filter((_, j) => j !== i))}
-                        className="text-slate-400 hover:text-red-600"
-                        title="Remove condition"
-                    >
-                        &times;
-                    </button>
-                </div>
-            ))}
-            <div className="flex items-center justify-end gap-3">
+                        <select value={row.op} onChange={e => update(i, { op: e.target.value })} className={selCls}>
+                            {(row.mode === 'col' ? COL_OPS : OPS).map(([op, label]) => (
+                                <option key={op} value={op}>{label}</option>
+                            ))}
+                        </select>
+                        <button
+                            onClick={() => update(i, row.mode === 'col'
+                                ? { mode: 'value' }
+                                : { mode: 'col', ...(VALUE_ONLY.has(row.op) ? { op: 'gte' } : {}) })}
+                            className={`cursor-pointer h-9 px-2.5 rounded-[10px] border text-xs ${row.mode === 'col'
+                                ? 'border-accent bg-accent-soft text-accent'
+                                : 'border-separator text-label-2 hover:bg-fill'}`}
+                            title={row.mode === 'col'
+                                ? 'Comparing to another column - switch to a value'
+                                : 'Compare to another column instead of a value'}
+                        >
+                            {row.mode === 'col' ? 'col' : 'val'}
+                        </button>
+                        {row.mode === 'col' ? (
+                            <select value={row.col ?? ''} onChange={e => update(i, { col: e.target.value })} className={`${selCls} w-full sm:w-44`}>
+                                <option value="" disabled>column…</option>
+                                {groups.map(([label, opts]) => (
+                                    <optgroup key={label} label={label}>
+                                        {opts.filter(o => o.key !== row.key).map(o => (
+                                            <option key={o.key} value={o.key}>{o.label}</option>
+                                        ))}
+                                    </optgroup>
+                                ))}
+                            </select>
+                        ) : (
+                            <input
+                                value={row.value}
+                                onChange={e => update(i, { value: e.target.value })}
+                                onKeyDown={e => e.key === 'Enter' && apply()}
+                                placeholder={row.op === 'in' || row.op === 'not-in' ? '"a","b",c' : 'value'}
+                                title={row.op === 'in' || row.op === 'not-in'
+                                    ? 'Comma-separated list; wrap an item in quotes to include commas/spaces'
+                                    : undefined}
+                                className="bg-fill text-label rounded-[10px] h-9 px-3 text-sm w-full sm:w-44 outline-none"
+                            />
+                        )}
+                        <button
+                            onClick={() => setRows(rs => rs.filter((_, j) => j !== i))}
+                            className="cursor-pointer w-8 h-8 inline-flex items-center justify-center rounded-full text-label-3 hover:bg-fill hover:text-miss"
+                            title="Remove condition"
+                        >
+                            &times;
+                        </button>
+                    </div>
+                ))}
                 <button
                     onClick={() => setRows(rs => [...rs, { ...NEW_ROW }])}
-                    className="text-sky-700 hover:underline"
+                    className="cursor-pointer text-accent hover:underline py-1"
                 >
                     + Add condition
                 </button>
-                <button
-                    onClick={apply}
-                    className="px-3 py-1 rounded bg-sky-600 text-white hover:bg-sky-500"
-                >
-                    Apply
-                </button>
+            </div>
+            <div className="flex items-center justify-between px-6 py-3 border-t border-separator-2">
                 <button
                     onClick={() => { setRows([{ ...NEW_ROW }]); onApply([]); }}
-                    className="text-slate-500 hover:underline"
+                    className="cursor-pointer text-label-2 hover:text-label text-sm"
                 >
                     Clear
+                </button>
+                <button
+                    onClick={apply}
+                    className="cursor-pointer h-10 px-6 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90"
+                >
+                    Apply
                 </button>
             </div>
         </div>

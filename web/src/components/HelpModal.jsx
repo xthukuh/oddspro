@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import Sheet, { SheetClose } from './Sheet.jsx';
 
 // Help / About modal: a brief, user-facing description of what Odds Pro does
 // plus an embedded demo video. The video URL is configurable at build time via
@@ -16,50 +16,37 @@ function youtubeEmbed(url) {
 }
 
 export default function HelpModal({ onClose }) {
-    // Escape closes; low-stakes modal so a backdrop click closes too.
-    useEffect(() => {
-        const onKey = e => e.key === 'Escape' && onClose();
-        document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
-    }, [onClose]);
-
     const embed = youtubeEmbed(DEMO_URL);
 
     return (
-        <div
-            onClick={onClose}
-            className="fixed inset-0 z-40 flex items-center justify-center bg-slate-900/50 p-2 md:p-4"
-        >
-            <div
-                onClick={e => e.stopPropagation()}
-                className="bg-white rounded-lg shadow-xl w-full max-w-2xl max-h-[90vh] md:max-h-[85vh] flex flex-col p-4 md:p-6 text-slate-800"
-            >
-                <div className="flex items-center mb-3">
-                    <h2 className="text-lg font-semibold">
-                        <span className="rounded border border-slate-300 bg-slate-100 px-1.5 py-0.5 text-sm font-bold tracking-wide mr-2">[OP]</span>
+        <Sheet onClose={onClose} className="max-w-2xl">
+            <div className="flex flex-col max-h-[92vh]">
+                <div className="flex items-center gap-3 px-6 pt-5 pb-3">
+                    <h2 className="text-[22px] font-extrabold tracking-tight flex items-center">
+                        <span className="rounded-md border border-separator bg-fill px-1.5 py-0.5 text-sm font-bold tracking-wide mr-2">[OP]</span>
                         {APP_NAME} — Help
                     </h2>
-                    <div className="grow" />
-                    <button onClick={onClose} title="Close" className="cursor-pointer text-slate-500 hover:text-slate-800 text-xl leading-none">&times;</button>
+                    <div className="flex-1" />
+                    <SheetClose onClose={onClose} />
                 </div>
 
-                <div className="overflow-y-auto">
-                    <p className="text-sm text-slate-600 mb-3">
-                        <strong>{APP_NAME}</strong> is a football odds &amp; tips dashboard. It gathers
+                <div className="overflow-y-auto px-6 pb-6">
+                    <p className="text-sm text-label-2 mb-3">
+                        <strong className="text-label">{APP_NAME}</strong> is a football odds &amp; tips dashboard. It gathers
                         bookmaker odds (BetPawa, Betika) alongside official fixture and results data,
-                        matches them up, and surfaces data-driven <strong>Over 2.5 hot picks</strong> 🔥
-                        and best-bet <strong>tips</strong> ranked by a backtested confidence model.
+                        matches them up, and surfaces data-driven <strong className="text-label">Over 2.5 hot picks</strong> 🔥
+                        and best-bet <strong className="text-label">tips</strong> ranked by a backtested confidence model.
                     </p>
-                    <ul className="text-sm text-slate-600 mb-4 space-y-1 list-disc pl-5">
-                        <li>Use the <strong>date navigation</strong> (⌂ ‹ ›) to browse fixtures by day.</li>
-                        <li><strong>⟳ Refresh</strong> re-fetches odds, fixtures &amp; results for the selected date.</li>
-                        <li><strong>✨ Magic</strong> re-orders tips most-likely-to-win first using backtested strategies.</li>
-                        <li><strong>🧾 Slips</strong> builds virtual multi-bet slips from the day's tips.</li>
-                        <li><strong>▽ Filters</strong> narrows the table; <strong>⚙ Settings</strong> controls columns &amp; display.</li>
+                    <ul className="text-sm text-label-2 mb-4 space-y-1 list-disc pl-5">
+                        <li>Use the <strong className="text-label">date navigation</strong> (‹ ›) and the calendar to browse fixtures by day; the logo returns you to today.</li>
+                        <li><strong className="text-label">Refresh</strong> re-fetches odds, fixtures &amp; results for the selected date.</li>
+                        <li><strong className="text-label">Magic</strong> re-orders tips most-likely-to-win first using backtested strategies.</li>
+                        <li><strong className="text-label">Slips</strong> builds virtual multi-bet slips from the day's tips.</li>
+                        <li><strong className="text-label">Filters</strong> narrows the table; <strong className="text-label">Settings</strong> controls columns &amp; display.</li>
                     </ul>
 
                     <h3 className="text-sm font-semibold mb-2">Demo video</h3>
-                    <div className="relative w-full overflow-hidden rounded-lg bg-slate-900" style={{ aspectRatio: '16 / 9' }}>
+                    <div className="relative w-full overflow-hidden rounded-xl bg-slate-900" style={{ aspectRatio: '16 / 9' }}>
                         {embed ? (
                             <iframe
                                 className="absolute inset-0 w-full h-full"
@@ -69,19 +56,19 @@ export default function HelpModal({ onClose }) {
                                 allowFullScreen
                             />
                         ) : (
-                            <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-slate-300 p-4">
+                            <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white/70 p-4">
                                 <span className="text-4xl mb-2">▶</span>
                                 <span className="text-sm">Demo video coming soon</span>
-                                <span className="text-xs text-slate-400 mt-1">A walkthrough will be published here shortly.</span>
+                                <span className="text-xs text-white/50 mt-1">A walkthrough will be published here shortly.</span>
                             </div>
                         )}
                     </div>
 
-                    <p className="text-xs text-slate-400 mt-4">
-                        Maintained by <a className="underline hover:text-slate-600" href="https://github.com/xthukuh" target="_blank" rel="noreferrer">Martin Thuku</a>.
+                    <p className="text-xs text-label-3 mt-4">
+                        Maintained by <a className="underline hover:text-label" href="https://github.com/xthukuh" target="_blank" rel="noreferrer">Martin Thuku</a>.
                     </p>
                 </div>
             </div>
-        </div>
+        </Sheet>
     );
 }
