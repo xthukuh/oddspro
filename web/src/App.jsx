@@ -4,13 +4,18 @@ import { shouldReloadForJob } from './freshness.js';
 import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
+import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import HelpModal from './components/HelpModal.jsx';
+import Logo from './components/Logo.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
+import OverflowMenu from './components/OverflowMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -149,6 +154,9 @@ export default function App() {
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
     const [showHelp, setShowHelp] = useState(false);
+    const [showCal, setShowCal] = useState(false);
+    const [showMagic, setShowMagic] = useState(false);
+    const [showOverflow, setShowOverflow] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
     const [notice, setNotice] = useState(null); // transient neutral banner
@@ -505,170 +513,107 @@ export default function App() {
     const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
     const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
 
+    const navBtn = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-label hover:bg-accent-soft disabled:opacity-40 disabled:hover:bg-transparent';
+    const navBtnActive = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-accent bg-accent-soft';
+
     return (
-        <div className="min-h-screen bg-slate-100 text-slate-800">
-            {/* Two-tier responsive topbar: brand + merged date-nav on one line,
-                action buttons on the next below md (single row from md up). */}
-            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-col gap-2 md:flex-row md:items-center">
-                <div className="flex items-center gap-2">
-                    {/* The SVG badge's background is #0f172a (= bg-slate-900,
-                        the topbar) so it blends in; the sky border + white "OP"
-                        are what read against the bar. */}
-                    <a href="/" title="ODDS PRO" className="shrink-0 hover:opacity-80">
-                        <img src="/icon.svg" alt="Odds Pro" className="h-8 w-8" />
-                    </a>
-                    {/* Merged segmented date-nav: [⌂] [‹] [ D/M/YYYY ] [›]. The
-                        centre cell is a transparent native picker under a
-                        formatted label (native date inputs can't be reformatted);
-                        tooltip spells the full day, clearing shows all dates. */}
-                    <div className="inline-flex items-stretch overflow-hidden rounded-md border border-slate-700 bg-slate-800 text-sm">
-                        {date !== TODAY && (
-                            <button
-                                onClick={() => changeDate(TODAY)}
-                                title="Jump to today"
-                                className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700"
-                            >
-                                ⌂
-                            </button>
-                        )}
-                        <button
-                            onClick={() => changeDate(PREV_DATE)}
-                            disabled={date <= MIN_DATE}
-                            title={`Previous (${PREV_DATE})`}
-                            className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                            &#8249;
-                        </button>
-                        <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
-                            <span className="pointer-events-none min-w-[6.5rem] px-3 py-1 text-center tabular-nums">
-                                {date ? _dmy(date) : 'All dates'}
-                            </span>
-                            <input
-                                type="date"
-                                value={date}
-                                min={MIN_DATE}
-                                max={MAX_DATE}
-                                onFocus={e => e.target.showPicker?.()}
-                                onClick={e => e.target.showPicker?.()}
-                                onChange={e => changeDate(e.target.value)}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                aria-label="Select date (clear to show all dates)"
-                            />
-                        </label>
-                        <button
-                            onClick={() => changeDate(NEXT_DATE)}
-                            disabled={date >= MAX_DATE}
-                            title={`Next (${NEXT_DATE})`}
-                            className="cursor-pointer border-l border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                            &#8250;
-                        </button>
-                    </div>
+        <div className="h-[100dvh] flex flex-col bg-app text-label overflow-hidden">
+            {/* iPadOS nav bar: a distinct surface (own bg + hairline + shadow +
+                blur) so it reads as its own bar, separated from the content.
+                3 zones: logo (home->today) · date nav+calendar · actions
+                (collapse into a ⋯ menu below sm). */}
+            <header className="shrink-0 grid grid-cols-[auto_1fr_auto] sm:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 px-2.5 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-b border-separator shadow-sm relative z-40">
+                <div className="flex items-center min-w-0">
+                    <Logo onHome={() => changeDate(TODAY)} />
                 </div>
-                {/* App-header style action bar: icon-only buttons (Android/iOS
-                    convention) with uniform touch targets + accessible labels;
-                    text lives in tooltips/aria-label, not on the chrome. */}
-                <div className="flex items-center justify-between gap-1.5 md:ml-auto md:justify-end">
-                    <button
-                        onClick={onRefresh}
-                        disabled={!date || refresh?.running}
-                        aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
-                        title={refresh?.running
-                            ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                            : date ? 'Re-fetch fixtures, results & odds for this date' : 'Pick a date to refresh'}
-                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none ${refresh?.running
-                            ? 'bg-amber-600 border-amber-500 cursor-wait'
-                            : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                    >
-                        <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
+                {/* Centre: chevrons + calendar-popover trigger */}
+                <div className="relative flex items-center gap-0.5 justify-self-center">
+                    <button onClick={() => changeDate(PREV_DATE)} disabled={date <= MIN_DATE}
+                        title={`Previous (${PREV_DATE})`} aria-label="Previous day" className={navBtn}>
+                        <IconChevronLeft />
                     </button>
-                    <MagicMenu
-                        data={magicData}
-                        error={magicError}
-                        activeIds={activeMagicIds}
-                        onToggle={onToggleMagic}
-                        onClearMagic={onClearMagic}
-                    />
-                    <button
-                        onClick={() => setShowSlips(true)}
-                        aria-label="Betslip playground"
-                        title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        🧾
+                    <button onClick={() => setShowCal(v => !v)} title={date ? _fullDate(date) : 'All dates'}
+                        aria-label="Pick a date"
+                        className="cursor-pointer h-10 min-w-[7rem] sm:min-w-[9.5rem] px-2 sm:px-3 inline-flex items-center justify-center gap-1.5 rounded-[10px] text-[15px] sm:text-[17px] font-semibold tabular-nums hover:bg-accent-soft">
+                        <span>{date ? _dmy(date) : 'All dates'}</span>
+                        <IconChevronDown className="text-accent" />
                     </button>
-                    <button
-                        onClick={() => setShowFilters(v => !v)}
-                        aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`}
-                        title="Filter the table rows"
-                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center gap-0.5 rounded-md border text-lg leading-none ${showFilters || filters.length
-                            ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
-                    >
-                        ▽{filters.length ? <span className="text-xs tabular-nums">{filters.length}</span> : null}
+                    <button onClick={() => changeDate(NEXT_DATE)} disabled={date >= MAX_DATE}
+                        title={`Next (${NEXT_DATE})`} aria-label="Next day" className={navBtn}>
+                        <IconChevronRight />
                     </button>
-                    <button
-                        onClick={() => setShowHelp(true)}
-                        aria-label="Help"
-                        title="Help - what Odds Pro does + demo video"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none font-semibold bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        ?
-                    </button>
-                    <button
-                        onClick={() => setShowSettings(true)}
-                        aria-label="Display settings"
-                        title="Display settings"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        ⚙
-                    </button>
+                    {showCal && (
+                        <CalendarPopover date={date} today={TODAY} min={MIN_DATE} max={MAX_DATE}
+                            onPick={d => changeDate(d)} onClose={() => setShowCal(false)} />
+                    )}
+                </div>
+                {/* Right: full action row (>=sm) or ⋯ overflow (<sm) */}
+                <div className="flex items-center justify-self-end">
+                    <div className="hidden sm:flex items-center gap-0.5">
+                        <button onClick={onRefresh} disabled={!date || refresh?.running}
+                            aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
+                            title={refresh?.running
+                                ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                                : date
+                                    ? `Refresh fixtures, results & odds${refresh?.last_success ? ` — last ${_hm(refresh.last_success.at)}` : ''}`
+                                    : 'Pick a date to refresh'}
+                            className={navBtn + (refresh?.running ? ' text-accent cursor-wait' : '')}>
+                            {refresh?.running
+                                ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" />
+                                : <IconRefresh />}
+                        </button>
+                        <button onClick={() => setShowMagic(true)} aria-label="Magic sort"
+                            title="Sort tips most-likely-to-win first (backtested ranking strategies)"
+                            className={activeMagicIds.length ? navBtnActive : navBtn}>
+                            <IconMagic />{activeMagicIds.length > 1 ? <span className="text-[11px] tabular-nums ml-0.5">{activeMagicIds.length}</span> : null}
+                        </button>
+                        <button onClick={() => setShowSlips(true)} aria-label="Betslip playground" title="Betslip playground - build virtual multi-bet slips from the day's tips" className={navBtn}><IconSlips /></button>
+                        <button onClick={() => setShowFilters(v => !v)} aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`} title="Filter the table rows"
+                            className={(showFilters || filters.length) ? navBtnActive : navBtn}>
+                            <IconFilter />{filters.length ? <span className="text-[11px] tabular-nums ml-0.5">{filters.length}</span> : null}
+                        </button>
+                        <div className="w-px h-5 bg-separator mx-1.5" />
+                        <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
+                        <button onClick={() => setShowSettings(true)} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
+                    </div>
+                    <div className="relative sm:hidden">
+                        <button onClick={() => setShowOverflow(v => !v)} aria-label="More actions" title="More"
+                            className={showOverflow ? navBtnActive : navBtn}><span className="text-xl leading-none">⋯</span></button>
+                        {showOverflow && (
+                            <OverflowMenu
+                                refreshing={refresh?.running} canRefresh={!!date && !refresh?.running}
+                                filterCount={filters.length} magicActive={activeMagicIds.length > 0}
+                                onRefresh={() => { onRefresh(); setShowOverflow(false); }}
+                                onMagic={() => { setShowMagic(true); setShowOverflow(false); }}
+                                onSlips={() => { setShowSlips(true); setShowOverflow(false); }}
+                                onFilters={() => { setShowFilters(v => !v); setShowOverflow(false); }}
+                                onHelp={() => { setShowHelp(true); setShowOverflow(false); }}
+                                onSettings={() => { setShowSettings(true); setShowOverflow(false); }}
+                                onClose={() => setShowOverflow(false)} />
+                        )}
+                    </div>
                 </div>
             </header>
 
-            <SortPills
-                chain={activeChain}
-                entryLabel={entryLabel}
-                onRemove={onRemoveEntry}
-                onClear={() => onReorderChain([])}
-            />
-
-            {showFilters && catalog && (
-                <FilterBuilder
-                    catalog={catalog}
-                    filters={filters}
-                    onApply={setFilters}
-                />
-            )}
-
-            {error && (
-                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm flex items-start gap-2" role="alert">
-                    <span className="grow">{error}</span>
-                    <button
-                        onClick={() => setError(null)}
-                        aria-label="Dismiss error"
-                        title="Dismiss"
-                        className="cursor-pointer shrink-0 text-red-400 hover:text-red-700 text-lg leading-none"
-                    >
-                        &times;
-                    </button>
-                </div>
-            )}
-
-            {notice && (
-                <div className="m-4 px-4 py-2 rounded border border-sky-300 bg-sky-50 text-sky-700 text-sm flex items-start gap-2" role="status">
-                    <span className="grow">{notice}</span>
-                    <button
-                        onClick={() => setNotice(null)}
-                        aria-label="Dismiss notice"
-                        title="Dismiss"
-                        className="cursor-pointer shrink-0 text-sky-400 hover:text-sky-700 text-lg leading-none"
-                    >
-                        &times;
-                    </button>
-                </div>
-            )}
-
-            <main className="p-4 pb-10">
+            <main className="flex-1 min-h-0 flex flex-col px-3.5 pt-2 pb-2 gap-2 overflow-hidden">
+                {error && (
+                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-miss/40 bg-miss/10 text-miss text-sm flex items-start gap-2" role="alert">
+                        <span className="grow">{error}</span>
+                        <button onClick={() => setError(null)} aria-label="Dismiss error" title="Dismiss" className="cursor-pointer shrink-0 text-miss/70 hover:text-miss text-lg leading-none">&times;</button>
+                    </div>
+                )}
+                {notice && (
+                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-accent/40 bg-accent-soft text-accent text-sm flex items-start gap-2" role="status">
+                        <span className="grow">{notice}</span>
+                        <button onClick={() => setNotice(null)} aria-label="Dismiss notice" title="Dismiss" className="cursor-pointer shrink-0 text-accent/70 hover:text-accent text-lg leading-none">&times;</button>
+                    </div>
+                )}
+                {showFilters && catalog && (
+                    <div className="shrink-0">
+                        <FilterBuilder catalog={catalog} filters={filters} onApply={setFilters} />
+                    </div>
+                )}
+                <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
                 <DataTable
                     catalog={catalog}
                     rows={rows}
@@ -684,47 +629,40 @@ export default function App() {
                 />
             </main>
 
-            {/* Bottom status bar (fixed, z-30 - under the z-40 modals): record
-                count, the day-level hit-rate scoreboard and the last refresh
-                time. Small text with a subtle lift shadow, wraps on narrow
-                screens; <main> reserves pb-10 so content clears it. */}
+            {/* Status bar: a normal flex child of the app shell (no longer fixed).
+                Whole items wrap to more rows on narrow widths; refresh/last-refresh
+                state now lives on the toolbar sync button, not here. */}
             {(() => {
                 const total = result?.data?.length ?? 0;
                 const filtered = rows.length !== total;
-                const last = refresh?.last_success;
                 return (
-                    <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-100/90 backdrop-blur border-t border-slate-300 px-3 py-1 text-xs text-slate-500 [text-shadow:0_1px_0_rgba(255,255,255,0.7)] flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span>
+                    <footer className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
+                        <span className="whitespace-nowrap">
                             {filtered ? `${rows.length}/${total}` : total}
                             {' '}record{total === 1 && !filtered ? '' : 's'}
                         </span>
-                        <span className="text-slate-300">·</span>
+                        <span className="text-label-3">·</span>
                         <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
-                            <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
+                            <span className="whitespace-nowrap"><span className="text-hot">🔥</span> O2.5: {_rate(dayRates.hot)}</span>
                         </Tooltip>
-                        <span className="text-slate-300">·</span>
+                        <span className="text-label-3">·</span>
                         <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
-                            <span>Tips: {_rate(dayRates.tips)}</span>
+                            <span className="whitespace-nowrap">Tips: {_rate(dayRates.tips)}</span>
                         </Tooltip>
-                        <span className="text-slate-300">·</span>
+                        <span className="text-label-3">·</span>
                         <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
-                            <span className={safeOnly ? 'text-sky-600' : ''}>🛡 Safe: {safePicks.length}</span>
+                            <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
                         </Tooltip>
-                        {(last || refresh?.running) && (
-                            <Tooltip content={refresh?.running
-                                ? `Refreshing (${refresh.mode ?? 'manual'})${refresh.step ? ` — ${refresh.step}` : ''}…`
-                                : `Last data refresh: ${new Date(last.at).toLocaleString()} (${last.mode})`}>
-                                <span className="ml-auto tabular-nums">
-                                    <span className={refresh?.running ? 'inline-block animate-pulse' : ''}>⟳</span>
-                                    {' '}{refresh?.running
-                                        ? (refresh.step ?? 'refreshing')
-                                        : _hm(last.at)}
-                                </span>
-                            </Tooltip>
-                        )}
-                    </div>
+                    </footer>
                 );
             })()}
+
+            {showMagic && (
+                <Sheet onClose={() => setShowMagic(false)} className="max-w-md">
+                    <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
+                        onToggle={onToggleMagic} onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+                </Sheet>
+            )}
 
             {showSlips && (
                 <BetslipPlayground

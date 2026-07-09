@@ -495,7 +495,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`overflow-auto max-h-[calc(100vh-13rem)] sm:max-h-[calc(100vh-10.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
