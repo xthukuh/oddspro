@@ -2,6 +2,16 @@
 
 Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — only Setup Node.js App, Cron Jobs, File Manager, and phpMyAdmin. This is the **manual-first** workflow: build locally, upload the built files. No Git Version Control, no `deploy` branch, no build step on the server. (CI/CD can come later when the host gains SSH — see §7.)
 
+## What's new in v1.0.1 (deployment-relevant)
+
+- **In-process auto-refresh scheduler** (`src/auto-refresh.js`, runs inside the always-on server): a LIGHT pass every `AUTO_LIGHT_MINUTES` (default 10 — settles scores/outcomes, refreshes today's odds, links, settles picks) and the FULL pipeline once daily at `AUTO_FULL_AT` (default 06:00 EAT, `AUTO_FULL_DAYS` ahead, default 5). **The daily cron job is now an optional backup**, not the primary schedule (§3 step 10).
+- **Per-job log** `logs/auto-refresh.log`, toggleable (`AUTO_LOG`) and **self-truncating** at `AUTO_LOG_MAX_KB` (default 256 KB) — no rotation needed on the host.
+- **Manual refresh cache reuse**: `POST /api/refresh` for a date already refreshed within `REFRESH_CACHE_MINUTES` (default 5) answers `200 {fresh:true}` without re-running; the web app shows "Already fresh" and just reloads.
+- **Connected browsers pick up refreshes silently**: the web app polls `GET /api/refresh` (now carrying `data_version`/`last_success`) every 60s and reloads the table in place — scroll, sort and filters preserved.
+- **New DB migration** `20260709000001_fixtures_elapsed` (`fixtures.elapsed` — live match minute, shown in the Status tooltip). Apply it on deploy (§5, Migrations).
+- **UI**: the footer is now a bottom-sticky status bar (record count, day hit-rates, last-refresh time).
+- New `.env` knobs (all optional, sane defaults): `AUTO_REFRESH_ENABLED`, `AUTO_LIGHT_MINUTES`, `AUTO_FULL_AT`, `AUTO_FULL_DAYS`, `AUTO_LOG`, `AUTO_LOG_MAX_KB`, `REFRESH_CACHE_MINUTES`.
+
 ## 1. Overview
 
 - **Two branches, no `deploy` branch.** `dev` is where development happens; `main` is the stable/production-ready line (merge `dev` → `main` when ready). You deploy by building **whichever branch you're shipping** locally and uploading the result — there is no separate release/promote branch.
@@ -49,9 +59,12 @@ Do these **in order**:
    - `DB_POOL_MAX`: start conservative, e.g. `3` (see §6).
    - `API_TOKEN`: optional (see §6) — if set, it must match the `VITE_API_TOKEN` you built with in step 4.
    - Leave `API_HOST` and `DEBUG` at their defaults (see §6).
+   - Auto-refresh: the defaults (light every 10 min, full daily 06:00 EAT) are production-ready; set `AUTO_REFRESH_ENABLED=0` only if you want cron-only scheduling.
 8. **Run NPM Install**: click **"Run NPM Install"** in the Setup Node.js App UI (installs production dependencies into the app's `nodevenv`).
 9. **Restart** the app via the Setup Node.js App UI, then smoke-test (§5's checklist).
-10. **Cron Jobs**: first confirm the server timezone — with no SSH, temporarily add a cron entry `date >> logs/tz-check.log` a minute out, read it via File Manager, then delete that test entry. Convert 08:00 EAT (UTC+3) to the server timezone (05:00 if UTC). Add the real entry, daily at the converted time:
+10. **Cron Jobs (optional backup since v1.0.1)**: the in-process scheduler (§ What's new) already runs the light pass every 10 minutes and the full pipeline daily at `AUTO_FULL_AT` — a cron entry is only a **safety net** for the case where the host spins the idle Node app down (see §6, Passenger residency). If you keep one:
+    - Schedule it **at least 1 hour away from `AUTO_FULL_AT`**. Cron runs in a *separate process* the server's single-slot job guard cannot see — two concurrent sweeps risk the InnoDB delete+insert gap-lock deadlocks the in-process guard exists to prevent.
+    - First confirm the server timezone — with no SSH, temporarily add a cron entry `date >> logs/tz-check.log` a minute out, read it via File Manager, then delete that test entry. Convert the chosen EAT time (UTC+3) to the server timezone. Then add:
     ```
     bash /home/<CPANEL_USER>/<APP_DIR>/scripts/pipeline-cron.sh
     ```
@@ -71,23 +84,34 @@ For any future change:
 **Smoke-test after each deploy:**
 - `/` loads the SPA shell (correct title, favicon, and — on a prod build — the GA tag in view-source).
 - `GET /api/columns` returns JSON.
-- `logs/pipeline.log` shows the next cron tick landed cleanly.
+- `GET /api/refresh` returns the job state with `data_version`; within ~`AUTO_LIGHT_MINUTES` of the restart, `logs/auto-refresh.log` shows a `light ok` line and the status bar's ⟳ time updates.
+- If a backup cron is kept: `logs/pipeline.log` shows its next tick landed cleanly.
 - The Setup Node.js App log shows no startup errors.
 
-**Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (b) translating the migration and running its SQL in phpMyAdmin. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying.
+**Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (b) translating the migration and running its SQL in phpMyAdmin **plus inserting its bookkeeping row** so a future `npm run migrate` doesn't try to re-apply it. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying.
+
+For the v1.0.1 migration specifically, option (b) is:
+```sql
+ALTER TABLE fixtures ADD COLUMN elapsed SMALLINT UNSIGNED NULL;
+INSERT INTO knex_migrations (name, batch, migration_time)
+VALUES ('20260709000001_fixtures_elapsed.js',
+        (SELECT b FROM (SELECT MAX(batch) + 1 AS b FROM knex_migrations) t), NOW());
+```
 
 **Rollback:** keep the previous known-good `release/` zips (both the `-app` and `-web` archives); re-extract them into the Application Root / `public_html` and restart. The corresponding commit on `dev`/`main` is the source-of-truth to rebuild from if you no longer have the zips.
 
 ## 6. Troubleshooting / risk appendix
 
-- **Connection-pool sizing.** The cron pipeline (`npm run start`) and the always-on server (`npm run serve`/`src/server.js`) are *separate processes*, each with its own knex pool (`DB_POOL_MAX`, default 10 each — worst case ~20 connections). Shared MySQL hosting caps per-account connections; if you see too-many-connections errors, lower `DB_POOL_MAX` in `.env` (e.g. `3`).
+- **Connection-pool sizing.** Since v1.0.1 the scheduled refreshes run *inside* the server process — one knex pool total in the default setup. Only a kept backup cron (`npm run start`) adds a second process/pool while it runs (worst case ~2×`DB_POOL_MAX`). Shared MySQL hosting caps per-account connections; if you see too-many-connections errors, lower `DB_POOL_MAX` in `.env` (e.g. `3`).
+- **Passenger residency (scheduler prerequisite).** The in-process scheduler only ticks while the Node app is alive. Passenger *can* spin idle apps down on some hosts — verify yours keeps it resident: after >15 idle minutes, check `logs/auto-refresh.log` still gained `light ok` lines. If the app sleeps, either rely on the visitor traffic + slow client polls to keep it warm, keep the backup cron (§3 step 10), or ask the host to mark the app always-running.
+- **`REFRESH_CACHE_MINUTES`.** Manual refresh of a date successfully refreshed within this window (default 5m, any mode — scheduled runs count) answers `200 {fresh:true}` and starts nothing, so button-mashing right after an auto run costs zero scrapes.
 - **Timezone.** The cron schedule (server system timezone, likely UTC) and the DB session's `SET time_zone = '+03:00'` pin (every knex connection, `knexfile.js`) are **independent**. The pin governs how stored EAT wall-clock datetimes compare against `NOW()`; the cron schedule only governs when the job fires.
 - **Why `API_HOST` stays `127.0.0.1`.** Passenger reverse-proxies your domain to the app over loopback — `0.0.0.0` isn't required and is worse practice on shared multi-tenant hosting. Only change it if Passenger's logs show connection-refused.
 - **`API_TOKEN` tradeoff.** Once public, `POST /api/refresh` has no access control beyond an easily-spoofed header — anyone with the URL could trigger live scrapes/API-Football calls. Setting `API_TOKEN` requires `Authorization: Bearer <token>` on all `/api/*`; `web/src/api.js` sends it automatically **when the frontend was built with a matching `VITE_API_TOKEN`** (set it in your local `.env` before `npm run build:web` — they must be identical, and the token is visible in the browser network tab, so it's a deterrent, not real auth). A no-code alternative: cPanel's "Directory Privacy" (Basic Auth on the whole app).
 - **`REFRESH_COOLDOWN_MINUTES`.** Per-date: refreshing a date locks that date for the window (default 60m, `0` disables); other dates are unaffected. A cooled-down request returns `429` with a retry time.
 - **MariaDB → MySQL dump portability.** The schema (`src/db/migrations/`) uses only standard tables, JSON columns and indexes — no generated/virtual columns, `CHECK` constraints, or sequences — all portable to MySQL 5.7+/8.0 or MariaDB 10.2+. If phpMyAdmin's import complains about an unrecognized directive, it's likely a stray `/*M!...*/` MariaDB-conditional comment — safe to strip.
 - **Lockfiles are gitignored** (`package-lock.json`, root and `web/`) — the server's `npm install` guarantees only semver-range compatibility with what you tested locally. Most runtime deps (`express`, `knex`, `mysql2`, `zod`, `dotenv`) are exact-pinned; only `axios` (`^1.7.2`) floats, so the blast radius is small.
-- **Unbounded `logs/` growth.** No log rotation exists. Shared hosting often has tight disk quotas; periodically clear old `logs/pipeline.log` entries via File Manager.
+- **`logs/` growth.** `logs/auto-refresh.log` self-truncates at `AUTO_LOG_MAX_KB` (default 256 KB) — no maintenance needed. `logs/pipeline.log` (backup cron only) still grows unbounded; if you keep the cron, periodically clear it via File Manager.
 - **Passenger restart.** If the app serves stale code after an upload, use the Setup Node.js App UI's **Restart** button (Passenger's `tmp/restart.txt` convention).
 
 ## 7. Later: CI/CD (when SSH lands)
