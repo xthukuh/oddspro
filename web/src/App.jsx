@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { shouldReloadForJob } from './freshness.js';
 import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
+import HelpModal from './components/HelpModal.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import SortPills from './components/SortPills.jsx';
+import Tooltip from './components/Tooltip.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -62,12 +65,17 @@ function _loadSort() {
     return [];
 }
 
+// Stable empty-array reference for null-catalog fallbacks - a fresh `[]` per
+// render would churn downstream memos/effect deps (see the providers note).
+const EMPTY_PROVIDERS = [];
+
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
-// Display an ISO date as DD-MM-YYYY; tooltip spells it out (noon-anchored to
-// dodge tz day-shift). Native <input type="date"> can't be reformatted, so a
-// formatted label is overlaid on a transparent picker input in the header.
-const _ddmmyyyy = iso => { const [y, m, d] = iso.split('-'); return `${d}-${m}-${y}`; };
+// Display an ISO date compactly as D/M/YYYY (no leading zeros); tooltip spells
+// it out (noon-anchored to dodge tz day-shift). Native <input type="date">
+// can't be reformatted, so a formatted label is overlaid on a transparent
+// picker input in the header.
+const _dmy = iso => { const [y, m, d] = iso.split('-'); return `${+d}/${+m}/${y}`; };
 const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
 });
@@ -97,6 +105,13 @@ function _hitRates(rows) {
 const _rate = ({ hits, settled }) => (settled
     ? `${hits}/${settled} (${(hits / settled * 100).toFixed(1)}%)`
     : '—');
+
+// 'HH:MM' local wall-clock for the status bar's last-refresh stamp
+const _hm = iso => {
+    const d = new Date(iso);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+};
 
 // Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
 // the cleared all-dates view) so reload / back / forward keep the navigation.
@@ -128,8 +143,18 @@ export default function App() {
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
+    const [showHelp, setShowHelp] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
+    const [notice, setNotice] = useState(null); // transient neutral banner
+    // Freshness signal plumbing: last seen data_version (null until the first
+    // poll - the baseline observation must not reload), whether the next
+    // records load is a silent background one (skip the loading dim), and the
+    // current date for interval callbacks (they must not re-subscribe per date).
+    const lastVersionRef = useRef(null);
+    const silentRef = useRef(false);
+    const dateRef = useRef(date);
+    useEffect(() => { dateRef.current = date; }, [date]);
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -194,9 +219,17 @@ export default function App() {
         ),
         [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
     );
-    const rates = useMemo(() => _hitRates(rows), [rows]);
-    // Known bookmakers come from the catalog; null selection = all visible
-    const providers = catalog?.providers ?? [];
+    // Day-level hit-rate scoreboard: computed over the whole loaded selection
+    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
+    // picks and stays stable when you filter or hide rows in the view.
+    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
+    // Known bookmakers come from the catalog; null selection = all visible.
+    // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
+    // not a fresh `[]`): a new array each render would change the
+    // selectedProviders memo and the records-effect deps every render, which
+    // on a failed catalog fetch spins an infinite refetch loop (see the
+    // "records effect" note below).
+    const providers = catalog?.providers ?? EMPTY_PROVIDERS;
     const selectedProviders = useMemo(() => {
         if (!providerKeys) return providers;
         const valid = new Set(providers);
@@ -206,10 +239,15 @@ export default function App() {
     // Records whenever the SERVER query shape changes (or a refresh lands
     // new data). Client-only filter edits re-filter locally, never refetch:
     // the effect keys on the serialized server subset, not `filters`.
+    // NOTE: every dep here must be reference-stable across renders (strings,
+    // numbers, or memoized arrays) - an unstable dep would refetch on its own
+    // setState, and on a failing request that becomes an infinite refetch loop.
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
         let stale = false;
-        setLoading(true);
+        // Silent background reloads (auto-refresh landed new data) skip the
+        // loading dim - the table just updates in place.
+        if (!silentRef.current) setLoading(true);
         fetchRecords({
             date: date || 'all',
             filters: serverFilters,
@@ -223,9 +261,27 @@ export default function App() {
                 setError(null);
             })
             .catch(e => !stale && setError(String(e.message ?? e)))
-            .finally(() => !stale && setLoading(false));
+            .finally(() => {
+                silentRef.current = false;
+                if (!stale) setLoading(false);
+            });
         return () => { stale = true; };
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
+
+    // Auto-dismiss the error banner after 3s (it's also manually closable).
+    // A new error resets the timer; clearing on unmount avoids a stray setState.
+    useEffect(() => {
+        if (!error) return;
+        const id = setTimeout(() => setError(null), 3000);
+        return () => clearTimeout(id);
+    }, [error]);
+
+    // Same auto-dismiss for the neutral notice ("Already fresh ...").
+    useEffect(() => {
+        if (!notice) return;
+        const id = setTimeout(() => setNotice(null), 3000);
+        return () => clearTimeout(id);
+    }, [notice]);
 
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
@@ -234,12 +290,50 @@ export default function App() {
         return () => window.removeEventListener('popstate', onPop);
     }, []);
 
-    // Pick up a refresh already in flight (e.g. page reloaded mid-refresh)
-    useEffect(() => {
-        fetchRefreshStatus().then(st => st?.running && setRefresh(st)).catch(() => {});
+    // Freshness gate: reload (silently) when the server's data_version moved
+    // AND the successful run's scope covers the loaded date. The FIRST
+    // observed version is just the baseline - a page load or server restart
+    // must not trigger a reload of data we already fetched.
+    const maybeReload = useCallback(st => {
+        if (st == null || typeof st.data_version !== 'number') return;
+        if (lastVersionRef.current === null) {
+            lastVersionRef.current = st.data_version;
+            return;
+        }
+        if (st.running || st.data_version === lastVersionRef.current) return;
+        lastVersionRef.current = st.data_version;
+        if (shouldReloadForJob(st.last_success, dateRef.current)) {
+            silentRef.current = true;
+            setRefreshTick(t => t + 1);
+        }
     }, []);
 
-    // Poll the refresh job while it runs; reload records when it finishes
+    // Slow freshness poll (always on): the in-process scheduler refreshes
+    // data server-side on its own cadence - this is how every connected
+    // client learns about it. Also adopts a refresh already in flight on
+    // mount (e.g. page reloaded mid-refresh).
+    useEffect(() => {
+        let stale = false;
+        const poll = async () => {
+            try {
+                const st = await fetchRefreshStatus();
+                if (stale) return;
+                setRefresh(st);
+                maybeReload(st);
+            } catch {
+                // transient poll failure - next interval retries
+            }
+        };
+        poll();
+        const id = setInterval(poll, 60_000);
+        return () => { stale = true; clearInterval(id); };
+    }, [maybeReload]);
+
+    // Fast poll while a job runs (manual or scheduled - the ⟳ button spins
+    // for both). Manual completions reload unconditionally (the user asked;
+    // even a failed run may have landed partial data) and surface errors;
+    // auto completions go through the silent freshness gate - their failures
+    // belong to logs/auto-refresh.log, not the UI.
     useEffect(() => {
         if (!refresh?.running) return;
         const id = setInterval(async () => {
@@ -247,19 +341,36 @@ export default function App() {
                 const st = await fetchRefreshStatus();
                 setRefresh(st);
                 if (!st.running) {
-                    setRefreshTick(t => t + 1);
-                    if (st.error) setError(`Refresh failed: ${st.error}`);
+                    if (st.mode === 'manual') {
+                        if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
+                        setRefreshTick(t => t + 1);
+                        if (st.error) setError(`Refresh failed: ${st.error}`);
+                    } else {
+                        maybeReload(st);
+                    }
                 }
             } catch {
                 // transient poll failure - keep polling
             }
         }, 2000);
         return () => clearInterval(id);
-    }, [refresh?.running]);
+    }, [refresh?.running, maybeReload]);
 
     const onRefresh = async () => {
         try {
-            setRefresh(await startRefresh(date));
+            const body = await startRefresh(date);
+            if (body?.fresh) {
+                // Server-side cache says this date was refreshed moments ago -
+                // no new run; just reload what we show and say so.
+                if (typeof body.data_version === 'number') lastVersionRef.current = body.data_version;
+                const mins = body.last_refreshed_at
+                    ? Math.max(1, Math.round((Date.now() - new Date(body.last_refreshed_at).getTime()) / 60_000))
+                    : null;
+                setNotice(`Already fresh${mins ? ` — refreshed ${mins}m ago` : ''}. Reloading the view.`);
+                setRefreshTick(t => t + 1);
+                return;
+            }
+            setRefresh(body);
         } catch (e) {
             setError(String(e.message ?? e));
         }
@@ -372,103 +483,122 @@ export default function App() {
 
     return (
         <div className="min-h-screen bg-slate-100 text-slate-800">
-            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-wrap items-center gap-1.5 md:gap-2">
-                <a href="/" className="text-lg font-semibold tracking-wide" title="ODDS PRO">[OP]</a>
-                <span className="hidden sm:inline text-slate-400 text-xs">
-                    By <a className="font-bold" href="https://github.com/xthukuh" target="_blank" title="Maintained by Martin Thuku">Martin</a>
-                </span>
-                <div className="grow" />
-                { date === TODAY ? null : (
+            {/* Two-tier responsive topbar: brand + merged date-nav on one line,
+                action buttons on the next below md (single row from md up). */}
+            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-col gap-2 md:flex-row md:items-center">
+                <div className="flex items-center gap-2">
+                    {/* The SVG badge's background is #0f172a (= bg-slate-900,
+                        the topbar) so it blends in; the sky border + white "OP"
+                        are what read against the bar. */}
+                    <a href="/" title="ODDS PRO" className="shrink-0 hover:opacity-80">
+                        <img src="/icon.svg" alt="Odds Pro" className="h-8 w-8" />
+                    </a>
+                    {/* Merged segmented date-nav: [⌂] [‹] [ D/M/YYYY ] [›]. The
+                        centre cell is a transparent native picker under a
+                        formatted label (native date inputs can't be reformatted);
+                        tooltip spells the full day, clearing shows all dates. */}
+                    <div className="inline-flex items-stretch overflow-hidden rounded-md border border-slate-700 bg-slate-800 text-sm">
+                        {date !== TODAY && (
+                            <button
+                                onClick={() => changeDate(TODAY)}
+                                title="Jump to today"
+                                className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700"
+                            >
+                                ⌂
+                            </button>
+                        )}
+                        <button
+                            onClick={() => changeDate(PREV_DATE)}
+                            disabled={date <= MIN_DATE}
+                            title={`Previous (${PREV_DATE})`}
+                            className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                            &#8249;
+                        </button>
+                        <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
+                            <span className="pointer-events-none min-w-[6.5rem] px-3 py-1 text-center tabular-nums">
+                                {date ? _dmy(date) : 'All dates'}
+                            </span>
+                            <input
+                                type="date"
+                                value={date}
+                                min={MIN_DATE}
+                                max={MAX_DATE}
+                                onFocus={e => e.target.showPicker?.()}
+                                onClick={e => e.target.showPicker?.()}
+                                onChange={e => changeDate(e.target.value)}
+                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                                aria-label="Select date (clear to show all dates)"
+                            />
+                        </label>
+                        <button
+                            onClick={() => changeDate(NEXT_DATE)}
+                            disabled={date >= MAX_DATE}
+                            title={`Next (${NEXT_DATE})`}
+                            className="cursor-pointer border-l border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
+                        >
+                            &#8250;
+                        </button>
+                    </div>
+                </div>
+                {/* App-header style action bar: icon-only buttons (Android/iOS
+                    convention) with uniform touch targets + accessible labels;
+                    text lives in tooltips/aria-label, not on the chrome. */}
+                <div className="flex items-center justify-between gap-1.5 md:ml-auto md:justify-end">
                     <button
-                        onClick={() => changeDate(TODAY)}
-                        title="Jump to today"
-                        className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
+                        onClick={onRefresh}
+                        disabled={!date || refresh?.running}
+                        aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
+                        title={refresh?.running
+                            ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                            : date ? 'Re-fetch fixtures, results & odds for this date' : 'Pick a date to refresh'}
+                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none ${refresh?.running
+                            ? 'bg-amber-600 border-amber-500 cursor-wait'
+                            : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
                     >
-                        <span className="sm:hidden">⌂</span><span className="hidden sm:inline">Today</span>
+                        <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
                     </button>
-                )}
-                <button
-                    onClick={() => changeDate(PREV_DATE)}
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
-                    disabled={date <= MIN_DATE}
-                    title={`Previous (${PREV_DATE})`}
-                >
-                    &#10094;
-                </button>
-                {/* Formatted DD-MM-YYYY label over a transparent native picker
-                    (native date inputs can't be reformatted); tooltip spells the
-                    full day. Clearing the picker shows all dates. */}
-                <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
-                    <span className="pointer-events-none bg-slate-800 border border-slate-700 rounded px-2 py-1 text-white text-sm tabular-nums">
-                        {date ? _ddmmyyyy(date) : 'All dates'}
-                    </span>
-                    <input
-                        type="date"
-                        value={date}
-                        min={MIN_DATE}
-                        max={MAX_DATE}
-                        onFocus={e => e.target.showPicker?.()}
-                        onClick={e => e.target.showPicker?.()}
-                        onChange={e => changeDate(e.target.value)}
-                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                        aria-label="Select date (clear to show all dates)"
+                    <MagicMenu
+                        data={magicData}
+                        error={magicError}
+                        activeIds={activeMagicIds}
+                        onToggle={onToggleMagic}
+                        onClearMagic={onClearMagic}
                     />
-                </label>
-                <button
-                    onClick={() => changeDate(NEXT_DATE)}
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-40"
-                    disabled={date >= MAX_DATE}
-                    title={`Next (${NEXT_DATE})`}
-                >
-                    &#10095;
-                </button>
-                <button
-                    onClick={onRefresh}
-                    disabled={!date || refresh?.running}
-                    title={date
-                        ? 'Re-fetch fixtures, results & odds for this date'
-                        : 'Pick a date to refresh'}
-                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${refresh?.running
-                        ? 'bg-amber-600 border-amber-500 cursor-wait'
-                        : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                >
-                    <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
-                    <span className="hidden sm:inline">
-                        {refresh?.running
-                            ? ` Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                            : ' Refresh'}
-                    </span>
-                </button>
-                <MagicMenu
-                    data={magicData}
-                    error={magicError}
-                    activeIds={activeMagicIds}
-                    onToggle={onToggleMagic}
-                    onClearMagic={onClearMagic}
-                />
-                <button
-                    onClick={() => setShowSlips(true)}
-                    title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
-                >
-                    🧾<span className="hidden sm:inline"> Slips</span>
-                </button>
-                <button
-                    onClick={() => setShowFilters(v => !v)}
-                    title="Filter the table rows"
-                    className={`cursor-pointer px-2 md:px-3 py-1 rounded border text-sm ${showFilters || filters.length
-                        ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
-                >
-                    <span className="sm:hidden">▽{filters.length ? ` ${filters.length}` : ''}</span>
-                    <span className="hidden sm:inline">Filters{filters.length ? ` (${filters.length})` : ''}</span>
-                </button>
-                <button
-                    onClick={() => setShowSettings(true)}
-                    title="Display settings"
-                    className="cursor-pointer px-2 md:px-3 py-1 rounded border text-sm bg-slate-800 border-slate-700 hover:bg-slate-700"
-                >
-                    ⚙<span className="hidden sm:inline"> Settings</span>
-                </button>
+                    <button
+                        onClick={() => setShowSlips(true)}
+                        aria-label="Betslip playground"
+                        title="Betslip playground - build virtual multi-bet slips from the day's tips"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        🧾
+                    </button>
+                    <button
+                        onClick={() => setShowFilters(v => !v)}
+                        aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`}
+                        title="Filter the table rows"
+                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center gap-0.5 rounded-md border text-lg leading-none ${showFilters || filters.length
+                            ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
+                    >
+                        ▽{filters.length ? <span className="text-xs tabular-nums">{filters.length}</span> : null}
+                    </button>
+                    <button
+                        onClick={() => setShowHelp(true)}
+                        aria-label="Help"
+                        title="Help - what Odds Pro does + demo video"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none font-semibold bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        ?
+                    </button>
+                    <button
+                        onClick={() => setShowSettings(true)}
+                        aria-label="Display settings"
+                        title="Display settings"
+                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
+                    >
+                        ⚙
+                    </button>
+                </div>
             </header>
 
             <SortPills
@@ -487,12 +617,34 @@ export default function App() {
             )}
 
             {error && (
-                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm">
-                    {error}
+                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm flex items-start gap-2" role="alert">
+                    <span className="grow">{error}</span>
+                    <button
+                        onClick={() => setError(null)}
+                        aria-label="Dismiss error"
+                        title="Dismiss"
+                        className="cursor-pointer shrink-0 text-red-400 hover:text-red-700 text-lg leading-none"
+                    >
+                        &times;
+                    </button>
                 </div>
             )}
 
-            <main className="p-4">
+            {notice && (
+                <div className="m-4 px-4 py-2 rounded border border-sky-300 bg-sky-50 text-sky-700 text-sm flex items-start gap-2" role="status">
+                    <span className="grow">{notice}</span>
+                    <button
+                        onClick={() => setNotice(null)}
+                        aria-label="Dismiss notice"
+                        title="Dismiss"
+                        className="cursor-pointer shrink-0 text-sky-400 hover:text-sky-700 text-lg leading-none"
+                    >
+                        &times;
+                    </button>
+                </div>
+            )}
+
+            <main className="p-4 pb-10">
                 <DataTable
                     catalog={catalog}
                     rows={rows}
@@ -504,28 +656,47 @@ export default function App() {
                     onSort={onSort}
                     loading={loading}
                     linkProviders={linkProviders}
+                    scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
-                <div className="py-3 text-sm text-slate-500">
-                    <span>
-                        {rows.length}{clientFilters.length ? ` of ${result?.total ?? 0}` : ''}
-                        {' '}record{(clientFilters.length ? result?.total : rows.length) === 1 ? '' : 's'}
-                    </span>
-                    <span className="mx-2 text-slate-300">·</span>
-                    <span
-                        className="cursor-help"
-                        title="Over 2.5 hot picks shown: settled hits / settled picks (unique fixtures; pending picks excluded)"
-                    >
-                        🔥 O2.5: {_rate(rates.hot)}
-                    </span>
-                    <span className="mx-2 text-slate-300">·</span>
-                    <span
-                        className="cursor-help"
-                        title="Tips shown: settled hits / settled tips (unique fixtures; pending tips excluded, AI-vetoed included)"
-                    >
-                        Tips: {_rate(rates.tips)}
-                    </span>
-                </div>
             </main>
+
+            {/* Bottom status bar (fixed, z-30 - under the z-40 modals): record
+                count, the day-level hit-rate scoreboard and the last refresh
+                time. Small text with a subtle lift shadow, wraps on narrow
+                screens; <main> reserves pb-10 so content clears it. */}
+            {(() => {
+                const total = result?.data?.length ?? 0;
+                const filtered = rows.length !== total;
+                const last = refresh?.last_success;
+                return (
+                    <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-100/90 backdrop-blur border-t border-slate-300 px-3 py-1 text-xs text-slate-500 [text-shadow:0_1px_0_rgba(255,255,255,0.7)] flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span>
+                            {filtered ? `${rows.length}/${total}` : total}
+                            {' '}record{total === 1 && !filtered ? '' : 's'}
+                        </span>
+                        <span className="text-slate-300">·</span>
+                        <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
+                            <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
+                        </Tooltip>
+                        <span className="text-slate-300">·</span>
+                        <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
+                            <span>Tips: {_rate(dayRates.tips)}</span>
+                        </Tooltip>
+                        {(last || refresh?.running) && (
+                            <Tooltip content={refresh?.running
+                                ? `Refreshing (${refresh.mode ?? 'manual'})${refresh.step ? ` — ${refresh.step}` : ''}…`
+                                : `Last data refresh: ${new Date(last.at).toLocaleString()} (${last.mode})`}>
+                                <span className="ml-auto tabular-nums">
+                                    <span className={refresh?.running ? 'inline-block animate-pulse' : ''}>⟳</span>
+                                    {' '}{refresh?.running
+                                        ? (refresh.step ?? 'refreshing')
+                                        : _hm(last.at)}
+                                </span>
+                            </Tooltip>
+                        )}
+                    </div>
+                );
+            })()}
 
             {showSlips && (
                 <BetslipPlayground
@@ -538,6 +709,8 @@ export default function App() {
                     onClose={() => setShowSlips(false)}
                 />
             )}
+
+            {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
 
             {showSettings && catalog && (
                 <SettingsModal

@@ -2,4 +2,3 @@
 # script (scripts/pipeline-cron.sh) breaks bash on the Linux cPanel host
 # ("bad interpreter" from the trailing \r).
 *.sh text eol=lf
-.cpanel.yml text eol=lf

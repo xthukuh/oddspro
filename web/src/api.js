@@ -1,7 +1,7 @@
 // Typed wrappers over the oddspro API (:3001, proxied via vite in dev).
 
-// Baked in at build time (scripts/release.js mirrors the server's API_TOKEN
-// into VITE_API_TOKEN so they never drift). Unset locally - no-op.
+// Baked in at build time from VITE_API_TOKEN (set it in .env to match the
+// server's API_TOKEN before `npm run build:web`). Unset locally - no-op.
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || null;
 const _authHeaders = () => API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
 
@@ -46,8 +46,10 @@ export async function fetchMagicSort() {
     return _get('/api/magic-sort');
 }
 
-// Start refreshing a date's data. A 409 (refresh already running) also
-// resolves to the in-flight job state - callers just track it.
+// Start refreshing a date's data. A 409 (refresh already running - manual or
+// scheduled) also resolves to the in-flight job state - callers just track
+// it. May resolve to { fresh: true, last_refreshed_at, ... } when the server
+// already refreshed the date within its cache window (no new run started).
 export async function startRefresh(date) {
     const res = await fetch(`/api/refresh?date=${encodeURIComponent(date)}`, {
         method: 'POST',
@@ -58,7 +60,10 @@ export async function startRefresh(date) {
     return body;
 }
 
-// Refresh job state: { running, date, step, started_at, finished_at, error, summary }
+// Refresh job state + freshness signal: { running, mode, date, dates, step,
+// started_at, finished_at, error, summary, data_version, last_success }.
+// data_version bumps on every successful run (any mode); last_success =
+// { at, mode, dates } drives the silent-reload scope gate (freshness.js).
 export async function fetchRefreshStatus() {
     return _get('/api/refresh');
 }

@@ -4,13 +4,14 @@
 // Sticky chrome: the header row pins to the top, and a duplicate Score
 // column pins left only while the real one is scrolled out of view.
 
-import { useMemo, useRef, useState } from 'react';
+import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sortValue } from '../sortValues.js';
 import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
+import Tooltip from './Tooltip.jsx';
 
 const PROVIDER_STYLE = {
     betpawa: 'bg-emerald-100 text-emerald-800',
@@ -89,6 +90,10 @@ const STATUS_INFO = {
     AWD: 'Awarded (technical result)', WO: 'Walkover',
 };
 
+// Statuses whose tooltip appends the live minute (HT is self-describing;
+// finals keep their last seen elapsed, which must not render as live).
+const LIVE_MINUTE = new Set(['1H', '2H', 'ET', 'BT', 'P', 'LIVE']);
+
 // Rearrange columns by the persisted key order (settings drag control):
 // ordered keys first, anything new/unknown keeps its natural position after.
 export function applyOrder(columns, order) {
@@ -147,7 +152,12 @@ const CELL_TITLES = {
             _dt(row.locked_at ?? row.updated_at),
         ].filter(Boolean).join('\n');
     },
-    status: row => STATUS_INFO[row.status] ?? null,
+    status: row => {
+        const info = STATUS_INFO[row.status] ?? null;
+        return info && LIVE_MINUTE.has(row.status) && row.elapsed != null
+            ? `${info} — ${row.elapsed}'`
+            : info;
+    },
     updated_at: row => _dt(row.updated_at),
     locked_at: row => _dt(row.locked_at),
     home_rank: row => (row.home_rank != null ? `${row.home_team ?? 'Home'} - current league rank` : null),
@@ -246,6 +256,9 @@ function _cell(row, col, linkProviders, openTip) {
             );
         }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
+        // The pinned (sticky) duplicate drops the % to stay compact; the real
+        // Tip column keeps it. Full breakdown is a tap away either way.
+        const compact = col.pin;
         const vetoed = row.tip_ai_verdict === 'veto';
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
@@ -264,7 +277,7 @@ function _cell(row, col, linkProviders, openTip) {
             >
                 {row.hot ? '🔥 ' : ''}
                 <span className={`font-medium ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                {pct && <span className={missed || vetoed ? '' : 'text-slate-500'}> · {pct}</span>}
+                {pct && !compact && <span className={missed || vetoed ? '' : 'text-slate-500'}> · {pct}</span>}
                 {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
                 {missed && <span className="font-bold"> ✗</span>}
             </span>
@@ -337,7 +350,7 @@ function _magicCell(row, meta) {
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders }) {
+export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey }) {
     const links = new Set(linkProviders ?? []);
 
     // Tip justification popover, anchored at the click point (one at a time)
@@ -421,13 +434,34 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // would clear the TOTAL width of the currently-inserted pins - adding or
     // removing a pin moves the real columns and the threshold by the same
     // amount, so the states never oscillate at the boundary.
-    const PIN_KEYS = ['score', 'magic', 'tip'];
+    // Only Score and Tip stay pinned (on every screen size) - keeping the set
+    // small leaves room for other columns on narrow widths. The ephemeral magic
+    // column scrolls with the rest.
+    const PIN_KEYS = ['score', 'tip'];
     const containerRef = useRef(null);
     const pinThRefs = useRef({}); // key -> the real column's <th>
     const [pinState, setPinState] = useState({}); // key -> pinned?
+    // Scroll preservation across data reloads: silent background refreshes
+    // replace `rows` in place - the view must not jump. A scrollKey change
+    // (date/server-filter navigation) is an intentional reset to the top.
+    const posRef = useRef({ top: 0, left: 0 });
+    const scrollKeyRef = useRef(scrollKey);
+    useLayoutEffect(() => {
+        const cont = containerRef.current;
+        if (!cont) return;
+        if (scrollKeyRef.current !== scrollKey) {
+            scrollKeyRef.current = scrollKey;
+            posRef.current = { top: 0, left: 0 };
+            cont.scrollTo(0, 0);
+        } else {
+            cont.scrollTop = posRef.current.top;
+            cont.scrollLeft = posRef.current.left;
+        }
+    }, [rows, scrollKey]);
     const onScroll = () => {
         const cont = containerRef.current;
         if (!cont) return;
+        posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
         const contLeft = cont.getBoundingClientRect().left;
         setPinState(prev => {
             const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
@@ -460,7 +494,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`overflow-auto max-h-[calc(100vh-11rem)] sm:max-h-[calc(100vh-8.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`overflow-auto max-h-[calc(100vh-13rem)] sm:max-h-[calc(100vh-10.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
@@ -511,20 +545,28 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             key={row.match_id}
                             className={`group border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
                         >
-                            {pinned.map(col => (
-                                <td
-                                    key={col.pin ? `pin:${col.key}` : col.key}
-                                    title={_cellTitle(row, col)}
-                                    style={col.pin ? { left: col.left } : undefined}
-                                    className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
-                                        ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
-                                        : ''}`}
-                                >
-                                    {col.key === 'magic' ? _magicCell(row, magicMeta)
-                                        : col.group === 'market' ? _marketCell(row, col.key)
-                                        : _cell(row, col, links, openTip)}
-                                </td>
-                            ))}
+                            {pinned.map(col => {
+                                const content = col.key === 'magic' ? _magicCell(row, magicMeta)
+                                    : col.group === 'market' ? _marketCell(row, col.key)
+                                    : _cell(row, col, links, openTip);
+                                const cellTitle = _cellTitle(row, col);
+                                // Tip & fixture own their tap actions (popover / link) and
+                                // keep their native titles; every other cell routes its
+                                // hidden-content title through the touch-friendly Tooltip.
+                                const wrap = cellTitle && col.key !== 'tip' && col.key !== 'fixture';
+                                return (
+                                    <td
+                                        key={col.pin ? `pin:${col.key}` : col.key}
+                                        title={wrap ? undefined : cellTitle}
+                                        style={col.pin ? { left: col.left } : undefined}
+                                        className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
+                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
+                                            : ''}`}
+                                    >
+                                        {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}
+                                    </td>
+                                );
+                            })}
                         </tr>
                     ))}
                     {!rows.length && (

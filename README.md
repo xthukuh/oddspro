@@ -62,7 +62,7 @@ npm test                            # offline node:test suite (no DB / live APIs
 `schtasks /query|/change|/delete /tn oddspro-pipeline`.
 
 **cPanel deployment:** see `docs/DEPLOYMENT.md` for the shared-hosting deployment guide
-(git-based deploy via a `deploy` branch, no SSH required).
+(manual build-and-upload, no SSH and no `deploy` branch required).
 
 ## Web UI
 

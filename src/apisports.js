@@ -43,7 +43,7 @@ const FixtureItem = z.object({
         date: z.string(), // ISO with TZ offset (requested timezone)
         referee: z.string().nullable().optional(),
         venue: z.object({ name: z.string().nullable().optional() }).partial().nullable().optional(),
-        status: z.object({ short: z.string() }),
+        status: z.object({ short: z.string(), elapsed: z.number().nullable().optional() }),
     }),
     league: z.object({
         id: z.number(),
@@ -127,6 +127,7 @@ function _fixtureRows(item) {
             home_team_id: t.home.id,
             away_team_id: t.away.id,
             status: f.status.short,
+            elapsed: f.status.elapsed ?? null,
             goals_home: item.goals.home,
             goals_away: item.goals.away,
             ht_home: item.score.halftime.home,
@@ -163,7 +164,7 @@ async function _saveFixtureItems(items) {
     for (let i = 0; i < fixtures.length; i += 200) {
         await db('fixtures').insert(fixtures.slice(i, i + 200)).onConflict('id').merge([
             'league_id', 'season', 'round', 'kickoff', 'home_team_id', 'away_team_id',
-            'status', 'goals_home', 'goals_away', 'ht_home', 'ht_away', 'ft_home', 'ft_away',
+            'status', 'elapsed', 'goals_home', 'goals_away', 'ht_home', 'ht_away', 'ft_home', 'ft_away',
             'et_home', 'et_away', 'pen_home', 'pen_away', 'venue', 'referee', 'metadata',
         ]);
     }

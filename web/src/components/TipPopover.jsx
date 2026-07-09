@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect } from 'react';
 
 // Tip justification popover: the persisted bestTip breakdown rendered as a
 // deterministic reasoning ledger - blend components with their effective
@@ -98,20 +98,12 @@ function Blend({ name, prob, weight, note }) {
 }
 
 export default function TipPopover({ row, x, y, onClose }) {
-    const ref = useRef(null);
     useEffect(() => {
-        const press = e => {
-            if (!ref.current?.contains(e.target)) onClose();
-        };
         const key = e => {
             if (e.key === 'Escape') onClose();
         };
-        document.addEventListener('mousedown', press);
         document.addEventListener('keydown', key);
-        return () => {
-            document.removeEventListener('mousedown', press);
-            document.removeEventListener('keydown', key);
-        };
+        return () => document.removeEventListener('keydown', key);
     }, [onClose]);
 
     const b = row.tip_breakdown;
@@ -124,8 +116,12 @@ export default function TipPopover({ row, x, y, onClose }) {
     };
 
     return (
+        <>
+        {/* Invisible dismiss overlay: a background click closes the popover and
+            is swallowed here, so it can't fall through to a column header and
+            trigger a sort. */}
+        <div className="fixed inset-0 z-40" onClick={onClose} />
         <div
-            ref={ref}
             style={style}
             className="fixed z-50 w-80 max-h-[25rem] overflow-y-auto bg-white border border-slate-200 rounded-lg shadow-xl p-3 text-xs"
         >
@@ -200,5 +196,6 @@ export default function TipPopover({ row, x, y, onClose }) {
                 </Section>
             )}
         </div>
+        </>
     );
 }

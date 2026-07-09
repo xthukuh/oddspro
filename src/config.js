@@ -66,6 +66,21 @@ const EnvSchema = z.object({
     // the SAME date again until this many minutes after its last run finished
     // (success or failure). 0 = disabled (today's behavior).
     REFRESH_COOLDOWN_MINUTES: z.coerce.number().min(0).default(60),
+    // In-process auto-refresh scheduler (src/auto-refresh.js, runs inside
+    // `npm run serve`): light pass (scores/outcomes + today's odds + link)
+    // every AUTO_LIGHT_MINUTES, full pipeline (runStartPipeline) once daily
+    // at AUTO_FULL_AT (EAT wall-clock, matching the warehouse convention).
+    AUTO_REFRESH_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    AUTO_LIGHT_MINUTES: z.coerce.number().int().min(0).default(10), // 0 = light mode off
+    AUTO_FULL_AT: z.string().default('06:00'),                      // ''/off = full mode off
+    AUTO_FULL_DAYS: z.coerce.number().int().min(0).default(5),      // days ahead for the daily sweep
+    // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
+    // has no log rotation and tight disk quotas).
+    AUTO_LOG: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    AUTO_LOG_MAX_KB: z.coerce.number().int().min(16).default(256),
+    // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
+    // date was successfully refreshed - any mode - within this window. 0 = off.
+    REFRESH_CACHE_MINUTES: z.coerce.number().min(0).default(5),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app

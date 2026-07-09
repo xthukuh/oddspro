@@ -1,12 +1,13 @@
 {
     "name": "oddspro",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "author": "https://github.com/xthukuh",
     "type": "module",
     "scripts": {
         "start": "node src/index.js",
         "serve": "node src/server.js",
         "build:web": "npm --prefix web run build",
+        "package:deploy": "node scripts/package-deploy.js",
         "migrate": "knex migrate:latest",
         "migrate:make": "knex migrate:make",
         "test": "node --test \"tests/*.test.js\""

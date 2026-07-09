@@ -54,9 +54,10 @@ cache/
 # Backtest harness trial outputs (config+metrics JSON; reproducible from configs)
 experiments/
 
-# Deployment (scripts/release.js, scripts/db-export.js - see docs/DEPLOYMENT.md)
+# Deployment (scripts/db-export.js DB dumps, scripts/package-deploy.js upload
+# zips - see docs/DEPLOYMENT.md)
 backups/
-.deploy-worktree/
+release/
 
 # Custom
 **.xx*

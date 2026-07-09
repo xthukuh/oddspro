@@ -25,7 +25,7 @@ const STEPS = 11;
 //   9. pre-match snapshots - needs local history (8) and fresh standings (7);
 //   10. API predictions (fetch-once) - the hot-pick boost/veto signal;
 //   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4).
-export async function runStartPipeline(days_ahead_ = null) {
+export async function runStartPipeline(days_ahead_ = null, onStep = null) {
     // parseInt: null/undefined parse to NaN (Number(null) would be 0)
     const n = parseInt(days_ahead_, 10);
     const days_ahead = Number.isInteger(n) && n >= 0 ? n : DEFAULT_DAYS_AHEAD;
@@ -39,6 +39,7 @@ export async function runStartPipeline(days_ahead_ = null) {
     const _step = label => {
         if (step) debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
         console.debug(`\n[start ${++step}/${STEPS}] ${label}`);
+        if (typeof onStep === 'function') onStep(label);
         stepStarted = Date.now();
     };
     console.debug(`[start] Full pipeline - ${dates.length} date(s): ${dates.join(', ')}...`);
@@ -93,6 +94,7 @@ export async function runStartPipeline(days_ahead_ = null) {
     debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
     debugLog(`total pipeline time ${Date.now() - pipelineStarted}ms`);
     console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
+    return { dates, quota_remaining: apisportsQuotaRemaining() };
 }
 
 // On-demand single-date refresh (web UI refresh button): fixtures, results
