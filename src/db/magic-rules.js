@@ -276,6 +276,19 @@ export function safeQualifies(row, opts = DEFAULT_SAFE) {
     return tip.price != null && tip.price <= o.maxPrice;
 }
 
+// Grouping day for a row: the ledger's `day` is already the EAT day string
+// (DATE_FORMAT in the pinned +03:00 SQL session); records rows carry
+// `start_time`, which JSON-serializes as a UTC ISO instant - slicing THAT
+// mis-buckets EAT evenings/midnights into the previous day (live bug:
+// one date split into two groups, doubling the per-day cap). EAT is a
+// fixed +03:00 with no DST (same assumption as auto-rules.js).
+const _dayKey = r => {
+    if (r.day != null) return String(r.day).slice(0, 10);
+    const t = Date.parse(r.start_time ?? '');
+    if (Number.isFinite(t)) return new Date(t + 3 * 3600000).toISOString().slice(0, 10);
+    return String(r.start_time ?? '').slice(0, 10);
+};
+
 // The day's safe slip legs: one row per canonical fixture (provider rows
 // share the fixture's tip - first row represents it), gate-filtered, ranked
 // per day by the pinned strategy and capped at maxPerDay. Callers filter a
@@ -289,7 +302,7 @@ export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
         if (seen.has(key)) continue;
         seen.add(key);
         if (!safeQualifies(r, o)) continue;
-        const day = String(r.day ?? r.start_time ?? '').slice(0, 10);
+        const day = _dayKey(r);
         let list = byDay.get(day);
         if (!list) byDay.set(day, list = []);
         list.push(r);

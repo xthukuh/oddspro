@@ -248,12 +248,23 @@ test('safeSelection honors an alternative ranking strategy', () => {
 
 test('safeSelection caps per day independently, using start_time when day is absent', () => {
     const rows = [
-        safe({ api_id: 1, day: null, start_time: '2026-07-01 15:00:00' }),
-        safe({ api_id: 2, day: null, start_time: '2026-07-01 17:00:00' }),
-        safe({ api_id: 3, day: null, start_time: '2026-07-02 15:00:00' }),
+        safe({ api_id: 1, day: null, start_time: '2026-07-01T12:00:00.000Z' }),
+        safe({ api_id: 2, day: null, start_time: '2026-07-01T14:00:00.000Z' }),
+        safe({ api_id: 3, day: null, start_time: '2026-07-02T12:00:00.000Z' }),
     ];
     const picks = safeSelection(rows, null, { maxPerDay: 1 });
     assert.deepEqual(picks.map(r => r.api_id), [1, 3]); // one per day, day order
+});
+
+test('safeSelection groups start_time by the EAT day, not the UTC date', () => {
+    // 21:00Z = midnight EAT the NEXT day; a UTC slice would split one date
+    // into two groups and double the per-day cap (live bug, 2026-07-09).
+    const rows = [
+        safe({ api_id: 1, day: null, start_time: '2026-07-08T21:00:00.000Z' }), // 2026-07-09 00:00 EAT
+        safe({ api_id: 2, day: null, start_time: '2026-07-09T12:00:00.000Z' }), // 2026-07-09 15:00 EAT
+    ];
+    const picks = safeSelection(rows, null, { maxPerDay: 1 });
+    assert.equal(picks.length, 1); // same EAT day -> one group, cap holds
 });
 
 // --- slip math ---
