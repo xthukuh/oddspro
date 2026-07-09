@@ -248,16 +248,18 @@ export function magicSortRows(rows, strategyId, cal) {
     });
 }
 
-// Safe-only selection gates (Safety Net Protocol, 2026-07-09). Seeded from a
-// 547-settled-tip probe: agree >= .72 with all 3 components = 82.5% leg rate
-// (n=40); the 'market' strategy led the 7-day replay (survival 4/7,
-// top-quartile 81.8%). Literals on purpose - the web imports this module
-// verbatim, env overrides would silently diverge client/server. Re-tune via
-// scripts/analyze-safe-tips.js as data grows.
+// Safe-only selection gates (Safety Net Protocol). Tuned 2026-07-09 by the
+// scripts/analyze-safe-tips.js leave-one-day-out grid over 547 settled tips
+// (user decision): the per-day 'market' ranking + cap does the quality
+// control, so looser floors that keep the pool fed beat strict ones that
+// starve it - this combo replayed 94.4% legs at 2.6 picks/day (2-leg slips
+// 6/6) vs 88.9% at 1.3/day for the all-3-signals variant. Literals on
+// purpose - the web imports this module verbatim, env overrides would
+// silently diverge client/server. Re-run the script weekly before touching.
 export const DEFAULT_SAFE = {
     strategy: 'market',   // ranking that decides who wins the per-day cap
-    minParts: 3,          // all three blend components must be present
-    minAgreement: 0.72,   // floor on min(market_prob, stats_prob, api_prob)
+    minParts: 2,          // at least two blend components present
+    minAgreement: 0.65,   // floor on the weakest present component
     maxPrice: 1.6,        // short-priced legs only (1.2 floor set at generation)
     maxPerDay: 3,         // quality over quantity - zero qualifiers = no bet
 };

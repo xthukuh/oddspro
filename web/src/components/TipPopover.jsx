@@ -175,9 +175,9 @@ export default function TipPopover({ row, x, y, onClose }) {
                     {safeQualifies(row) && (
                         <div
                             className="mt-1 text-sky-700"
-                            title="Passes the Safe-only checks: bookmaker odds, recent form and expert data all rate it highly, and the odds are short. See Settings → Safe only."
+                            title="Passes the Safe-only checks: the available signals (bookmaker odds, recent form, expert data) agree with none weak, and the odds are short. See Settings → Safe only."
                         >
-                            🛡 Safe pick - all three signals agree
+                            🛡 Safe pick - the signals agree
                         </div>
                     )}
                     {b ? (

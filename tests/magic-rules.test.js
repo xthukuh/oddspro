@@ -179,8 +179,8 @@ test('magicSortRows sorts score desc, sinks nulls, keeps ties stable', () => {
 
 // --- safe selection (Safety Net Protocol gates + per-day cap) ---
 
-// A row that clears every DEFAULT_SAFE gate: 3 components, min 0.75 >= 0.72,
-// price 1.25 <= 1.6, not vetoed.
+// A row that clears every DEFAULT_SAFE gate: 3 components (>= 2 required),
+// weakest 0.75 >= 0.65, price 1.25 <= 1.6, not vetoed.
 const safe = (over = {}) => row({
     api_id: 1, tip_outcome: null, tip_price: 1.25,
     tip_breakdown: { market_prob: 0.8, stats_prob: 0.75, api_prob: 0.78 },
@@ -199,12 +199,14 @@ test('safeQualifies rejects each gate violation individually', () => {
     assert.equal(safeQualifies(safe({ tip_ai_verdict: 'veto' })), false);
     assert.equal(safeQualifies(safe({ tip_market: null })), false);
     assert.equal(safeQualifies(safe({ tip_breakdown: null })), false);          // pre-2026-07-04 rows
-    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } })), false); // 2 of 3 parts
-    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.7, api_prob: 0.78 } })), false); // agree 0.70 < 0.72
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8 } })), false); // 1 of 3 parts < minParts 2
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.6, api_prob: 0.78 } })), false); // agree 0.60 < 0.65
     assert.equal(safeQualifies(safe({ tip_price: 1.7 })), false);
     assert.equal(safeQualifies(safe({ tip_price: null })), false);
-    // partial opts merge over DEFAULT_SAFE
-    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } }), { minParts: 2 }), true);
+    // partial opts merge over DEFAULT_SAFE (two parts pass by default, a
+    // stricter override rejects)
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } })), true);
+    assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } }), { minParts: 3 }), false);
 });
 
 test('safeQualifies normalizes DECIMAL strings and JSON-string breakdowns', () => {

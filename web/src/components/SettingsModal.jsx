@@ -208,7 +208,7 @@ export default function SettingsModal({
                                 onChange={e => onSafeOnly(e.target.checked)}
                                 className="accent-sky-600"
                             />
-                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: all three signals agree, short odds, best 3 per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
+                            <span>🛡 Safe only <span className="text-slate-400">— only the day's safest slip legs: signals in agreement (none weak), short odds, best 3 per day. Zero games on a day means no safe bet exists — that's the protocol working</span></span>
                         </label>
                     </div>
                     <p className="text-xs text-slate-500 mt-1">

@@ -700,7 +700,7 @@ export default function App() {
                             <span>Tips: {_rate(dayRates.tips)}</span>
                         </Tooltip>
                         <span className="text-slate-300">·</span>
-                        <Tooltip content="Games that pass the strict safety checks for multi-bet slips: all three signals (bookmaker odds, team form, expert data) point the same way, short odds, best 3 per day. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.">
+                        <Tooltip content="Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best 3 per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.">
                             <span className={safeOnly ? 'text-sky-600' : ''}>🛡 Safe: {safePicks.length}</span>
                         </Tooltip>
                         {(last || refresh?.running) && (
