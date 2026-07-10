@@ -29,7 +29,7 @@ export default function SortPills({ chain, entryLabel, onRemove, onClear }) {
             <button
                 onClick={onClear}
                 title="Clear all sorts"
-                className="cursor-pointer ml-1 text-xs text-label-2 hover:text-miss hover:underline"
+                className="cursor-pointer ml-1 text-xs text-label-2 hover:text-miss"
             >
                 Clear all
             </button>

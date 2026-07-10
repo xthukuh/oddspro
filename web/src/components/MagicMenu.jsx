@@ -21,7 +21,7 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
     const active = new Set(activeIds ?? []);
 
     return (
-        <div className="flex flex-col max-h-[92vh]">
+        <div className="flex flex-col max-h-[calc(100dvh-4.5rem)]">
             <div className="flex items-center gap-3 px-6 pt-5 pb-2">
                 <h2 className="text-[22px] font-extrabold tracking-tight">Magic sort</h2>
                 <span className="text-[13px] text-label-2 hidden sm:inline">most-likely-to-win first</span>

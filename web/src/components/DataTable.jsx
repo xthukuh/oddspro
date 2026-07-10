@@ -12,27 +12,14 @@ import { orderRows } from '../ordering.js';
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
+import { BASE_COLUMNS } from '../baseColumns.js';
+// Re-exported so existing importers (App, SettingsModal) keep their path.
+export { BASE_COLUMNS } from '../baseColumns.js';
 
 const PROVIDER_STYLE = {
     betpawa: 'bg-hit/15 text-hit',
     betika: 'bg-accent-soft text-accent',
 };
-
-// Base columns are always shown (README temp-csv order); match_url folds
-// into the fixture cell as an outbound link. Exported for the settings
-// modal's column-order control.
-export const BASE_COLUMNS = [
-    { key: 'api_id', label: 'API ID' },
-    { key: 'start_time', label: 'Start' },
-    { key: 'fixture', label: 'Fixture' },
-    { key: 'provider', label: 'Provider' },
-    { key: 'score', label: 'Score' },
-    { key: 'goals', label: 'Goals' },
-    { key: 'tip', label: 'Tip' },
-    { key: 'status', label: 'Status' },
-    { key: 'updated_at', label: 'Updated' },
-    { key: 'locked_at', label: 'Locked' },
-];
 
 // Two alternating row tones cycled by canonical fixture (api_id) in
 // first-appearance order: the same fixture shown once per provider shares a
@@ -301,7 +288,7 @@ function _cell(row, col, linkProviders, openTip) {
             return (
                 <>
                     {badge}
-                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-accent hover:underline">
+                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-accent hover:opacity-70">
                         {row.fixture}
                     </a>
                 </>
@@ -495,7 +482,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`flex-1 min-h-0 overflow-auto bg-surface rounded-2xl border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface rounded-xl border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>

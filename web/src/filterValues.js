@@ -18,14 +18,24 @@ export function serverKeys(catalog) {
     ]);
 }
 
+// Base fields whose SQL column differs from the DISPLAYED value, so they must
+// filter client-side over what the user sees. `league` renders "Country - Name"
+// but its SQL target is l.name alone — filtering the display is both correct and
+// exactly what the value-picker offers. (The whole day is loaded, so running it
+// client-side costs nothing.)
+export const CLIENT_ONLY_KEYS = new Set(['league']);
+
 // Partition applied filters: a condition is server-side only when every
 // column it references (key, and the RHS column in col-mode) is a server
 // key — a single client-side reference pulls the whole condition local.
+// CLIENT_ONLY_KEYS force the condition local regardless.
 export function splitFilters(filters, catalog) {
     const keys = serverKeys(catalog);
     const server = [], client = [];
     for (const f of Array.isArray(filters) ? filters : []) {
-        const local = !keys.has(f.key) || (f.col != null && !keys.has(f.col));
+        const local = CLIENT_ONLY_KEYS.has(f.key)
+            || !keys.has(f.key)
+            || (f.col != null && !keys.has(f.col));
         (local ? client : server).push(f);
     }
     return { server, client };
@@ -99,6 +109,39 @@ export function applyClientFilters(rows, filters, columns) {
         const cmp = _compare(sortValue(row, lhs), rhs);
         return cmp != null && test(cmp);
     }));
+}
+
+// Distinct displayed values of a column across the loaded rows, for filter
+// value pickers on low-cardinality fields (league, status, provider, season,
+// round). Uses the RAW displayed value (_raw) so the options match what the
+// user sees AND what the filter compares. Returns [] once the distinct count
+// exceeds `cap` (too many to be a useful list — the caller falls back to free
+// text). Numbers sort numerically, strings case-insensitively.
+export function distinctValues(rows, col, cap = 50) {
+    const seen = new Set();
+    for (const r of rows ?? []) {
+        const v = _raw(r, col);
+        if (v == null || v === '') continue;
+        seen.add(typeof v === 'number' ? v : String(v));
+        if (seen.size > cap) return [];
+    }
+    return [...seen].sort((a, b) => (
+        typeof a === 'number' && typeof b === 'number'
+            ? a - b
+            : String(a).localeCompare(String(b), undefined, { sensitivity: 'base' })
+    ));
+}
+
+// Serialize picker selections back into the `in`/`not-in` CSV shape
+// parseFilterList understands: quote any item holding a comma, whitespace or a
+// quote, doubling inner quotes. Inverse of parseFilterList.
+export function toFilterCsv(items) {
+    return (items ?? [])
+        .map(raw => {
+            const s = String(raw);
+            return /[",\s]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        })
+        .join(',');
 }
 
 // Settled-outcome display toggles (client-side, over the whole loaded day):

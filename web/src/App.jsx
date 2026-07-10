@@ -1,6 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
+import { getTheme, setTheme } from './theme.js';
+import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
@@ -38,6 +40,10 @@ const LS_NO_MISS = 'oddspro.show.noMiss';
 // Safe-only toggle (settings; default off): keep only the day's safest slip
 // legs per the shared safeSelection gates (magic-rules DEFAULT_SAFE)
 const LS_SAFE_ONLY = 'oddspro.show.safeOnly';
+// Safe-only policy overrides (settings; merged over the server DEFAULT_SAFE
+// policy and passed as safeSelection opts - the browser can't read .env, so
+// this is how a user tunes the gates locally). Object, not array.
+const LS_SAFE_OVERRIDES = 'oddspro.safe.overrides';
 // Legacy single magic-strategy id (superseded by the unified sort chain below;
 // still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
@@ -52,6 +58,16 @@ function _load(key) {
         return Array.isArray(v) ? v : null;
     } catch {
         return null;
+    }
+}
+
+// Plain-object loader (safe-limit overrides); non-objects fall back to {}.
+function _loadObj(key) {
+    try {
+        const v = JSON.parse(localStorage.getItem(key));
+        return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    } catch {
+        return {};
     }
 }
 
@@ -84,7 +100,11 @@ const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0
 // it out (noon-anchored to dodge tz day-shift). Native <input type="date">
 // can't be reformatted, so a formatted label is overlaid on a transparent
 // picker input in the header.
-const _dmy = iso => { const [y, m, d] = iso.split('-'); return `${+d}/${+m}/${y}`; };
+// Human-friendly nav label "Thu, Jul 9" (noon-anchored to dodge tz day-shift);
+// the tooltip spells out the full date.
+const _human = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+});
 const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
 });
@@ -142,6 +162,10 @@ export default function App() {
     const [hideMiss, setHideMiss] = useState(() => localStorage.getItem(LS_HIDE_MISS) === '1');
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
     const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
+    const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
+    // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
+    // applied the saved value pre-paint; this just mirrors it into React state.
+    const [theme, setThemeState] = useState(getTheme);
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
     const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
@@ -189,8 +213,14 @@ export default function App() {
     const cal = magicData?.calibration ?? null;
     // Safe-only policy served from the API (SAFE_* env → DEFAULT_SAFE fallback);
     // undefined until magic-sort loads, when safeSelection uses its own defaults.
+    // The user's local overrides layer on top; the merged object drives both the
+    // footer count and the Safe-only cut.
     const safeCfg = magicData?.safe ?? null;
-    const safeCap = safeCfg?.maxPerDay ?? 3;
+    const effectiveSafe = useMemo(
+        () => ({ ...(safeCfg ?? {}), ...safeOverrides }),
+        [safeCfg, safeOverrides],
+    );
+    const safeCap = effectiveSafe.maxPerDay ?? 3;
     const activeMagicIds = useMemo(
         () => activeChain.filter(e => e.type === 'magic').map(e => e.id),
         [activeChain],
@@ -227,13 +257,21 @@ export default function App() {
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
+    // Market/stat keys present in the loaded day - drives date-dynamic option
+    // lists in the settings selectors and the filter builder (absent columns
+    // are omitted so the controls honestly reflect the day). Recomputes on
+    // date/refresh via `result`.
+    const available = useMemo(
+        () => availableColumnKeys(result?.data ?? [], catalog),
+        [result, catalog],
+    );
     // Safe picks are day-level over the whole loaded selection (result.data),
     // NOT the filtered rows - other toggles/filters must not change who wins
     // the per-day cap, and the footer count stays honest. One representative
     // row per fixture; the table filters by api_id membership.
     const safePicks = useMemo(
-        () => safeSelection(result?.data ?? [], cal, safeCfg ?? undefined),
-        [result, cal, safeCfg],
+        () => safeSelection(result?.data ?? [], cal, effectiveSafe),
+        [result, cal, effectiveSafe],
     );
     // Advanced-filter the loaded rows, then apply the settled-outcome toggles
     // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
@@ -505,6 +543,17 @@ export default function App() {
         setSafeOnly(value);
         localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
     };
+    const changeTheme = value => setThemeState(setTheme(value));
+    // Safe-limit overrides: set one key, or reset to the server policy.
+    const saveSafeOverride = (key, value) => setSafeOverrides(prev => {
+        const next = { ...prev, [key]: value };
+        localStorage.setItem(LS_SAFE_OVERRIDES, JSON.stringify(next));
+        return next;
+    });
+    const resetSafeOverrides = () => {
+        setSafeOverrides({});
+        localStorage.removeItem(LS_SAFE_OVERRIDES);
+    };
 
     const TODAY = _today();
     const DAY_MS = 86400000;
@@ -534,8 +583,8 @@ export default function App() {
                     </button>
                     <button onClick={() => setShowCal(v => !v)} title={date ? _fullDate(date) : 'All dates'}
                         aria-label="Pick a date"
-                        className="cursor-pointer h-10 min-w-[7rem] sm:min-w-[9.5rem] px-2 sm:px-3 inline-flex items-center justify-center gap-1.5 rounded-[10px] text-[15px] sm:text-[17px] font-semibold tabular-nums hover:bg-accent-soft">
-                        <span>{date ? _dmy(date) : 'All dates'}</span>
+                        className="cursor-pointer h-10 min-w-[7rem] sm:min-w-[9.5rem] px-2 sm:px-3 inline-flex items-center justify-center gap-1.5 rounded-[10px] text-[15px] sm:text-[17px] font-semibold hover:bg-accent-soft">
+                        <span>{date ? _human(date) : 'All dates'}</span>
                         <IconChevronDown className="text-accent" />
                     </button>
                     <button onClick={() => changeDate(NEXT_DATE)} disabled={date >= MAX_DATE}
@@ -661,7 +710,15 @@ export default function App() {
 
             {showFilters && catalog && (
                 <Sheet onClose={() => setShowFilters(false)} className="max-w-2xl">
-                    <FilterBuilder catalog={catalog} filters={filters} onApply={setFilters} onClose={() => setShowFilters(false)} />
+                    <FilterBuilder
+                        catalog={catalog}
+                        available={available}
+                        rows={result?.data ?? []}
+                        filterColumns={filterColumns}
+                        filters={filters}
+                        onApply={setFilters}
+                        onClose={() => setShowFilters(false)}
+                    />
                 </Sheet>
             )}
 
@@ -682,6 +739,10 @@ export default function App() {
             {showSettings && catalog && (
                 <SettingsModal
                     catalog={catalog}
+                    theme={theme}
+                    onTheme={changeTheme}
+                    availableMarkets={available.markets}
+                    availableStats={available.stats}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
                     columnOrder={columnOrder}
@@ -694,6 +755,11 @@ export default function App() {
                     noMiss={noMiss}
                     safeOnly={safeOnly}
                     safeMaxPerDay={safeCap}
+                    safe={effectiveSafe}
+                    safeDefaults={safeCfg}
+                    safeOverridden={Object.keys(safeOverrides).length > 0}
+                    onSafeSet={saveSafeOverride}
+                    onSafeReset={resetSafeOverrides}
                     sortChain={activeChain}
                     entryLabel={entryLabel}
                     onReorderSort={onReorderChain}

@@ -39,14 +39,14 @@ export default function CalendarPopover({ date, today, min, max, onPick, onClose
                 <div className="grid grid-cols-7 gap-0.5">
                     {days.map((d, i) => { const c = cell(d); return (
                         <button key={i} disabled={c.disabled} onClick={() => { onPick(c.s); onClose(); }}
-                            className={`cursor-pointer h-9 rounded-lg text-sm tabular-nums ${c.selected ? 'bg-accent text-white font-semibold' : c.inMonth ? 'text-label hover:bg-accent-soft' : 'text-label-3 hover:bg-accent-soft'} disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default`}>
+                            className={`cursor-pointer h-10 rounded-lg text-sm tabular-nums ${c.selected ? 'bg-accent text-white font-semibold' : c.inMonth ? 'text-label hover:bg-accent-soft' : 'text-label-3 hover:bg-accent-soft'} disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-default`}>
                             {c.n}
                         </button>
                     ); })}
                 </div>
                 <div className="flex justify-between mt-3 pt-2.5 border-t border-separator-2">
-                    <button onClick={() => { onPick(''); onClose(); }} className="cursor-pointer text-accent text-[15px]">Clear</button>
-                    <button onClick={() => { onPick(today); onClose(); }} className="cursor-pointer text-accent text-[15px] font-semibold">Today</button>
+                    <button onClick={() => { onPick(''); onClose(); }} className="cursor-pointer text-accent text-[15px] py-1.5 px-2 -mx-2 rounded-lg hover:bg-accent-soft">Clear</button>
+                    <button onClick={() => { onPick(today); onClose(); }} className="cursor-pointer text-accent text-[15px] font-semibold py-1.5 px-2 -mx-2 rounded-lg hover:bg-accent-soft">Today</button>
                 </div>
             </div>
         </>

@@ -20,7 +20,7 @@ export default function HelpModal({ onClose }) {
 
     return (
         <Sheet onClose={onClose} className="max-w-2xl">
-            <div className="flex flex-col max-h-[92vh]">
+            <div className="flex flex-col max-h-[calc(100dvh-4.5rem)]">
                 <div className="flex items-center gap-3 px-6 pt-5 pb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight flex items-center">
                         <span className="rounded-md border border-separator bg-fill px-1.5 py-0.5 text-sm font-bold tracking-wide mr-2">[OP]</span>

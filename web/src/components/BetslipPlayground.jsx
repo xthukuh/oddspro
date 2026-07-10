@@ -179,8 +179,8 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     }, [autoKey]);
 
     return (
-        <div className="fixed inset-0 z-40 flex items-center justify-center bg-black/28 [backdrop-filter:blur(2px)] [animation:op-fade_0.2s_ease] p-3 sm:p-6" role="dialog" aria-modal="true">
-            <div className="bg-surface text-label rounded-2xl shadow-2xl w-full max-w-5xl max-h-[92vh] flex flex-col [animation:op-sheet-in_0.24s_cubic-bezier(0.32,0.72,0,1)] p-3 md:p-5">
+        <div className="fixed inset-0 z-40 flex items-start justify-end bg-black/15 [backdrop-filter:blur(0.5px)] [animation:op-fade_0.2s_ease] p-2 sm:p-3" role="dialog" aria-modal="true">
+            <div className="mt-11 sm:mt-12 bg-surface text-label rounded-2xl shadow-2xl w-full max-w-5xl max-h-[calc(100dvh-4.5rem)] flex flex-col [animation:op-pop_0.18s_cubic-bezier(0.32,0.72,0,1)] p-3 md:p-5">
                 <div className="flex items-center gap-3 mb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight">Betslip playground</h2>
                     <span className="text-xs text-label-2 hidden sm:inline">virtual slips — nothing is placed</span>
@@ -236,13 +236,13 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                         onClick={clearSlips}
                         disabled={!slips.length}
                         title="Remove all slips at once (their tips become available again)"
-                        className="cursor-pointer h-9 px-3 rounded-full border border-separator text-sm text-label-2 hover:bg-fill hover:text-miss disabled:opacity-50"
+                        className="cursor-pointer h-10 px-3 rounded-full border border-separator text-sm text-label-2 hover:bg-fill hover:text-miss disabled:opacity-50"
                     >
                         Clear slips
                     </button>
                     <button
                         onClick={() => addSlip()}
-                        className="cursor-pointer h-9 px-3 rounded-full border border-separator text-sm hover:bg-fill"
+                        className="cursor-pointer h-10 px-3 rounded-full border border-separator text-sm hover:bg-fill"
                     >
                         + New slip
                     </button>
@@ -252,7 +252,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                         title={plannedFill.length
                             ? `Autogenerate ${plannedFill.length} slip${plannedFill.length > 1 ? 's' : ''} from ${unused.length} unused tip${unused.length > 1 ? 's' : ''} (best first, ≤${config.maxLegs} legs, target ${config.targetOdds})`
                             : 'All tips are already on slips'}
-                        className="cursor-pointer h-9 px-4 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50"
+                        className="cursor-pointer h-10 px-4 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90 disabled:opacity-50"
                     >
                         ✨ Fill from top
                     </button>
@@ -265,26 +265,34 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                 <div className="flex flex-col md:flex-row gap-4 min-h-0 grow overflow-y-auto md:overflow-visible">
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
                     <div className="w-full md:w-2/5 min-w-0 flex flex-col md:min-h-0">
-                        <h3 className="text-sm font-medium text-label mb-1">
+                        <h3 className="text-sm font-medium text-label mb-0.5">
                             Tips <span className="text-label-3 font-normal">
                                 ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
                             </span>
                         </h3>
-                        <div className="max-h-[38vh] md:max-h-none md:grow overflow-y-auto border border-separator-2 rounded p-1">
+                        {/* Touch-first: tapping the teal ＋ adds a tip to the active slip
+                            (drag still works on desktop). The hint names where ＋ lands. */}
+                        <p className="text-xs mb-1">
+                            {activeSlip
+                                ? <span className="text-accent">Tap <b>＋</b> to add to <b>{activeSlip.name}</b></span>
+                                : <span className="text-label-3">Add a slip, then tap ＋ on a tip.</span>}
+                        </p>
+                        <div className="max-h-[38vh] md:max-h-none md:grow overflow-y-auto border border-separator-2 rounded-lg p-1">
                             {shown.map(c => (
                                 <div
                                     key={c.api_id}
                                     draggable
                                     onDragStart={() => setDrag(c.api_id)}
                                     onDragEnd={() => setDrag(null)}
-                                    className={`flex items-center gap-2 px-1.5 py-1 rounded text-xs cursor-grab select-none hover:bg-fill ${
+                                    className={`flex items-center gap-2 px-1.5 py-1.5 rounded-lg text-xs select-none hover:bg-fill md:cursor-grab ${
                                         drag === c.api_id ? 'opacity-40' : ''}`}
                                 >
                                     <button
-                                        onClick={() => activeSlip && addLeg(activeSlip.id, c)}
+                                        onClick={e => { e.stopPropagation(); if (activeSlip) addLeg(activeSlip.id, c); }}
                                         disabled={!activeSlip}
+                                        aria-label={activeSlip ? `Add ${c.fixture} to ${activeSlip.name}` : 'Create a slip first'}
                                         title={activeSlip ? `Add to ${activeSlip.name}` : 'Create a slip first'}
-                                        className="cursor-pointer px-1.5 rounded border border-separator text-label-2 hover:bg-accent-soft disabled:opacity-40"
+                                        className="cursor-pointer shrink-0 w-9 h-9 inline-flex items-center justify-center rounded-full bg-accent-soft text-accent text-lg leading-none font-semibold hover:bg-accent hover:text-white disabled:opacity-40 disabled:hover:bg-accent-soft disabled:hover:text-accent"
                                     >
                                         +
                                     </button>
@@ -331,14 +339,18 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                             <input
                                                 value={slip.name}
                                                 onChange={e => renameSlip(slip.id, e.target.value)}
-                                                className="text-sm font-medium border-b border-transparent focus:border-separator outline-none w-32"
+                                                className="text-sm font-medium border-b border-transparent focus:border-separator outline-none w-28"
                                             />
+                                            {slip.id === activeSlip?.id && (
+                                                <span className="text-[10px] font-semibold uppercase tracking-wide text-accent bg-accent-soft rounded-full px-1.5 py-0.5">adding here</span>
+                                            )}
                                             <span className="text-xs text-label-3">{slip.legs.length}/{config.maxLegs} legs</span>
                                             <div className="grow" />
                                             <button
-                                                onClick={() => removeSlip(slip.id)}
+                                                onClick={e => { e.stopPropagation(); removeSlip(slip.id); }}
                                                 title="Delete slip"
-                                                className="cursor-pointer text-label-3 hover:text-miss"
+                                                aria-label="Delete slip"
+                                                className="cursor-pointer shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-full text-label-3 text-lg leading-none hover:bg-fill hover:text-miss"
                                             >
                                                 &times;
                                             </button>
@@ -346,7 +358,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                         {slip.legs.map(l => (
                                             <div
                                                 key={l.api_id}
-                                                className={`flex items-center gap-2 text-xs py-0.5 ${live.has(l.api_id) ? '' : 'opacity-50'} ${
+                                                className={`flex items-center gap-2 text-xs py-1 ${live.has(l.api_id) ? '' : 'opacity-50'} ${
                                                     verdict.broken.includes(l.api_id) ? 'text-miss' : ''}`}
                                             >
                                                 <span className="truncate grow" title={l.fixture}>{l.fixture}</span>
@@ -359,8 +371,9 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                 {l.outcome === 'miss' && <span className="text-miss font-bold">✗</span>}
                                                 <span className="tabular-nums text-label-2">{_pct(l.prob)}</span>
                                                 <button
-                                                    onClick={() => removeLeg(slip.id, l.api_id)}
-                                                    className="cursor-pointer text-label-3 hover:text-miss"
+                                                    onClick={e => { e.stopPropagation(); removeLeg(slip.id, l.api_id); }}
+                                                    aria-label={`Remove ${l.fixture}`}
+                                                    className="cursor-pointer shrink-0 w-7 h-7 inline-flex items-center justify-center rounded-full text-label-3 leading-none hover:bg-fill hover:text-miss"
                                                 >
                                                     &times;
                                                 </button>
@@ -401,38 +414,41 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                 </div>
                             )}
                         </div>
-                        {totals.slips > 0 && (
-                            <div className="flex flex-wrap items-center gap-x-4 gap-y-0.5 mt-2 pt-2 border-t border-separator-2 text-xs tabular-nums font-medium">
-                                <span className="text-label-2">
-                                    {totals.slips} slip{totals.slips === 1 ? '' : 's'}
-                                    <span className="text-label-3 font-normal">
-                                        {' '}({totals.won} won · {totals.lost} lost{totals.open ? ` · ${totals.open} open` : ''})
-                                    </span>
-                                </span>
-                                <span>staked <b>{totals.staked.toFixed(2)}</b></span>
-                                <span>returned <b>{totals.returned.toFixed(2)}</b></span>
-                                {totals.open > 0 && (
-                                    <span
-                                        className="text-accent"
-                                        title="What the open (unsettled) slips would pay if every pending leg landed"
-                                    >
-                                        potential <b>{totals.potential.toFixed(2)}</b>
-                                    </span>
-                                )}
-                                <span
-                                    className={totals.profit >= 0 ? 'text-hit' : 'text-miss'}
-                                    title="Returned minus stakes of settled slips - open slips' stakes are not yet lost"
-                                >
-                                    P/L <b>{totals.profit >= 0 ? '+' : ''}{totals.profit.toFixed(2)}</b>
-                                </span>
-                            </div>
-                        )}
-                        <p className="text-xs text-label-3 mt-2">
-                            Survival multiplies each leg's calibrated win estimate (independence assumption) -
-                            an expectation over many slips, not a promise for this one.
-                        </p>
                     </div>
                 </div>
+                {/* Sticky summary footer: the running slip totals + note stay
+                    pinned to the modal bottom even as the panes scroll (mobile
+                    especially), so the P/L is always in view. */}
+                {totals.slips > 0 && (
+                    <div className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-0.5 mt-2 pt-2 border-t border-separator-2 text-xs tabular-nums font-medium">
+                        <span className="text-label-2">
+                            {totals.slips} slip{totals.slips === 1 ? '' : 's'}
+                            <span className="text-label-3 font-normal">
+                                {' '}({totals.won} won · {totals.lost} lost{totals.open ? ` · ${totals.open} open` : ''})
+                            </span>
+                        </span>
+                        <span>staked <b>{totals.staked.toFixed(2)}</b></span>
+                        <span>returned <b>{totals.returned.toFixed(2)}</b></span>
+                        {totals.open > 0 && (
+                            <span
+                                className="text-accent"
+                                title="What the open (unsettled) slips would pay if every pending leg landed"
+                            >
+                                potential <b>{totals.potential.toFixed(2)}</b>
+                            </span>
+                        )}
+                        <span
+                            className={totals.profit >= 0 ? 'text-hit' : 'text-miss'}
+                            title="Returned minus stakes of settled slips - open slips' stakes are not yet lost"
+                        >
+                            P/L <b>{totals.profit >= 0 ? '+' : ''}{totals.profit.toFixed(2)}</b>
+                        </span>
+                    </div>
+                )}
+                <p className="shrink-0 text-xs text-label-3 mt-1">
+                    Survival multiplies each leg's calibrated win estimate (independence assumption) -
+                    an expectation over many slips, not a promise for this one.
+                </p>
             </div>
         </div>
     );

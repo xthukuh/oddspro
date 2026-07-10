@@ -6,7 +6,7 @@ import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, I
 function Row({ icon, label, onClick, disabled, active, trailing }) {
     return (
         <button onClick={onClick} disabled={disabled}
-            className={`cursor-pointer w-full flex items-center gap-3 px-4 py-2.5 text-[15px] text-left hover:bg-fill disabled:opacity-40 ${active ? 'text-accent' : 'text-label'}`}>
+            className={`cursor-pointer w-full flex items-center gap-3 px-4 py-3 text-[15px] text-left hover:bg-fill disabled:opacity-40 ${active ? 'text-accent' : 'text-label'}`}>
             <span className="w-5 inline-flex justify-center">{icon}</span>
             <span className="flex-1">{label}</span>
             {trailing}

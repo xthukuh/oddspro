@@ -11,6 +11,17 @@
     <link rel="icon" href="/favicon.ico" sizes="48x48" />
     <link rel="icon" type="image/svg+xml" href="/icon.svg" />
     <link rel="apple-touch-icon" href="/icon.png" />
+    <!-- Theme FOUC guard: apply the saved theme BEFORE first paint. 'system'
+         (or unset) leaves data-theme off so prefers-color-scheme wins. Mirrors
+         web/src/theme.js - keep the storage key + values in sync. -->
+    <script>
+        (function () {
+            try {
+                var t = localStorage.getItem('oddspro.theme');
+                if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+            } catch (e) { /* private mode / no storage - fall back to system */ }
+        })();
+    </script>
 </head>
 <body>
     <div id="root"></div>

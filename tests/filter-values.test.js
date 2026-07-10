@@ -2,7 +2,9 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
+    distinctValues, toFilterCsv,
 } from '../web/src/filterValues.js';
+import { parseFilterList } from '../src/db/filter-csv.js';
 
 // Catalog shaped like GET /api/columns: base/markets are server-filterable,
 // stats never are (derived in JS during hydration).
@@ -190,6 +192,42 @@ test('in normalizes numbers, so a market price matches its CSV item', () => {
     const rows = [row({ markets: { 1: 2.1 } }), row({ markets: { 1: 3.0 } }), row({ markets: { 1: 1.8 } })];
     const out = applyClientFilters(rows, [{ key: '1', op: 'in', value: '2.1,3.0' }], COLUMNS);
     assert.deepEqual(out.map(r => r.markets[1]), [2.1, 3.0]);
+});
+
+test('splitFilters forces league (CLIENT_ONLY_KEYS) client even when a server key', () => {
+    // league renders "Country - Name" but its SQL column is l.name alone, so it
+    // must filter on the display, client-side.
+    const cat = { base: [{ key: 'league', filterable: true }], markets: [], stats: [] };
+    const { server, client } = splitFilters([{ key: 'league', op: 'in', value: 'a,b' }], cat);
+    assert.equal(server.length, 0);
+    assert.deepEqual(client.map(f => f.key), ['league']);
+});
+
+// --- value pickers: distinct values + CSV round-trip --------------------
+test('distinctValues returns sorted distinct displayed values (strings + numbers)', () => {
+    const rows = [
+        { league: 'B', status: 'FT', season: 2024 },
+        { league: 'A', status: 'NS', season: 2024 },
+        { league: 'A', status: 'FT', season: 2023 },
+        { league: null, status: '', season: undefined },
+    ];
+    assert.deepEqual(distinctValues(rows, { key: 'league', group: 'base' }), ['A', 'B']);
+    assert.deepEqual(distinctValues(rows, { key: 'status', group: 'base' }), ['FT', 'NS']);
+    // numbers sort numerically, not lexically
+    assert.deepEqual(distinctValues(rows, { key: 'season', group: 'base' }), [2023, 2024]);
+});
+
+test('distinctValues bails to [] once the distinct count exceeds the cap', () => {
+    const rows = Array.from({ length: 12 }, (_, i) => ({ league: `L${i}` }));
+    assert.deepEqual(distinctValues(rows, { key: 'league', group: 'base' }, 5), []);
+});
+
+test('toFilterCsv quotes commas/spaces/quotes and round-trips through parseFilterList', () => {
+    const items = ['A', 'B, C', 'D E', 'quote"d', 'F'];
+    assert.deepEqual(parseFilterList(toFilterCsv(items)), items);
+    // plain items stay unquoted
+    assert.equal(toFilterCsv(['x', 'y']), 'x,y');
+    assert.equal(toFilterCsv([]), '');
 });
 
 // --- settled-outcome display toggles ------------------------------------
