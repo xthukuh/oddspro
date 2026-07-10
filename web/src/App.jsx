@@ -3,7 +3,7 @@ import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRe
 import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
@@ -30,6 +30,8 @@ const LS_LINKS = 'oddspro.links.unavailable';
 // Providers whose rows show in the table (settings multi-select; default all -
 // the catalog discovers new bookmakers, so null means "everything known")
 const LS_PROVIDERS = 'oddspro.providers.visible';
+const LS_PROVIDER_ORDER = 'oddspro.providers.order'; // priority order (all providers)
+const LS_ONE_EACH = 'oddspro.show.oneEach';          // one row per game by priority
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
 // Settled-outcome display toggles (settings; all default off, client-side over
@@ -157,6 +159,8 @@ export default function App() {
     const [columnOrder, setColumnOrder] = useState(() => _load(LS_ORDER));
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
     const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
+    const [providerOrder, setProviderOrder] = useState(() => _load(LS_PROVIDER_ORDER));
+    const [oneEach, setOneEach] = useState(() => localStorage.getItem(LS_ONE_EACH) === '1');
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [hideHits, setHideHits] = useState(() => localStorage.getItem(LS_HIDE_HITS) === '1');
     const [hideMiss, setHideMiss] = useState(() => localStorage.getItem(LS_HIDE_MISS) === '1');
@@ -273,22 +277,6 @@ export default function App() {
         () => safeSelection(result?.data ?? [], cal, effectiveSafe),
         [result, cal, effectiveSafe],
     );
-    // Advanced-filter the loaded rows, then apply the settled-outcome toggles
-    // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
-    // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
-    const rows = useMemo(() => {
-        const base = applyOutcomeToggles(
-            applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
-            { hideHits, hideMiss, noMiss },
-        );
-        if (!safeOnly) return base;
-        const ids = new Set(safePicks.map(r => r.api_id));
-        return base.filter(r => ids.has(r.api_id));
-    }, [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks]);
-    // Day-level hit-rate scoreboard: computed over the whole loaded selection
-    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
-    // picks and stays stable when you filter or hide rows in the view.
-    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
     // not a fresh `[]`): a new array each render would change the
@@ -296,11 +284,48 @@ export default function App() {
     // on a failed catalog fetch spins an infinite refetch loop (see the
     // "records effect" note below).
     const providers = catalog?.providers ?? EMPTY_PROVIDERS;
-    const selectedProviders = useMemo(() => {
-        if (!providerKeys) return providers;
+    // Priority order over ALL providers: saved order first (valid entries), any
+    // new/unsaved bookmakers appended last, unknown dropped. Drives the provider
+    // control's row order and the one-of-each pick. Declared before `rows`
+    // because the one-of-each dedupe in that memo reads it.
+    const orderedProviders = useMemo(() => {
+        if (!providers.length) return providers;
         const valid = new Set(providers);
-        return providerKeys.filter(p => valid.has(p));
-    }, [providerKeys, providers]);
+        const saved = (providerOrder ?? []).filter(p => valid.has(p));
+        return [...saved, ...providers.filter(p => !saved.includes(p))];
+    }, [providerOrder, providers]);
+    // Advanced-filter the loaded rows, then apply the settled-outcome toggles
+    // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
+    // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
+    const rows = useMemo(() => {
+        let out = applyOutcomeToggles(
+            applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
+            { hideHits, hideMiss, noMiss },
+        );
+        if (safeOnly) {
+            const ids = new Set(safePicks.map(r => r.api_id));
+            out = out.filter(r => ids.has(r.api_id));
+        }
+        // One-of-each collapses to a single row per game (highest-priority
+        // enabled provider); loaded rows are already the enabled providers.
+        if (oneEach) out = applyOneOfEach(out, orderedProviders);
+        return out;
+    }, [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks, oneEach, orderedProviders]);
+    // Day-level hit-rate scoreboard: computed over the whole loaded selection
+    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
+    // picks and stays stable when you filter or hide rows in the view.
+    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
+    // Enabled providers in priority order (null persisted keys = all enabled).
+    const selectedProviders = useMemo(() => {
+        if (!providerKeys) return orderedProviders;
+        const enabled = new Set(providerKeys);
+        return orderedProviders.filter(p => enabled.has(p));
+    }, [providerKeys, orderedProviders]);
+    // Rows for the provider control: ordered, each flagged enabled.
+    const providerItems = useMemo(
+        () => orderedProviders.map(p => ({ key: p, label: p, enabled: providerKeys ? providerKeys.includes(p) : true })),
+        [orderedProviders, providerKeys],
+    );
 
     // Records whenever the SERVER query shape changes (or a refresh lands
     // new data). Client-only filter edits re-filter locally, never refetch:
@@ -519,9 +544,27 @@ export default function App() {
         setLinkProviders(keys);
         localStorage.setItem(LS_LINKS, JSON.stringify(keys));
     };
-    const saveProviders = keys => {
-        setProviderKeys(keys);
-        localStorage.setItem(LS_PROVIDERS, JSON.stringify(keys));
+    // Enable/disable a provider; persist the enabled set in priority order.
+    const toggleProvider = key => {
+        const enabled = new Set(providerKeys ?? providers); // null persisted = all on
+        enabled.has(key) ? enabled.delete(key) : enabled.add(key);
+        const next = orderedProviders.filter(p => enabled.has(p));
+        setProviderKeys(next);
+        localStorage.setItem(LS_PROVIDERS, JSON.stringify(next));
+    };
+    // Move a provider up/down the priority order; persist the full order.
+    const moveProvider = (key, dir) => {
+        const arr = [...orderedProviders];
+        const i = arr.indexOf(key);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= arr.length) return;
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+        setProviderOrder(arr);
+        localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(arr));
+    };
+    const saveOneEach = value => {
+        setOneEach(value);
+        localStorage.setItem(LS_ONE_EACH, value ? '1' : '0');
     };
     const saveShowCompleted = value => {
         setShowCompleted(value);
@@ -747,12 +790,13 @@ export default function App() {
                     statKeys={selectedStats}
                     columnOrder={columnOrder}
                     providers={providers}
-                    visibleProviders={selectedProviders}
+                    providerItems={providerItems}
                     linkProviders={linkProviders}
                     showCompleted={showCompleted}
                     hideHits={hideHits}
                     hideMiss={hideMiss}
                     noMiss={noMiss}
+                    oneEach={oneEach}
                     safeOnly={safeOnly}
                     safeMaxPerDay={safeCap}
                     safe={effectiveSafe}
@@ -767,12 +811,14 @@ export default function App() {
                     onMarkets={saveMarkets}
                     onStats={saveStats}
                     onOrder={saveOrder}
-                    onVisibleProviders={saveProviders}
+                    onToggleProvider={toggleProvider}
+                    onMoveProvider={moveProvider}
                     onLinkProviders={saveLinkProviders}
                     onShowCompleted={saveShowCompleted}
                     onHideHits={saveHideHits}
                     onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss}
+                    onOneEach={saveOneEach}
                     onSafeOnly={saveSafeOnly}
                     onClose={() => setShowSettings(false)}
                 />

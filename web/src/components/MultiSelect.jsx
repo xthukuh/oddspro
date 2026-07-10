@@ -10,7 +10,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 // still emits over the FULL option set, so a currently-selected column with no
 // data today is preserved and re-appears when its data returns; only "None"
 // clears everything.
-export default function MultiSelect({ label, options, selected, onChange, availableKeys = null }) {
+export default function MultiSelect({ label, options, selected, onChange, availableKeys = null, title }) {
     const [open, setOpen] = useState(false);
     const [pos, setPos] = useState(null);
     const ref = useRef(null);   // wrapper (trigger + panel) for outside-click test
@@ -72,6 +72,7 @@ export default function MultiSelect({ label, options, selected, onChange, availa
                 ref={btnRef}
                 type="button"
                 onClick={() => setOpen(v => !v)}
+                title={title}
                 className="cursor-pointer flex items-center gap-2 px-3 min-h-11 py-2 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill"
             >
                 <span>{label}</span>

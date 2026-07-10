@@ -165,3 +165,23 @@ export function applyOutcomeToggles(rows, { hideHits = false, hideMiss = false, 
         return true;
     });
 }
+
+// One-of-each view: collapse to a single row per canonical fixture (api_id),
+// keeping the row from the highest-priority provider present (`priority` is the
+// ordered provider list, index 0 = top). Providers absent from the list rank
+// last; rows without an api_id are never merged. A game only a lower-priority
+// provider carries still appears, so enabled providers complement one another
+// and no game is missed. Kept rows keep their incoming (sorted) order.
+export function applyOneOfEach(rows, priority = []) {
+    if (!Array.isArray(rows) || rows.length < 2) return rows;
+    const rank = new Map(priority.map((p, i) => [p, i]));
+    const rankOf = p => (rank.has(p) ? rank.get(p) : Number.MAX_SAFE_INTEGER);
+    const best = new Map(); // api_id (or the row itself when id-less) -> chosen row
+    for (const r of rows) {
+        if (r.api_id == null) { best.set(r, r); continue; }
+        const cur = best.get(r.api_id);
+        if (cur === undefined || rankOf(r.provider) < rankOf(cur.provider)) best.set(r.api_id, r);
+    }
+    const keep = new Set(best.values());
+    return rows.filter(r => keep.has(r));
+}

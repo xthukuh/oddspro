@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
-    distinctValues, toFilterCsv,
+    distinctValues, toFilterCsv, applyOneOfEach,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -261,4 +261,44 @@ test('noMiss keeps clean-market rows (+upcoming), drops failed markets and tiple
     ];
     assert.deepEqual(
         applyOutcomeToggles(rows, { noMiss: true }).map(r => r.api_id), [3, 4, 5]);
+});
+
+// One-of-each collapses to one row per fixture, choosing the highest-priority
+// provider present; games only a lower-priority provider has still survive.
+const provRow = (api_id, provider, extra = {}) => ({ api_id, provider, ...extra });
+
+test('applyOneOfEach keeps the top-priority provider per fixture', () => {
+    const rows = [
+        provRow(1, 'betpawa'), provRow(1, 'betika'), // fixture 1 in both
+        provRow(2, 'betika'),                         // fixture 2 only in betika
+        provRow(3, 'betpawa'), provRow(3, 'betika'), // fixture 3 in both
+    ];
+    const out = applyOneOfEach(rows, ['betpawa', 'betika']);
+    assert.deepEqual(out.map(r => [r.api_id, r.provider]),
+        [[1, 'betpawa'], [2, 'betika'], [3, 'betpawa']]);
+});
+
+test('applyOneOfEach honours a reversed priority order', () => {
+    const rows = [provRow(1, 'betpawa'), provRow(1, 'betika')];
+    assert.deepEqual(applyOneOfEach(rows, ['betika', 'betpawa']).map(r => r.provider), ['betika']);
+});
+
+test('applyOneOfEach preserves incoming (sorted) order of survivors', () => {
+    const rows = [provRow(2, 'betika'), provRow(1, 'betpawa'), provRow(1, 'betika'), provRow(3, 'betpawa')];
+    assert.deepEqual(applyOneOfEach(rows, ['betpawa', 'betika']).map(r => r.api_id), [2, 1, 3]);
+});
+
+test('applyOneOfEach ranks unknown providers last and never merges id-less rows', () => {
+    const rows = [provRow(1, 'mystery'), provRow(1, 'betpawa'), provRow(null, 'betika'), provRow(null, 'betpawa')];
+    const out = applyOneOfEach(rows, ['betpawa', 'betika']);
+    // fixture 1 -> betpawa (known beats unknown); both id-less rows survive
+    assert.equal(out.filter(r => r.api_id === 1).length, 1);
+    assert.equal(out.find(r => r.api_id === 1).provider, 'betpawa');
+    assert.equal(out.filter(r => r.api_id == null).length, 2);
+});
+
+test('applyOneOfEach is a no-op for 0/1 rows', () => {
+    const one = [provRow(1, 'betpawa')];
+    assert.equal(applyOneOfEach(one, ['betpawa']), one);
+    assert.equal(applyOneOfEach([], ['betpawa']).length, 0);
 });
