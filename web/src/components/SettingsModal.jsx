@@ -1,18 +1,18 @@
 import MultiSelect from './MultiSelect.jsx';
-import ProviderPriority from './ProviderPriority.jsx';
+import ReorderList from './ReorderList.jsx';
 import NumberInput from './NumberInput.jsx';
-import DraggablePills from './DraggablePills.jsx';
 import Sheet, { SheetClose } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 import { THEMES } from '../theme.js';
 import { DEFAULT_SAFE } from '../../../src/db/magic-rules.js';
 
 // Display settings, organized into related sections:
-//   Appearance  - theme (System / Light / Dark)
-//   Columns     - market/stats multi-selects (day-dynamic) + drag-to-reorder
-//   Sorting     - sort-priority drag list (same pill control as Column order)
-//   Providers   - visible bookmakers + unavailable-link exceptions
-//   View & tips - completed-games + settled-tip toggles + Safe-only + its limits
+//   Appearance         - theme (System / Light / Dark)
+//   Columns & sorting  - market/stats multi-selects (day-dynamic) + the Column
+//                        order and Sort priority reorder dropdowns (ReorderList)
+//   Providers          - provider priority (enable + ↑/↓ order) + unavailable-link exceptions
+//   View & tips        - completed-games + One-of-each + settled-tip toggles + Safe-only + its limits
+// Column order, Sort priority and Providers share the ONE ReorderList control.
 
 const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
 
@@ -80,6 +80,24 @@ export default function SettingsModal({
         ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key })),
     ], columnOrder);
     const sortId = e => (e.type === 'magic' ? `magic:${e.id}` : `col:${e.key}`);
+    // Swap an item with its neighbour (ReorderList ↑/↓ arrows). Returns the new
+    // array, or null at a boundary.
+    const _swap = (arr, key, dir, keyOf) => {
+        const i = arr.findIndex(x => keyOf(x) === key);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= arr.length) return null;
+        const next = arr.slice();
+        [next[i], next[j]] = [next[j], next[i]];
+        return next;
+    };
+    const moveColumn = (key, dir) => {
+        const next = _swap(orderedColumns, key, dir, c => c.key);
+        if (next) onOrder(next.map(c => c.key));
+    };
+    const moveSort = (key, dir) => {
+        const next = _swap(sortChain, key, dir, sortId);
+        if (next) onReorderSort(next);
+    };
 
     const heading = 'font-semibold text-label mb-2';
 
@@ -100,8 +118,8 @@ export default function SettingsModal({
                     </section>
 
                     <section className="mb-6">
-                        <h3 className={heading}>Columns</h3>
-                        <div className="flex flex-wrap gap-2 mb-3">
+                        <h3 className={heading}>Columns &amp; sorting</h3>
+                        <div className="flex flex-wrap gap-2">
                             <MultiSelect
                                 label="Odds markets"
                                 options={catalog.markets}
@@ -118,82 +136,48 @@ export default function SettingsModal({
                                 onChange={onStats}
                                 title="Pick which post-match stat columns show (only stats present on the loaded day are listed)"
                             />
-                        </div>
-                        <div className="flex items-center gap-3 mb-2">
-                            <h4 className="text-sm text-label-2">Column order</h4>
-                            <div className="grow" />
-                            <button onClick={() => onOrder(null)} className="text-xs text-accent hover:opacity-70">
-                                Reset order
-                            </button>
-                        </div>
-                        <DraggablePills
-                            items={orderedColumns}
-                            idOf={c => c.key}
-                            onReorder={next => onOrder(next.map(c => c.key))}
-                        >
-                            {(c, dragging) => (
-                                <span
-                                    className={`px-2.5 py-1.5 rounded-lg border text-xs bg-surface ${dragging
-                                        ? 'border-accent' : 'border-separator hover:border-label-3'}`}
-                                    title="Drag to reposition this column"
-                                >
-                                    <span className="text-label-3 mr-1">⠿</span>{c.label}
-                                </span>
+                            <ReorderList
+                                label="Column order"
+                                items={orderedColumns.map(c => ({ key: c.key, label: c.label }))}
+                                onMove={moveColumn}
+                                hint="Order the table columns left→right (↑ = further left)."
+                                title="Reorder the table columns"
+                                footer={(
+                                    <button onClick={() => onOrder(null)} className="text-xs text-accent hover:opacity-70 py-0.5">
+                                        Reset order
+                                    </button>
+                                )}
+                            />
+                            {sortChain?.length > 0 && (
+                                <ReorderList
+                                    label="Sort priority"
+                                    items={sortChain.map(e => ({ key: sortId(e), label: entryLabel(e), entry: e }))}
+                                    onMove={moveSort}
+                                    onRemove={key => { const e = sortChain.find(x => sortId(x) === key); if (e) onRemoveSort(e); }}
+                                    renderTag={it => (it.entry.type === 'column'
+                                        ? <span className="text-accent text-xs">{it.entry.dir === 'asc' ? '▲' : '▼'}</span> : null)}
+                                    hint="Top wins. ↑/↓ reprioritise · × removes a sort."
+                                    title="Reorder or remove the active sorts"
+                                />
                             )}
-                        </DraggablePills>
+                        </div>
                         <p className="text-xs text-label-2 mt-2">
-                            Only columns with data for the selected day are offered. Your picks are kept for
-                            days that do have them.
+                            Only columns with data for the selected day are offered; your picks are kept for
+                            days that do have them. Sort priority also lives on the table's pills.
                         </p>
                     </section>
-
-                    {sortChain?.length > 0 && (
-                        <section className="mb-6">
-                            <div className="flex items-center gap-3 mb-2">
-                                <h3 className="font-semibold text-label">Sort priority</h3>
-                                <div className="grow" />
-                                <span className="text-xs text-label-3">drag to reorder · left wins</span>
-                            </div>
-                            <DraggablePills
-                                items={sortChain}
-                                idOf={sortId}
-                                onReorder={onReorderSort}
-                            >
-                                {(e, dragging) => {
-                                    const i = sortChain.findIndex(x => sortId(x) === sortId(e));
-                                    return (
-                                        <span
-                                            className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border text-xs bg-surface ${dragging
-                                                ? 'border-accent' : 'border-separator'}`}
-                                            title="Drag to change sort priority"
-                                        >
-                                            <span className="text-label-3">⠿</span>
-                                            <span className="text-label-3 tabular-nums">{i + 1}</span>
-                                            <span className="font-medium">{entryLabel(e)}</span>
-                                            {e.type === 'column' && <span className="text-accent">{e.dir === 'asc' ? '▲' : '▼'}</span>}
-                                            <button
-                                                onPointerDown={ev => ev.stopPropagation()}
-                                                onClick={() => onRemoveSort(e)}
-                                                className="cursor-pointer text-label-3 hover:text-miss leading-none pl-0.5"
-                                                title="Remove this sort"
-                                            >
-                                                &times;
-                                            </button>
-                                        </span>
-                                    );
-                                }}
-                            </DraggablePills>
-                        </section>
-                    )}
 
                     <section className="mb-6">
                         <h3 className={heading}>Providers</h3>
                         <div className="flex flex-wrap gap-2 mb-2">
-                            <ProviderPriority
+                            <ReorderList
                                 label="Providers"
                                 items={providerItems}
+                                badge={`${providerItems.filter(i => i.enabled).length}/${providerItems.length}`}
                                 onToggle={onToggleProvider}
                                 onMove={onMoveProvider}
+                                hint="Priority top→bottom. Untick to hide a bookmaker."
+                                title="Enable bookmakers and set their priority — the top enabled provider represents each game under One of each"
                             />
                             <MultiSelect
                                 label="Unavailable match links"
