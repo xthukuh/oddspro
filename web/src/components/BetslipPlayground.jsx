@@ -50,6 +50,14 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     const [{ config, slips }, setState] = useState(() => _loadSlips());
     const [activeId, setActiveId] = useState(() => _loadSlips().slips[0]?.id ?? null);
     const [drag, setDrag] = useState(null); // dragged candidate api_id
+    // Collapsible panes (small screens only): collapsing Tips or Slips frees
+    // vertical room for the other when they're stacked. On md+ (side-by-side)
+    // both always show - the collapse class only hides below md.
+    const [panes, setPanes] = useState({ tips: true, slips: true });
+    const togglePane = k => setPanes(p => ({ ...p, [k]: !p[k] }));
+    const bodyCls = open => (open
+        ? 'flex flex-col min-h-0 md:grow'
+        : 'hidden md:flex md:flex-col md:min-h-0 md:grow');
 
     // Persist on every change (paired-save idiom)
     useEffect(() => {
@@ -270,11 +278,17 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                 <div className="flex flex-col md:flex-row gap-4 min-h-0 grow overflow-y-auto md:overflow-visible">
                     {/* Candidates: the view's tips ranked best-first (settled included) */}
                     <div className="w-full md:w-2/5 min-w-0 flex flex-col md:min-h-0">
-                        <h3 className="text-sm font-medium text-label mb-0.5">
-                            Tips <span className="text-label-3 font-normal">
+                        <button
+                            type="button" onClick={() => togglePane('tips')} aria-expanded={panes.tips}
+                            title="Collapse / expand the tips list (small screens)"
+                            className="flex items-center gap-1.5 text-sm font-medium text-label mb-0.5 text-left w-full md:cursor-default"
+                        >
+                            <span className={`md:hidden text-label-3 text-xs transition-transform ${panes.tips ? 'rotate-90' : ''}`}>▸</span>
+                            <span>Tips <span className="text-label-3 font-normal">
                                 ({shown.length}{candidates.length > shown.length ? ` · ${candidates.length - shown.length} used hidden` : ''}, best first{hasMagic ? ' · magic' : ''})
-                            </span>
-                        </h3>
+                            </span></span>
+                        </button>
+                        <div className={bodyCls(panes.tips)}>
                         {/* Touch-first: tapping the teal ＋ adds a tip to the active slip
                             (drag still works on desktop). The hint names where ＋ lands. */}
                         <p className="text-xs mb-1">
@@ -315,12 +329,20 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                 </div>
                             )}
                         </div>
+                        </div>
                     </div>
 
                     {/* Slips: drop targets */}
                     <div className="w-full md:w-3/5 min-w-0 flex flex-col md:min-h-0">
-                        <h3 className="text-sm font-medium text-label mb-1">Slips</h3>
-                        <div className="space-y-3 pr-1 md:grow md:overflow-y-auto">
+                        <button
+                            type="button" onClick={() => togglePane('slips')} aria-expanded={panes.slips}
+                            title="Collapse / expand the slips (small screens)"
+                            className="flex items-center gap-1.5 text-sm font-medium text-label mb-1 text-left w-full md:cursor-default"
+                        >
+                            <span className={`md:hidden text-label-3 text-xs transition-transform ${panes.slips ? 'rotate-90' : ''}`}>▸</span>
+                            <span>Slips <span className="text-label-3 font-normal">({slips.length})</span></span>
+                        </button>
+                        <div className={`space-y-3 pr-1 md:grow md:overflow-y-auto ${panes.slips ? '' : 'hidden md:block'}`}>
                             {slips.map(slip => {
                                 const sum = slipSummary(slip.legs, config.stake);
                                 const verdict = slipOutcome(slip.legs);
