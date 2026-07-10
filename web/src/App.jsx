@@ -16,6 +16,7 @@ import OverflowMenu from './components/OverflowMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
+import ViewPills from './components/ViewPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
 import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
 
@@ -701,6 +702,13 @@ export default function App() {
                     </div>
                 )}
                 <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
+                <ViewPills
+                    showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
+                    noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filters.length}
+                    onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
+                    onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
+                    onOpenFilters={() => setShowFilters(true)} onClearFilters={() => setFilters([])}
+                />
                 <DataTable
                     catalog={catalog}
                     rows={rows}
