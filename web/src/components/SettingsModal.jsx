@@ -45,7 +45,7 @@ function Toggle({ checked, onChange, children }) {
 
 // One safe-limit number field seeded from the effective policy, defaulting the
 // placeholder to the shipped DEFAULT_SAFE value.
-function SafeLimit({ label, k, safe, onSafeSet, min, max, int, hint }) {
+function SafeLimit({ label, k, safe, onSafeSet, min, max, int, step, hint }) {
     return (
         <label className="flex flex-col gap-1 text-xs text-label-2" title={hint}>
             {label}
@@ -55,6 +55,7 @@ function SafeLimit({ label, k, safe, onSafeSet, min, max, int, hint }) {
                 min={min}
                 max={max}
                 int={int}
+                step={step}
                 className="w-20 bg-surface border border-separator text-label rounded-[10px] px-2 h-10 text-sm outline-none"
             />
         </label>
@@ -244,7 +245,7 @@ export default function SettingsModal({
                                 <SafeLimit label="Max price" k="maxPrice" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={5} hint="Only keep short-priced legs at or below this odds" />
                                 <SafeLimit label="Min agreement" k="minAgreement" safe={safe} onSafeSet={onSafeSet}
-                                    min={0} max={1} hint="Floor on the weakest present blend component (0–1)" />
+                                    min={0} max={1} step={0.05} hint="Floor on the weakest present blend component (0–1)" />
                                 <SafeLimit label="Min signals" k="minParts" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={3} int hint="Require at least this many blend components present" />
                             </div>

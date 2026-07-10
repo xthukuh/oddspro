@@ -21,16 +21,19 @@ const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, targetOdds: 2.5, maxSlips: 0, h
 const _id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
 const _pct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
 
-// Stored slips survive reloads within the same table date; a date change
-// keeps the limits but clears the slips (their fixtures are gone anyway).
-function _loadSlips(date) {
+// Stored slips + limits survive reloads AND date changes, so one multi-bet slip
+// can accumulate tips from several days. Legs are self-contained (each carries
+// its own fixture/market/price/prob/outcome), so they render and settle no
+// matter which date is loaded. Only the user empties them - the Clear-slips
+// button or removing legs. (`date` in the payload is just the last-viewed date.)
+function _loadSlips() {
     try {
         const v = JSON.parse(localStorage.getItem(LS_SLIPS));
         const config = { ...DEFAULT_CONFIG, ...(v && typeof v.config === 'object' ? v.config : {}) };
         // Migrate the old "Min odds" limit to "Target odds" (same number)
         if (config.minOdds != null && v?.config?.targetOdds == null) config.targetOdds = config.minOdds;
         delete config.minOdds;
-        const slips = v?.date === date && Array.isArray(v.slips)
+        const slips = Array.isArray(v?.slips)
             ? v.slips.filter(s => s && typeof s === 'object' && Array.isArray(s.legs))
             : [];
         return { config, slips };
@@ -44,8 +47,8 @@ const _wrap = (legArrays, start) => legArrays.map((legs, i) => ({ id: _id(), nam
 
 export default function BetslipPlayground({ rows, chain, cal, columns, calibration, date, onClose }) {
     const hasMagic = chain?.some(e => e.type === 'magic');
-    const [{ config, slips }, setState] = useState(() => _loadSlips(date));
-    const [activeId, setActiveId] = useState(() => _loadSlips(date).slips[0]?.id ?? null);
+    const [{ config, slips }, setState] = useState(() => _loadSlips());
+    const [activeId, setActiveId] = useState(() => _loadSlips().slips[0]?.id ?? null);
     const [drag, setDrag] = useState(null); // dragged candidate api_id
 
     // Persist on every change (paired-save idiom)
@@ -84,8 +87,9 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
             price: r.tip_price,
             prob: estimateLegProb(tipView(r), calibration),
             outcome: r.tip_outcome ?? null,
+            date, // origin date - lets legs from other days render un-dimmed
         }));
-    }, [rows, chain, columns, cal, calibration]);
+    }, [rows, chain, columns, cal, calibration, date]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
     // Tips already sitting on any slip: "Fill from top" ALWAYS skips them, so
@@ -190,7 +194,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
 
                 <div className="flex flex-wrap items-end gap-3 mb-3 text-sm">
                     {[
-                        ['Stake / slip', 'stake', { min: 1, max: 1_000_000 }, 'w-24'],
+                        ['Stake / slip', 'stake', { min: 1, max: 1_000_000, step: 1 }, 'w-24'],
                         ['Max legs', 'maxLegs', { min: 1, max: 20, int: true }, 'w-16'],
                         ['Target odds', 'targetOdds', { min: 1, max: 1000 }, 'w-20',
                             'Autogeneration closes a slip once its combined odds reach this'],
@@ -205,6 +209,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                 min={bounds.min}
                                 max={bounds.max}
                                 int={bounds.int}
+                                step={bounds.step}
                                 className={`${w} bg-fill text-label rounded-[10px] px-2 h-9 text-sm outline-none`}
                             />
                         </label>
@@ -355,15 +360,23 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                 &times;
                                             </button>
                                         </div>
-                                        {slip.legs.map(l => (
+                                        {slip.legs.map(l => {
+                                            // A leg's own date tells "dropped off today's view" (dim + gone)
+                                            // apart from "belongs to another day" (fine - show its date).
+                                            const sameDay = !l.date || l.date === date;
+                                            const dropped = sameDay && !live.has(l.api_id);
+                                            return (
                                             <div
                                                 key={l.api_id}
-                                                className={`flex items-center gap-2 text-xs py-1 ${live.has(l.api_id) ? '' : 'opacity-50'} ${
+                                                className={`flex items-center gap-2 text-xs py-1 ${dropped ? 'opacity-50' : ''} ${
                                                     verdict.broken.includes(l.api_id) ? 'text-miss' : ''}`}
                                             >
                                                 <span className="truncate grow" title={l.fixture}>{l.fixture}</span>
-                                                {!live.has(l.api_id) && (
-                                                    <span className="text-hot" title="No longer a tip on this view">gone</span>
+                                                {dropped && (
+                                                    <span className="text-hot" title="No longer a tip on today's view">gone</span>
+                                                )}
+                                                {!sameDay && (
+                                                    <span className="text-label-3" title={`From ${l.date}`}>{l.date?.slice(5)}</span>
                                                 )}
                                                 <span className="font-medium whitespace-nowrap">{l.market}</span>
                                                 <span className="tabular-nums">{l.price?.toFixed(2) ?? '—'}</span>
@@ -378,7 +391,8 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                     &times;
                                                 </button>
                                             </div>
-                                        ))}
+                                            );
+                                        })}
                                         {!slip.legs.length && (
                                             <div className="text-xs text-label-3 py-1">Drag tips here (or use their + button).</div>
                                         )}
