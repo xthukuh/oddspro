@@ -219,18 +219,19 @@ export default function SettingsModal({
                                 title="Enable bookmakers and set their priority - the top enabled provider represents each game under One of each"
                             />
                             <MultiSelect
-                                label="Unavailable match links"
+                                label="Keep links after kickoff"
                                 options={providers.map(p => ({ key: p, label: p }))}
                                 selected={linkProviders}
                                 onChange={onLinkProviders}
-                                title="Keep clickable links for a provider's concluded / market-less matches"
+                                title="Keep a provider's links clickable after kickoff / once markets close (e.g. betpawa serves live & concluded pages). Others auto-disable when the match starts."
                             />
                         </div>
                         <p className="text-xs text-label-2">
                             Tick a bookmaker to show it and use the arrows to set priority (top first). The
-                            order picks which provider represents a game under <b>One of each</b>. Unavailable
-                            matches (concluded, or no markets left) are unlinked by default - enable a provider
-                            under links to keep them anyway (betpawa serves concluded pages for ~6h).
+                            order picks which provider represents a game under <b>One of each</b>. A match link
+                            auto-disables once it kicks off, is concluded, or has no markets left (many books,
+                            e.g. Betika, drop the link at kickoff) - enable a provider under links to keep them
+                            anyway (betpawa serves live &amp; concluded pages ~6h).
                         </p>
                     </section>
 

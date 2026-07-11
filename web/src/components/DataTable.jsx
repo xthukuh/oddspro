@@ -348,10 +348,16 @@ function _cell(row, col, linkProviders, openTip) {
         );
     }
     if (key === 'fixture') {
-        // Unavailable matches (concluded or no live markets) lose their link
-        // unless the provider is opted in via Settings (betpawa keeps
-        // concluded match pages up for ~6h).
-        const dead = row.available === false;
+        // A match link dies once betting closes. The server marks `available`
+        // false when the fixture is terminal / completed OR the latest refresh
+        // returned zero markets (no betting options). On TOP of that we disable
+        // the link client-side once KICKOFF has passed (start_time <= the
+        // client's clock): many books (e.g. Betika) drop the pre-match link at
+        // kickoff, well before the server records zero markets. Providers opted
+        // in via Settings keep their link regardless (betpawa serves live /
+        // concluded pages ~6h). Re-evaluates on the 60s freshness re-render.
+        const started = row.start_time != null && new Date(row.start_time).getTime() <= Date.now();
+        const dead = row.available === false || started;
         const badge = _hotBadge(row);
         if (row.match_url && (!dead || linkProviders.has(row.provider))) {
             return (
@@ -363,10 +369,11 @@ function _cell(row, col, linkProviders, openTip) {
                 </>
             );
         }
+        const deadTitle = row.available === false ? 'Betting unavailable' : 'Betting closed - match has started';
         return (
             <>
                 {badge}
-                {dead ? <span title="Betting unavailable">{row.fixture}</span> : row.fixture}
+                {dead ? <span title={deadTitle}>{row.fixture}</span> : row.fixture}
             </>
         );
     }
