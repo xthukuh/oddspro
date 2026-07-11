@@ -12,6 +12,7 @@
 
 import { sortValue } from './sortValues.js';
 import { parseFilterList } from '../../src/db/filter-csv.js';
+import { tipHit } from '../../src/db/tip-rules.js';
 
 // Raw (displayed) value for text ops: the underlying field text, so e.g.
 // `home_form like WWW` matches the letters, not the derived points. The tip
@@ -21,6 +22,51 @@ export function rawValue(row, col) {
     if (col.group === 'market') return row.markets?.[col.key] ?? null;
     if (col.key.startsWith('fs:')) return row.stats?.[col.key] ?? null;
     return row[col.key] ?? null;
+}
+
+// R26b — tip-column filter value prefix. On the `tip` field a filter value may
+// carry a `[H|M]?\d?:` prefix that redirects the match to a runner-up candidate
+// and/or gates on the settled outcome. Split it off before the op runs:
+//   `2:1X`  -> 2nd candidate, market compared against "1X"
+//   `H:O 2` -> chosen candidate that HIT, market compared against "O 2"
+//   `M2:`   -> 2nd candidate that MISSED (empty value = any market)
+// A leading colon is required, so plain markets (`O 2.5`, `1X`, CSV lists) with
+// no colon parse as { index:1, outcome:null } and behave exactly as before.
+const TIP_PREFIX = /^([HM]?)(\d?):(.*)$/i;
+export function parseTipFilter(value) {
+    const s = value == null ? '' : String(value);
+    const m = TIP_PREFIX.exec(s);
+    if (!m) return { index: 1, outcome: null, value: s };
+    const flag = m[1].toUpperCase();
+    return {
+        index: m[2] ? Number(m[2]) : 1,
+        outcome: flag === 'H' ? 'hit' : flag === 'M' ? 'miss' : null,
+        value: m[3],
+    };
+}
+
+// Resolve the Nth tip candidate's market: 1 = the chosen tip (fp.tip_market),
+// 2/3 = the runners-up persisted in tip_breakdown. null when the fixture has no
+// tip or no candidate at that rank.
+export function tipCandidateMarket(row, index) {
+    if (index === 1) return row?.tip_market ?? null;
+    const up = row?.tip_breakdown?.runners_up;
+    return Array.isArray(up) ? (up[index - 2]?.market ?? null) : null;
+}
+
+// Grade the Nth candidate hit/miss from the fixture's final score (via tipHit,
+// exactly as the tip cell settles runners-up). null when pending (no final
+// score), the candidate is absent, or the market is unknown.
+export function tipCandidateOutcome(row, index) {
+    const market = tipCandidateMarket(row, index);
+    if (market == null || !row?.score) return null;
+    const [hs, as] = String(row.score).split('-').map(Number);
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
+    try {
+        return tipHit(market, hs, as) ? 'hit' : 'miss';
+    } catch {
+        return null;
+    }
 }
 
 // Three-way comparison (-1/0/1), null when either side is missing/unparsable:
@@ -65,6 +111,28 @@ function safeRegex(pattern) {
     }
 }
 
+// Value-matching ops (value-only, no column-to-column form): text substring,
+// CSV set membership, and safe regex. Shared by the general path and the tip
+// candidate-prefix path so both grade identically. `raw` is passed un-coerced
+// (numeric `in` normalization depends on its type); a null `raw` never matches.
+const VALUE_OPS = new Set(['like', 'not-contains', 'in', 'not-in', 'match', 'not-match']);
+function matchValueOp(op, raw, value) {
+    if (raw == null) return false;
+    if (op === 'like' || op === 'not-contains') {
+        const has = String(raw).toLowerCase().includes(String(value).toLowerCase());
+        return op === 'like' ? has : !has;
+    }
+    if (op === 'in' || op === 'not-in') {
+        const inSet = parseFilterList(value).some(it => compareValues(raw, it) === 0);
+        return op === 'in' ? inSet : !inSet;
+    }
+    // match / not-match
+    const re = safeRegex(value);
+    if (!re) return false;
+    const m = re.test(String(raw));
+    return op === 'match' ? m : !m;
+}
+
 // Resolve a column key to its descriptor. Accepts an array of descriptors (built
 // once into a Map) or an already-built resolver function (the hot path in
 // filterRows builds the resolver once, not per row).
@@ -88,28 +156,17 @@ function evalCond(row, cond, resolve) {
     }
     const lhs = resolve(cond.key);
     const op = cond.op;
-    // Text substring ops (value-only, no column-to-column form).
-    if ((op === 'like' || op === 'not-contains') && cond.col == null) {
-        const raw = rawValue(row, lhs);
-        if (raw == null) return false;
-        const has = String(raw).toLowerCase().includes(String(cond.value).toLowerCase());
-        return op === 'like' ? has : !has;
-    }
-    // CSV set membership (number-normalized like the server's whereIn).
-    if ((op === 'in' || op === 'not-in') && cond.col == null) {
-        const raw = rawValue(row, lhs);
-        if (raw == null) return false;
-        const inSet = parseFilterList(cond.value).some(it => compareValues(raw, it) === 0);
-        return op === 'in' ? inSet : !inSet;
-    }
-    // Safe regex match over the displayed text.
-    if ((op === 'match' || op === 'not-match') && cond.col == null) {
-        const raw = rawValue(row, lhs);
-        if (raw == null) return false;
-        const re = safeRegex(cond.value);
-        if (!re) return false;
-        const m = re.test(String(raw));
-        return op === 'match' ? m : !m;
+    // Value-matching ops (text/set/regex, value-only). On the tip field the
+    // value may carry an R26b `[H|M]?\d?:` prefix that redirects to a runner-up
+    // candidate and/or gates on the settled outcome (AND-combined with the
+    // market predicate); every other field matches its rawValue as before.
+    if (VALUE_OPS.has(op) && cond.col == null) {
+        if (lhs.key === 'tip') {
+            const { index, outcome, value } = parseTipFilter(cond.value);
+            if (outcome && tipCandidateOutcome(row, index) !== outcome) return false;
+            return matchValueOp(op, tipCandidateMarket(row, index), value);
+        }
+        return matchValueOp(op, rawValue(row, lhs), cond.value);
     }
     const test = CMP_OPS[op];
     if (!test) return false;

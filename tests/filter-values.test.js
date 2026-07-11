@@ -80,6 +80,17 @@ test('splitFilters: col-mode goes client when EITHER side is client-only', () =>
     assert.equal(client.length, 2);
 });
 
+test('splitFilters: a prefixed tip condition (R26b) is forced client-side', () => {
+    const filters = [
+        { key: 'tip', op: 'like', value: 'O 2.5' },   // plain → server (fp.tip_market)
+        { key: 'tip', op: 'like', value: '2:O 2.5' }, // runner-up prefix → client
+        { key: 'tip', op: 'like', value: 'H:O 2.5' }, // outcome prefix → client
+    ];
+    const { server, client } = splitFilters(filters, CATALOG);
+    assert.deepEqual(server.map(f => f.value), ['O 2.5']);
+    assert.deepEqual(client.map(f => f.value), ['2:O 2.5', 'H:O 2.5']);
+});
+
 test('numeric ops on plain stat values (h2h_count gte)', () => {
     const rows = [row({ h2h_count: 5 }), row({ h2h_count: 2 }), row({ h2h_count: null })];
     const out = applyClientFilters(rows, [{ key: 'h2h_count', op: 'gte', value: '3' }], COLUMNS);

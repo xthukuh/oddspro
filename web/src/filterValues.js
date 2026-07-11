@@ -7,7 +7,7 @@
 // Condition/group evaluation + the raw-value helper live in filterExpr.js (one
 // source of truth for filter semantics — this module delegates so the flat-AND
 // path and the advanced nested/expression path can never drift).
-import { rawValue, filterRows } from './filterExpr.js';
+import { rawValue, filterRows, parseTipFilter } from './filterExpr.js';
 
 // Keys the API accepts in /api/records filters (catalog base + market
 // columns flagged filterable). Everything else must filter client-side.
@@ -29,6 +29,17 @@ export const CLIENT_ONLY_KEYS = new Set(['league']);
 // must evaluate over the loaded day.
 const CLIENT_ONLY_OPS = new Set(['match', 'not-match']);
 
+// R26b: a `tip` condition whose value carries a candidate/outcome prefix
+// (`2:`, `H:`, `M2:`, …) can't be a plain `fp.tip_market LIKE` — the server
+// would match the literal "H2:" text and return nothing. Such conditions must
+// evaluate client-side (where parseTipFilter resolves the runner-up + settles
+// hit/miss). A plain, un-prefixed tip value stays server-side, unchanged.
+function tipHasPrefix(f) {
+    if (!f || f.key !== 'tip' || f.col != null || typeof f.value !== 'string') return false;
+    const p = parseTipFilter(f.value);
+    return p.index !== 1 || p.outcome !== null;
+}
+
 // Partition applied filters into a server (SQL) subset and a client subset.
 // A flat array is an implicit top-level AND, so each condition is placed
 // independently: server-side only when every column it references is a server
@@ -46,6 +57,7 @@ export function splitFilters(filters, catalog) {
         const local = f.type === 'expr'
             || CLIENT_ONLY_OPS.has(f.op)
             || CLIENT_ONLY_KEYS.has(f.key)
+            || tipHasPrefix(f)
             || !keys.has(f.key)
             || (f.col != null && !keys.has(f.col));
         (local ? client : server).push(f);

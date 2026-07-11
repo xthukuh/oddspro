@@ -76,6 +76,10 @@ const SORT_HINT = {
     home_goals_oth: 'sorts by avg total', away_goals_oth: 'sorts by avg total',
 };
 
+// R26b — the tip value may carry a candidate/outcome prefix. Shown under tip's
+// text/set/regex ops (its CMP ops keep the confidence SORT_HINT).
+const TIP_PREFIX_HINT = 'prefix a rank/outcome: 2:/3: = runner-up pick, H:/M: = hit/miss (e.g. H2:O 2.5)';
+
 const EXPR_EXAMPLES = [
     "$row['goals'] > 2 && $row['h2h_count'] >= 3",
     "contains($row['fixture'], 'united') or $row['tip'] >= 0.7",
@@ -273,12 +277,19 @@ function FieldSelect({ value, onChange, ctx, exclude }) {
 function ConditionRow({ cond, ctx, advanced, onChange, onRemove, apply }) {
     const type = ctx.typeOf(cond.key);
     let ops = cond.mode === 'col' ? CMP_OPS : opsForType(type);
+    // The tip field is number-typed (sorts by confidence) but also matches its
+    // market TEXT (server `like_sql`), so offer contains/not-contains too — that
+    // is where the R26b candidate/outcome prefix is most natural.
+    if (cond.mode !== 'col' && cond.key === 'tip') ops = [...ops, 'like', 'not-contains'];
     if (advanced && cond.mode !== 'col' && type !== 'date') ops = [...ops, 'match', 'not-match'];
     // Keep the op valid when the field type changes under it; write the
     // reconciled op back so Apply uses exactly what the row displays.
     const op = ops.includes(cond.op) ? cond.op : ops[0];
     useEffect(() => { if (op !== cond.op) onChange({ op }); }, [op, cond.op]);
-    const hint = cond.mode !== 'col' && CMP_OPS.includes(op) ? SORT_HINT[cond.key] : null;
+    const hint = cond.mode !== 'col'
+        ? (CMP_OPS.includes(op) ? SORT_HINT[cond.key]
+            : cond.key === 'tip' && VALUE_ONLY.has(op) ? TIP_PREFIX_HINT : null)
+        : null;
 
     const setField = key => {
         const t = ctx.typeOf(key);
