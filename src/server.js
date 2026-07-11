@@ -7,7 +7,8 @@ import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
-import { closeDb } from './db/connection.js';
+import { db, closeDb } from './db/connection.js';
+import { describeMigrationResult } from './db/migrate-rules.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -193,15 +194,35 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
     res.status(status).json({ error: String(err?.message ?? err) });
 });
 
-const server = app.listen(config.API_PORT, config.API_HOST, () => {
-    console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
-    startAutoRefresh();
+// Optionally self-apply pending schema migrations before serving
+// (MIGRATE_ON_BOOT). Off by default - local/dev restarts never migrate. On a
+// shell-less shared host (cPanel) there is no terminal to `npm run migrate`, so
+// restarting the Node app is the only way to run a new migration; this makes
+// the restart do it. Schema-only (knex migrate:latest, forward-only).
+async function migrateOnBoot() {
+    if (!config.MIGRATE_ON_BOOT) return; // no-op default
+    console.debug('[migrate] MIGRATE_ON_BOOT set - running knex migrate:latest...');
+    console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
+}
+
+let server = null;
+migrateOnBoot().then(() => {
+    server = app.listen(config.API_PORT, config.API_HOST, () => {
+        console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
+        startAutoRefresh();
+    });
+}).catch(err => {
+    // Fail fast: don't serve on an uncertain schema. The host surfaces the exit
+    // + this log via Passenger; fix the migration and restart.
+    console.error('[migrate] boot migration failed - not starting server:', err);
+    closeDb().finally(() => process.exit(1));
 });
 
 // Graceful shutdown - stop the scheduler, close the HTTP server and the pool
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         stopAutoRefresh();
-        server.close(() => closeDb().finally(() => process.exit(0)));
+        if (server) server.close(() => closeDb().finally(() => process.exit(0)));
+        else closeDb().finally(() => process.exit(0));
     });
 }

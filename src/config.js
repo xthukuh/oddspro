@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { DEFAULT_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
+import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
@@ -60,6 +61,11 @@ const EnvSchema = z.object({
     // with separate pools - shared hosting connection caps may need this lower.
     DB_POOL_MIN: z.coerce.number().int().min(0).default(0),
     DB_POOL_MAX: z.coerce.number().int().min(1).default(10),
+    // Self-apply pending knex migrations when the server (src/server.js) boots.
+    // OFF by default (local/dev restarts never migrate); a shell-less shared
+    // host (cPanel) sets this so restarting the Node app runs migrate:latest.
+    // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
+    MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
     // Verbose per-step timing logs (src/pipeline.js) via src/utils.js#debugLog.
     // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
     DEBUG: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
