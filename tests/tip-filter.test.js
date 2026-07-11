@@ -133,3 +133,21 @@ test('evalCondition tip: an absent Nth candidate is a non-match', () => {
     assert.equal(evalCondition(r, { key: 'tip', op: 'like', value: '4:anything' }, COLS), false);
     assert.equal(evalCondition({ tip_market: 'O 2.5' }, { key: 'tip', op: 'like', value: '2:x' }, COLS), false);
 });
+
+// --- tip_confidence field: the chosen tip's win % on a 0-100 integer scale ---
+const CONF_COLS = [{ key: 'tip_confidence', group: 'base' }];
+
+test('evalCondition tip_confidence: compares the chosen win % on a 0-100 scale', () => {
+    const r = { tip_confidence: 0.72 }; // 72%
+    assert.equal(evalCondition(r, { key: 'tip_confidence', op: 'gte', value: '70' }, CONF_COLS), true);
+    assert.equal(evalCondition(r, { key: 'tip_confidence', op: 'gte', value: '72' }, CONF_COLS), true);
+    assert.equal(evalCondition(r, { key: 'tip_confidence', op: 'gt', value: '72' }, CONF_COLS), false);
+    assert.equal(evalCondition({ tip_confidence: 0.6 }, { key: 'tip_confidence', op: 'gte', value: '70' }, CONF_COLS), false);
+});
+
+test('evalCondition tip_confidence: rounds to the displayed integer %; null never matches', () => {
+    // 0.666 -> 66.6 -> 67 (matches the rounded % the tip cell shows)
+    assert.equal(evalCondition({ tip_confidence: 0.666 }, { key: 'tip_confidence', op: 'gte', value: '67' }, CONF_COLS), true);
+    assert.equal(evalCondition({ tip_confidence: 0.666 }, { key: 'tip_confidence', op: 'gt', value: '67' }, CONF_COLS), false);
+    assert.equal(evalCondition({ tip_confidence: null }, { key: 'tip_confidence', op: 'gte', value: '0' }, CONF_COLS), false);
+});

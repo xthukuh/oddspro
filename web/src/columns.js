@@ -19,6 +19,9 @@ const EXTRA_BASE_LABELS = {
     select: 'Select',
     hot: 'Over 2.5 pick',
     hot_score: 'Over 2.5 score',
+    // Client-only derived filter field: the chosen tip's confidence as an
+    // integer win % (0-100). Not a table column — filterable only.
+    tip_confidence: 'Tip confidence %',
     // Filterable data fields that are no longer their own TABLE column (id folds
     // into Start; updated/locked fold into the Status tooltip) but stay queryable.
     api_id: 'ID',

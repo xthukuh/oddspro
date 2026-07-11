@@ -57,7 +57,13 @@ const valueLabel = (key, v) => (key === 'status' ? `${v} — ${STATUS_LABEL[v] ?
 
 // Base keys grouped for the field dropdown (mirrors the table/settings layout).
 const MATCH_KEYS = ['fixture', 'home_team', 'away_team', 'league', 'season', 'round', 'status', 'start_time', 'provider', 'api_id'];
-const BETTING_KEYS = ['tip', 'hot', 'hot_score', 'goals', 'score', 'updated_at', 'locked_at'];
+const BETTING_KEYS = ['tip', 'tip_confidence', 'hot', 'hot_score', 'goals', 'score', 'updated_at', 'locked_at'];
+// Client-only derived Betting fields (not in the server catalog) that are still
+// force-listed as filter fields — mirrors how `score` is offered.
+const CLIENT_BETTING_KEYS = new Set(['score', 'tip_confidence']);
+// Per-field numeric input bounds (integer/percent fields the free NumberInput
+// should clamp). tip_confidence is an integer win % on a 0-100 scale.
+const NUMBER_BOUNDS = { tip_confidence: { min: 0, max: 100, int: true, step: 1 } };
 const TEAM_STAT_KEYS = ['home_rank', 'home_form', 'away_rank', 'away_form', 'h2h', 'h2h_count',
     'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth'];
 
@@ -65,7 +71,7 @@ const DATE_KEYS = new Set(['start_time', 'updated_at', 'locked_at']);
 // Fields whose sort value is numeric (so comparisons use a numeric input) even
 // when the displayed text is a string (form points, tip confidence, …).
 const NUMBER_KEYS = new Set(['goals', 'score', 'h2h_count', 'hot', 'hot_score', 'api_id', 'tip',
-    'season', 'home_rank', 'away_rank', 'home_form', 'away_form', 'h2h',
+    'tip_confidence', 'season', 'home_rank', 'away_rank', 'home_form', 'away_form', 'h2h',
     'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
 // Sort-hint shown under derived-numeric fields (their sort value ≠ their text).
 const SORT_HINT = {
@@ -239,6 +245,7 @@ function ValueControl({ cond, ctx, onChange, apply }) {
                 value={cond.value}
                 onCommit={n => onChange({ value: String(n) })}
                 className={inputCls}
+                {...(NUMBER_BOUNDS[key] ?? {})}
             />
         );
     }
@@ -496,7 +503,7 @@ export default function FilterBuilder({ catalog, available, rows = [], filterCol
         const baseOrStat = k => baseFilterable.has(k) || (statKeys.has(k) && statOk(k));
         return [
             ['Match info', [field('select'), ...MATCH_KEYS.filter(baseOrStat).map(field)]],
-            ['Betting', BETTING_KEYS.filter(k => baseFilterable.has(k) || k === 'score').map(field)],
+            ['Betting', BETTING_KEYS.filter(k => baseFilterable.has(k) || CLIENT_BETTING_KEYS.has(k)).map(field)],
             ['Odds markets', catalog.markets.filter(c => marketOk(c.key)).map(c => field(c.key))],
             ['Team & H2H stats', TEAM_STAT_KEYS.filter(k => statKeys.has(k) && statOk(k)).map(field)],
             ['Post-match stats', catalog.stats.filter(c => c.key.startsWith('fs:') && statOk(c.key)).map(c => field(c.key))],
