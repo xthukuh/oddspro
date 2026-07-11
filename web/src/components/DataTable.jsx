@@ -10,6 +10,9 @@ import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
+// Pure settler (zero-import) - grades a runner-up market from the final score
+// (the settle pass only stores the CHOSEN tip's outcome).
+import { tipHit } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
 import { BASE_COLUMNS } from '../baseColumns.js';
@@ -230,6 +233,32 @@ function _hotBadge(row) {
     );
 }
 
+// Win-% weight tiers (AX1): the confidence is the number the app exists to
+// surface, so strong picks pop in accent, mid stays default, weak is muted -
+// instead of the flat dim grey it used to share with inert metadata.
+function _pctClass(conf) {
+    if (conf == null) return 'text-label-3';
+    if (conf >= 0.70) return 'text-accent font-semibold';
+    if (conf >= 0.65) return '';
+    return 'text-label-3';
+}
+
+// Settle any market for a final fixture from its canonical score. Runners-up
+// carry no stored outcome (only the chosen tip is graded), so we grade them
+// here; a non-final row (no score) returns null -> pending, no tick.
+function _marketOutcome(row, market) {
+    if (!row.score) return null;
+    const [hs, as] = row.score.split('-').map(Number);
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
+    return tipHit(market, hs, as) ? 'hit' : 'miss';
+}
+
+function _tick(outcome) {
+    if (outcome === 'hit') return <span className="text-hit font-bold"> ✓</span>;
+    if (outcome === 'miss') return <span className="text-miss font-bold"> ✗</span>;
+    return null;
+}
+
 function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
     if (key === 'start_time') {
@@ -275,18 +304,36 @@ function _cell(row, col, linkProviders, openTip) {
         // AI-vetoed tip is struck through (it stays on record and settles -
         // the performance report measures what the veto was worth).
         const missed = row.tip_outcome === 'miss';
+        // Top-3 picks stacked (chosen + up to two runners-up). The chosen is the
+        // sort value, so it stays bold/full-size; runners-up are smaller & muted,
+        // each with its own settled ✓/✗ (graded from the score). The pinned
+        // duplicate (compact) shows the chosen line only, to stay narrow.
+        const ups = Array.isArray(row.tip_breakdown?.runners_up)
+            ? row.tip_breakdown.runners_up.slice(0, 2) : [];
         return (
-            <span
-                className={`whitespace-nowrap cursor-pointer ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}
+            <div
+                className="cursor-pointer leading-tight"
                 title={title}
                 onClick={e => openTip(row, e)}
             >
-                {row.hot ? '🔥 ' : ''}
-                <span className={`font-medium ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                {pct && !compact && <span className={missed || vetoed ? '' : 'text-label-2'}> · {pct}</span>}
-                {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓</span>}
-                {missed && <span className="font-bold"> ✗</span>}
-            </span>
+                <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
+                    {row.hot ? '🔥 ' : ''}
+                    <span className={`font-semibold ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
+                    {pct && !compact && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
+                    {_tick(row.tip_outcome)}
+                </div>
+                {!compact && ups.map((r, i) => {
+                    const rpct = r.confidence != null ? `${Math.round(r.confidence * 100)}%` : null;
+                    return (
+                        <div key={i} className="whitespace-nowrap text-[11px] text-label-3">
+                            <span className="tabular-nums">{i + 2}.</span>{' '}
+                            <span>{r.market}</span>
+                            {rpct && <span> · {rpct}</span>}
+                            {_tick(_marketOutcome(row, r.market))}
+                        </div>
+                    );
+                })}
+            </div>
         );
     }
     if (key === 'provider') {
