@@ -1,6 +1,33 @@
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import useAnchoredPanel from '../useAnchoredPanel.js';
+import { moveToPosition } from '../reorder.js';
 import { Z } from '../zLayers.js';
+
+// Editable priority number: type a position and commit on Enter/blur (NOT live -
+// a live commit would reorder mid-keystroke). Digits only; syncs to the incoming
+// position whenever the row isn't focused (so a reorder renumbers it).
+function PositionInput({ pos, onSet }) {
+    const [raw, setRaw] = useState(String(pos));
+    const focused = useRef(false);
+    useEffect(() => { if (!focused.current) setRaw(String(pos)); }, [pos]);
+    const commit = () => {
+        focused.current = false;
+        const n = parseInt(raw, 10);
+        if (Number.isFinite(n) && n !== pos) onSet(n);
+        setRaw(String(pos)); // effect re-syncs to the new position after the reorder
+    };
+    return (
+        <input
+            type="text" inputMode="numeric" value={raw}
+            aria-label="Position — type a number to move this row there" title="Type a position to move this row there"
+            onFocus={e => { focused.current = true; e.target.select(); }}
+            onChange={e => { if (/^\d*$/.test(e.target.value)) setRaw(e.target.value); }}
+            onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
+            onBlur={commit}
+            className="shrink-0 w-6 h-6 text-center text-xs tabular-nums bg-fill text-label-2 rounded-md outline-none focus:ring-1 focus:ring-accent"
+        />
+    );
+}
 
 // Collapsible reorder dropdown — the shared control for provider priority,
 // column order and sort priority (it replaced the always-visible drag lists to
@@ -12,12 +39,14 @@ import { Z } from '../zLayers.js';
 //   items   : [{ key, label, enabled? }]  (array order = priority, index 0 = top)
 //   badge   : trigger count text (defaults to items.length)
 //   onMove(key, dir)   required — dir is -1 (up) / +1 (down)
+//   onReorder(keys)    optional — renders an editable position input per row;
+//                      given the full reordered key list to persist (E2)
 //   onToggle(key)      optional — renders the checkbox (item.enabled = checked)
 //   onRemove(key)      optional — renders the × on each row
 //   renderTag(item)    optional — inline node shown before the arrows
 //   hint    : optional panel-header text
 //   footer  : optional node pinned under the rows (e.g. a Reset button)
-export default function ReorderList({ label, items, badge, onMove, onToggle, onRemove, renderTag, hint, footer, title }) {
+export default function ReorderList({ label, items, badge, onMove, onReorder, onToggle, onRemove, renderTag, hint, footer, title }) {
     const [open, setOpen] = useState(false);
     const ref = useRef(null);   // wrapper (trigger + panel) for outside-click test
     const btnRef = useRef(null);
@@ -57,7 +86,9 @@ export default function ReorderList({ label, items, badge, onMove, onToggle, onR
                                     className="accent-accent h-4 w-4"
                                 />
                             )}
-                            <span className="text-label-3 text-xs tabular-nums w-4 text-center" title="Priority">{i + 1}</span>
+                            {onReorder
+                                ? <PositionInput pos={i + 1} onSet={p => onReorder(moveToPosition(items, it.key, p).map(x => x.key))} />
+                                : <span className="text-label-3 text-xs tabular-nums w-4 text-center" title="Priority">{i + 1}</span>}
                             <span className="grow text-sm truncate" title={typeof it.label === 'string' ? it.label : undefined}>{it.label}</span>
                             {renderTag?.(it)}
                             <button

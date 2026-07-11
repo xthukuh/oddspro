@@ -659,6 +659,11 @@ export default function App() {
         setProviderOrder(arr);
         localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(arr));
     };
+    // Persist a full provider priority order (ReorderList "move to position #").
+    const reorderProviders = keys => {
+        setProviderOrder(keys);
+        localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(keys));
+    };
     const saveOneEach = value => {
         setOneEach(value);
         localStorage.setItem(LS_ONE_EACH, value ? '1' : '0');
@@ -805,7 +810,12 @@ export default function App() {
                     )}
                 </div>
                 {/* Right: full action row (>=sm) or ⋯ overflow (<sm) */}
-                <div className="flex items-center justify-self-end">
+                <div className="relative flex items-center justify-self-end">
+                    {/* Tiny greyed build version, tucked under the right icons (E4) -
+                        absolute + pointer-events-none so it never shifts or blocks them. */}
+                    <span className="hidden sm:block absolute right-1 -bottom-1 text-[9px] leading-none text-label-3 tabular-nums pointer-events-none">
+                        v{__APP_VERSION__}
+                    </span>
                     <div className="hidden sm:flex items-center gap-0.5">
                         <button onClick={onRefresh} disabled={!date || refresh?.running}
                             aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
@@ -905,26 +915,29 @@ export default function App() {
                 // settled wins/losses/P-L.
                 const bet = displayedSummary(rows, betslipStake);
                 return (
-                    <footer className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
-                        <span className="whitespace-nowrap">
-                            {filtered ? `${rows.length}/${total}` : total}
-                            {' '}record{total === 1 && !filtered ? '' : 's'}
-                        </span>
-                        <span className="text-label-3">·</span>
-                        <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
-                            <span className="whitespace-nowrap"><span className="text-hot">🔥</span> O2.5: {_rate(dayRates.hot)}</span>
-                        </Tooltip>
-                        <span className="text-label-3">·</span>
-                        <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
-                            <span className="whitespace-nowrap">Tips: {_rate(dayRates.tips)}</span>
-                        </Tooltip>
-                        <span className="text-label-3">·</span>
-                        <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
-                            <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
-                        </Tooltip>
+                    <footer className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
+                        {/* Section 1: record count + day hit-rates (day-level KPIs) */}
+                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                            <span className="whitespace-nowrap">
+                                {filtered ? `${rows.length}/${total}` : total}
+                                {' '}record{total === 1 && !filtered ? '' : 's'}
+                            </span>
+                            <span className="text-label-3">·</span>
+                            <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
+                                <span className="whitespace-nowrap"><span className="text-hot">🔥</span> O2.5: {_rate(dayRates.hot)}</span>
+                            </Tooltip>
+                            <span className="text-label-3">·</span>
+                            <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
+                                <span className="whitespace-nowrap">Tips: {_rate(dayRates.tips)}</span>
+                            </Tooltip>
+                            <span className="text-label-3">·</span>
+                            <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
+                                <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
+                            </Tooltip>
+                        </div>
+                        {/* Section 2: betting ledger over the rows currently shown */}
                         {bet.picks > 0 && (
-                            <>
-                                <span className="text-label-3">|</span>
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 sm:border-l sm:border-separator sm:pl-3">
                                 <Tooltip content={`The rows shown treated as flat ${_money(betslipStake)}-unit bets, one per fixture: ${bet.picks} pick${bet.picks === 1 ? '' : 's'} staking ${_money(betslipStake * bet.picks)} in total. Stake comes from the betslip playground.`}>
                                     <span className="whitespace-nowrap">💰 {bet.picks} pick{bet.picks === 1 ? '' : 's'}</span>
                                 </Tooltip>
@@ -954,7 +967,7 @@ export default function App() {
                                         </Tooltip>
                                     </>
                                 )}
-                            </>
+                            </div>
                         )}
                     </footer>
                 );
@@ -1039,6 +1052,7 @@ export default function App() {
                     onExportSelection={exportSelection}
                     onToggleProvider={toggleProvider}
                     onMoveProvider={moveProvider}
+                    onReorderProviders={reorderProviders}
                     onLinkProviders={saveLinkProviders}
                     onShowCompleted={saveShowCompleted}
                     onHideHits={saveHideHits}

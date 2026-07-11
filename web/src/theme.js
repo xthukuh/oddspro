@@ -1,10 +1,11 @@
-// Theme controller: 'system' (default) | 'light' | 'dark'.
+// Theme controller: 'light' (DEFAULT) | 'dark' | 'system'.
 //   system -> data-theme removed, so prefers-color-scheme (and the per-theme
 //             color-scheme pinned in index.css) follows the OS.
 //   light/dark -> data-theme forced; the token blocks AND color-scheme flip,
 //             so even native controls (select popups, scrollbars) match.
-// The FOUC guard in web/index.html applies the saved value before first paint -
-// keep this storage key + logic in sync with that inline script.
+// Light is the default when nothing is stored (System is one tap away in
+// Settings). The FOUC guard in web/index.html applies the saved value before
+// first paint - keep this storage key + logic in sync with that inline script.
 
 const LS_THEME = 'oddspro.theme';
 export const THEMES = ['system', 'light', 'dark'];
@@ -13,9 +14,9 @@ const VALID = new Set(THEMES);
 export function getTheme() {
     try {
         const t = localStorage.getItem(LS_THEME);
-        return VALID.has(t) ? t : 'system';
+        return VALID.has(t) ? t : 'light';
     } catch {
-        return 'system';
+        return 'light';
     }
 }
 

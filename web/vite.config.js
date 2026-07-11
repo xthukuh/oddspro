@@ -19,6 +19,11 @@ export default defineConfig(({ command, mode }) => {
     const gaId = env.VITE_GA_ID;
 
     return {
+        // Client-readable build constant: the package version, surfaced as a
+        // tiny greyed label in the toolbar (E4). Baked in at build time.
+        define: {
+            __APP_VERSION__: JSON.stringify(pkg.version),
+        },
         plugins: [
             react(),
             tailwindcss(),

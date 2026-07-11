@@ -2,6 +2,7 @@ import { useState } from 'react';
 import MultiSelect from './MultiSelect.jsx';
 import ReorderList from './ReorderList.jsx';
 import NumberInput from './NumberInput.jsx';
+import Field from './Field.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 import { THEMES } from '../theme.js';
@@ -17,7 +18,7 @@ import { DEFAULT_SAFE } from '../../../src/db/magic-rules.js';
 
 const THEME_LABEL = { system: 'System', light: 'Light', dark: 'Dark' };
 
-// Segmented theme control (iOS-style). System is the default (follows the OS).
+// Segmented theme control (iOS-style). Light is the default; System follows the OS.
 function ThemeToggle({ theme, onTheme }) {
     return (
         <div className="inline-flex rounded-[10px] bg-fill p-0.5 gap-0.5">
@@ -47,11 +48,11 @@ function Toggle({ checked, onChange, title, children }) {
 }
 
 // One safe-limit number field seeded from the effective policy, defaulting the
-// placeholder to the shipped DEFAULT_SAFE value.
+// placeholder to the shipped DEFAULT_SAFE value. Its hint is shown VISIBLY via
+// Field (E1) - no hover-only title - so touch users get the guidance too.
 function SafeLimit({ label, k, safe, onSafeSet, min, max, int, step, hint }) {
     return (
-        <label className="flex flex-col gap-1 text-xs text-label-2" title={hint}>
-            {label}
+        <Field label={label} hint={hint}>
             <NumberInput
                 value={safe?.[k] ?? DEFAULT_SAFE[k]}
                 onCommit={n => onSafeSet(k, n)}
@@ -59,9 +60,9 @@ function SafeLimit({ label, k, safe, onSafeSet, min, max, int, step, hint }) {
                 max={max}
                 int={int}
                 step={step}
-                className="w-20 bg-surface border border-separator text-label rounded-[10px] px-2 h-10 text-sm outline-none"
+                className="w-full bg-surface border border-separator text-label rounded-[10px] px-2 h-10 text-sm outline-none"
             />
-        </label>
+        </Field>
     );
 }
 
@@ -73,7 +74,7 @@ export default function SettingsModal({
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
     hideSelected, onHideSelected, keepSelected, onKeepSelected, selectionCount = 0, onClearSelections, onExportSelection,
-    onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onLinkProviders, onShowCompleted,
+    onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onReorderProviders, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
@@ -108,6 +109,19 @@ export default function SettingsModal({
 
     const heading = 'font-semibold text-label mb-2';
     const [pinned, setPinned] = useState(false);
+
+    // Wipe every persisted Odds Pro preference on this device and reload (E5).
+    // Confirmed first - this resets slips, selections, filters, columns, theme…
+    const clearCacheReload = () => {
+        const ok = window.confirm(
+            'Clear all saved Odds Pro settings on this device and reload?\n\n'
+            + 'This resets your betslips, row selections, filters, column choices, '
+            + 'sort order and theme. It does not touch any data on the server.',
+        );
+        if (!ok) return;
+        for (const k of Object.keys(localStorage)) if (k.startsWith('oddspro.')) localStorage.removeItem(k);
+        location.reload();
+    };
 
     return (
         <Sheet onClose={onClose} className="max-w-2xl" dismissable={!pinned}>
@@ -156,7 +170,8 @@ export default function SettingsModal({
                                 label="Column order"
                                 items={orderedColumns.map(c => ({ key: c.key, label: c.label }))}
                                 onMove={moveColumn}
-                                hint="Order the table columns left→right (↑ = further left)."
+                                onReorder={keys => onOrder(keys)}
+                                hint="Order the table columns left→right (↑ = further left). Type a row's number to jump it."
                                 title="Reorder the table columns"
                                 footer={(
                                     <button onClick={() => onOrder(null)} className="text-xs text-accent hover:opacity-70 py-0.5">
@@ -169,10 +184,11 @@ export default function SettingsModal({
                                     label="Sort priority"
                                     items={sortChain.map(e => ({ key: sortId(e), label: entryLabel(e), entry: e }))}
                                     onMove={moveSort}
+                                    onReorder={keys => onReorderSort(keys.map(k => sortChain.find(e => sortId(e) === k)).filter(Boolean))}
                                     onRemove={key => { const e = sortChain.find(x => sortId(x) === key); if (e) onRemoveSort(e); }}
                                     renderTag={it => (it.entry.type === 'column'
                                         ? <span className="text-accent text-xs">{it.entry.dir === 'asc' ? '▲' : '▼'}</span> : null)}
-                                    hint="Top wins. ↑/↓ reprioritise · × removes a sort."
+                                    hint="Top wins. ↑/↓ or type a number to reprioritise · × removes a sort."
                                     title="Reorder or remove the active sorts"
                                 />
                             )}
@@ -196,7 +212,8 @@ export default function SettingsModal({
                                 badge={`${providerItems.filter(i => i.enabled).length}/${providerItems.length}`}
                                 onToggle={onToggleProvider}
                                 onMove={onMoveProvider}
-                                hint="Priority top→bottom. Untick to hide a bookmaker."
+                                onReorder={onReorderProviders}
+                                hint="Priority top→bottom. Untick to hide a bookmaker. Type a row's number to jump it."
                                 title="Enable bookmakers and set their priority — the top enabled provider represents each game under One of each"
                             />
                             <MultiSelect
@@ -292,7 +309,7 @@ export default function SettingsModal({
                                     Reset to defaults
                                 </button>
                             </div>
-                            <div className="flex flex-wrap gap-3">
+                            <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                                 <SafeLimit label="Max per day" k="maxPerDay" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={20} int hint="Cap the number of safe picks kept per day" />
                                 <SafeLimit label="Max price" k="maxPrice" safe={safe} onSafeSet={onSafeSet}
@@ -315,7 +332,15 @@ export default function SettingsModal({
                     </section>
 
                 </div>
-                <div className="flex justify-end px-6 py-3 border-t border-separator-2">
+                <div className="flex items-center gap-3 px-6 py-3 border-t border-separator-2">
+                    <button
+                        onClick={clearCacheReload}
+                        title="Reset every saved preference on this device (slips, selections, filters, columns, theme) and reload. Server data is untouched."
+                        className="cursor-pointer text-xs text-miss/80 hover:text-miss"
+                    >
+                        Clear cache &amp; reload
+                    </button>
+                    <div className="grow" />
                     <button onClick={onClose} title="Close settings (changes are saved as you make them)" className="cursor-pointer h-11 px-6 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90">
                         Done
                     </button>
