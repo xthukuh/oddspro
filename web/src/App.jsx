@@ -5,6 +5,7 @@ import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
+import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
@@ -659,6 +660,23 @@ export default function App() {
         for (const k of Object.keys(localStorage)) if (k.startsWith(LS_SELECT_PREFIX)) localStorage.removeItem(k);
         setSelection(new Set());
     };
+    // Export the selected rows as a full-record CSV (all fields incl. the ones
+    // hidden from the table + every market/stat). Acts on the SELECTION, so it
+    // ignores the Hide-selection cut (stampedData, not visibleData).
+    const exportSelection = () => {
+        const records = stampedData.filter(r => r.select);
+        if (!records.length) return;
+        const csv = buildRecordCsv(records, catalog);
+        const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8' }); // BOM helps Excel detect UTF-8
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `oddspro-selection-${date || 'all'}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
     // Base/synthetic column visibility. Hiding the Select column clears the
     // current date's selection (R28a).
     const saveVisibleBase = keys => {
@@ -907,6 +925,7 @@ export default function App() {
                     onHideSelected={saveHideSelected}
                     selectionCount={selection.size}
                     onClearSelections={clearAllSelections}
+                    onExportSelection={exportSelection}
                     onToggleProvider={toggleProvider}
                     onMoveProvider={moveProvider}
                     onLinkProviders={saveLinkProviders}

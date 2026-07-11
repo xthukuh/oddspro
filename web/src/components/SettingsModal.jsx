@@ -72,7 +72,7 @@ export default function SettingsModal({
     safe, safeDefaults, safeOverridden, onSafeSet, onSafeReset,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
-    hideSelected, onHideSelected, selectionCount = 0, onClearSelections,
+    hideSelected, onHideSelected, selectionCount = 0, onClearSelections, onExportSelection,
     onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
 }) {
@@ -245,6 +245,14 @@ export default function SettingsModal({
                                 title="Hide the checked rows from the table, filters, day stats and the betslip pool. Existing slips keep their legs.">
                                 Hide selection <span className="text-label-3">— remove checked rows from every view (built slips keep their legs)</span>
                             </Toggle>
+                            <button
+                                onClick={onExportSelection}
+                                disabled={!selectionCount}
+                                title="Download the checked rows as a CSV with full record details (every field, market and stat — including columns hidden from the table)"
+                                className="mt-1.5 cursor-pointer h-10 px-4 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill disabled:opacity-40 disabled:cursor-default disabled:hover:bg-surface"
+                            >
+                                Export CSV{selectionCount ? ` (${selectionCount})` : ''}
+                            </button>
                         </div>
 
                         <h4 className="text-sm text-label-2 mt-3 mb-1">Settled tips</h4>
