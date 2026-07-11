@@ -282,7 +282,7 @@ function _cell(row, col, linkProviders, openTip) {
             if (!reason) return <span className="text-label-3">-</span>;
             return (
                 <span
-                    className="text-label-3 italic cursor-pointer"
+                    className="text-label-3 italic cursor-pointer decoration-dotted underline-offset-2 hover:underline"
                     title={`${skipLabel(reason)}\nClick for details`}
                     onClick={e => openTip(row, e)}
                 >
@@ -312,13 +312,13 @@ function _cell(row, col, linkProviders, openTip) {
             ? row.tip_breakdown.runners_up.slice(0, 2) : [];
         return (
             <div
-                className="cursor-pointer leading-tight"
+                className="group/tip cursor-pointer leading-tight"
                 title={title}
                 onClick={e => openTip(row, e)}
             >
                 <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
                     {row.hot ? '🔥 ' : ''}
-                    <span className={`font-semibold ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
+                    <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
                     {pct && !compact && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
                     {_tick(row.tip_outcome)}
                 </div>
