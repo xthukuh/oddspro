@@ -30,16 +30,13 @@ const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
 const HEADER_META = {
-    api_id: { short: 'ID', info: 'API-Football fixture id' },
-    start_time: { info: 'Kickoff time' },
+    start_time: { info: 'Kickoff time (with the fixture id) - hover a cell for the full date & match details' },
     fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
     goals: { info: 'Total goals at full time' },
     tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
-    status: { info: 'Fixture status' },
-    updated_at: { info: 'Last bookmaker odds refresh' },
-    locked_at: { info: 'Betting closed - odds frozen and final' },
+    status: { info: 'Fixture status - hover a cell for the odds-refresh & betting-closed times' },
     league: { info: 'Country - league' },
     season: { info: 'Season (starting year)' },
     round: { info: 'Competition round' },
@@ -97,6 +94,14 @@ function _time(value) {
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Time only (HH:MM). The date is redundant now that the whole table is one day
+// (the toolbar shows it), so the Start column drops the date to save width.
+function _hm(value) {
+    const d = new Date(value);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const _dt = value => (value ? new Date(value).toLocaleString() : null);
 
 // H2H tooltip: recent meeting lines (date, names, score) + overflow marker
@@ -114,12 +119,14 @@ function _h2hTitle(row) {
 // Interactive inner elements (fixture link, tip span, hot badge) carry their
 // own titles, which win on direct hover.
 const CELL_TITLES = {
-    api_id: row => [
+    // Start now carries the fixture id + canonical name + league context that the
+    // removed ID column used to own, on top of the full kickoff timestamp.
+    start_time: row => [
+        _dt(row.start_time),
         `Fixture #${row.api_id}`,
         row.fixture_api,
         [row.league, row.season, row.round].filter(v => v != null).join(' · ') || null,
     ].filter(Boolean).join('\n'),
-    start_time: row => _dt(row.start_time),
     fixture: row => (row.fixture_api && row.fixture_api !== row.fixture ? row.fixture_api : null),
     score: row => {
         if (!row.score) return null;
@@ -139,14 +146,19 @@ const CELL_TITLES = {
             _dt(row.locked_at ?? row.updated_at),
         ].filter(Boolean).join('\n');
     },
+    // Status absorbs the removed Updated/Locked columns: the human status (plus
+    // live minute) then the odds-refresh and betting-closed timestamps.
     status: row => {
-        const info = STATUS_INFO[row.status] ?? null;
-        return info && LIVE_MINUTE.has(row.status) && row.elapsed != null
+        const info = STATUS_INFO[row.status] ?? row.status;
+        const head = info && LIVE_MINUTE.has(row.status) && row.elapsed != null
             ? `${info} — ${row.elapsed}'`
             : info;
+        return [
+            head,
+            row.updated_at ? `Updated ${_dt(row.updated_at)}` : null,
+            row.locked_at ? `Locked ${_dt(row.locked_at)}` : null,
+        ].filter(Boolean).join('\n');
     },
-    updated_at: row => _dt(row.updated_at),
-    locked_at: row => _dt(row.locked_at),
     home_rank: row => (row.home_rank != null ? `${row.home_team ?? 'Home'} - current league rank` : null),
     away_rank: row => (row.away_rank != null ? `${row.away_team ?? 'Away'} - current league rank` : null),
     home_form: row => (row.home_form ? `${row.home_team ?? 'Home'} - ${HEADER_META.home_form.info}` : null),
@@ -220,9 +232,15 @@ function _hotBadge(row) {
 
 function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
-    if (key === 'start_time') return _time(row.start_time);
-    if (key === 'updated_at' || key === 'locked_at') {
-        return row[key] ? _time(row[key]) : <span className="text-label-3">-</span>;
+    if (key === 'start_time') {
+        // Time only + the fixture id demoted to a small greyed prefix (the ID
+        // column was removed; full id/fixture context lives in the tooltip).
+        return (
+            <span className="whitespace-nowrap">
+                <span className="text-label-3 text-[10px] tabular-nums mr-1">{row.api_id}</span>
+                {_hm(row.start_time)}
+            </span>
+        );
     }
     if (key === 'tip') {
         // Safest bettable outcome + blended confidence; 🔥 marks the fixture
@@ -320,6 +338,11 @@ function _cell(row, col, linkProviders, openTip) {
 function _marketCell(row, key) {
     const frozen = row.available === false;
     const fresh = row.markets[key];
+    // A non-positive price (0.00) is a suspended/void market, not a real odd -
+    // render it as a distinct placeholder so it can't read as a genuine number.
+    if (fresh != null && fresh <= 0) {
+        return <span className="text-label-3" title="Suspended - no price">✕</span>;
+    }
     if (fresh != null) {
         return frozen
             ? <span className="text-label-3" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>

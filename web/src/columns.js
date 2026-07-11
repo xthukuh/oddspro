@@ -15,6 +15,11 @@ const EXTRA_BASE_LABELS = {
     league: 'League',
     hot: 'Over 2.5 pick',
     hot_score: 'Over 2.5 score',
+    // Filterable data fields that are no longer their own TABLE column (id folds
+    // into Start; updated/locked fold into the Status tooltip) but stay queryable.
+    api_id: 'ID',
+    updated_at: 'Updated',
+    locked_at: 'Locked',
 };
 
 // Human label for a column key. base column -> its table title; extra base ->

@@ -2,8 +2,10 @@
 // fixture cell). Kept in a pure, JSX-free module so both DataTable.jsx and the
 // column helpers (columns.js) can import it and node:test can exercise the
 // helpers offline. DataTable.jsx re-exports this for existing importers.
+// The ID column folded into Start (v1.0.1); Updated/Locked folded into the
+// Status tooltip. Those three stay filterable data fields via columns.js
+// EXTRA_BASE_LABELS - they're just no longer their own visible column.
 export const BASE_COLUMNS = [
-    { key: 'api_id', label: 'API ID' },
     { key: 'start_time', label: 'Start' },
     { key: 'fixture', label: 'Fixture' },
     { key: 'provider', label: 'Provider' },
@@ -11,6 +13,4 @@ export const BASE_COLUMNS = [
     { key: 'goals', label: 'Goals' },
     { key: 'tip', label: 'Tip' },
     { key: 'status', label: 'Status' },
-    { key: 'updated_at', label: 'Updated' },
-    { key: 'locked_at', label: 'Locked' },
 ];
