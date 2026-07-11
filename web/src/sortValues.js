@@ -47,7 +47,8 @@ const _str = v => (v == null || v === '' ? null : String(v).toLowerCase());
 // handling in sortValue.
 const VALUES = {
     // Synthetic "No" column: its load-order anchor position, stamped on the row
-    // by DataTable (null when unstamped -> sorts last, like any missing value).
+    // by App upstream of the client filters (so `no` is filterable too, R27d);
+    // null when unstamped -> sorts last, like any missing value.
     no: r => _num(r._no),
     // Synthetic "Select" column: the row's checkbox state (stamped boolean);
     // sorts checked-first under descending. Non-boolean -> null (sorts last).

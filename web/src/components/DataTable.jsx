@@ -368,6 +368,18 @@ function _cell(row, col, linkProviders, openTip) {
             </>
         );
     }
+    if (key === 'status' && LIVE_MINUTE.has(row.status) && row.elapsed != null) {
+        // In-play: surface the live minute on a second muted line — the taller
+        // row (R30, driven by the multi-line Tip/Start cells) gives it space, so
+        // the minute reads at a glance without hovering the tooltip. Static
+        // statuses stay single-line via the generic path below.
+        return (
+            <div className="leading-tight whitespace-nowrap">
+                <div>{row.status}</div>
+                <div className="text-label-3 text-[10px] tabular-nums">{row.elapsed}&rsquo;</div>
+            </div>
+        );
+    }
     const value = key.startsWith('fs:') ? row.stats[key] : row[key];
     if (value == null) return <span className="text-label-3">-</span>;
     // Prefix text columns with their hidden derived sort value (e.g. 8:LWWWD).
@@ -453,36 +465,21 @@ export default function DataTable({
         });
     }, [catalog, rows, marketKeys, statKeys, columnOrder, visibleBase]);
 
-    // "No" load-order anchor (R27): each row's position in the loaded set,
-    // captured once per scrollKey (date / server-filter navigation). Client-side
-    // filtering doesn't change scrollKey, so the anchor stays stable — sorting by
-    // No restores the original load order, and "pin position" freezes the shown
-    // number to it. Recaptured lazily once rows for a new key arrive.
-    const anchorRef = useRef({ key: null, map: new Map() });
-    if (rows.length && (anchorRef.current.key !== scrollKey || anchorRef.current.map.size === 0)) {
-        const m = new Map();
-        let i = 0;
-        for (const r of rows) if (!m.has(r.match_id)) m.set(r.match_id, ++i);
-        anchorRef.current = { key: scrollKey, map: m };
-    }
-    const noAnchor = anchorRef.current.map;
-
-    // One ordering for the whole unified chain (column sorts + magic
-    // strategies interleaved by priority); tipless/vetoed rows sink on magic
-    // entries, nulls sink on column entries. Stamp `_no` (anchor position) first
-    // so a No-column sort orders by load order.
-    const sorted = useMemo(() => {
-        for (const r of rows) r._no = noAnchor.get(r.match_id) ?? null;
-        return orderRows(rows, chain, columns, cal);
-    }, [rows, chain, columns, cal, noAnchor]);
+    // One ordering for the whole unified chain (column sorts + magic strategies
+    // interleaved by priority); tipless/vetoed rows sink on magic entries, nulls
+    // sink on column entries. The `_no` load-order anchor is stamped by App
+    // (upstream of the client filters, so `no` is filterable too) - a No-column
+    // sort reads it via sortValue.
+    const sorted = useMemo(() => orderRows(rows, chain, columns, cal), [rows, chain, columns, cal]);
 
     // Displayed row number per row: live position in the sorted order, or the
-    // frozen anchor when "pin position" is on (so re-sorting doesn't renumber).
+    // frozen load-order anchor (`_no`) when "pin position" is on (so re-sorting
+    // doesn't renumber).
     const noByRow = useMemo(() => {
         const m = new Map();
-        sorted.forEach((r, i) => m.set(r.match_id, noPin ? (noAnchor.get(r.match_id) ?? i + 1) : i + 1));
+        sorted.forEach((r, i) => m.set(r.match_id, noPin ? (r._no ?? i + 1) : i + 1));
         return m;
-    }, [sorted, noPin, noAnchor]);
+    }, [sorted, noPin]);
 
     // The magic column tracks the highest-priority magic entry in the chain
     // (if any). Score from that strategy; rank per unique fixture in the FINAL

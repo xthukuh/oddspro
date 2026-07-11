@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
     distinctValues, toFilterCsv, applyOneOfEach, conditionCount,
-    stampSelection, applySelectionHide,
+    stampSelection, applySelectionHide, applySelectionKeep,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -370,6 +370,26 @@ test('applySelectionHide drops checked rows only when hide is on', () => {
     const rows = stampSelection([{ match_id: 1 }, { match_id: 2 }], new Set([1]));
     assert.deepEqual(applySelectionHide(rows, true).map(r => r.match_id), [2]);
     assert.equal(applySelectionHide(rows, false), rows); // no-op passthrough
+});
+
+test('applySelectionKeep keeps only checked rows (inverse of hide)', () => {
+    const rows = stampSelection([{ match_id: 1 }, { match_id: 2 }, { match_id: 3 }], new Set([1, 3]));
+    assert.deepEqual(applySelectionKeep(rows, true).map(r => r.match_id), [1, 3]);
+    assert.equal(applySelectionKeep(rows, false), rows); // no-op passthrough
+});
+
+// --- synthetic "No" row-number field is filterable on its load-order anchor ---
+test('the No field filters on the stamped _no anchor and routes client-side', () => {
+    const rows = [row({ _no: 1 }), row({ _no: 2 }), row({ _no: 3 }), row({ _no: null })];
+    const cols = [...COLUMNS, { key: 'no', group: 'base' }];
+    // `no lte 2` keeps the two earliest-loaded rows; unstamped (_no null) never matches
+    assert.deepEqual(
+        applyClientFilters(rows, [{ key: 'no', op: 'lte', value: '2' }], cols).map(r => r._no),
+        [1, 2]);
+    // it's a synthetic column (not in the catalog), so it must run client-side
+    const { server, client } = splitFilters([{ key: 'no', op: 'lte', value: '2' }], CATALOG);
+    assert.equal(server.length, 0);
+    assert.deepEqual(client.map(f => f.key), ['no']);
 });
 
 test('applyOneOfEach is a no-op for 0/1 rows', () => {

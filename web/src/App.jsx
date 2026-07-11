@@ -3,7 +3,7 @@ import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRe
 import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
@@ -63,6 +63,9 @@ const LS_COLS_BASE = 'oddspro.cols.base';
 const LS_NO_PIN = 'oddspro.cols.noPin';
 const LS_SELECT_PREFIX = 'oddspro.select.d.';
 const LS_SELECT_HIDE = 'oddspro.select.hide';
+// "Keep selection" - inverse of Hide selection (show only checked rows). The two
+// are mutually exclusive (enabling one clears the other in the setters below).
+const LS_SELECT_KEEP = 'oddspro.select.keep';
 
 // The base + synthetic columns a user can show/hide (Select omitted from sort).
 const BASE_COL_OPTIONS = [
@@ -190,6 +193,7 @@ export default function App() {
     const [visibleBaseKeys, setVisibleBaseKeys] = useState(() => _load(LS_COLS_BASE));
     const [noPin, setNoPin] = useState(() => localStorage.getItem(LS_NO_PIN) === '1');
     const [hideSelected, setHideSelected] = useState(() => localStorage.getItem(LS_SELECT_HIDE) === '1');
+    const [keepSelected, setKeepSelected] = useState(() => localStorage.getItem(LS_SELECT_KEEP) === '1');
     // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
     // applied the saved value pre-paint; this just mirrors it into React state.
     const [theme, setThemeState] = useState(getTheme);
@@ -285,6 +289,7 @@ export default function App() {
     const filterColumns = useMemo(() => (catalog ? [
         ...catalog.base.map(c => ({ key: c.key, group: 'base' })),
         { key: 'score', group: 'base' },
+        { key: 'no', group: 'base' }, // synthetic row-number (R27d), filterable via _no
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
@@ -294,7 +299,30 @@ export default function App() {
     // row gains a `select` boolean (identity = match_id), which also powers the
     // Select column and the Select filter field.
     const stampedData = useMemo(() => stampSelection(result?.data ?? [], selection), [result, selection]);
-    const visibleData = useMemo(() => applySelectionHide(stampedData, hideSelected), [stampedData, hideSelected]);
+    // Load-order anchor for the synthetic "No" column (R27): each loaded row's
+    // 1-based position in the fetched set, rebuilt only when a new fetch lands
+    // (result reference) - client-filter edits and selection changes never touch
+    // `result`, so the numbering stays put. Stamping `_no` HERE (upstream of the
+    // client filters, R27d) is what lets `no` be a FILTERABLE field, not just a
+    // sortable/display column; the DataTable reads the same `_no`.
+    const noAnchor = useMemo(() => {
+        const m = new Map();
+        let i = 0;
+        for (const r of result?.data ?? []) if (!m.has(r.match_id)) m.set(r.match_id, ++i);
+        return m;
+    }, [result]);
+    const numberedData = useMemo(() => {
+        for (const r of stampedData) r._no = noAnchor.get(r.match_id) ?? null;
+        return stampedData;
+    }, [stampedData, noAnchor]);
+    // Selection view cut: Hide selection drops checked rows, Keep selection drops
+    // UNCHECKED rows (inverse). Applied here so it flows into the table, filter
+    // options, day calcs AND the betslip pool at once. The two are mutually
+    // exclusive in the UI, so at most one ever narrows the set.
+    const visibleData = useMemo(
+        () => applySelectionKeep(applySelectionHide(numberedData, hideSelected), keepSelected),
+        [numberedData, hideSelected, keepSelected],
+    );
     const visibleBaseSet = useMemo(() => (visibleBaseKeys ? new Set(visibleBaseKeys) : null), [visibleBaseKeys]);
     // Market/stat keys present in the loaded day - drives date-dynamic option
     // lists in the settings selectors and the filter builder (absent columns
@@ -688,9 +716,23 @@ export default function App() {
         setNoPin(value);
         localStorage.setItem(LS_NO_PIN, value ? '1' : '0');
     };
+    // Hide / Keep selection are opposites - turning one on clears the other so
+    // the view can never be emptied by both narrowing at once.
     const saveHideSelected = value => {
         setHideSelected(value);
         localStorage.setItem(LS_SELECT_HIDE, value ? '1' : '0');
+        if (value && keepSelected) {
+            setKeepSelected(false);
+            localStorage.setItem(LS_SELECT_KEEP, '0');
+        }
+    };
+    const saveKeepSelected = value => {
+        setKeepSelected(value);
+        localStorage.setItem(LS_SELECT_KEEP, value ? '1' : '0');
+        if (value && hideSelected) {
+            setHideSelected(false);
+            localStorage.setItem(LS_SELECT_HIDE, '0');
+        }
     };
 
     const TODAY = _today();
@@ -829,6 +871,13 @@ export default function App() {
             {(() => {
                 const total = result?.data?.length ?? 0;
                 const filtered = rows.length !== total;
+                // Summaries over the rows CURRENTLY SHOWN (after filters/hides/toggles),
+                // alongside the day-level ones - only when the view is a subset, since
+                // otherwise "shown" equals "day". Safe = day-safe picks still on screen.
+                const shown = filtered ? _hitRates(rows) : null;
+                const shownSafe = filtered
+                    ? (() => { const ids = new Set(rows.map(r => r.api_id)); return safePicks.filter(p => ids.has(p.api_id)).length; })()
+                    : safePicks.length;
                 return (
                     <footer className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
                         <span className="whitespace-nowrap">
@@ -847,6 +896,16 @@ export default function App() {
                         <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
                             <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
                         </Tooltip>
+                        {filtered && (
+                            <>
+                                <span className="text-label-3">|</span>
+                                <Tooltip content="Same summaries over the rows currently shown (after filters, hides and toggles): settled hits / settled picks per unique fixture; pending excluded. Safe = day-safe picks still on screen.">
+                                    <span className="whitespace-nowrap text-label">
+                                        Shown — <span className="text-hot">🔥</span> O2.5: {_rate(shown.hot)} · Tips: {_rate(shown.tips)} · 🛡 {shownSafe}
+                                    </span>
+                                </Tooltip>
+                            </>
+                        )}
                     </footer>
                 );
             })()}
@@ -923,6 +982,8 @@ export default function App() {
                     onNoPin={saveNoPin}
                     hideSelected={hideSelected}
                     onHideSelected={saveHideSelected}
+                    keepSelected={keepSelected}
+                    onKeepSelected={saveKeepSelected}
                     selectionCount={selection.size}
                     onClearSelections={clearAllSelections}
                     onExportSelection={exportSelection}

@@ -72,7 +72,7 @@ export default function SettingsModal({
     safe, safeDefaults, safeOverridden, onSafeSet, onSafeReset,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
-    hideSelected, onHideSelected, selectionCount = 0, onClearSelections, onExportSelection,
+    hideSelected, onHideSelected, keepSelected, onKeepSelected, selectionCount = 0, onClearSelections, onExportSelection,
     onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
 }) {
@@ -244,6 +244,10 @@ export default function SettingsModal({
                             <Toggle checked={hideSelected} onChange={onHideSelected}
                                 title="Hide the checked rows from the table, filters, day stats and the betslip pool. Existing slips keep their legs.">
                                 Hide selection <span className="text-label-3">— remove checked rows from every view (built slips keep their legs)</span>
+                            </Toggle>
+                            <Toggle checked={keepSelected} onChange={onKeepSelected}
+                                title="Show ONLY the checked rows — hide everything unchecked from the table, filters, day stats and the betslip pool. Opposite of Hide selection (the two can't both be on).">
+                                Keep selection <span className="text-label-3">— show only checked rows, hide the rest (opposite of Hide selection)</span>
                             </Toggle>
                             <button
                                 onClick={onExportSelection}

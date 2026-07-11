@@ -158,6 +158,14 @@ export function applySelectionHide(rows, hide) {
     return hide ? (rows ?? []).filter(r => !r.select) : rows;
 }
 
+// "With Selected → Keep selection": the inverse of Hide selection — drop every
+// UNCHECKED row so only the checked ones remain across every record view. Same
+// identity-based `select` flag (survives filtering). Mutually exclusive with
+// Hide selection in the UI (both on would empty the view).
+export function applySelectionKeep(rows, keep) {
+    return keep ? (rows ?? []).filter(r => r.select) : rows;
+}
+
 // One-of-each view: collapse to a single row per canonical fixture (api_id),
 // keeping the row from the highest-priority provider present (`priority` is the
 // ordered provider list, index 0 = top). Providers absent from the list rank

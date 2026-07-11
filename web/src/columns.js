@@ -17,6 +17,8 @@ const EXTRA_BASE_LABELS = {
     away_team: 'Away Team',
     // Client-only checkbox column: filterable as a boolean ($row['select']).
     select: 'Select',
+    // Synthetic row-number column: filterable on its load-order position (R27d).
+    no: 'No',
     hot: 'Over 2.5 pick',
     hot_score: 'Over 2.5 score',
     // Client-only derived filter field: the chosen tip's confidence as an
