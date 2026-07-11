@@ -8,15 +8,15 @@ import { parseFilterList } from '../../../src/db/filter-csv.js';
 import { parseExpr } from '../filterExpr.js';
 
 // Advanced query builder with progressive disclosure:
-//   BASIC (default) — a flat list of AND-combined conditions over any catalog
+//   BASIC (default) - a flat list of AND-combined conditions over any catalog
 //     column that carries data on the loaded day. Value controls adapt to the
 //     field type (number → NumberInput, date → date picker, low-cardinality →
 //     value picker, text → text box); labels match the table column titles.
-//   ADVANCED (toggle) — nested AND/OR groups, regex match/not-match ops, and
+//   ADVANCED (toggle) - nested AND/OR groups, regex match/not-match ops, and
 //     free-form `$row[...]` expression conditions (evaluated client-side over
 //     the loaded day; see filterExpr.js). A live count previews the match set.
 // Simple flat-AND conditions still pass to SQL (server narrowing); anything
-// advanced falls back to whole-day client evaluation — the split is decided in
+// advanced falls back to whole-day client evaluation - the split is decided in
 // filterValues.splitFilters, so the builder just emits the right wire shape.
 
 // op code -> label. Regex ops are advanced-only.
@@ -53,13 +53,13 @@ const STATUS_LABEL = {
     PEN: 'After penalties', PST: 'Postponed', CANC: 'Cancelled', ABD: 'Abandoned',
     AWD: 'Awarded', WO: 'Walkover',
 };
-const valueLabel = (key, v) => (key === 'status' ? `${v} — ${STATUS_LABEL[v] ?? v}` : String(v));
+const valueLabel = (key, v) => (key === 'status' ? `${v} - ${STATUS_LABEL[v] ?? v}` : String(v));
 
 // Base keys grouped for the field dropdown (mirrors the table/settings layout).
 const MATCH_KEYS = ['fixture', 'home_team', 'away_team', 'league', 'season', 'round', 'status', 'start_time', 'provider', 'api_id'];
 const BETTING_KEYS = ['tip', 'tip_confidence', 'hot', 'hot_score', 'goals', 'score', 'updated_at', 'locked_at'];
 // Client-only derived Betting fields (not in the server catalog) that are still
-// force-listed as filter fields — mirrors how `score` is offered.
+// force-listed as filter fields - mirrors how `score` is offered.
 const CLIENT_BETTING_KEYS = new Set(['score', 'tip_confidence']);
 // Per-field numeric input bounds (integer/percent fields the free NumberInput
 // should clamp). tip_confidence is an integer win % on a 0-100 scale; `no` is a
@@ -86,7 +86,7 @@ const SORT_HINT = {
     home_goals_oth: 'sorts by avg total', away_goals_oth: 'sorts by avg total',
 };
 
-// R26b — the tip value may carry a candidate/outcome prefix. Shown under tip's
+// R26b - the tip value may carry a candidate/outcome prefix. Shown under tip's
 // text/set/regex ops (its CMP ops keep the confidence SORT_HINT).
 const TIP_PREFIX_HINT = 'prefix a rank/outcome: 2:/3: = runner-up pick, H:/M: = hit/miss (e.g. H2:O 2.5)';
 
@@ -289,7 +289,7 @@ function ConditionRow({ cond, ctx, advanced, onChange, onRemove, apply }) {
     const type = ctx.typeOf(cond.key);
     let ops = cond.mode === 'col' ? CMP_OPS : opsForType(type);
     // The tip field is number-typed (sorts by confidence) but also matches its
-    // market TEXT (server `like_sql`), so offer contains/not-contains too — that
+    // market TEXT (server `like_sql`), so offer contains/not-contains too - that
     // is where the R26b candidate/outcome prefix is most natural.
     if (cond.mode !== 'col' && cond.key === 'tip') ops = [...ops, 'like', 'not-contains'];
     if (advanced && cond.mode !== 'col' && type !== 'date') ops = [...ops, 'match', 'not-match'];
@@ -325,7 +325,7 @@ function ConditionRow({ cond, ctx, advanced, onChange, onRemove, apply }) {
                     ? 'border-accent bg-accent-soft text-accent'
                     : 'border-separator text-label-2 hover:bg-fill'}`}
                 title={cond.mode === 'col'
-                    ? 'Comparing to another column — switch to a value'
+                    ? 'Comparing to another column - switch to a value'
                     : 'Compare to another column instead of a value'}
             >
                 {cond.mode === 'col' ? 'col' : 'val'}
@@ -563,7 +563,7 @@ export default function FilterBuilder({ catalog, available, rows = [], filterCol
                     Clear
                 </button>
                 {matched != null && (
-                    <span className="text-xs text-label-2 tabular-nums" title="How many of the loaded rows match — previewed live before you apply">
+                    <span className="text-xs text-label-2 tabular-nums" title="How many of the loaded rows match - previewed live before you apply">
                         {matched} of {rows.length} match
                     </span>
                 )}

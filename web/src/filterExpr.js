@@ -1,5 +1,5 @@
 // Advanced client-side filter engine: recursive AND/OR groups, safe regex ops
-// (match/not-match), and a sandboxed `$row[...]` expression language — all over
+// (match/not-match), and a sandboxed `$row[...]` expression language - all over
 // the SAME derived semantics the table sorts/filters by (sortValue for numeric
 // comparisons, rawValue for the displayed text). Pure module (imports only the
 // sort registry + the shared CSV parser) so node:test covers it offline.
@@ -24,7 +24,7 @@ export function rawValue(row, col) {
     return row[col.key] ?? null;
 }
 
-// R26b — tip-column filter value prefix. On the `tip` field a filter value may
+// R26b - tip-column filter value prefix. On the `tip` field a filter value may
 // carry a `[H|M]?\d?:` prefix that redirects the match to a runner-up candidate
 // and/or gates on the settled outcome. Split it off before the op runs:
 //   `2:1X`  -> 2nd candidate, market compared against "1X"
@@ -99,7 +99,7 @@ const CMP_OPS = {
 };
 
 // Compile a user regex safely: cap the pattern length (ReDoS foot-gun guard)
-// and swallow syntax errors — a bad pattern is a non-match, never a throw.
+// and swallow syntax errors - a bad pattern is a non-match, never a throw.
 const REGEX_MAX = 200;
 function safeRegex(pattern) {
     const s = pattern == null ? '' : String(pattern);
@@ -213,7 +213,7 @@ export function evalGroup(row, group, columns) {
 }
 
 // Filter rows through a model (group or flat array). An empty model returns the
-// input array unchanged (same reference) — a no-op like applyClientFilters.
+// input array unchanged (same reference) - a no-op like applyClientFilters.
 export function filterRows(rows, model, columns) {
     if (!Array.isArray(rows) || isEmptyModel(model)) return rows;
     const resolve = resolver(columns);
@@ -222,7 +222,7 @@ export function filterRows(rows, model, columns) {
 }
 
 // ========================================================================
-// Expression language — a hand-written recursive-descent parser/evaluator.
+// Expression language - a hand-written recursive-descent parser/evaluator.
 // NO eval / Function: the only escape hatches are the whitelisted HELPERS and
 // $row[...] reads. Grammar (lowest→highest precedence):
 //   or   := and (('||'|'or') and)*
@@ -460,7 +460,7 @@ function evalNode(node, row, resolve) {
 
 // Parse an expression string into an AST, memoized (parse errors cached too so
 // a bad expression in the live-preview loop doesn't re-parse every keystroke).
-// Throws a descriptive Error on syntax errors — the UI surfaces it live.
+// Throws a descriptive Error on syntax errors - the UI surfaces it live.
 const _parseCache = new Map();
 export function parseExpr(expr) {
     const key = String(expr);
@@ -483,7 +483,7 @@ export function parseExpr(expr) {
 
 // Evaluate an expression against a row, returning its value (number/boolean/
 // string/null). Throws on a syntax error (callers that want a non-match on bad
-// input — evalCond — wrap it in try/catch).
+// input - evalCond - wrap it in try/catch).
 export function evalExpr(row, expr, columns) {
     return evalNode(parseExpr(expr), row, resolver(columns));
 }

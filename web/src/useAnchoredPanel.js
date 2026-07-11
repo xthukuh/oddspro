@@ -1,7 +1,7 @@
 import { useEffect, useLayoutEffect, useState } from 'react';
 
 // Shared anchored-dropdown behaviour for the fixed-position panels (MultiSelect,
-// ReorderList) — extracted so the two can't drift (they carried byte-identical
+// ReorderList) - extracted so the two can't drift (they carried byte-identical
 // copies of this). Positions the panel under its trigger, flipping ABOVE when
 // the space below is tight; closes on outside pointerdown and Escape; and
 // repositions on scroll/resize while open (so it tracks a scrolling modal body).
@@ -11,7 +11,7 @@ import { useEffect, useLayoutEffect, useState } from 'react';
 // Sheet (whose Escape listener sits on `window`, one hop further out).
 //
 //   open       : whether the panel is shown
-//   onClose    : () => void — called to dismiss (outside click / Escape)
+//   onClose    : () => void - called to dismiss (outside click / Escape)
 //   wrapRef    : ref to the wrapper (trigger + panel) for the outside-click test
 //   btnRef     : ref to the trigger button (anchor)
 //   rightGutter: viewport - panelWidth clamp (256+8 for w-64, 288 for w-72)

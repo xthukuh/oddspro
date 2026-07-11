@@ -1,11 +1,11 @@
 // Client-side filter engine: conditions over columns the server can't
-// WHERE on (the JS-derived STATS columns, score) run in the browser — the
+// WHERE on (the JS-derived STATS columns, score) run in the browser - the
 // table already holds the whole selection (per_page=all), mirroring how
 // sorting went client-side. Pure module (imports only sortValues.js) so
 // node:test covers it offline like the other rule modules.
 
 // Condition/group evaluation + the raw-value helper live in filterExpr.js (one
-// source of truth for filter semantics — this module delegates so the flat-AND
+// source of truth for filter semantics - this module delegates so the flat-AND
 // path and the advanced nested/expression path can never drift).
 import { rawValue, filterRows, parseTipFilter } from './filterExpr.js';
 
@@ -20,17 +20,17 @@ export function serverKeys(catalog) {
 
 // Base fields whose SQL column differs from the DISPLAYED value, so they must
 // filter client-side over what the user sees. `league` renders "Country - Name"
-// but its SQL target is l.name alone — filtering the display is both correct and
+// but its SQL target is l.name alone - filtering the display is both correct and
 // exactly what the value-picker offers. (The whole day is loaded, so running it
 // client-side costs nothing.)
 export const CLIENT_ONLY_KEYS = new Set(['league']);
 
-// Regex ops have no SQL form; expression conditions are opaque to SQL — both
+// Regex ops have no SQL form; expression conditions are opaque to SQL - both
 // must evaluate over the loaded day.
 const CLIENT_ONLY_OPS = new Set(['match', 'not-match']);
 
 // R26b: a `tip` condition whose value carries a candidate/outcome prefix
-// (`2:`, `H:`, `M2:`, …) can't be a plain `fp.tip_market LIKE` — the server
+// (`2:`, `H:`, `M2:`, …) can't be a plain `fp.tip_market LIKE` - the server
 // would match the literal "H2:" text and return nothing. Such conditions must
 // evaluate client-side (where parseTipFilter resolves the runner-up + settles
 // hit/miss). A plain, un-prefixed tip value stays server-side, unchanged.
@@ -43,7 +43,7 @@ function tipHasPrefix(f) {
 // Partition applied filters into a server (SQL) subset and a client subset.
 // A flat array is an implicit top-level AND, so each condition is placed
 // independently: server-side only when every column it references is a server
-// key AND the op has a SQL form. An ADVANCED model (a `{type:'group'}` object —
+// key AND the op has a SQL form. An ADVANCED model (a `{type:'group'}` object -
 // nested groups / OR joins) can't be expressed as flat AND SQL, so it runs
 // entirely client-side (the server loads the whole date; applyClientFilters
 // narrows it). CLIENT_ONLY_KEYS / _OPS and expr conditions force local.
@@ -65,7 +65,7 @@ export function splitFilters(filters, catalog) {
     return { server, client };
 }
 
-// Count leaf conditions in a filter model (flat array or nested group) — drives
+// Count leaf conditions in a filter model (flat array or nested group) - drives
 // the "N active" filter badge and the ViewPills chip. Sub-groups recurse; each
 // leaf condition (plain or expr) counts one.
 export function conditionCount(filters) {
@@ -81,7 +81,7 @@ export function conditionCount(filters) {
 // an implicit top-level AND group; filterRows (filterExpr.js) evaluates each
 // condition with the SAME derived semantics sorting uses (form → points,
 // "gf/ga (avg)" → avg, "H / A" → sum, score → total goals), so filtering always
-// agrees with the column's sort order. Hidden columns filter fine — descriptors
+// agrees with the column's sort order. Hidden columns filter fine - descriptors
 // come from the full catalog, independent of visibility.
 export function applyClientFilters(rows, filters, columns) {
     return filterRows(rows, filters, columns);
@@ -91,7 +91,7 @@ export function applyClientFilters(rows, filters, columns) {
 // value pickers on low-cardinality fields (league, status, provider, season,
 // round). Uses the RAW displayed value (rawValue) so the options match what the
 // user sees AND what the filter compares. Returns [] once the distinct count
-// exceeds `cap` (too many to be a useful list — the caller falls back to free
+// exceeds `cap` (too many to be a useful list - the caller falls back to free
 // text). Numbers sort numerically, strings case-insensitively.
 export function distinctValues(rows, col, cap = 50) {
     const seen = new Set();
@@ -158,7 +158,7 @@ export function applySelectionHide(rows, hide) {
     return hide ? (rows ?? []).filter(r => !r.select) : rows;
 }
 
-// "With Selected → Keep selection": the inverse of Hide selection — drop every
+// "With Selected → Keep selection": the inverse of Hide selection - drop every
 // UNCHECKED row so only the checked ones remain across every record view. Same
 // identity-based `select` flag (survives filtering). Mutually exclusive with
 // Hide selection in the UI (both on would empty the view).

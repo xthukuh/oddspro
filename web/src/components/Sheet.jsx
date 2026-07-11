@@ -8,7 +8,7 @@ import { IconPin } from './icons.jsx';
 // clears the nav bar and caps its height so its footer never falls off-screen.
 //
 // `dismissable` (default true): when false the backdrop click no longer closes
-// the sheet — this backs the standardized "pin view" toggle (see PinToggle).
+// the sheet - this backs the standardized "pin view" toggle (see PinToggle).
 // Escape and the × always close regardless, so a pinned sheet is never a trap.
 export default function Sheet({ onClose, children, className = '', labelledBy, dismissable = true }) {
     useEffect(() => {
@@ -47,7 +47,7 @@ export function SheetClose({ onClose }) {
     );
 }
 
-// "Pin view" toggle for sheet headers — filled pin = pinned (background clicks
+// "Pin view" toggle for sheet headers - filled pin = pinned (background clicks
 // won't dismiss). Drop it in the header just before SheetClose and wire it to a
 // `pinned` state whose value is passed to Sheet as `dismissable={!pinned}`.
 export function PinToggle({ pinned, onToggle }) {
@@ -56,7 +56,7 @@ export function PinToggle({ pinned, onToggle }) {
             onClick={onToggle}
             aria-pressed={pinned}
             aria-label={pinned ? 'Unpin view' : 'Pin view'}
-            title={pinned ? 'Pinned — clicks outside won’t close this' : 'Pin — keep open when clicking outside'}
+            title={pinned ? 'Pinned - clicks outside won’t close this' : 'Pin - keep open when clicking outside'}
             className={`cursor-pointer shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-full hover:bg-fill ${pinned ? 'bg-accent-soft text-accent' : 'bg-fill text-label-2'}`}
         >
             <IconPin filled={pinned} width="15" height="15" />

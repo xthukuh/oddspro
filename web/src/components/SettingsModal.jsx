@@ -201,7 +201,7 @@ export default function SettingsModal({
                         </p>
                         <Toggle checked={noPin} onChange={onNoPin}
                             title="Freeze the No column's numbers to each row's load position, so sorting or filtering doesn't renumber them.">
-                            Pin position numbers <span className="text-label-3">— freeze the No column so re-sorting doesn't renumber</span>
+                            Pin position numbers <span className="text-label-3">- freeze the No column so re-sorting doesn't renumber</span>
                         </Toggle>
                     </section>
 
@@ -216,7 +216,7 @@ export default function SettingsModal({
                                 onMove={onMoveProvider}
                                 onReorder={onReorderProviders}
                                 hint="Priority top→bottom. Untick to hide a bookmaker. Type a row's number to jump it."
-                                title="Enable bookmakers and set their priority — the top enabled provider represents each game under One of each"
+                                title="Enable bookmakers and set their priority - the top enabled provider represents each game under One of each"
                             />
                             <MultiSelect
                                 label="Unavailable match links"
@@ -229,7 +229,7 @@ export default function SettingsModal({
                         <p className="text-xs text-label-2">
                             Tick a bookmaker to show it and use the arrows to set priority (top first). The
                             order picks which provider represents a game under <b>One of each</b>. Unavailable
-                            matches (concluded, or no markets left) are unlinked by default — enable a provider
+                            matches (concluded, or no markets left) are unlinked by default - enable a provider
                             under links to keep them anyway (betpawa serves concluded pages for ~6h).
                         </p>
                     </section>
@@ -244,7 +244,7 @@ export default function SettingsModal({
 
                         <Toggle checked={oneEach} onChange={onOneEach}
                             title="Show one row per game, taken from your highest-priority enabled provider. Games only another provider carries still appear, so providers complement each other.">
-                            One of each <span className="text-label-3">— one row per game from your top provider; other providers fill any gaps</span>
+                            One of each <span className="text-label-3">- one row per game from your top provider; other providers fill any gaps</span>
                         </Toggle>
 
                         <div className="mt-3 rounded-xl border border-separator-2 p-3">
@@ -262,16 +262,16 @@ export default function SettingsModal({
                             </div>
                             <Toggle checked={hideSelected} onChange={onHideSelected}
                                 title="Hide the checked rows from the table, filters, day stats and the betslip pool. Existing slips keep their legs.">
-                                Hide selection <span className="text-label-3">— remove checked rows from every view (built slips keep their legs)</span>
+                                Hide selection <span className="text-label-3">- remove checked rows from every view (built slips keep their legs)</span>
                             </Toggle>
                             <Toggle checked={keepSelected} onChange={onKeepSelected}
-                                title="Show ONLY the checked rows — hide everything unchecked from the table, filters, day stats and the betslip pool. Opposite of Hide selection (the two can't both be on).">
-                                Keep selection <span className="text-label-3">— show only checked rows, hide the rest (opposite of Hide selection)</span>
+                                title="Show ONLY the checked rows - hide everything unchecked from the table, filters, day stats and the betslip pool. Opposite of Hide selection (the two can't both be on).">
+                                Keep selection <span className="text-label-3">- show only checked rows, hide the rest (opposite of Hide selection)</span>
                             </Toggle>
                             <button
                                 onClick={onExportSelection}
                                 disabled={!selectionCount}
-                                title="Download the checked rows as a CSV with full record details (every field, market and stat — including columns hidden from the table)"
+                                title="Download the checked rows as a CSV with full record details (every field, market and stat - including columns hidden from the table)"
                                 className="mt-1.5 cursor-pointer h-10 px-4 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill disabled:opacity-40 disabled:cursor-default disabled:hover:bg-surface"
                             >
                                 Export CSV{selectionCount ? ` (${selectionCount})` : ''}
@@ -282,19 +282,19 @@ export default function SettingsModal({
                         <div className="flex flex-col">
                             <Toggle checked={hideHits} onChange={onHideHits}
                                 title="Hide tips that already won; keeps losing and upcoming tips.">
-                                Hide hits <span className="text-label-3">— show only losing &amp; upcoming tips</span>
+                                Hide hits <span className="text-label-3">- show only losing &amp; upcoming tips</span>
                             </Toggle>
                             <Toggle checked={hideMiss} onChange={onHideMiss}
                                 title="Hide tips that already lost; keeps winning and upcoming tips.">
-                                Hide miss <span className="text-label-3">— show only winning &amp; upcoming tips</span>
+                                Hide miss <span className="text-label-3">- show only winning &amp; upcoming tips</span>
                             </Toggle>
                             <Toggle checked={noMiss} onChange={onNoMiss}
                                 title="Drop every pick from any market that lost anywhere today; keeps clean markets' wins + upcoming.">
-                                No miss <span className="text-label-3">— hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span>
+                                No miss <span className="text-label-3">- hide every pick from a market that lost anywhere today (keeps clean markets' wins + upcoming)</span>
                             </Toggle>
                             <Toggle checked={safeOnly} onChange={onSafeOnly}
                                 title={`Only the day's safest slip legs: blend signals in agreement (none weak), short odds, best ${safeMaxPerDay} per day. Zero games = no safe bet exists.`}>
-                                🛡 Safe only <span className="text-label-3">— only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games means no safe bet exists — the protocol working</span>
+                                🛡 Safe only <span className="text-label-3">- only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games means no safe bet exists - the protocol working</span>
                             </Toggle>
                         </div>
 

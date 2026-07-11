@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
+import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
@@ -173,7 +174,10 @@ function _hitRates(rows) {
 
 const _rate = ({ hits, settled }) => (settled
     ? `${hits}/${settled} (${(hits / settled * 100).toFixed(1)}%)`
-    : '—');
+    : '-');
+// Compact footer form: integer percent only (the full fraction lives in the
+// tooltip). Keeps the status bar short + uniform.
+const _ratePct = ({ hits, settled }) => (settled ? `${Math.round(hits / settled * 100)}%` : '-');
 
 // 'HH:MM' local wall-clock for the status bar's last-refresh stamp
 const _hm = iso => {
@@ -183,7 +187,7 @@ const _hm = iso => {
 };
 
 // Grouped number for the footer betting ledger (odds / value / P-L).
-const _money = v => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+const _money = v => (v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
 
 // The betslip playground persists its whole config (incl. the per-pick stake)
 // under this key. The footer ledger reuses that stake, so the two never diverge.
@@ -265,6 +269,12 @@ export default function App() {
     const lastQueryRef = useRef(null);
     const dateRef = useRef(date);
     useEffect(() => { dateRef.current = date; }, [date]);
+    // Wrappers (trigger + panel) for the header popups' tap-away dismissal - a
+    // backdrop <div> can't cover the page from inside the backdrop-filtered nav.
+    const calWrapRef = useRef(null);
+    const overflowWrapRef = useRef(null);
+    useOutsideDismiss(calWrapRef, showCal, () => setShowCal(false));
+    useOutsideDismiss(overflowWrapRef, showOverflow, () => setShowOverflow(false));
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -552,7 +562,7 @@ export default function App() {
                         // Never surface the raw job error (it can be a ~2 KB SQL
                         // dump, e.g. a transient deadlock). The full detail lives
                         // in console.error + logs/auto-refresh.log server-side.
-                        if (st.error) setError('Refresh failed — please try again in a moment.');
+                        if (st.error) setError('Refresh failed - please try again in a moment.');
                     } else {
                         maybeReload(st);
                     }
@@ -574,7 +584,7 @@ export default function App() {
                 const mins = body.last_refreshed_at
                     ? Math.max(1, Math.round((Date.now() - new Date(body.last_refreshed_at).getTime()) / 60_000))
                     : null;
-                setNotice(`Already fresh${mins ? ` — refreshed ${mins}m ago` : ''}. Reloading the view.`);
+                setNotice(`Already fresh${mins ? ` - refreshed ${mins}m ago` : ''}. Reloading the view.`);
                 setRefreshTick(t => t + 1);
                 return;
             }
@@ -809,7 +819,7 @@ export default function App() {
                     <Logo onHome={() => changeDate(TODAY)} />
                 </div>
                 {/* Centre: chevrons + calendar-popover trigger */}
-                <div className="relative flex items-center gap-0.5 justify-self-center">
+                <div ref={calWrapRef} className="relative flex items-center gap-0.5 justify-self-center">
                     <button onClick={() => changeDate(PREV_DATE)} disabled={date <= MIN_DATE}
                         title={`Previous (${PREV_DATE})`} aria-label="Previous day" className={navBtn}>
                         <IconChevronLeft />
@@ -840,9 +850,9 @@ export default function App() {
                         <button onClick={onRefresh} disabled={!date || refresh?.running}
                             aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
                             title={refresh?.running
-                                ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
+                                ? `Refreshing ${refresh.date}${refresh.step ? ` - ${refresh.step}` : ''}…`
                                 : date
-                                    ? `Refresh fixtures, results & odds${refresh?.last_success ? ` — last ${_hm(refresh.last_success.at)}` : ''}`
+                                    ? `Refresh fixtures, results & odds${refresh?.last_success ? ` - last ${_hm(refresh.last_success.at)}` : ''}`
                                     : 'Pick a date to refresh'}
                             className={navBtn + (refresh?.running ? ' text-accent cursor-wait' : '')}>
                             {refresh?.running
@@ -863,7 +873,7 @@ export default function App() {
                         <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
                         <button onClick={() => setShowSettings(true)} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
                     </div>
-                    <div className="relative sm:hidden">
+                    <div ref={overflowWrapRef} className="relative sm:hidden">
                         <button onClick={() => setShowOverflow(v => !v)} aria-label="More actions" title="More"
                             className={showOverflow ? navBtnActive : navBtn}><IconMenu /></button>
                         {showOverflow && (
@@ -937,72 +947,49 @@ export default function App() {
                 // settled wins/losses/P-L.
                 const bet = displayedSummary(rows, betslipStake);
                 return (
-                    <footer className="shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
-                        {/* Section 1: record count + day hit-rates (day-level KPIs) */}
-                        <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                            <span className="whitespace-nowrap">
-                                {filtered ? `${rows.length}/${total}` : total}
-                                {' '}record{total === 1 && !filtered ? '' : 's'}
-                            </span>
-                            <span className="text-label-3">·</span>
-                            <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
-                                <span className="whitespace-nowrap"><span className="text-hot">🔥</span> O2.5: {_rate(dayRates.hot)}</span>
+                    <footer className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-[11px] text-label-2 tabular-nums z-20">
+                        {/* Day KPIs - compact (percent only; fractions in tooltips).
+                            One flex row, gap-spaced (no ragged "·" separators). */}
+                        <div className="flex items-center gap-x-3">
+                            <Tooltip content={`${filtered ? `${rows.length} of ${total}` : total} record${total === 1 && !filtered ? '' : 's'} for this view.`}>
+                                <span className="whitespace-nowrap font-medium text-label">{filtered ? `${rows.length}/${total}` : total}</span>
                             </Tooltip>
-                            <span className="text-label-3">·</span>
-                            <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
-                                <span className="whitespace-nowrap">Tips: {_rate(dayRates.tips)}</span>
+                            <Tooltip content={`Over 2.5 hot picks: ${_rate(dayRates.hot)} settled. Day-level - unaffected by view filters.`}>
+                                <span className="whitespace-nowrap"><span className="text-hot">🔥</span> {_ratePct(dayRates.hot)}</span>
                             </Tooltip>
-                            {/* R26c: how the 2nd / 3rd-choice picks would have settled
-                                (graded from the final score) - only when there are any. */}
+                            <Tooltip content={`Tips: ${_rate(dayRates.tips)} settled (AI-vetoed included). Day-level - unaffected by view filters.`}>
+                                <span className="whitespace-nowrap">Tips {_ratePct(dayRates.tips)}</span>
+                            </Tooltip>
+                            {/* R26c: 2nd/3rd-choice hit-rates, muted, only when present */}
                             {dayRates.up2.settled > 0 && (
-                                <>
-                                    <span className="text-label-3">·</span>
-                                    <Tooltip content="If you'd taken the 2nd-choice tip instead: settled hits / settled (unique fixtures). Graded from the final score.">
-                                        <span className="whitespace-nowrap text-label-3">2nd: {_rate(dayRates.up2)}</span>
-                                    </Tooltip>
-                                </>
+                                <Tooltip content={`If you'd taken the 2nd / 3rd-choice tip instead: 2nd ${_rate(dayRates.up2)}, 3rd ${_rate(dayRates.up3)} (graded from the final score).`}>
+                                    <span className="whitespace-nowrap text-label-3">2·{_ratePct(dayRates.up2)} 3·{_ratePct(dayRates.up3)}</span>
+                                </Tooltip>
                             )}
-                            {dayRates.up3.settled > 0 && (
-                                <>
-                                    <span className="text-label-3">·</span>
-                                    <Tooltip content="If you'd taken the 3rd-choice tip instead: settled hits / settled (unique fixtures). Graded from the final score.">
-                                        <span className="whitespace-nowrap text-label-3">3rd: {_rate(dayRates.up3)}</span>
-                                    </Tooltip>
-                                </>
-                            )}
-                            <span className="text-label-3">·</span>
-                            <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
-                                <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
+                            <Tooltip content={`Games passing the safety checks for multi-bet slips (signals agree, none weak, short odds, best ${safeCap}/day). Turn on 'Safe only' in Settings to show just these.`}>
+                                <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 {safePicks.length}</span>
                             </Tooltip>
                         </div>
-                        {/* Section 2: betting ledger over the rows currently shown */}
+                        {/* Ledger over the rows shown - each pick a flat-stake bet */}
                         {bet.picks > 0 && (
-                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 sm:border-l sm:border-separator sm:pl-3">
-                                <Tooltip content={`The rows shown treated as flat ${_money(betslipStake)}-unit bets, one per fixture: ${bet.picks} pick${bet.picks === 1 ? '' : 's'} staking ${_money(betslipStake * bet.picks)} in total. Stake comes from the betslip playground.`}>
-                                    <span className="whitespace-nowrap">💰 {bet.picks} pick{bet.picks === 1 ? '' : 's'}</span>
+                            <div className="flex items-center gap-x-3 sm:border-l sm:border-separator sm:pl-4">
+                                <Tooltip content={`The rows shown as flat ${_money(betslipStake)}-unit bets, one per fixture: ${bet.picks} pick${bet.picks === 1 ? '' : 's'} staking ${_money(betslipStake * bet.picks)}. Stake comes from the betslip playground.`}>
+                                    <span className="whitespace-nowrap">💰 {bet.picks}</span>
                                 </Tooltip>
-                                <span className="text-label-3">·</span>
                                 <Tooltip content={`Sum of the ${bet.picks} picks' odds (total odds).`}>
-                                    <span className="whitespace-nowrap">odds Σ {_money(bet.totalOdds)}</span>
+                                    <span className="whitespace-nowrap">Σ{_money(bet.totalOdds)}</span>
                                 </Tooltip>
-                                <span className="text-label-3">·</span>
-                                <Tooltip content={`Potential total return at ${_money(betslipStake)} per pick if every displayed pick won (stake × total odds) — a ceiling, not a forecast.`}>
-                                    <span className="whitespace-nowrap">value ≈{_money(bet.value)}</span>
+                                <Tooltip content={`Potential return if every shown pick won: stake × total odds = ${_money(bet.value)}. A ceiling, not a forecast.`}>
+                                    <span className="whitespace-nowrap text-label-3">≈{_money(bet.value)}</span>
                                 </Tooltip>
                                 {bet.settled > 0 && (
                                     <>
-                                        <span className="text-label-3">·</span>
-                                        <Tooltip content={`Displayed picks that already won — at ${_money(betslipStake)}/pick they returned ${_money(bet.returned)}.`}>
-                                            <span className="whitespace-nowrap text-hit">{bet.won} won</span>
+                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: ${bet.won} won, ${bet.lost} lost.`}>
+                                            <span className="whitespace-nowrap"><span className="text-hit">{bet.won}✓</span> <span className="text-miss">{bet.lost}✗</span></span>
                                         </Tooltip>
-                                        <span className="text-label-3">·</span>
-                                        <Tooltip content={`Displayed picks that already lost — ${_money(betslipStake)}/pick forfeited.`}>
-                                            <span className="whitespace-nowrap text-miss">{bet.lost} lost</span>
-                                        </Tooltip>
-                                        <span className="text-label-3">·</span>
-                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: staked ${_money(bet.staked)}, returned ${_money(bet.returned)}. P/L = returned − staked (pending picks not counted).`}>
+                                        <Tooltip content={`P/L over settled shown picks: staked ${_money(bet.staked)}, returned ${_money(bet.returned)}, P/L = returned − staked (pending not counted).`}>
                                             <span className={`whitespace-nowrap font-semibold ${bet.profit >= 0 ? 'text-hit' : 'text-miss'}`}>
-                                                P/L {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}
+                                                {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}
                                             </span>
                                         </Tooltip>
                                     </>
@@ -1015,7 +1002,8 @@ export default function App() {
 
             {showMagic && (
                 <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
-                    onToggle={onToggleMagic} onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+                    onToggle={id => { onToggleMagic(id); setShowMagic(false); }}
+                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
             )}
 
             {showFilters && catalog && (

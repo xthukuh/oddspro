@@ -1,6 +1,6 @@
 // Client-side CSV export for the "With selected" action. Pure (no DOM), so
 // node:test covers the escaping and the full-record schema offline; App owns the
-// Blob download. "Full record details incl. hidden info columns" — every field
+// Blob download. "Full record details incl. hidden info columns" - every field
 // the row carries (including the ones folded out of the table into tooltips: id,
 // updated/locked times, canonical team names) plus every catalog market column
 // and post-match stat.

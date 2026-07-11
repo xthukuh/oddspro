@@ -7,8 +7,8 @@ import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 // its own Sheet (like the other modals) so it can carry the standard pin toggle;
 // the toolbar/overflow trigger owns open/close via `showMagic`.
 
-const _pct = v => (v == null ? '—' : `${Math.round(v * 100)}%`);
-const _roi = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`);
+const _pct = v => (v == null ? '-' : `${Math.round(v * 100)}%`);
+const _roi = v => (v == null ? '-' : `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`);
 
 const STATS_TITLE = 'What each number means (replayed on past days):\n'
     + '· slips - days a 4-game multi-bet built from this ranking\'s top picks won\n'
@@ -57,7 +57,7 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                         <span className="block text-[12.5px] text-label-2 tabular-nums" title={STATS_TITLE}>
                             slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
                             {' · '}top picks {s.stats.quartile.hits}/{s.stats.quartile.n} ({_pct(s.stats.quartile.rate)})
-                            {' · '}streak {s.stats.streak?.avg ?? '—'}/{s.stats.streak?.best ?? '—'}
+                            {' · '}streak {s.stats.streak?.avg ?? '-'}/{s.stats.streak?.best ?? '-'}
                             {' · '}ROI {_roi(s.stats.roi)}
                         </span>
                     </button>

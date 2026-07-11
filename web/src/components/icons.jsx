@@ -36,7 +36,7 @@ export const IconChevronRight = (p) => (
 export const IconChevronDown = (p) => (
     <svg width="11" height="7" viewBox="0 0 12 8" fill="none" {...p}><path d="M1 1.5L6 6.5L11 1.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
 );
-// Hamburger (three EQUAL bars) for the mobile overflow trigger — deliberately
+// Hamburger (three EQUAL bars) for the mobile overflow trigger - deliberately
 // distinct from IconFilter's three DECREASING bars (they never sit adjacent:
 // the filter action collapses INTO this menu below sm).
 export const IconMenu = (p) => (

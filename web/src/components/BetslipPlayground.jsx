@@ -20,7 +20,7 @@ const LS_SLIPS = 'oddspro.betslips';
 const DEFAULT_CONFIG = { stake: 100, maxLegs: 4, targetOdds: 2.5, maxSlips: 0, hideUsed: true, auto: false };
 
 const _id = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 6);
-const _pct = v => (v == null ? '—' : `${(v * 100).toFixed(1)}%`);
+const _pct = v => (v == null ? '-' : `${(v * 100).toFixed(1)}%`);
 // HH:MM kickoff (matches the table's Start column) and a compact "Jul 9" date -
 // a leg on the loaded day shows its time, a leg from another day shows its date.
 const _hm = iso => {
@@ -234,9 +234,16 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     // Touch add: land the tip on the active slip, or - with ZERO slips - create
     // one seeded with just this tip (guardrail: auto-create only on an explicit
     // add when the book is empty; activeSlip is null only when slips is empty).
+    // Enforced: when the active slip is FULL there is no slip to add to, so the
+    // add is refused outright (the + is already hidden - this closes any other
+    // path, e.g. a stale tap, so a tip can never be consumed with nowhere to go).
     const addToActiveOrNew = candidate => {
         if (!candidate) return;
-        if (activeSlip) { addLeg(activeSlip.id, candidate); return; }
+        if (activeSlip) {
+            if (activeSlip.legs.length >= config.maxLegs) return; // full - nothing to add to
+            addLeg(activeSlip.id, candidate);
+            return;
+        }
         const [slip] = _wrap([[candidate]], slips.length + 1);
         setSlips(prev => [...prev, slip]);
         setActiveId(slip.id);
@@ -275,7 +282,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
         <Sheet onClose={onClose} className="max-w-5xl flex flex-col p-3 md:p-5" dismissable={!pinned}>
                 <div className="flex items-center gap-3 mb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight">Betslip playground</h2>
-                    <span className="text-xs text-label-2 hidden sm:inline">virtual slips — nothing is placed</span>
+                    <span className="text-xs text-label-2 hidden sm:inline">virtual slips - nothing is placed</span>
                     <div className="grow" />
                     <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                     <SheetClose onClose={onClose} />
@@ -388,7 +395,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                             (drag still works on desktop). The hint names where ＋ lands. */}
                         <p className="text-xs mb-1">
                             {slipFull
-                                ? <span className="text-hot"><b>{activeSlip.name}</b> is full — <b>+ New slip</b> to keep adding.</span>
+                                ? <span className="text-hot"><b>{activeSlip.name}</b> is full - <b>+ New slip</b> to keep adding.</span>
                                 : activeSlip
                                     ? <span className="text-accent">Tap <b>+</b> to add to <b>{activeSlip.name}</b></span>
                                     : <span className="text-label-3">Tap <b>+</b> on a tip to start a slip.</span>}
@@ -422,7 +429,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                         onClick={e => { e.stopPropagation(); toggleName(c.api_id); }}
                                     >{c.fixture}</span>
                                     <span className="font-medium whitespace-nowrap">{c.market}</span>
-                                    <span className="tabular-nums">{c.price?.toFixed(2) ?? '—'}</span>
+                                    <span className="tabular-nums">{c.price?.toFixed(2) ?? '-'}</span>
                                     {c.outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
                                     {c.outcome === 'miss' && <span className="text-miss font-bold">✗</span>}
                                     <span className="tabular-nums text-label-2" title="Calibrated win estimate">{_pct(c.prob)}</span>
@@ -453,19 +460,23 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                 const verdict = slipOutcome(slip.legs);
                                 const over = slip.legs.length > config.maxLegs;
                                 const under = slip.legs.length > 0 && sum.odds < config.targetOdds;
+                                // A full slip is NOT a drop target (enforce no-add) -
+                                // dropping onto it is ignored and it doesn't flash the
+                                // accept border.
+                                const full = slip.legs.length >= config.maxLegs;
                                 return (
                                     <div
                                         key={slip.id}
                                         onClick={() => setActiveId(slip.id)}
-                                        onDragOver={e => e.preventDefault()}
+                                        onDragOver={e => { if (!full) e.preventDefault(); }}
                                         onDrop={e => {
                                             e.preventDefault();
-                                            addLeg(slip.id, candidates.find(c => c.api_id === drag));
+                                            if (!full) addLeg(slip.id, candidates.find(c => c.api_id === drag));
                                             setDrag(null);
                                         }}
                                         className={`rounded-xl border p-2 transition-colors ${slip.id === activeSlip?.id
                                             ? 'border-accent ring-2 ring-accent/40 bg-accent-soft/40' : 'border-separator-2'} ${
-                                            drag ? 'border-dashed border-accent' : ''}`}
+                                            drag && !full ? 'border-dashed border-accent' : ''}`}
                                     >
                                         <div className="flex items-center gap-2 mb-1">
                                             <input
@@ -526,7 +537,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                 ) : (
                                                     <span className="font-medium whitespace-nowrap">{l.market}</span>
                                                 )}
-                                                <span className="tabular-nums">{l.price?.toFixed(2) ?? '—'}</span>
+                                                <span className="tabular-nums">{l.price?.toFixed(2) ?? '-'}</span>
                                                 {l.outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
                                                 {l.outcome === 'miss' && <span className="text-miss font-bold">✗</span>}
                                                 <span className="tabular-nums text-label-2">{_pct(l.prob)}</span>

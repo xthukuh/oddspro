@@ -8,12 +8,12 @@
 //   10  sticky body pinned cells      (DataTable)
 //   20  sticky header row             (DataTable)
 //   30  sticky corner (both axes)     (DataTable)
-//   40  app chrome — nav bar + footer status bar
+//   40  app chrome - nav bar + footer status bar
 //   50  content & toolbar popups      (OverflowMenu, CalendarPopover, TipPopover, table tooltips' tap catcher)
 //   55    their panels
 //   60  modal scrim / backdrop        (Sheet, Betslip)
 //   70  modal card
-//   80  in-modal anchored dropdowns   (MultiSelect, ReorderList panels — must clear the card)
+//   80  in-modal anchored dropdowns   (MultiSelect, ReorderList panels - must clear the card)
 //   90  tooltips (always on top; pass-through)
 export const Z = {
     stickyBody: 'z-10',

@@ -19,7 +19,7 @@ function PositionInput({ pos, onSet }) {
     return (
         <input
             type="text" inputMode="numeric" value={raw}
-            aria-label="Position — type a number to move this row there" title="Type a position to move this row there"
+            aria-label="Position - type a number to move this row there" title="Type a position to move this row there"
             onFocus={e => { focused.current = true; e.target.select(); }}
             onChange={e => { if (/^\d*$/.test(e.target.value)) setRaw(e.target.value); }}
             onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); e.currentTarget.blur(); } }}
@@ -29,7 +29,7 @@ function PositionInput({ pos, onSet }) {
     );
 }
 
-// Collapsible reorder dropdown — the shared control for provider priority,
+// Collapsible reorder dropdown - the shared control for provider priority,
 // column order and sort priority (it replaced the always-visible drag lists to
 // free space and keep one reordering idiom). Each row shows a priority number,
 // an optional enable checkbox, the label, an optional inline tag (e.g. a sort
@@ -38,12 +38,12 @@ function PositionInput({ pos, onSet }) {
 // ancestor's overflow (the settings sheet) can clip it.
 //   items   : [{ key, label, enabled? }]  (array order = priority, index 0 = top)
 //   badge   : trigger count text (defaults to items.length)
-//   onMove(key, dir)   required — dir is -1 (up) / +1 (down)
-//   onReorder(keys)    optional — renders an editable position input per row;
+//   onMove(key, dir)   required - dir is -1 (up) / +1 (down)
+//   onReorder(keys)    optional - renders an editable position input per row;
 //                      given the full reordered key list to persist (E2)
-//   onToggle(key)      optional — renders the checkbox (item.enabled = checked)
-//   onRemove(key)      optional — renders the × on each row
-//   renderTag(item)    optional — inline node shown before the arrows
+//   onToggle(key)      optional - renders the checkbox (item.enabled = checked)
+//   onRemove(key)      optional - renders the × on each row
+//   renderTag(item)    optional - inline node shown before the arrows
 //   hint    : optional panel-header text
 //   footer  : optional node pinned under the rows (e.g. a Reset button)
 export default function ReorderList({ label, items, badge, onMove, onReorder, onToggle, onRemove, renderTag, hint, footer, title }) {
@@ -82,7 +82,7 @@ export default function ReorderList({ label, items, badge, onMove, onReorder, on
                                     type="checkbox"
                                     checked={!!it.enabled}
                                     onChange={() => onToggle(it.key)}
-                                    title={it.enabled ? 'Shown — untick to hide' : 'Hidden — tick to show'}
+                                    title={it.enabled ? 'Shown - untick to hide' : 'Hidden - tick to show'}
                                     className="accent-accent h-4 w-4"
                                 />
                             )}

@@ -26,7 +26,7 @@ export default function HelpModal({ onClose }) {
                 <div className="flex items-center gap-3 px-6 pt-5 pb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight flex items-center">
                         <span className="rounded-md border border-separator bg-fill px-1.5 py-0.5 text-sm font-bold tracking-wide mr-2">[OP]</span>
-                        {APP_NAME} — Help
+                        {APP_NAME} - Help
                     </h2>
                     <div className="flex-1" />
                     <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
@@ -35,15 +35,15 @@ export default function HelpModal({ onClose }) {
 
                 <div className="overflow-y-auto px-6 pb-6">
                     <p className="text-sm text-label-2 mb-3">
-                        <strong className="text-label">{APP_NAME}</strong> is a football odds &amp; tips dashboard. It gathers
-                        bookmaker odds (BetPawa, Betika) alongside official fixture and results data,
-                        matches them up, and surfaces data-driven <strong className="text-label">Over 2.5 hot picks</strong> 🔥
-                        and best-bet <strong className="text-label">tips</strong> ranked by a backtested confidence model.
+                        <strong className="text-label">{APP_NAME}</strong> is a football odds &amp; tips dashboard. It brings
+                        bookmaker odds (BetPawa, Betika) together with official fixture and results data,
+                        matches them up, and highlights the standout <strong className="text-label">Over 2.5 hot picks</strong> 🔥
+                        and best-bet <strong className="text-label">tips</strong> for each day - ranked most-likely-to-win first.
                     </p>
                     <ul className="text-sm text-label-2 mb-4 space-y-1 list-disc pl-5">
                         <li>Use the <strong className="text-label">date navigation</strong> (‹ ›) and the calendar to browse fixtures by day; the logo returns you to today.</li>
                         <li><strong className="text-label">Refresh</strong> re-fetches odds, fixtures &amp; results for the selected date.</li>
-                        <li><strong className="text-label">Magic</strong> re-orders tips most-likely-to-win first using backtested strategies.</li>
+                        <li><strong className="text-label">Magic</strong> re-orders tips so the strongest come first.</li>
                         <li><strong className="text-label">Slips</strong> builds virtual multi-bet slips from the day's tips.</li>
                         <li><strong className="text-label">Filters</strong> narrows the table; <strong className="text-label">Settings</strong> controls columns &amp; display.</li>
                     </ul>

@@ -26,9 +26,11 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
         window.addEventListener('keydown', onKey);
         return () => window.removeEventListener('keydown', onKey);
     }, [onClose]);
+    // Dismiss-on-tap-away is handled by the parent via useOutsideDismiss (a
+    // backdrop <div> here is trapped by the nav's backdrop-filter and can't
+    // cover the page - see useOutsideDismiss).
     return (
         <>
-            <div onPointerDown={onClose} className={`fixed inset-0 cursor-pointer ${Z.popupCatcher}`} />
             <div className={`absolute right-0 top-[46px] w-56 bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 py-1 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <Row icon={refreshing ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" /> : <IconRefresh />}
                     label={refreshing ? 'Refreshing…' : 'Refresh'} onClick={onRefresh} disabled={!canRefresh} />

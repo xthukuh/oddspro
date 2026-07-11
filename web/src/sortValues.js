@@ -64,7 +64,7 @@ const VALUES = {
         ? null
         : (Number(r.tip_confidence) || 0) + (r.hot ? 1 : 0)),
     // The chosen tip's overall confidence as an integer win % (0-100), matching
-    // the % the tip cell displays — a filter-only field (no hot bonus, no table
+    // the % the tip cell displays - a filter-only field (no hot bonus, no table
     // column) so users can screen by "win % ≥ 70".
     tip_confidence: r => (r.tip_confidence == null ? null : Math.round(Number(r.tip_confidence) * 100)),
     status: r => _str(r.status),

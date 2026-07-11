@@ -1,10 +1,10 @@
 // Theme-adaptive brand mark: [OP] filled via --logo (purple on light, white
-// on dark). Home button — resets the table to today (SPA nav, no reload).
+// on dark). Home button - resets the table to today (SPA nav, no reload).
 export default function Logo({ onHome }) {
     return (
         <button
             onClick={onHome}
-            title="Odds Pro — home (today)"
+            title="Odds Pro - home (today)"
             aria-label="Odds Pro home"
             className="cursor-pointer inline-flex items-center h-10 px-1.5 rounded-[10px] hover:bg-accent-soft"
         >

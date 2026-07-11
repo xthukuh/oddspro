@@ -19,7 +19,7 @@ export default function ViewPills({
     const pill = 'inline-flex items-center gap-1 rounded-[10px] border border-hot/50 bg-hot/10 text-hot pl-2 pr-1 py-0.5 text-xs';
     return (
         <div className="flex flex-wrap items-center gap-1.5 shrink-0 py-0.5">
-            <span className="text-xs text-hot mr-0.5" title="These options hide or reduce rows — what you see is a subset of the day">
+            <span className="text-xs text-hot mr-0.5" title="These options hide or reduce rows - what you see is a subset of the day">
                 ⚠ Showing a subset:
             </span>
             {items.map(([key, label, hint, clear]) => (

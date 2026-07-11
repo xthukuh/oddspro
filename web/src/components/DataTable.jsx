@@ -159,7 +159,7 @@ const CELL_TITLES = {
     status: row => {
         const info = STATUS_INFO[row.status] ?? row.status;
         const head = info && LIVE_MINUTE.has(row.status) && row.elapsed != null
-            ? `${info} — ${row.elapsed}'`
+            ? `${info} - ${row.elapsed}'`
             : info;
         return [
             head,
@@ -268,7 +268,7 @@ function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
     if (key === 'start_time') {
         // Two lines (R30): the fixture id as a tiny greyed label on top, the
-        // kickoff time below — uses the taller row the multi-line Tip introduced
+        // kickoff time below - uses the taller row the multi-line Tip introduced
         // and saves horizontal width. Full id/date context lives in the tooltip.
         return (
             <div className="leading-tight whitespace-nowrap">
@@ -373,7 +373,7 @@ function _cell(row, col, linkProviders, openTip) {
         );
     }
     if (key === 'status' && LIVE_MINUTE.has(row.status) && row.elapsed != null) {
-        // In-play: surface the live minute on a second muted line — the taller
+        // In-play: surface the live minute on a second muted line - the taller
         // row (R30, driven by the multi-line Tip/Start cells) gives it space, so
         // the minute reads at a glance without hovering the tooltip. Static
         // statuses stay single-line via the generic path below.
@@ -422,7 +422,7 @@ function _marketCell(row, key) {
 // score (strategies keep their native scales - no fake percentages).
 function _magicCell(row, meta) {
     const m = meta?.info.get(row.api_id);
-    if (!m) return <span className="text-label-3">—</span>;
+    if (!m) return <span className="text-label-3">-</span>;
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
@@ -541,8 +541,11 @@ export default function DataTable({
     // amount, so the states never oscillate at the boundary.
     // Only Score and Tip stay pinned (on every screen size) - keeping the set
     // small leaves room for other columns on narrow widths. The ephemeral magic
-    // column scrolls with the rest.
-    const PIN_KEYS = ['score', 'tip'];
+    // column scrolls with the rest. Score only pins when the day actually HAS
+    // scores (upcoming fixtures are all dashes - no point stickying an empty
+    // column); Tip is always pinnable.
+    const scoreHasData = rows.some(r => r.score != null && r.score !== '');
+    const PIN_KEYS = scoreHasData ? ['score', 'tip'] : ['tip'];
     const containerRef = useRef(null);
     const pinThRefs = useRef({}); // key -> the real column's <th>
     const [pinState, setPinState] = useState({}); // key -> pinned?
@@ -598,7 +601,9 @@ export default function DataTable({
     // Pins keep the columns' own (drag-order) relative order and stack with
     // cumulative left offsets so they never overlap.
     let pinLeft = selectCol ? SELECT_W : 0;
-    const pins = displayColumns.filter(c => pinState[c.key]).map(c => {
+    // Require PIN_KEYS membership too: if Score just lost its data it leaves
+    // PIN_KEYS, but a stale pinState.score must not still pin the empty column.
+    const pins = displayColumns.filter(c => PIN_KEYS.includes(c.key) && pinState[c.key]).map(c => {
         // Pin the duplicate to the EXACT measured width of its real column and
         // advance the next pin's offset by the same value, so two adjacent pins
         // (any order, e.g. Tip before Score) butt together with no gap for the
