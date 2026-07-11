@@ -1,6 +1,7 @@
 import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
@@ -9,6 +10,8 @@ import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
+import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken } from './human-pow.js';
+import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -17,6 +20,25 @@ import { describeMigrationResult } from './db/migrate-rules.js';
 
 const app = express();
 app.disable('x-powered-by');
+
+// Bot user-agent blocklist (opt-in, BOT_UA_FILTER_ENABLED). Blocks known AI
+// scrapers / aggressive crawlers / raw HTTP clients site-wide before any route;
+// general search engines are deliberately NOT blocked (landing-page SEO). Tune
+// via BOT_UA_EXTRA (add) / BOT_UA_ALLOW (exempt). See src/bot-rules.js.
+const _uaList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
+if (config.BOT_UA_FILTER_ENABLED) {
+    const extra = _uaList(config.BOT_UA_EXTRA);
+    const allow = _uaList(config.BOT_UA_ALLOW);
+    app.use((req, res, next) => {
+        if (isBlockedUserAgent(req.get('user-agent') || '', { extra, allow })) {
+            return res.status(403).type('text/plain').send('Forbidden');
+        }
+        next();
+    });
+}
+// AI-crawler robots.txt (always served): politely disallows LLM crawlers + /api;
+// the impolite ones that ignore it are caught by the UA blocklist above.
+app.get('/robots.txt', (req, res) => res.type('text/plain').send(AI_ROBOTS_TXT));
 
 // Optional bearer-token guard: X-Requested-With (below) only stops a plain
 // cross-origin form/navigation - once this server is on a public domain,
@@ -27,6 +49,46 @@ if (config.API_TOKEN) {
     app.use('/api', (req, res, next) => {
         if (req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
         res.status(401).json({ error: 'Unauthorized' });
+    });
+}
+
+// SPA bot-protection: stateless proof-of-work human gate (opt-in,
+// HUMAN_POW_ENABLED). The browser solves a PoW challenge from /api/challenge and
+// posts it to /api/human, which mints a short-lived (check-once) token; every
+// other /api/* route then requires that token. A valid API_TOKEN bearer bypasses
+// the gate (trusted machine clients). Registered BEFORE the data routes so it
+// intercepts them; the two gate endpoints are registered first so they stay
+// open. All crypto + verification is pure (src/human-pow.js, offline-tested).
+if (config.HUMAN_POW_ENABLED) {
+    // A stable secret keeps the check-once token valid across restarts; the
+    // ephemeral fallback still works but re-challenges users after a restart.
+    const HUMAN_SECRET = config.HUMAN_TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
+    if (!config.HUMAN_TOKEN_SECRET) {
+        console.warn('[human] HUMAN_POW_ENABLED but HUMAN_TOKEN_SECRET unset - using an ephemeral per-boot secret (tokens reset on restart). Set HUMAN_TOKEN_SECRET for a stable check-once.');
+    }
+    const CHALLENGE_TTL = config.HUMAN_CHALLENGE_TTL_MINUTES * 60_000;
+    const TOKEN_TTL = config.HUMAN_TOKEN_TTL_DAYS * 86_400_000;
+
+    // Issue a PoW challenge (public, cheap, stateless - the HMAC signature is
+    // the only "storage").
+    app.get('/api/challenge', (req, res) => {
+        res.json(issueChallenge(HUMAN_SECRET, { bits: config.HUMAN_POW_BITS, ttlMs: CHALLENGE_TTL }));
+    });
+    // Verify a solved challenge -> mint the check-once human token.
+    app.post('/api/human', express.json({ limit: '2kb' }), (req, res) => {
+        if (!req.get('x-requested-with')) return res.status(403).json({ error: 'Missing X-Requested-With header.' });
+        const v = verifyChallenge(HUMAN_SECRET, req.body || {});
+        if (!v.ok) return res.status(400).json({ error: 'Human verification failed - please retry.', reason: v.reason });
+        res.json({ token: signHumanToken(HUMAN_SECRET, { ttlMs: TOKEN_TTL }), ttl_days: config.HUMAN_TOKEN_TTL_DAYS });
+    });
+    // Gate every other /api/* route on a valid human token (or an API_TOKEN
+    // bearer). The two endpoints above are registered first, so they're already
+    // handled before this runs; the path check is belt-and-suspenders.
+    app.use('/api', (req, res, next) => {
+        if (req.path === '/challenge' || req.path === '/human') return next();
+        if (config.API_TOKEN && req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
+        if (verifyHumanToken(HUMAN_SECRET, req.get('x-human-token')).ok) return next();
+        res.status(401).json({ error: 'Human verification required.', human_required: true });
     });
 }
 

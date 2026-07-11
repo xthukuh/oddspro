@@ -66,6 +66,20 @@ const EnvSchema = z.object({
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.
     // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
     MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
+    // --- SPA bot-protection (opt-in; src/server.js + web/src/HumanGate.jsx) ---
+    // Stateless proof-of-work "verify you're human" gate. Enable on BOTH sides
+    // together: HUMAN_POW_ENABLED here AND VITE_HUMAN_POW at web build time.
+    HUMAN_POW_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    HUMAN_POW_BITS: z.coerce.number().int().min(1).max(28).default(18),   // difficulty (~2^bits hashes, <1s in-browser)
+    HUMAN_TOKEN_SECRET: z.string().min(1).optional(),                     // HMAC key; set for a stable check-once across restarts
+    HUMAN_TOKEN_TTL_DAYS: z.coerce.number().min(0.01).default(7),         // check-once lifetime (~1 week per the user's ask)
+    HUMAN_CHALLENGE_TTL_MINUTES: z.coerce.number().min(1).default(10),
+    // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
+    // Blocks AI scrapers / aggressive crawlers / raw HTTP clients; general search
+    // engines are intentionally left alone (landing-page SEO).
+    BOT_UA_FILTER_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    BOT_UA_EXTRA: z.string().default(''),   // comma-separated extra UA substrings to block
+    BOT_UA_ALLOW: z.string().default(''),   // comma-separated UA substrings to exempt
     // Verbose per-step timing logs (src/pipeline.js) via src/utils.js#debugLog.
     // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
     DEBUG: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),

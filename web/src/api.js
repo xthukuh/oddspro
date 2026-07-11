@@ -1,9 +1,20 @@
 // Typed wrappers over the oddspro API (:3001, proxied via vite in dev).
+import { getHumanToken } from './humanToken.js';
 
 // Baked in at build time from VITE_API_TOKEN (set it in .env to match the
 // server's API_TOKEN before `npm run build:web`). Unset locally - no-op.
 const API_TOKEN = import.meta.env.VITE_API_TOKEN || null;
-const _authHeaders = () => API_TOKEN ? { Authorization: `Bearer ${API_TOKEN}` } : {};
+
+// Auth headers: the optional build-time API_TOKEN bearer plus the check-once
+// human-verification token (X-Human-Token) once the PoW gate has passed. Both
+// no-op when unset - a server that isn't enforcing simply ignores them.
+function _authHeaders() {
+    const h = {};
+    if (API_TOKEN) h.Authorization = `Bearer ${API_TOKEN}`;
+    const human = getHumanToken();
+    if (human) h['X-Human-Token'] = human;
+    return h;
+}
 
 async function _get(path, params = {}) {
     const search = new URLSearchParams();
@@ -69,4 +80,22 @@ export async function startRefresh(date) {
 // lives entirely on the refresh button.)
 export async function fetchRefreshStatus() {
     return _get('/api/refresh');
+}
+
+// Proof-of-work human gate (opt-in; only reachable when the server has
+// HUMAN_POW_ENABLED). fetchChallenge -> solve in the browser -> submitHuman
+// mints the check-once token. See web/src/HumanGate.jsx + src/human-pow.js.
+export async function fetchChallenge() {
+    return _get('/api/challenge');
+}
+
+export async function submitHuman(solution) {
+    const res = await fetch('/api/human', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
+        body: JSON.stringify(solution),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    return body; // { token, ttl_days }
 }
