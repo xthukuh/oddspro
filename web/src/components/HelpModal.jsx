@@ -1,4 +1,5 @@
-import Sheet, { SheetClose } from './Sheet.jsx';
+import { useState } from 'react';
+import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 
 // Help / About modal: a brief, user-facing description of what Odds Pro does
 // plus an embedded demo video. The video URL is configurable at build time via
@@ -17,9 +18,10 @@ function youtubeEmbed(url) {
 
 export default function HelpModal({ onClose }) {
     const embed = youtubeEmbed(DEMO_URL);
+    const [pinned, setPinned] = useState(false);
 
     return (
-        <Sheet onClose={onClose} className="max-w-2xl">
+        <Sheet onClose={onClose} className="max-w-2xl" dismissable={!pinned}>
             <div className="flex flex-col max-h-[calc(100dvh-4.5rem)]">
                 <div className="flex items-center gap-3 px-6 pt-5 pb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight flex items-center">
@@ -27,6 +29,7 @@ export default function HelpModal({ onClose }) {
                         {APP_NAME} — Help
                     </h2>
                     <div className="flex-1" />
+                    <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                     <SheetClose onClose={onClose} />
                 </div>
 

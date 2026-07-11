@@ -1,7 +1,8 @@
+import { useState } from 'react';
 import MultiSelect from './MultiSelect.jsx';
 import ReorderList from './ReorderList.jsx';
 import NumberInput from './NumberInput.jsx';
-import Sheet, { SheetClose } from './Sheet.jsx';
+import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 import { THEMES } from '../theme.js';
 import { DEFAULT_SAFE } from '../../../src/db/magic-rules.js';
@@ -100,13 +101,15 @@ export default function SettingsModal({
     };
 
     const heading = 'font-semibold text-label mb-2';
+    const [pinned, setPinned] = useState(false);
 
     return (
-        <Sheet onClose={onClose} className="max-w-2xl">
+        <Sheet onClose={onClose} className="max-w-2xl" dismissable={!pinned}>
             <div className="flex flex-col max-h-[calc(100dvh-4.5rem)]">
                 <div className="flex items-center gap-3 px-6 pt-5 pb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight">Display settings</h2>
                     <div className="flex-1" />
+                    <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                     <SheetClose onClose={onClose} />
                 </div>
                 <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-3">

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSlips, estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
 import { orderRows } from '../ordering.js';
 import NumberInput from './NumberInput.jsx';
-import { SheetClose } from './Sheet.jsx';
+import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 
 // Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
 // drag a candidate onto a slip card (or use its + button), tune the
@@ -50,6 +50,9 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     const [{ config, slips }, setState] = useState(() => _loadSlips());
     const [activeId, setActiveId] = useState(() => _loadSlips().slips[0]?.id ?? null);
     const [drag, setDrag] = useState(null); // dragged candidate api_id
+    // Defaults PINNED: slips are easy to lose to a stray backdrop click, so the
+    // playground opens with background-dismiss disabled (Escape / × still close).
+    const [pinned, setPinned] = useState(true);
     // Collapsible panes (small screens only): collapsing Tips or Slips frees
     // vertical room for the other when they're stacked. On md+ (side-by-side)
     // both always show - the collapse class only hides below md.
@@ -63,14 +66,6 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     useEffect(() => {
         localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips }));
     }, [date, config, slips]);
-
-    // The modal no longer closes on backdrop click (slips are easy to lose by
-    // a stray click) - Escape and the x button are the close paths.
-    useEffect(() => {
-        const onKey = e => e.key === 'Escape' && onClose();
-        document.addEventListener('keydown', onKey);
-        return () => document.removeEventListener('keydown', onKey);
-    }, [onClose]);
 
     // Slip candidates: the table's non-vetoed tips - one per canonical
     // fixture - in the SAME order the table shows (the unified sort chain);
@@ -191,12 +186,12 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     }, [autoKey]);
 
     return (
-        <div className="fixed inset-0 z-40 flex items-start justify-end bg-black/15 [backdrop-filter:blur(0.5px)] [animation:op-fade_0.2s_ease] p-2 sm:p-3" role="dialog" aria-modal="true">
-            <div className="mt-11 sm:mt-12 bg-surface text-label rounded-2xl shadow-2xl w-full max-w-5xl max-h-[calc(100dvh-4.5rem)] flex flex-col [animation:op-pop_0.18s_cubic-bezier(0.32,0.72,0,1)] p-3 md:p-5">
+        <Sheet onClose={onClose} className="max-w-5xl flex flex-col p-3 md:p-5" dismissable={!pinned}>
                 <div className="flex items-center gap-3 mb-3">
                     <h2 className="text-[22px] font-extrabold tracking-tight">Betslip playground</h2>
                     <span className="text-xs text-label-2 hidden sm:inline">virtual slips — nothing is placed</span>
                     <div className="grow" />
+                    <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                     <SheetClose onClose={onClose} />
                 </div>
 
@@ -485,7 +480,6 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     Survival multiplies each leg's calibrated win estimate (independence assumption) -
                     an expectation over many slips, not a promise for this one.
                 </p>
-            </div>
-        </div>
+        </Sheet>
     );
 }

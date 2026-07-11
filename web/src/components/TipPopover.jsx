@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { safeQualifies } from '../../../src/db/magic-rules.js';
+import { Z } from '../zLayers.js';
 
 // Tip justification popover: the persisted bestTip breakdown rendered as a
 // deterministic reasoning ledger - blend components with their effective
@@ -152,10 +153,10 @@ export default function TipPopover({ row, x, y, onClose }) {
         {/* Invisible dismiss overlay: a background click closes the popover and
             is swallowed here, so it can't fall through to a column header and
             trigger a sort. */}
-        <div className="fixed inset-0 z-40" onClick={onClose} />
+        <div className={`fixed inset-0 ${Z.popupCatcher}`} onClick={onClose} />
         <div
             style={style}
-            className="fixed z-50 w-80 max-h-[25rem] overflow-y-auto bg-surface text-label border border-separator-2 rounded-2xl shadow-2xl p-3 text-xs"
+            className={`fixed ${Z.popup} w-80 max-h-[25rem] overflow-y-auto bg-surface text-label border border-separator-2 rounded-2xl shadow-2xl p-3 text-xs`}
         >
             <div className="flex items-start justify-between gap-2">
                 <div className="font-medium text-label">{row.fixture_api ?? row.fixture}</div>

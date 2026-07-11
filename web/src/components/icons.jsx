@@ -36,3 +36,17 @@ export const IconChevronRight = (p) => (
 export const IconChevronDown = (p) => (
     <svg width="11" height="7" viewBox="0 0 12 8" fill="none" {...p}><path d="M1 1.5L6 6.5L11 1.5" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/></svg>
 );
+// Hamburger (three EQUAL bars) for the mobile overflow trigger — deliberately
+// distinct from IconFilter's three DECREASING bars (they never sit adjacent:
+// the filter action collapses INTO this menu below sm).
+export const IconMenu = (p) => (
+    <svg {...S} {...p}><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
+);
+// Push-pin toggle for the "pin view" modal control (filled = pinned, so a
+// background click won't dismiss). Emoji 📌/📍 in the spec were only examples.
+export const IconPin = ({ filled, ...p }) => (
+    <svg {...S} viewBox="0 0 24 24" {...p}>
+        <path d="M16 9V4l1 0c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1l1 0v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z"
+            fill={filled ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth={filled ? 0 : 1.5} strokeLinejoin="round"/>
+    </svg>
+);

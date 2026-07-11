@@ -1,4 +1,6 @@
+import { useEffect } from 'react';
 import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear } from './icons.jsx';
+import { Z } from '../zLayers.js';
 
 // Right-justified mobile overflow: the toolbar actions as a simple tap list
 // (date nav stays inline in the bar). Each row fires the same handler as its
@@ -16,10 +18,15 @@ function Row({ icon, label, onClick, disabled, active, trailing }) {
 
 export default function OverflowMenu({ refreshing, canRefresh, filterCount, magicActive,
     onRefresh, onMagic, onSlips, onFilters, onHelp, onSettings, onClose }) {
+    useEffect(() => {
+        const onKey = e => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
     return (
         <>
-            <div onClick={onClose} className="fixed inset-0 z-50" />
-            <div className="absolute right-0 top-[46px] w-56 bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 py-1 z-[60] [animation:op-pop_0.16s_ease]">
+            <div onClick={onClose} className={`fixed inset-0 ${Z.popupCatcher}`} />
+            <div className={`absolute right-0 top-[46px] w-56 bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 py-1 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <Row icon={refreshing ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" /> : <IconRefresh />}
                     label={refreshing ? 'Refreshing…' : 'Refresh'} onClick={onRefresh} disabled={!canRefresh} />
                 <Row icon={<IconMagic />} label="Magic sort" onClick={onMagic} active={magicActive} />

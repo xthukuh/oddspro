@@ -1,5 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { IconChevronLeft, IconChevronRight } from './icons.jsx';
+import { Z } from '../zLayers.js';
 
 // Custom month-grid date picker (replaces the native <input type=date>): noon-
 // anchored math dodges the UTC day-shift; out-of-range days are disabled;
@@ -13,6 +14,11 @@ const nextMonth = v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m: v.m + 1
 export default function CalendarPopover({ date, today, min, max, onPick, onClose }) {
     const anchor = date ? new Date(`${date}T12:00:00`) : new Date(`${today}T12:00:00`);
     const [view, setView] = useState({ y: anchor.getFullYear(), m: anchor.getMonth() });
+    useEffect(() => {
+        const onKey = e => { if (e.key === 'Escape') onClose(); };
+        window.addEventListener('keydown', onKey);
+        return () => window.removeEventListener('keydown', onKey);
+    }, [onClose]);
     const first = new Date(view.y, view.m, 1);
     const days = Array.from({ length: 42 }, (_, i) => new Date(view.y, view.m, 1 - first.getDay() + i, 12));
     const title = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -22,8 +28,8 @@ export default function CalendarPopover({ date, today, min, max, onPick, onClose
     };
     return (
         <>
-            <div onClick={onClose} className="fixed inset-0 z-50" />
-            <div className="absolute top-[54px] left-1/2 -translate-x-1/2 w-[300px] bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 p-4 z-[60] [animation:op-pop_0.16s_ease]">
+            <div onClick={onClose} className={`fixed inset-0 ${Z.popupCatcher}`} />
+            <div className={`absolute top-[54px] left-1/2 -translate-x-1/2 w-[300px] bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 p-4 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <div className="flex items-center justify-between mb-3">
                     <div className="text-base font-bold">{title}</div>
                     <div className="flex gap-0.5">

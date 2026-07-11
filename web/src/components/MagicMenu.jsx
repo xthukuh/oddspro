@@ -1,10 +1,11 @@
-import { SheetClose } from './Sheet.jsx';
+import { useState } from 'react';
+import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 
-// Magic-sort sheet body: pick one or more backtest-ranked tip-sorting
-// strategies (GET /api/magic-sort) to reorder the table most-likely-to-win
-// first. Stats shown are BACKTESTS over settled tips, not forecasts - labeled
-// as such. Rendered inside a Sheet (see App.jsx); the toolbar/overflow trigger
-// owns open/close via `showMagic`.
+// Magic-sort sheet: pick one or more backtest-ranked tip-sorting strategies
+// (GET /api/magic-sort) to reorder the table most-likely-to-win first. Stats
+// shown are BACKTESTS over settled tips, not forecasts - labeled as such. Owns
+// its own Sheet (like the other modals) so it can carry the standard pin toggle;
+// the toolbar/overflow trigger owns open/close via `showMagic`.
 
 const _pct = v => (v == null ? '—' : `${Math.round(v * 100)}%`);
 const _roi = v => (v == null ? '—' : `${v >= 0 ? '+' : ''}${Math.round(v * 100)}%`);
@@ -19,13 +20,16 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
     const strategies = data?.strategies ?? [];
     const sample = data?.sample;
     const active = new Set(activeIds ?? []);
+    const [pinned, setPinned] = useState(false);
 
     return (
+        <Sheet onClose={onClose} className="max-w-md" dismissable={!pinned}>
         <div className="flex flex-col max-h-[calc(100dvh-4.5rem)]">
             <div className="flex items-center gap-3 px-6 pt-5 pb-2">
                 <h2 className="text-[22px] font-extrabold tracking-tight">Magic sort</h2>
                 <span className="text-[13px] text-label-2 hidden sm:inline">most-likely-to-win first</span>
                 <div className="flex-1" />
+                <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                 <SheetClose onClose={onClose} />
             </div>
             <p className="px-6 pb-3 text-[13px] text-label-2 leading-relaxed">
@@ -82,5 +86,6 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 )}
             </div>
         </div>
+        </Sheet>
     );
 }

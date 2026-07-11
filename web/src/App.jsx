@@ -18,7 +18,7 @@ import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
 import ViewPills from './components/ViewPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
-import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconMenu, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -671,7 +671,7 @@ export default function App() {
                     </div>
                     <div className="relative sm:hidden">
                         <button onClick={() => setShowOverflow(v => !v)} aria-label="More actions" title="More"
-                            className={showOverflow ? navBtnActive : navBtn}><span className="text-xl leading-none">⋯</span></button>
+                            className={showOverflow ? navBtnActive : navBtn}><IconMenu /></button>
                         {showOverflow && (
                             <OverflowMenu
                                 refreshing={refresh?.running} canRefresh={!!date && !refresh?.running}
@@ -753,10 +753,8 @@ export default function App() {
             })()}
 
             {showMagic && (
-                <Sheet onClose={() => setShowMagic(false)} className="max-w-md">
-                    <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
-                        onToggle={onToggleMagic} onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
-                </Sheet>
+                <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
+                    onToggle={onToggleMagic} onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
             )}
 
             {showFilters && catalog && (

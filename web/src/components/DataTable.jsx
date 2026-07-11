@@ -470,8 +470,13 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // cumulative left offsets so they never overlap.
     let pinLeft = 0;
     const pins = displayColumns.filter(c => pinState[c.key]).map(c => {
-        const p = { ...c, pin: true, left: pinLeft };
-        pinLeft += pinThRefs.current[c.key]?.offsetWidth ?? 0;
+        // Pin the duplicate to the EXACT measured width of its real column and
+        // advance the next pin's offset by the same value, so two adjacent pins
+        // (any order, e.g. Tip before Score) butt together with no gap for the
+        // scrolling content to bleed through.
+        const w = pinThRefs.current[c.key]?.offsetWidth ?? 0;
+        const p = { ...c, pin: true, left: pinLeft, width: w || undefined };
+        pinLeft += w;
         return p;
     });
     const pinned = pins.length ? [...pins, ...displayColumns] : displayColumns;
@@ -482,7 +487,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`flex-1 min-h-0 overflow-auto bg-surface rounded-xl border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
@@ -502,7 +507,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             return (
                                 <th
                                     key={col.pin ? `pin:${col.key}` : col.key}
-                                    style={col.pin ? { left: col.left } : undefined}
+                                    style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
                                     ref={!col.pin && PIN_KEYS.includes(col.key)
                                         ? el => { pinThRefs.current[col.key] = el; }
                                         : undefined}
@@ -531,7 +536,10 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     {sorted.map(row => (
                         <tr
                             key={row.match_id}
-                            className={`group border-b border-hairline ${tint.get(row.api_id) ?? ''} hover:bg-fill`}
+                            // Opaque bg fallback MUST match the pinned cell's fallback below
+                            // (both 'bg-surface') so a tint-less row can't bleed the app
+                            // background through the gap beside the left-pinned columns.
+                            className={`group border-b border-hairline ${tint.get(row.api_id) ?? 'bg-surface'} hover:bg-fill`}
                         >
                             {pinned.map(col => {
                                 const content = col.key === 'magic' ? _magicCell(row, magicMeta)
@@ -546,7 +554,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                     <td
                                         key={col.pin ? `pin:${col.key}` : col.key}
                                         title={wrap ? undefined : cellTitle}
-                                        style={col.pin ? { left: col.left } : undefined}
+                                        style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
                                         className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
                                             ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:bg-fill shadow-[inset_-1px_0_0_var(--separator-2)]`
                                             : ''}`}
