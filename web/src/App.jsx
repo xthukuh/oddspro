@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { cancelRefresh, fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
-import { isDateStale, shouldReloadForJob } from './freshness.js';
+import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
@@ -236,8 +236,6 @@ export default function App() {
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
     const [notice, setNotice] = useState(null); // transient neutral banner
-    const [cancelDismissed, setCancelDismissed] = useState(false); // hide the cancelled banner (F3)
-    const [staleDismissedDate, setStaleDismissedDate] = useState(null); // date the stale nudge was dismissed for (F2)
     // Freshness signal plumbing: last seen data_version (null until the first
     // poll - the baseline observation must not reload), whether the next
     // records load is a silent background one (skip the loading dim), and the
@@ -324,16 +322,6 @@ export default function App() {
     // row gains a `select` boolean (identity = match_id), which also powers the
     // Select column and the Select filter field.
     const stampedData = useMemo(() => stampSelection(result?.data ?? [], selection), [result, selection]);
-    // Newest odds refresh time across the loaded rows - the F2 stale-date gate's
-    // freshness signal (null when nothing is loaded).
-    const freshestAt = useMemo(() => {
-        let max = 0;
-        for (const r of result?.data ?? []) {
-            const t = r.updated_at ? new Date(r.updated_at).getTime() : 0;
-            if (t > max) max = t;
-        }
-        return max || null;
-    }, [result]);
     // Load-order anchor for the synthetic "No" column (R27): each loaded row's
     // 1-based position in the fetched set, rebuilt only when a new fetch lands
     // (result reference) - client-filter edits and selection changes never touch
@@ -544,7 +532,10 @@ export default function App() {
                     if (st.mode === 'manual') {
                         if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
                         setRefreshTick(t => t + 1);
-                        if (st.error) setError(`Refresh failed: ${st.error}`);
+                        // Never surface the raw job error (it can be a ~2 KB SQL
+                        // dump, e.g. a transient deadlock). The full detail lives
+                        // in console.error + logs/auto-refresh.log server-side.
+                        if (st.error) setError('Refresh failed — please try again in a moment.');
                     } else {
                         maybeReload(st);
                     }
@@ -555,23 +546,6 @@ export default function App() {
         }, 2000);
         return () => clearInterval(id);
     }, [refresh?.running, maybeReload]);
-
-    // Cooperatively cancel the running refresh (F3); the fast poll reconciles
-    // the state and, once the job ends cancelled, the resume banner appears.
-    const onCancel = async () => {
-        try {
-            const st = await cancelRefresh();
-            if (st && typeof st === 'object' && 'running' in st) setRefresh(st);
-        } catch (e) {
-            setError(String(e.message ?? e));
-        }
-    };
-    // Resume = just re-run the date (the pipeline is idempotent, so finished
-    // steps are cheap no-ops); hide the cancelled banner while it restarts.
-    const onResume = () => { setCancelDismissed(true); onRefresh(); };
-    // A newly-started run clears any lingering cancelled-banner dismissal so a
-    // fresh cancel shows its banner again.
-    useEffect(() => { if (refresh?.running) setCancelDismissed(false); }, [refresh?.running]);
 
     const onRefresh = async () => {
         try {
@@ -804,15 +778,6 @@ export default function App() {
     const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
     const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
 
-    // F2 stale-date nudge + F3 cancelled-run banner gates (plain render-time
-    // computations - the 60s freshness poll re-renders, so showStale re-evaluates
-    // as the loaded data ages).
-    const dateIsPast = !!date && date < TODAY;
-    const staleAgeMin = freshestAt ? Math.round((Date.now() - freshestAt) / 60000) : null;
-    const showStale = !refresh?.running && staleDismissedDate !== date
-        && isDateStale({ freshestAt, isPast: dateIsPast, isAllDates: !date, now: Date.now(), maxAgeMinutes: 20 });
-    const showCancelled = !refresh?.running && !!refresh?.cancelled && !cancelDismissed;
-
     const navBtn = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-label hover:bg-accent-soft disabled:opacity-40 disabled:hover:bg-transparent';
     const navBtnActive = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-accent bg-accent-soft';
 
@@ -913,37 +878,6 @@ export default function App() {
                         <button onClick={() => setNotice(null)} aria-label="Dismiss notice" title="Dismiss" className="cursor-pointer shrink-0 text-accent/70 hover:text-accent text-lg leading-none">&times;</button>
                     </div>
                 )}
-                {/* F3: running refresh with a Cancel; then a cancelled-run banner
-                    offering Resume; F2: a discreet stale-date nudge. Mutually
-                    exclusive by precedence (running > cancelled > stale). */}
-                {refresh?.running ? (
-                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-accent/40 bg-accent-soft text-accent text-sm flex items-center gap-2" role="status">
-                        <IconSpinner className="[animation:op-spin_0.8s_linear_infinite] shrink-0" />
-                        <span className="grow">Refreshing {refresh.date}{refresh.step ? ` — ${refresh.step}` : ''}…</span>
-                        <button onClick={onCancel} title="Stop at the next step (finished steps are kept — Resume re-runs the rest)"
-                            className="cursor-pointer shrink-0 px-3 h-7 rounded-full border border-accent/50 text-accent text-xs font-semibold hover:bg-accent hover:text-white">
-                            Cancel
-                        </button>
-                    </div>
-                ) : showCancelled ? (
-                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-hot/40 bg-hot/10 text-hot text-sm flex items-center gap-2" role="status">
-                        <span className="grow">Refresh cancelled{refresh.last_step ? ` at "${refresh.last_step}"` : ''}. Finished steps were kept.</span>
-                        <button onClick={onResume} title="Re-run the refresh (finished steps are cheap no-ops)"
-                            className="cursor-pointer shrink-0 px-3 h-7 rounded-full border border-hot/50 text-hot text-xs font-semibold hover:bg-hot hover:text-white">
-                            Resume
-                        </button>
-                        <button onClick={() => setCancelDismissed(true)} aria-label="Dismiss" title="Dismiss" className="cursor-pointer shrink-0 text-hot/70 hover:text-hot text-lg leading-none">&times;</button>
-                    </div>
-                ) : showStale ? (
-                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-separator bg-fill text-label-2 text-sm flex items-center gap-2" role="status">
-                        <span className="grow">This date's data is about {staleAgeMin}m old — refresh for the latest odds &amp; results.</span>
-                        <button onClick={onRefresh} title="Refresh fixtures, results & odds for this date"
-                            className="cursor-pointer shrink-0 px-3 h-7 rounded-full border border-accent/50 text-accent text-xs font-semibold hover:bg-accent hover:text-white">
-                            Refresh
-                        </button>
-                        <button onClick={() => setStaleDismissedDate(date)} aria-label="Dismiss" title="Dismiss" className="cursor-pointer shrink-0 text-label-3 hover:text-label text-lg leading-none">&times;</button>
-                    </div>
-                ) : null}
                 <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
                 <ViewPills
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}

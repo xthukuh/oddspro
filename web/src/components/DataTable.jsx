@@ -294,9 +294,9 @@ function _cell(row, col, linkProviders, openTip) {
             );
         }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
-        // The pinned (sticky) duplicate drops the % to stay compact; the real
-        // Tip column keeps it. Full breakdown is a tap away either way.
-        const compact = col.pin;
+        // The pinned (sticky) duplicate renders IDENTICALLY to the real Tip
+        // column - it's sized to that column's measured width, so full parity
+        // (%, runners-up, ticks) fills the space it was already given.
         const vetoed = row.tip_ai_verdict === 'veto';
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
@@ -309,8 +309,8 @@ function _cell(row, col, linkProviders, openTip) {
         const missed = row.tip_outcome === 'miss';
         // Top-3 picks stacked (chosen + up to two runners-up). The chosen is the
         // sort value, so it stays bold/full-size; runners-up are smaller & muted,
-        // each with its own settled ✓/✗ (graded from the score). The pinned
-        // duplicate (compact) shows the chosen line only, to stay narrow.
+        // each with its own settled ✓/✗ (graded from the score). Rendered the
+        // same in the real column and its left-pinned duplicate.
         const ups = Array.isArray(row.tip_breakdown?.runners_up)
             ? row.tip_breakdown.runners_up.slice(0, 2) : [];
         return (
@@ -322,10 +322,10 @@ function _cell(row, col, linkProviders, openTip) {
                 <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
                     {row.hot ? '🔥 ' : ''}
                     <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                    {pct && !compact && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
+                    {pct && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
                     {_tick(row.tip_outcome)}
                 </div>
-                {!compact && ups.map((r, i) => {
+                {ups.map((r, i) => {
                     const rpct = r.confidence != null ? `${Math.round(r.confidence * 100)}%` : null;
                     return (
                         <div key={i} className="whitespace-nowrap text-[11px] text-label-3">

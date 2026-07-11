@@ -4,6 +4,7 @@ import { config } from './config.js';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
+import { withRetry } from './db/retry-rules.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -176,19 +177,24 @@ async function _saveFixtureItems(items) {
         for (const t of tt) teams.set(t.id, t);
         fixtures.push(fixture);
     }
+    // These idempotent upserts can deadlock against a concurrent process's
+    // warehouse write (a 2nd serve/CLI/cron) on the shared leagues/teams/fixtures
+    // rows - the observed manual-refresh "Insert SQL error". Retry transiently
+    // (see retry-rules.js) instead of failing the whole refresh.
     if (leagues.size) {
-        await db('leagues').insert([...leagues.values()]).onConflict('id').merge(['name', 'type', 'country', 'logo']);
+        await withRetry(() => db('leagues').insert([...leagues.values()]).onConflict('id').merge(['name', 'type', 'country', 'logo']));
     }
     if (teams.size) {
-        await db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']);
+        await withRetry(() => db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']));
     }
     // merge excludes *_fetched_at flags - they are owned by the stats action
     for (let i = 0; i < fixtures.length; i += 200) {
-        await db('fixtures').insert(fixtures.slice(i, i + 200)).onConflict('id').merge([
+        const chunk = fixtures.slice(i, i + 200);
+        await withRetry(() => db('fixtures').insert(chunk).onConflict('id').merge([
             'league_id', 'season', 'round', 'kickoff', 'home_team_id', 'away_team_id',
             'status', 'elapsed', 'goals_home', 'goals_away', 'ht_home', 'ht_away', 'ft_home', 'ft_away',
             'et_home', 'et_away', 'pen_home', 'pen_away', 'venue', 'referee', 'metadata',
-        ]);
+        ]));
     }
     return { leagues: leagues.size, teams: teams.size, fixtures: fixtures.length };
 }
