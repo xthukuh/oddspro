@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
     distinctValues, toFilterCsv, applyOneOfEach, conditionCount,
+    stampSelection, applySelectionHide,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -336,6 +337,22 @@ test('applyOneOfEach ranks unknown providers last and never merges id-less rows'
     assert.equal(out.filter(r => r.api_id === 1).length, 1);
     assert.equal(out.find(r => r.api_id === 1).provider, 'betpawa');
     assert.equal(out.filter(r => r.api_id == null).length, 2);
+});
+
+// --- row selection: stamp by identity + hide cut --------------------------
+test('stampSelection sets select by match_id and never mutates the source', () => {
+    const rows = [{ match_id: 1 }, { match_id: 2 }, { match_id: 3 }];
+    const out = stampSelection(rows, new Set([1, 3]));
+    assert.deepEqual(out.map(r => r.select), [true, false, true]);
+    assert.equal('select' in rows[0], false); // source untouched
+    // accepts a plain array of ids too
+    assert.deepEqual(stampSelection(rows, [2]).map(r => r.select), [false, true, false]);
+});
+
+test('applySelectionHide drops checked rows only when hide is on', () => {
+    const rows = stampSelection([{ match_id: 1 }, { match_id: 2 }], new Set([1]));
+    assert.deepEqual(applySelectionHide(rows, true).map(r => r.match_id), [2]);
+    assert.equal(applySelectionHide(rows, false), rows); // no-op passthrough
 });
 
 test('applyOneOfEach is a no-op for 0/1 rows', () => {

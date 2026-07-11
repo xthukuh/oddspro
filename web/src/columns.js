@@ -15,6 +15,8 @@ const EXTRA_BASE_LABELS = {
     league: 'League',
     home_team: 'Home Team',
     away_team: 'Away Team',
+    // Client-only checkbox column: filterable as a boolean ($row['select']).
+    select: 'Select',
     hot: 'Over 2.5 pick',
     hot_score: 'Over 2.5 score',
     // Filterable data fields that are no longer their own TABLE column (id folds

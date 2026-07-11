@@ -46,6 +46,12 @@ const _str = v => (v == null || v === '' ? null : String(v).toLowerCase());
 // Per-column extractors; market and fs: columns fall through to the group
 // handling in sortValue.
 const VALUES = {
+    // Synthetic "No" column: its load-order anchor position, stamped on the row
+    // by DataTable (null when unstamped -> sorts last, like any missing value).
+    no: r => _num(r._no),
+    // Synthetic "Select" column: the row's checkbox state (stamped boolean);
+    // sorts checked-first under descending. Non-boolean -> null (sorts last).
+    select: r => (r.select == null ? null : (r.select ? 1 : 0)),
     api_id: r => _num(r.api_id),
     start_time: r => _date(r.start_time),
     fixture: r => _str(r.fixture),

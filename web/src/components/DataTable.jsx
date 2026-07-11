@@ -33,6 +33,7 @@ const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
 const HEADER_META = {
+    no: { info: 'Row number in the current order. Sort by it, or freeze it with "Pin position" in Settings so re-sorting doesn\'t renumber.' },
     start_time: { info: 'Kickoff time (with the fixture id) - hover a cell for the full date & match details' },
     fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
     provider: { info: 'Bookmaker' },
@@ -262,13 +263,14 @@ function _tick(outcome) {
 function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
     if (key === 'start_time') {
-        // Time only + the fixture id demoted to a small greyed prefix (the ID
-        // column was removed; full id/fixture context lives in the tooltip).
+        // Two lines (R30): the fixture id as a tiny greyed label on top, the
+        // kickoff time below — uses the taller row the multi-line Tip introduced
+        // and saves horizontal width. Full id/date context lives in the tooltip.
         return (
-            <span className="whitespace-nowrap">
-                <span className="text-label-3 text-[10px] tabular-nums mr-1">{row.api_id}</span>
-                {_hm(row.start_time)}
-            </span>
+            <div className="leading-tight whitespace-nowrap">
+                <div className="text-label-3 text-[10px] tabular-nums">{row.api_id}</div>
+                <div className="tabular-nums">{_hm(row.start_time)}</div>
+            </div>
         );
     }
     if (key === 'tip') {
@@ -408,8 +410,14 @@ function _magicCell(row, meta) {
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey }) {
+export default function DataTable({
+    catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey,
+    visibleBase = null, selection, onToggleSelect, onToggleAll, noPin = false,
+}) {
     const links = new Set(linkProviders ?? []);
+    // Base/synthetic column visibility (R27b/R28a): null = all shown.
+    const baseVisible = key => !visibleBase || visibleBase.has(key);
+    const showSelect = baseVisible('select');
 
     // Tip justification popover, anchored at the click point (one at a time)
     const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
@@ -422,8 +430,15 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // empty market/stat columns (base columns always show).
     const columns = useMemo(() => {
         const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
-        const cols = applyOrder([
+        // The synthetic "No" row-number column joins the base set (orderable +
+        // sortable); "Select" is handled separately (always-left pin). Base
+        // columns are now individually hideable via `visibleBase`.
+        const baseCols = [
+            { key: 'no', label: 'No', group: 'base' },
             ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
+        ].filter(c => baseVisible(c.key));
+        const cols = applyOrder([
+            ...baseCols,
             ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
             ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
         ], columnOrder);
@@ -436,15 +451,38 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
             if (col.key.startsWith('fs:')) return rows.some(r => r.stats?.[col.key] != null);
             return rows.some(r => r[col.key] != null);
         });
-    }, [catalog, rows, marketKeys, statKeys, columnOrder]);
+    }, [catalog, rows, marketKeys, statKeys, columnOrder, visibleBase]);
+
+    // "No" load-order anchor (R27): each row's position in the loaded set,
+    // captured once per scrollKey (date / server-filter navigation). Client-side
+    // filtering doesn't change scrollKey, so the anchor stays stable — sorting by
+    // No restores the original load order, and "pin position" freezes the shown
+    // number to it. Recaptured lazily once rows for a new key arrive.
+    const anchorRef = useRef({ key: null, map: new Map() });
+    if (rows.length && (anchorRef.current.key !== scrollKey || anchorRef.current.map.size === 0)) {
+        const m = new Map();
+        let i = 0;
+        for (const r of rows) if (!m.has(r.match_id)) m.set(r.match_id, ++i);
+        anchorRef.current = { key: scrollKey, map: m };
+    }
+    const noAnchor = anchorRef.current.map;
 
     // One ordering for the whole unified chain (column sorts + magic
     // strategies interleaved by priority); tipless/vetoed rows sink on magic
-    // entries, nulls sink on column entries.
-    const sorted = useMemo(
-        () => orderRows(rows, chain, columns, cal),
-        [rows, chain, columns, cal],
-    );
+    // entries, nulls sink on column entries. Stamp `_no` (anchor position) first
+    // so a No-column sort orders by load order.
+    const sorted = useMemo(() => {
+        for (const r of rows) r._no = noAnchor.get(r.match_id) ?? null;
+        return orderRows(rows, chain, columns, cal);
+    }, [rows, chain, columns, cal, noAnchor]);
+
+    // Displayed row number per row: live position in the sorted order, or the
+    // frozen anchor when "pin position" is on (so re-sorting doesn't renumber).
+    const noByRow = useMemo(() => {
+        const m = new Map();
+        sorted.forEach((r, i) => m.set(r.match_id, noPin ? (noAnchor.get(r.match_id) ?? i + 1) : i + 1));
+        return m;
+    }, [sorted, noPin, noAnchor]);
 
     // The magic column tracks the highest-priority magic entry in the chain
     // (if any). Score from that strategy; rank per unique fixture in the FINAL
@@ -536,9 +574,14 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
             return changed ? next : prev;
         });
     };
+    // The Select column (R28) is a permanent left-pinned column (fixed width,
+    // no scrolling duplicate) sitting at the very left edge; the Score/Tip pins
+    // stack to its right.
+    const SELECT_W = 40;
+    const selectCol = showSelect ? { key: 'select', group: 'select', pin: true, left: 0, width: SELECT_W } : null;
     // Pins keep the columns' own (drag-order) relative order and stack with
     // cumulative left offsets so they never overlap.
-    let pinLeft = 0;
+    let pinLeft = selectCol ? SELECT_W : 0;
     const pins = displayColumns.filter(c => pinState[c.key]).map(c => {
         // Pin the duplicate to the EXACT measured width of its real column and
         // advance the next pin's offset by the same value, so two adjacent pins
@@ -549,7 +592,12 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
         pinLeft += w;
         return p;
     });
-    const pinned = pins.length ? [...pins, ...displayColumns] : displayColumns;
+    const pinned = [...(selectCol ? [selectCol] : []), ...pins, ...displayColumns];
+
+    // Check-all state over the currently displayed rows (R28).
+    const selCount = sorted.reduce((n, r) => n + (r.select ? 1 : 0), 0);
+    const allSelected = sorted.length > 0 && selCount === sorted.length;
+    const someSelected = selCount > 0 && !allSelected;
 
     return (
         <>
@@ -574,6 +622,8 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             const sticky = col.pin
                                 ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_var(--separator-2)]'
                                 : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_var(--separator-2)]';
+                            const isSelect = col.group === 'select';
+                            const noSort = col.key === 'magic' || isSelect;
                             return (
                                 <th
                                     key={col.pin ? `pin:${col.key}` : col.key}
@@ -581,21 +631,36 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                     ref={!col.pin && PIN_KEYS.includes(col.key)
                                         ? el => { pinThRefs.current[col.key] = el; }
                                         : undefined}
-                                    onClick={col.key === 'magic' ? undefined : e => onSort(col.key, e.shiftKey)}
-                                    className={`${sticky} bg-surface-2 px-2.5 py-2 font-semibold ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' ? 'text-center' : ''}`}
+                                    onClick={noSort ? undefined : e => onSort(col.key, e.shiftKey)}
+                                    className={`${sticky} bg-surface-2 px-2.5 py-2 font-semibold ${noSort ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' || isSelect ? 'text-center' : ''}`}
                                     title={col.key === 'magic'
                                         ? `Magic sort${magicLabels.length > 1 ? `s (${magicLabels.length})` : ''}: ${magicLabels.join(', ')} - #rank · strategy score`
-                                        : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
+                                        : isSelect
+                                            ? `Select / deselect all ${sorted.length} shown row${sorted.length === 1 ? '' : 's'}`
+                                            : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
                                 >
-                                    {meta?.short ?? col.label}
-                                    {s && (
-                                        <span className="ml-1 text-accent">
-                                            {s.dir === 'asc' ? '▲' : '▼'}
-                                            {chain.length > 1 && <sup>{s.i + 1}</sup>}
-                                        </span>
-                                    )}
-                                    {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
-                                        <sup className="ml-0.5 text-accent">{magicPos + 1}</sup>
+                                    {isSelect ? (
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Select all"
+                                            checked={allSelected}
+                                            ref={el => { if (el) el.indeterminate = someSelected; }}
+                                            onChange={() => onToggleAll?.(sorted.map(r => r.match_id), !allSelected)}
+                                            className="accent-accent h-4 w-4 align-middle cursor-pointer"
+                                        />
+                                    ) : (
+                                        <>
+                                            {meta?.short ?? col.label}
+                                            {s && (
+                                                <span className="ml-1 text-accent">
+                                                    {s.dir === 'asc' ? '▲' : '▼'}
+                                                    {chain.length > 1 && <sup>{s.i + 1}</sup>}
+                                                </span>
+                                            )}
+                                            {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
+                                                <sup className="ml-0.5 text-accent">{magicPos + 1}</sup>
+                                            )}
+                                        </>
                                     )}
                                 </th>
                             );
@@ -612,10 +677,21 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             className={`group border-b border-hairline ${tint.get(row.api_id) ?? 'bg-surface'} hover:bg-fill`}
                         >
                             {pinned.map(col => {
-                                const content = col.key === 'magic' ? _magicCell(row, magicMeta)
+                                const isSelect = col.group === 'select';
+                                const content = isSelect ? (
+                                    <input
+                                        type="checkbox"
+                                        aria-label="Select row"
+                                        checked={!!row.select}
+                                        onChange={() => onToggleSelect?.(row.match_id)}
+                                        className="accent-accent h-4 w-4 cursor-pointer"
+                                    />
+                                ) : col.key === 'no' ? (
+                                    <span className="text-label-3 tabular-nums">{noByRow.get(row.match_id) ?? ''}</span>
+                                ) : col.key === 'magic' ? _magicCell(row, magicMeta)
                                     : col.group === 'market' ? _marketCell(row, col.key)
                                     : _cell(row, col, links, openTip);
-                                const cellTitle = _cellTitle(row, col);
+                                const cellTitle = isSelect ? undefined : _cellTitle(row, col);
                                 // Tip & fixture own their tap actions (popover / link) and
                                 // keep their native titles; every other cell routes its
                                 // hidden-content title through the touch-friendly Tooltip.
@@ -625,7 +701,7 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                         key={col.pin ? `pin:${col.key}` : col.key}
                                         title={wrap ? undefined : cellTitle}
                                         style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
-                                        className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
+                                        className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
                                             ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:bg-fill shadow-[inset_-1px_0_0_var(--separator-2)]`
                                             : ''}`}
                                     >

@@ -3,7 +3,7 @@ import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRe
 import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
@@ -54,6 +54,22 @@ const LS_MAGIC = 'oddspro.magic.strategy';
 // list (index 0 = highest priority). Entries are { type:'column', key, dir }
 // or { type:'magic', id }.
 const LS_SORT = 'oddspro.sort';
+// Visible base/synthetic columns (R27b/R28a; null = all shown). "Pin position"
+// freezes the No column's numbers. Row selection persists PER DISPLAY DATE
+// (keyed by match_id) under the `.d.` prefix so "Clear all selections" can wipe
+// every date without touching the hide toggle.
+const LS_COLS_BASE = 'oddspro.cols.base';
+const LS_NO_PIN = 'oddspro.cols.noPin';
+const LS_SELECT_PREFIX = 'oddspro.select.d.';
+const LS_SELECT_HIDE = 'oddspro.select.hide';
+
+// The base + synthetic columns a user can show/hide (Select omitted from sort).
+const BASE_COL_OPTIONS = [
+    { key: 'select', label: 'Select' },
+    { key: 'no', label: 'No' },
+    ...BASE_COLUMNS,
+];
+const _selectKey = date => LS_SELECT_PREFIX + (date || 'all');
 
 function _load(key) {
     try {
@@ -168,10 +184,17 @@ export default function App() {
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
     const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
     const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
+    // Base/synthetic column visibility (null = all shown), No pin, and the
+    // "Hide selection" cut. Row selection (per display date) is loaded below.
+    const [visibleBaseKeys, setVisibleBaseKeys] = useState(() => _load(LS_COLS_BASE));
+    const [noPin, setNoPin] = useState(() => localStorage.getItem(LS_NO_PIN) === '1');
+    const [hideSelected, setHideSelected] = useState(() => localStorage.getItem(LS_SELECT_HIDE) === '1');
     // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
     // applied the saved value pre-paint; this just mirrors it into React state.
     const [theme, setThemeState] = useState(getTheme);
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
+    // Row selection for the loaded date (Set<match_id>); reloaded on date change.
+    const [selection, setSelection] = useState(() => new Set(_load(_selectKey(_dateFromUrl() ?? _today())) ?? []));
     const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
     const [magicError, setMagicError] = useState(null);
@@ -264,21 +287,29 @@ export default function App() {
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
+    // Selection-stamped + hide-cut data: the single upstream source every record
+    // view derives from, so "Hide selection" removes checked rows from the table,
+    // the filter option lists, the day calcs AND the betslip pool at once. Each
+    // row gains a `select` boolean (identity = match_id), which also powers the
+    // Select column and the Select filter field.
+    const stampedData = useMemo(() => stampSelection(result?.data ?? [], selection), [result, selection]);
+    const visibleData = useMemo(() => applySelectionHide(stampedData, hideSelected), [stampedData, hideSelected]);
+    const visibleBaseSet = useMemo(() => (visibleBaseKeys ? new Set(visibleBaseKeys) : null), [visibleBaseKeys]);
     // Market/stat keys present in the loaded day - drives date-dynamic option
     // lists in the settings selectors and the filter builder (absent columns
     // are omitted so the controls honestly reflect the day). Recomputes on
     // date/refresh via `result`.
     const available = useMemo(
-        () => availableColumnKeys(result?.data ?? [], catalog),
-        [result, catalog],
+        () => availableColumnKeys(visibleData, catalog),
+        [visibleData, catalog],
     );
     // Safe picks are day-level over the whole loaded selection (result.data),
     // NOT the filtered rows - other toggles/filters must not change who wins
     // the per-day cap, and the footer count stays honest. One representative
     // row per fixture; the table filters by api_id membership.
     const safePicks = useMemo(
-        () => safeSelection(result?.data ?? [], cal, effectiveSafe),
-        [result, cal, effectiveSafe],
+        () => safeSelection(visibleData, cal, effectiveSafe),
+        [visibleData, cal, effectiveSafe],
     );
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
@@ -302,7 +333,7 @@ export default function App() {
     // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
     const rows = useMemo(() => {
         let out = applyOutcomeToggles(
-            applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
+            applyClientFilters(visibleData, clientFilters, filterColumns),
             { hideHits, hideMiss, noMiss },
         );
         if (safeOnly) {
@@ -313,11 +344,11 @@ export default function App() {
         // enabled provider); loaded rows are already the enabled providers.
         if (oneEach) out = applyOneOfEach(out, orderedProviders);
         return out;
-    }, [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks, oneEach, orderedProviders]);
+    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks, oneEach, orderedProviders]);
     // Day-level hit-rate scoreboard: computed over the whole loaded selection
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
-    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
+    const dayRates = useMemo(() => _hitRates(visibleData), [visibleData]);
     // Enabled providers in priority order (null persisted keys = all enabled).
     const selectedProviders = useMemo(() => {
         if (!providerKeys) return orderedProviders;
@@ -383,6 +414,12 @@ export default function App() {
         window.addEventListener('popstate', onPop);
         return () => window.removeEventListener('popstate', onPop);
     }, []);
+
+    // Load the persisted row selection for the newly-shown date (selections are
+    // per-date, keyed by match_id, so they survive filtering AND reload).
+    useEffect(() => {
+        setSelection(new Set(_load(_selectKey(date)) ?? []));
+    }, [date]);
 
     // Freshness gate: reload (silently) when the server's data_version moved
     // AND the successful run's scope covers the loaded date. The FIRST
@@ -600,6 +637,43 @@ export default function App() {
         setSafeOverrides({});
         localStorage.removeItem(LS_SAFE_OVERRIDES);
     };
+    // Row selection (persist per current date).
+    const saveSelection = next => {
+        setSelection(next);
+        const key = _selectKey(date);
+        if (next.size) localStorage.setItem(key, JSON.stringify([...next]));
+        else localStorage.removeItem(key);
+    };
+    const toggleSelect = id => {
+        const next = new Set(selection);
+        next.has(id) ? next.delete(id) : next.add(id);
+        saveSelection(next);
+    };
+    const toggleAllSelect = (ids, checked) => {
+        const next = new Set(selection);
+        for (const id of ids) checked ? next.add(id) : next.delete(id);
+        saveSelection(next);
+    };
+    // Wipe every date's persisted selection (the per-date `.d.` keys only).
+    const clearAllSelections = () => {
+        for (const k of Object.keys(localStorage)) if (k.startsWith(LS_SELECT_PREFIX)) localStorage.removeItem(k);
+        setSelection(new Set());
+    };
+    // Base/synthetic column visibility. Hiding the Select column clears the
+    // current date's selection (R28a).
+    const saveVisibleBase = keys => {
+        setVisibleBaseKeys(keys);
+        localStorage.setItem(LS_COLS_BASE, JSON.stringify(keys));
+        if (!keys.includes('select')) saveSelection(new Set());
+    };
+    const saveNoPin = value => {
+        setNoPin(value);
+        localStorage.setItem(LS_NO_PIN, value ? '1' : '0');
+    };
+    const saveHideSelected = value => {
+        setHideSelected(value);
+        localStorage.setItem(LS_SELECT_HIDE, value ? '1' : '0');
+    };
 
     const TODAY = _today();
     const DAY_MS = 86400000;
@@ -722,6 +796,11 @@ export default function App() {
                     onSort={onSort}
                     loading={loading}
                     linkProviders={linkProviders}
+                    visibleBase={visibleBaseSet}
+                    selection={selection}
+                    onToggleSelect={toggleSelect}
+                    onToggleAll={toggleAllSelect}
+                    noPin={noPin}
                     scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
             </main>
@@ -764,7 +843,7 @@ export default function App() {
                     <FilterBuilder
                         catalog={catalog}
                         available={available}
-                        rows={result?.data ?? []}
+                        rows={visibleData}
                         filterColumns={filterColumns}
                         filters={filters}
                         onApply={setFilters}
@@ -819,6 +898,15 @@ export default function App() {
                     onMarkets={saveMarkets}
                     onStats={saveStats}
                     onOrder={saveOrder}
+                    baseColOptions={BASE_COL_OPTIONS}
+                    visibleBaseKeys={visibleBaseKeys}
+                    onVisibleBase={saveVisibleBase}
+                    noPin={noPin}
+                    onNoPin={saveNoPin}
+                    hideSelected={hideSelected}
+                    onHideSelected={saveHideSelected}
+                    selectionCount={selection.size}
+                    onClearSelections={clearAllSelections}
                     onToggleProvider={toggleProvider}
                     onMoveProvider={moveProvider}
                     onLinkProviders={saveLinkProviders}

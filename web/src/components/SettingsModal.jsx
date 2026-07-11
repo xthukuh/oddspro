@@ -71,12 +71,18 @@ export default function SettingsModal({
     hideHits, hideMiss, noMiss, oneEach, safeOnly, safeMaxPerDay = 3,
     safe, safeDefaults, safeOverridden, onSafeSet, onSafeReset,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
+    baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
+    hideSelected, onHideSelected, selectionCount = 0, onClearSelections,
     onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
+    // The reorder list carries the shown, orderable columns: visible base + the
+    // No row-number column + selected markets/stats (Select is always leftmost,
+    // so it's excluded from ordering).
+    const baseShown = key => !visibleBaseKeys || visibleBaseKeys.includes(key);
     const orderedColumns = applyOrder([
-        ...BASE_COLUMNS,
+        ...[{ key: 'no', label: 'No' }, ...BASE_COLUMNS].filter(c => baseShown(c.key)),
         ...marketKeys.map(key => ({ key, label: key })),
         ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key })),
     ], columnOrder);
@@ -124,6 +130,13 @@ export default function SettingsModal({
                         <h3 className={heading}>Columns &amp; sorting</h3>
                         <div className="flex flex-wrap gap-2">
                             <MultiSelect
+                                label="Table columns"
+                                options={baseColOptions}
+                                selected={visibleBaseKeys ?? baseColOptions.map(o => o.key)}
+                                onChange={onVisibleBase}
+                                title="Show or hide the fixed columns (Start, Fixture, Score…) plus the Select checkbox and No row-number columns"
+                            />
+                            <MultiSelect
                                 label="Odds markets"
                                 options={catalog.markets}
                                 availableKeys={availableMarkets}
@@ -168,6 +181,10 @@ export default function SettingsModal({
                             Only columns with data for the selected day are offered; your picks are kept for
                             days that do have them. Sort priority also lives on the table's pills.
                         </p>
+                        <Toggle checked={noPin} onChange={onNoPin}
+                            title="Freeze the No column's numbers to each row's load position, so sorting or filtering doesn't renumber them.">
+                            Pin position numbers <span className="text-label-3">— freeze the No column so re-sorting doesn't renumber</span>
+                        </Toggle>
                     </section>
 
                     <section className="mb-6">
@@ -210,6 +227,25 @@ export default function SettingsModal({
                             title="Show one row per game, taken from your highest-priority enabled provider. Games only another provider carries still appear, so providers complement each other.">
                             One of each <span className="text-label-3">— one row per game from your top provider; other providers fill any gaps</span>
                         </Toggle>
+
+                        <div className="mt-3 rounded-xl border border-separator-2 p-3">
+                            <div className="flex items-center gap-3 mb-1">
+                                <h4 className="text-sm text-label-2">With selected <span className="text-label-3 tabular-nums">({selectionCount})</span></h4>
+                                <div className="grow" />
+                                <button
+                                    onClick={onClearSelections}
+                                    disabled={!selectionCount}
+                                    title="Clear the checkbox selection on every date"
+                                    className="text-xs text-accent hover:opacity-70 disabled:opacity-40 disabled:hover:opacity-40"
+                                >
+                                    Clear all selections
+                                </button>
+                            </div>
+                            <Toggle checked={hideSelected} onChange={onHideSelected}
+                                title="Hide the checked rows from the table, filters, day stats and the betslip pool. Existing slips keep their legs.">
+                                Hide selection <span className="text-label-3">— remove checked rows from every view (built slips keep their legs)</span>
+                            </Toggle>
+                        </div>
 
                         <h4 className="text-sm text-label-2 mt-3 mb-1">Settled tips</h4>
                         <div className="flex flex-col">

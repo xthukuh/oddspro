@@ -130,6 +130,22 @@ export function applyOutcomeToggles(rows, { hideHits = false, hideMiss = false, 
     });
 }
 
+// Row selection (the "Select" checkbox column): stamp each row's `select`
+// boolean from the persisted id set (keyed by stable match_id), so the Select
+// column, the Select filter field ($row['select']) and the hide-cut all read
+// one field. Returns new row objects (never mutates the fetched data).
+export function stampSelection(rows, selectedIds) {
+    const ids = selectedIds instanceof Set ? selectedIds : new Set(selectedIds ?? []);
+    return (rows ?? []).map(r => ({ ...r, select: ids.has(r.match_id) }));
+}
+
+// "With Selected → Hide selection": drop checked rows from every record view
+// (table, filter options, day calcs, betslip pool) when the toggle is on. Keyed
+// off the stamped `select` flag, so it's identity-based and survives filtering.
+export function applySelectionHide(rows, hide) {
+    return hide ? (rows ?? []).filter(r => !r.select) : rows;
+}
+
 // One-of-each view: collapse to a single row per canonical fixture (api_id),
 // keeping the row from the highest-priority provider present (`priority` is the
 // ordered provider list, index 0 = top). Providers absent from the list rank

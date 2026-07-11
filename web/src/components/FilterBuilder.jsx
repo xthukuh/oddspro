@@ -38,6 +38,7 @@ const PICKABLE = new Set(['league', 'status', 'provider', 'season', 'round']);
 
 // Full op list for a field type (basic set; regex ops appended in advanced).
 function opsForType(type) {
+    if (type === 'bool') return ['eq', 'ne'];
     if (type === 'date') return [...RANGE_OPS];
     if (type === 'enum') return ['eq', 'ne', 'in', 'not-in', 'like', 'not-contains'];
     if (type === 'number') return [...CMP_OPS, 'in', 'not-in'];
@@ -152,6 +153,15 @@ function isAdvanced(group) {
 function ValueControl({ cond, ctx, onChange, apply }) {
     const { op, key } = cond;
     const type = ctx.typeOf(key);
+    if (type === 'bool') {
+        const checked = cond.value === '1' || cond.value === 'true';
+        return (
+            <label className="flex items-center gap-2 h-10 text-sm cursor-pointer">
+                <input type="checkbox" checked={checked} onChange={e => onChange({ value: e.target.checked ? '1' : '0' })} className="accent-accent h-4 w-4" />
+                <span className="text-label-2">{checked ? 'selected' : 'not selected'}</span>
+            </label>
+        );
+    }
     if (REGEX_OPS.has(op)) {
         const ok = !cond.value || isValidRegex(cond.value);
         return (
@@ -273,7 +283,9 @@ function ConditionRow({ cond, ctx, advanced, onChange, onRemove, apply }) {
     const setField = key => {
         const t = ctx.typeOf(key);
         const next = opsForType(t);
-        onChange({ key, op: next.includes(op) ? op : next[0] });
+        const patch = { key, op: next.includes(op) ? op : next[0] };
+        if (t === 'bool' && !cond.value) patch.value = '1'; // default: selected
+        onChange(patch);
     };
     const toggleMode = () => onChange(cond.mode === 'col'
         ? { mode: 'value' }
@@ -472,7 +484,7 @@ export default function FilterBuilder({ catalog, available, rows = [], filterCol
         const field = key => ({ key, label: labelFor(key, catalog) });
         const baseOrStat = k => baseFilterable.has(k) || (statKeys.has(k) && statOk(k));
         return [
-            ['Match info', MATCH_KEYS.filter(baseOrStat).map(field)],
+            ['Match info', [field('select'), ...MATCH_KEYS.filter(baseOrStat).map(field)]],
             ['Betting', BETTING_KEYS.filter(k => baseFilterable.has(k) || k === 'score').map(field)],
             ['Odds markets', catalog.markets.filter(c => marketOk(c.key)).map(c => field(c.key))],
             ['Team & H2H stats', TEAM_STAT_KEYS.filter(k => statKeys.has(k) && statOk(k)).map(field)],
@@ -482,9 +494,10 @@ export default function FilterBuilder({ catalog, available, rows = [], filterCol
 
     const defaultKey = groups[0]?.[1]?.[0]?.key ?? '1';
     const marketKeys = useMemo(() => new Set(catalog.markets.map(c => c.key)), [catalog]);
-    const typeOf = (key) => (DATE_KEYS.has(key) ? 'date'
-        : (NUMBER_KEYS.has(key) || marketKeys.has(key) || key.startsWith('fs:')) ? 'number'
-            : PICKABLE.has(key) ? 'enum' : 'text');
+    const typeOf = (key) => (key === 'select' ? 'bool'
+        : DATE_KEYS.has(key) ? 'date'
+            : (NUMBER_KEYS.has(key) || marketKeys.has(key) || key.startsWith('fs:')) ? 'number'
+                : PICKABLE.has(key) ? 'enum' : 'text');
     const pickerValues = (key) => (PICKABLE.has(key) ? distinctValues(rows, { key, group: 'base' }) : []);
 
     // Seed one starter condition when opened with no filters (empty group),
