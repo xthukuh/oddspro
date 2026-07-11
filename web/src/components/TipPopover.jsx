@@ -2,13 +2,17 @@ import { useEffect } from 'react';
 import { safeQualifies } from '../../../src/db/magic-rules.js';
 import { Z } from '../zLayers.js';
 
-// Tip justification popover: the persisted bestTip breakdown rendered as a
-// deterministic reasoning ledger - blend components with their effective
-// (renormalized) weights, evidence sample sizes, runner-up candidates - plus
-// the over-2.5 gate audit and any AI verdicts. Everything is phrased for a
-// layman reader; the raw numbers stay visible beside the plain wording.
-// Opened by clicking a tip cell; closes on Esc or any press outside (same
-// idiom as MultiSelect).
+// Tip popover: a lean bet-decision card - the pick, its odds, a confidence
+// rating, the 🛡 Safe / 🔥 high-scoring flags, close alternatives and the
+// settled result. Opened by clicking a tip cell; closes on Esc or any press
+// outside (same idiom as MultiSelect).
+//
+// SECRET SAUCE: how the pick is DERIVED (the blend components + weights, the
+// evidence samples, the over-2.5 gate audit and the AI's own findings) is our
+// edge and stays hidden. That detailed reasoning is preserved below, gated
+// behind SHOW_INTERNALS - flip it (or thread a `premium` prop) when the
+// session-based premium tier lands and paid users unlock the full breakdown.
+const SHOW_INTERNALS = false;
 
 const _pct = v => (v == null ? '-' : `${Math.round(v * 100)}%`);
 
@@ -174,20 +178,41 @@ export default function TipPopover({ row, x, y, onClose }) {
                         {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓ hit</span>}
                         {row.tip_outcome === 'miss' && <span className="text-miss font-bold"> ✗ miss</span>}
                     </div>
-                    {safeQualifies(row) && (
-                        <div
-                            className="mt-1 text-accent"
-                            title="Passes the Safe-only checks: the available signals (bookmaker odds, recent form, expert data) agree with none weak, and the odds are short. See Settings → Safe only."
-                        >
-                            🛡 Safe pick - the signals agree
+                    {/* Confidence rating (the verdict; HOW it's derived stays hidden) */}
+                    {row.tip_confidence != null && (
+                        <div className="mt-1 text-label">
+                            Confidence <span className="font-semibold tabular-nums">{_pct(row.tip_confidence)}</span>
+                            {_strength(row.tip_confidence) && <span className="text-label-3"> ({_strength(row.tip_confidence)})</span>}
                         </div>
                     )}
-                    {b ? (
+                    {safeQualifies(row) && (
+                        <div className="mt-1 text-accent" title="One of the safer picks for multi-bet slips. Turn on Settings → Safe only to show just these.">
+                            🛡 Safe pick
+                        </div>
+                    )}
+                    {row.hot && (
+                        <div className="mt-1 text-hot">🔥 Likely a high-scoring game (3+ goals)</div>
+                    )}
+                    {vetoed && (
+                        <div className="mt-1 text-miss">⚠ Flagged for caution - consider skipping this one.</div>
+                    )}
+                    {/* Close alternatives: other bettable outcomes for this match */}
+                    {b?.runners_up?.length > 0 && (
+                        <Section title="Other options">
+                            {b.runners_up.map(r => (
+                                <div key={r.market} className="flex justify-between gap-2 text-label">
+                                    <span>{r.market} <span className="text-label-3">- {_label(r.market)}</span>{r.price != null ? ` @ ${r.price?.toFixed ? r.price.toFixed(2) : r.price}` : ''}</span>
+                                    <span className="tabular-nums text-label-2">{_pct(r.confidence)}</span>
+                                </div>
+                            ))}
+                        </Section>
+                    )}
+
+                    {/* ── Premium / internal reasoning (SHOW_INTERNALS gated) ── */}
+                    {SHOW_INTERNALS && b && (
                         <Section title="Why this tip">
                             <div className="mb-1 text-label">
-                                Overall confidence <span className="font-semibold tabular-nums">{_pct(row.tip_confidence)}</span>
-                                {_strength(row.tip_confidence) && <span className="text-label-3"> ({_strength(row.tip_confidence)})</span>}
-                                , blended from three independent signals:
+                                Blended from three independent signals:
                             </div>
                             <Blend name="Bookmaker odds" prob={b.market_prob} weight={b.weights?.market} note="chance the price itself implies" />
                             <Blend name="Recent form" prob={b.stats_prob} weight={b.weights?.stats} note="both teams' last games" />
@@ -199,25 +224,13 @@ export default function TipPopover({ row, x, y, onClose }) {
                                 </div>
                             )}
                         </Section>
-                    ) : (
-                        <div className="mt-1 text-label-3">No stored reasoning - this tip predates justification tracking.</div>
-                    )}
-                    {b?.runners_up?.length > 0 && (
-                        <Section title="Close alternatives (not picked)">
-                            {b.runners_up.map(r => (
-                                <div key={r.market} className="flex justify-between gap-2 text-label">
-                                    <span>{r.market} <span className="text-label-3">- {_label(r.market)}</span> @ {r.price?.toFixed ? r.price.toFixed(2) : r.price}</span>
-                                    <span className="tabular-nums">{_pct(r.confidence)}</span>
-                                </div>
-                            ))}
-                        </Section>
                     )}
                 </>
             ) : (
                 <div className="mt-1 text-label-2">{skipLabel(row.tip_skip_reason) ?? 'No tip for this fixture.'}</div>
             )}
 
-            {signals.length > 0 && (
+            {SHOW_INTERNALS && signals.length > 0 && (
                 <Section title={`Will both teams score freely? (over 2.5 checks)${row.hot ? ' - 🔥 hot pick' : ''}`}>
                     <div className="mb-1 text-label-2">
                         Every check must pass (needed value in grey) for the 🔥 over-2.5 flag:
@@ -234,7 +247,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                 </Section>
             )}
 
-            {(row.tip_ai_verdict || row.hot_reason) && (
+            {SHOW_INTERNALS && (row.tip_ai_verdict || row.hot_reason) && (
                 <Section title="AI double-check">
                     {row.tip_ai_verdict && (
                         <div className={vetoed ? 'text-miss' : 'text-label'}>

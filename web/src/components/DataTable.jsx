@@ -13,7 +13,7 @@ import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 // Pure settler (zero-import) - grades a runner-up market from the final score
 // (the settle pass only stores the CHOSEN tip's outcome).
 import { tipHit } from '../../../src/db/tip-rules.js';
-import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.jsx';
+import TipPopover, { skipLabel } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
 import { IconSpinner } from './icons.jsx';
 import { BASE_COLUMNS } from '../baseColumns.js';
@@ -217,18 +217,14 @@ function _cellTitle(row, col) {
     return [base, hint].filter(Boolean).join('\n') || undefined;
 }
 
-// Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
-// tooltip carries the AI reason (when adjudicated) or the signal audit.
+// Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. Tooltip is
+// deliberately non-revealing - the signal audit / AI reason (our edge) stays
+// out of the UI (see TipPopover's SHOW_INTERNALS).
 function _hotBadge(row) {
     // Non-hot rows are also settled in the ledger (calibration); only actual
     // picks earn the badge - a frozen pick keeps hot=1 forever.
     if (!row.hot) return null;
-    const detail = row.hot_reason
-        ?? (Array.isArray(row.hot_signals)
-            ? row.hot_signals.map(s => `${SIGNAL_LABEL[s.key] ?? s.key}: ${signalValue(s.key, s.value) ?? '-'}`).join('\n')
-            : '');
-    const title = `Likely 3+ goals game (over 2.5 hot pick${row.hot_score != null ? `, score ${row.hot_score}` : ''})`
-        + `${detail ? `\n${detail}` : ''}\nClick the tip for the full checks`;
+    const title = 'Likely a high-scoring game (3+ goals). Click the tip for more.';
     return (
         <span className="mr-1 cursor-help" title={title}>
             🔥
@@ -301,11 +297,13 @@ function _cell(row, col, linkProviders, openTip) {
         // column - it's sized to that column's measured width, so full parity
         // (%, runners-up, ticks) fills the space it was already given.
         const vetoed = row.tip_ai_verdict === 'veto';
+        // Non-revealing tooltip: the pick, its odds and confidence - never HOW
+        // it's derived (see TipPopover's SHOW_INTERNALS).
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
-            + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
-            + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '')
-            + (vetoed ? ` - AI veto: ${row.tip_ai_reason ?? 'see details'}` : '')
-            + '\nClick for reasoning';
+            + (pct ? ` - confidence ${pct}` : '')
+            + (row.hot ? ' - 🔥 likely high-scoring' : '')
+            + (vetoed ? ' - flagged for caution' : '')
+            + '\nClick for details';
         // A missed tip turns red wholesale; a hit stays calm with its ✓; an
         // AI-vetoed tip is struck through (it stays on record and settles -
         // the performance report measures what the veto was worth).
