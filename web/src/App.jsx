@@ -242,6 +242,10 @@ export default function App() {
     // current date for interval callbacks (they must not re-subscribe per date).
     const lastVersionRef = useRef(null);
     const silentRef = useRef(false);
+    // Last serialized records query actually fetched - the records effect skips a
+    // re-run whose query is byte-identical (an unstable-reference dep would
+    // otherwise refetch every render; see the effect's note).
+    const lastQueryRef = useRef(null);
     const dateRef = useRef(date);
     useEffect(() => { dateRef.current = date; }, [date]);
 
@@ -417,28 +421,27 @@ export default function App() {
     // setState, and on a failing request that becomes an infinite refetch loop.
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
-        let stale = false;
+        // Only constrain providers when a strict subset is chosen
+        const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
+        // The exact query this fetch represents. `lastQueryRef` doubles as the
+        // "current query" marker: a response is applied only while it still holds
+        // this key, so a superseded (stale) response is ignored WITHOUT a per-run
+        // cleanup flag. That also lets us skip a re-run whose query is
+        // byte-identical (defense-in-depth: an unstable-reference dep would
+        // otherwise refetch every render) - safe precisely because an unchanged
+        // query leaves any in-flight fetch valid. A zero-record result never
+        // mutates these inputs, so it can never re-trigger the effect.
+        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}`;
+        if (lastQueryRef.current === queryKey) return;
+        lastQueryRef.current = queryKey;
+        const current = () => lastQueryRef.current === queryKey;
         // Silent background reloads (auto-refresh landed new data) skip the
         // loading dim - the table just updates in place.
         if (!silentRef.current) setLoading(true);
-        fetchRecords({
-            date: date || 'all',
-            filters: serverFilters,
-            completed: showCompleted,
-            // Only constrain when a strict subset is chosen
-            providers: providerKeys && selectedProviders.length < providers.length ? selectedProviders : null,
-        })
-            .then(res => {
-                if (stale) return;
-                setResult(res);
-                setError(null);
-            })
-            .catch(e => !stale && setError(String(e.message ?? e)))
-            .finally(() => {
-                silentRef.current = false;
-                if (!stale) setLoading(false);
-            });
-        return () => { stale = true; };
+        fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
+            .then(res => { if (current()) { setResult(res); setError(null); } })
+            .catch(e => { if (current()) setError(String(e.message ?? e)); })
+            .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).

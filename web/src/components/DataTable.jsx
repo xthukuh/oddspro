@@ -449,11 +449,18 @@ export default function DataTable({
             { key: 'no', label: 'No', group: 'base' },
             ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
         ].filter(c => baseVisible(c.key));
-        const cols = applyOrder([
+        let cols = applyOrder([
             ...baseCols,
             ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
             ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
         ], columnOrder);
+        // "No" defaults to the first column after the pinned Select checkbox.
+        // A saved order predating the column (legacy) would otherwise append it
+        // at the end; only an order that EXPLICITLY lists `no` may move it.
+        if (baseVisible('no') && !(Array.isArray(columnOrder) && columnOrder.includes('no'))) {
+            const noCol = cols.find(c => c.key === 'no');
+            if (noCol) cols = [noCol, ...cols.filter(c => c.key !== 'no')];
+        }
         if (!rows.length) return cols;
         return cols.filter(col => {
             if (col.group === 'base') return true;
