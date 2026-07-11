@@ -166,6 +166,35 @@ export function applySelectionKeep(rows, keep) {
     return keep ? (rows ?? []).filter(r => r.select) : rows;
 }
 
+// Footer betting-ledger summary over the DISPLAYED rows: treat each shown pick
+// as one flat `stake`-unit bet, deduped to one bet per canonical fixture
+// (api_id) since a fixture's tip is fixture-level (each provider row repeats it).
+// Only tipped fixtures with a real positive price count.
+//   picks     - unique displayed fixtures carrying a bettable tip
+//   totalOdds - Σ of the picks' prices ("total odds"); × stake = potential value
+//   value     - stake × totalOdds (gross return if EVERY pick won - a ceiling)
+//   won/lost  - settled hits / misses; settled = won + lost
+//   staked    - stake × settled  (only settled bets are realised)
+//   returned  - Σ over settled hits of stake × price
+//   profit    - returned − staked (settled P/L; pending stakes not yet lost -
+//               same convention as the betslip playground's slipTotals)
+export function displayedSummary(rows, stake = 1) {
+    const seen = new Set();
+    let picks = 0, totalOdds = 0, won = 0, lost = 0, returned = 0;
+    for (const r of rows ?? []) {
+        const price = Number(r.tip_price);
+        if (r.tip_market == null || !Number.isFinite(price) || price <= 0) continue;
+        if (r.api_id != null) { if (seen.has(r.api_id)) continue; seen.add(r.api_id); }
+        picks += 1;
+        totalOdds += price;
+        if (r.tip_outcome === 'hit') { won += 1; returned += stake * price; }
+        else if (r.tip_outcome === 'miss') { lost += 1; }
+    }
+    const settled = won + lost;
+    const staked = stake * settled;
+    return { picks, totalOdds, value: stake * totalOdds, won, lost, settled, staked, returned, profit: returned - staked };
+}
+
 // One-of-each view: collapse to a single row per canonical fixture (api_id),
 // keeping the row from the highest-priority provider present (`priority` is the
 // ordered provider list, index 0 = top). Providers absent from the list rank

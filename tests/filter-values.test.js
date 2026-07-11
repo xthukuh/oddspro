@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
     distinctValues, toFilterCsv, applyOneOfEach, conditionCount,
-    stampSelection, applySelectionHide, applySelectionKeep,
+    stampSelection, applySelectionHide, applySelectionKeep, displayedSummary,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -376,6 +376,35 @@ test('applySelectionKeep keeps only checked rows (inverse of hide)', () => {
     const rows = stampSelection([{ match_id: 1 }, { match_id: 2 }, { match_id: 3 }], new Set([1, 3]));
     assert.deepEqual(applySelectionKeep(rows, true).map(r => r.match_id), [1, 3]);
     assert.equal(applySelectionKeep(rows, false), rows); // no-op passthrough
+});
+
+// --- footer betting ledger over the displayed rows ------------------------
+test('displayedSummary: flat-stake ledger over displayed picks (deduped by fixture)', () => {
+    const rows = [
+        row({ api_id: 1, tip_market: 'O 2.5', tip_price: 2.0, tip_outcome: 'hit' }),
+        row({ api_id: 1, tip_market: 'O 2.5', tip_price: 2.0, tip_outcome: 'hit' }), // same fixture → deduped
+        row({ api_id: 2, tip_market: '1X', tip_price: 1.5, tip_outcome: 'miss' }),
+        row({ api_id: 3, tip_market: 'O 1.5', tip_price: 1.5, tip_outcome: null }),  // upcoming
+        row({ api_id: 4, tip_market: null, tip_price: null }),                        // no tip → skipped
+        row({ api_id: 5, tip_market: 'X', tip_price: 0 }),                            // void price → skipped
+    ];
+    const s = displayedSummary(rows, 100);
+    assert.equal(s.picks, 3);          // fixtures 1, 2, 3
+    assert.equal(s.totalOdds, 5.0);    // 2.0 + 1.5 + 1.5
+    assert.equal(s.value, 500);        // 100 × 5.0 (potential if all won)
+    assert.equal(s.won, 1);
+    assert.equal(s.lost, 1);
+    assert.equal(s.settled, 2);
+    assert.equal(s.staked, 200);       // 2 settled × 100
+    assert.equal(s.returned, 200);     // the hit: 100 × 2.0
+    assert.equal(s.profit, 0);         // returned − staked
+});
+
+test('displayedSummary: default stake 1; empty input is all zeros', () => {
+    assert.deepEqual(displayedSummary([], 1),
+        { picks: 0, totalOdds: 0, value: 0, won: 0, lost: 0, settled: 0, staked: 0, returned: 0, profit: 0 });
+    const s = displayedSummary([row({ api_id: 1, tip_market: 'O 2.5', tip_price: 3.0, tip_outcome: 'hit' })]);
+    assert.equal(s.profit, 2); // stake 1: returned 3 − staked 1
 });
 
 // --- synthetic "No" row-number field is filterable on its load-order anchor ---

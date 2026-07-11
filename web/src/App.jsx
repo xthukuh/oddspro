@@ -3,7 +3,7 @@ import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRe
 import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
@@ -165,6 +165,21 @@ const _hm = iso => {
     return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 
+// Grouped number for the footer betting ledger (odds / value / P-L).
+const _money = v => (v == null ? '—' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+
+// The betslip playground persists its whole config (incl. the per-pick stake)
+// under this key. The footer ledger reuses that stake, so the two never diverge.
+const LS_BETSLIPS = 'oddspro.betslips';
+const _loadBetslipStake = () => {
+    try {
+        const s = Number(JSON.parse(localStorage.getItem(LS_BETSLIPS))?.config?.stake);
+        return Number.isFinite(s) && s > 0 ? s : 100; // 100 = betslip DEFAULT_CONFIG.stake
+    } catch {
+        return 100;
+    }
+};
+
 // Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
 // the cleared all-dates view) so reload / back / forward keep the navigation.
 const _dateFromUrl = () => {
@@ -210,6 +225,10 @@ export default function App() {
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
+    // Per-pick stake mirrored from the betslip playground's persisted config, so
+    // the footer P/L ledger uses the same number. Re-read when the slips modal
+    // closes (that's where it's edited) - see the effect below.
+    const [betslipStake, setBetslipStake] = useState(_loadBetslipStake);
     const [showHelp, setShowHelp] = useState(false);
     const [showCal, setShowCal] = useState(false);
     const [showMagic, setShowMagic] = useState(false);
@@ -436,6 +455,12 @@ export default function App() {
         const id = setTimeout(() => setNotice(null), 3000);
         return () => clearTimeout(id);
     }, [notice]);
+
+    // Re-read the betslip stake whenever the slips modal closes (that's the only
+    // place it's edited), so the footer ledger reflects the latest value.
+    useEffect(() => {
+        if (!showSlips) setBetslipStake(_loadBetslipStake());
+    }, [showSlips]);
 
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
@@ -871,13 +896,11 @@ export default function App() {
             {(() => {
                 const total = result?.data?.length ?? 0;
                 const filtered = rows.length !== total;
-                // Summaries over the rows CURRENTLY SHOWN (after filters/hides/toggles),
-                // alongside the day-level ones - only when the view is a subset, since
-                // otherwise "shown" equals "day". Safe = day-safe picks still on screen.
-                const shown = filtered ? _hitRates(rows) : null;
-                const shownSafe = filtered
-                    ? (() => { const ids = new Set(rows.map(r => r.api_id)); return safePicks.filter(p => ids.has(p.api_id)).length; })()
-                    : safePicks.length;
+                // Betting ledger over the rows CURRENTLY SHOWN (recomputes as the
+                // table re-renders): each displayed pick = one flat betslip-stake
+                // bet, one per fixture. Count, total odds, potential value, and the
+                // settled wins/losses/P-L.
+                const bet = displayedSummary(rows, betslipStake);
                 return (
                     <footer className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 px-4 py-2 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-xs text-label-2 z-20">
                         <span className="whitespace-nowrap">
@@ -896,14 +919,27 @@ export default function App() {
                         <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
                             <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>
                         </Tooltip>
-                        {filtered && (
+                        {bet.picks > 0 && (
                             <>
                                 <span className="text-label-3">|</span>
-                                <Tooltip content="Same summaries over the rows currently shown (after filters, hides and toggles): settled hits / settled picks per unique fixture; pending excluded. Safe = day-safe picks still on screen.">
-                                    <span className="whitespace-nowrap text-label">
-                                        Shown — <span className="text-hot">🔥</span> O2.5: {_rate(shown.hot)} · Tips: {_rate(shown.tips)} · 🛡 {shownSafe}
-                                    </span>
+                                <Tooltip content={`The rows shown treated as flat ${_money(betslipStake)}-unit bets, one per fixture: ${bet.picks} pick${bet.picks === 1 ? '' : 's'} staking ${_money(betslipStake * bet.picks)} in total. Stake comes from the betslip playground.`}>
+                                    <span className="whitespace-nowrap">💰 {bet.picks} pick{bet.picks === 1 ? '' : 's'}</span>
                                 </Tooltip>
+                                <span className="text-label-3">·</span>
+                                <Tooltip content={`Sum of the ${bet.picks} picks' odds. At ${_money(betslipStake)} per pick that returns ≈${_money(bet.value)} if every pick won (a ceiling, not a forecast).`}>
+                                    <span className="whitespace-nowrap">odds Σ {_money(bet.totalOdds)} <span className="text-label-3">→ ≈{_money(bet.value)}</span></span>
+                                </Tooltip>
+                                {bet.settled > 0 && (
+                                    <>
+                                        <span className="text-label-3">·</span>
+                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: ${bet.won} won, ${bet.lost} lost. Staked ${_money(bet.staked)}, returned ${_money(bet.returned)}. P/L = returned − staked (pending picks not counted).`}>
+                                            <span className={`whitespace-nowrap font-medium ${bet.profit >= 0 ? 'text-hit' : 'text-miss'}`}>
+                                                P/L {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}{' '}
+                                                <span className="font-normal text-label-2">({bet.won}<span className="text-hit">✓</span> {bet.lost}<span className="text-miss">✗</span>)</span>
+                                            </span>
+                                        </Tooltip>
+                                    </>
+                                )}
                             </>
                         )}
                     </footer>
