@@ -39,6 +39,15 @@ export function isLightDue(nowMs, lastLightMs, lightMinutes) {
     return lightMinutes > 0 && nowMs - lastLightMs >= lightMinutes * 60_000;
 }
 
+// Classify a finished refresh job (F3). A user CANCEL wins over any error the
+// cooperative abort threw - it's an intentional stop, not a failure - and only
+// a clean 'ok' run bumps the data version / freshness stamps.
+export function refreshOutcome({ error, cancelRequested } = {}) {
+    if (cancelRequested) return 'cancelled';
+    if (error) return 'error';
+    return 'ok';
+}
+
 // Self-truncating log: past maxBytes, keep the newest ~half starting at a
 // line boundary, behind a truncation marker. Byte-approximate (log lines are
 // ASCII); nowIso is injectable for deterministic tests.

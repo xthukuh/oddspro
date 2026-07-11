@@ -25,7 +25,7 @@ const STEPS = 11;
 //   9. pre-match snapshots - needs local history (8) and fresh standings (7);
 //   10. API predictions (fetch-once) - the hot-pick boost/veto signal;
 //   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4).
-export async function runStartPipeline(days_ahead_ = null, onStep = null) {
+export async function runStartPipeline(days_ahead_ = null, onStep = null, shouldCancel = null) {
     // parseInt: null/undefined parse to NaN (Number(null) would be 0)
     const n = parseInt(days_ahead_, 10);
     const days_ahead = Number.isInteger(n) && n >= 0 ? n : DEFAULT_DAYS_AHEAD;
@@ -37,6 +37,7 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null) {
     const pipelineStarted = Date.now();
     let stepStarted = pipelineStarted;
     const _step = label => {
+        if (typeof shouldCancel === 'function' && shouldCancel()) throw new Error('cancelled');
         if (step) debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
         console.debug(`\n[start ${++step}/${STEPS}] ${label}`);
         if (typeof onStep === 'function') onStep(label);
@@ -103,13 +104,16 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null) {
 // history + pre-match snapshots. Standings stay owned by the full pipeline -
 // a league-wide sweep is out of scope for one date. `onStep` gets each step
 // label (job progress for the API).
-export async function runDateRefresh(date_, onStep = null) {
+export async function runDateRefresh(date_, onStep = null, shouldCancel = null) {
     const dt = _dtime(_date(date_)).substring(0, 10);
     const today = _dtime(_date()).substring(0, 10);
     const refreshStarted = Date.now();
     let stepStarted = refreshStarted;
     let lastLabel = null;
     const _step = label => {
+        // Cooperative cancel (F3): abort at a step boundary; finished steps stay
+        // (idempotent - a resume re-run skips them via the fetch-once flags).
+        if (typeof shouldCancel === 'function' && shouldCancel()) throw new Error('cancelled');
         if (lastLabel) debugLog(`refresh ${dt}: ${lastLabel} done in ${Date.now() - stepStarted}ms`);
         console.debug(`[refresh ${dt}] ${label}...`);
         if (typeof onStep === 'function') onStep(label);

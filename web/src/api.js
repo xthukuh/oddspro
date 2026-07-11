@@ -61,9 +61,22 @@ export async function startRefresh(date) {
 }
 
 // Refresh job state + freshness signal: { running, mode, date, dates, step,
-// started_at, finished_at, error, summary, data_version, last_success }.
-// data_version bumps on every successful run (any mode); last_success =
-// { at, mode, dates } drives the silent-reload scope gate (freshness.js).
+// last_step, started_at, finished_at, error, cancelled, summary, data_version,
+// last_success }. data_version bumps on every successful run (any mode);
+// last_success = { at, mode, dates } drives the silent-reload scope gate
+// (freshness.js). cancelled = true when the user aborted the last run (F3).
 export async function fetchRefreshStatus() {
     return _get('/api/refresh');
+}
+
+// Cooperatively cancel the in-flight refresh (F3). A 409 (nothing running)
+// resolves to its body rather than throwing - the poll reconciles the state.
+export async function cancelRefresh() {
+    const res = await fetch('/api/refresh/cancel', {
+        method: 'POST',
+        headers: { 'X-Requested-With': 'fetch', ..._authHeaders() }, // CSRF guard (see server.js)
+    });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
+    return body;
 }

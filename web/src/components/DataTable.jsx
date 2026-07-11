@@ -15,6 +15,7 @@ import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import { tipHit } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel, SIGNAL_LABEL, signalValue } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
+import { IconSpinner } from './icons.jsx';
 import { BASE_COLUMNS } from '../baseColumns.js';
 // Re-exported so existing importers (App, SettingsModal) keep their path.
 export { BASE_COLUMNS } from '../baseColumns.js';
@@ -606,10 +607,21 @@ export default function DataTable({
     return (
         <>
         {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} onClose={() => setTipPop(null)} />}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+        {/* Non-silent load: blur the stale table + float a spinner over it
+            (silent background reloads pass loading=false, so they never dim). */}
+        {loading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+                <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface/90 border border-separator-2 shadow-lg [backdrop-filter:blur(6px)]">
+                    <IconSpinner className="[animation:op-spin_0.8s_linear_infinite] text-accent" />
+                    <span className="text-xs font-medium text-label-2">Loading…</span>
+                </div>
+            </div>
+        )}
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm transition-[filter,opacity] ${loading ? 'blur-[1.5px] opacity-70' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
@@ -715,15 +727,16 @@ export default function DataTable({
                             })}
                         </tr>
                     ))}
-                    {!rows.length && (
+                    {!rows.length && !loading && (
                         <tr>
                             <td colSpan={pinned.length} className="px-2 py-8 text-center text-label-3">
-                                {loading ? 'Loading...' : 'No correlated records for this selection.'}
+                                No correlated records for this selection.
                             </td>
                         </tr>
                     )}
                 </tbody>
             </table>
+        </div>
         </div>
         </>
     );

@@ -6,7 +6,7 @@ import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
-import { refreshStatus, startJob, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
+import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
 import { closeDb } from './db/connection.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -149,12 +149,25 @@ app.post('/api/refresh', (req, res) => {
     const started = startJob({
         mode: 'manual',
         dates: [date],
-        run: onStep => runDateRefresh(date, onStep),
-        onFinish: () => refreshCooldown.set(date, Date.now()),
+        run: (onStep, shouldCancel) => runDateRefresh(date, onStep, shouldCancel),
+        // A cancelled run doesn't spend the cooldown, so "Resume" (re-POST) works
+        // immediately; a completed/failed run already spent quota, so it does.
+        onFinish: job => { if (!job.cancelled) refreshCooldown.set(date, Date.now()); },
     });
     // Race with a scheduler tick claiming the slot between the check above
     // and here - same answer as the up-front running check.
     if (!started) return res.status(409).json(refreshStatus());
+    res.status(202).json(refreshStatus());
+});
+
+// POST /api/refresh/cancel - cooperatively cancel the in-flight refresh job
+// (F3). Same CSRF guard as the trigger. 202 with the job state when a cancel
+// was requested, 409 when nothing is running to cancel.
+app.post('/api/refresh/cancel', (req, res) => {
+    if (!req.get('x-requested-with')) {
+        return res.status(403).json({ error: 'Missing X-Requested-With header.' });
+    }
+    if (!requestCancel()) return res.status(409).json({ error: 'No refresh is running.' });
     res.status(202).json(refreshStatus());
 });
 
