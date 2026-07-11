@@ -10,7 +10,12 @@ Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — on
 - **Connected browsers pick up refreshes silently**: the web app polls `GET /api/refresh` (now carrying `data_version`/`last_success`) every 60s and reloads the table in place — scroll, sort and filters preserved.
 - **New DB migration** `20260709000001_fixtures_elapsed` (`fixtures.elapsed` — live match minute, shown in the Status tooltip). Apply it on deploy (§5, Migrations).
 - **UI**: the footer is now a bottom-sticky status bar (record count, day hit-rates, last-refresh time).
-- New `.env` knobs (all optional, sane defaults): `AUTO_REFRESH_ENABLED`, `AUTO_LIGHT_MINUTES`, `AUTO_FULL_AT`, `AUTO_FULL_DAYS`, `AUTO_LOG`, `AUTO_LOG_MAX_KB`, `REFRESH_CACHE_MINUTES`.
+- **Deadlock-resilient refreshes + the "only one `serve`" rule.** Manual/auto refreshes now retry transient InnoDB deadlocks / lock-wait timeouts (`src/db/retry-rules.js`, wrapping the fixtures/teams/leagues + per-match odds writers) and surface a friendly "please try again" instead of a raw SQL error banner. **Run exactly ONE `serve` process.** The deadlocks come from a *second* concurrent writer on the same rows — a stray `serve`, a manual CLI sweep, or a backup cron overlapping the in-process scheduler; the retry self-heals a rare race, but two always-on writers will fight (see §7, connection-pool + Passenger notes).
+- **Boot-time migrations (opt-in, `MIGRATE_ON_BOOT`).** The server can self-apply `knex migrate:latest` on startup — set `MIGRATE_ON_BOOT=1` and a Restart runs any pending migrations (fail-fast: it won't serve on a migration error). This is the no-SSH-friendly alternative to the phpMyAdmin SQL recipe in §5. Off by default (local/dev restarts never migrate).
+- **Bot protection (opt-in).** A proof-of-work "verify you're human" gate before the SPA loads + a check-once ~1-week token the API requires, plus a known-bot user-agent blocklist and an AI-crawler `robots.txt`. Off by default. **See the new §8 for the full config** (server `.env` + one web build flag).
+- **Client-side kickoff link-disable.** A match's bookmaker link auto-disables once its kickoff passes on the viewer's clock (many books drop the pre-match link at kickoff). Presentation-only; no config.
+- **Prediction methodology hidden in the UI** (guarded for a future premium tier): the tip popover shows a lean bet-decision card with the blend/weights/gate internals behind a `SHOW_INTERNALS=false` code flag. **NOTE for the premium phase:** the raw `tip_breakdown` / `hot_signals` / AI-review fields are STILL in the `/api/records` payload (visible in devtools) — gate them server-side when premium lands for true secrecy.
+- New `.env` knobs (all optional, sane defaults): `AUTO_REFRESH_ENABLED`, `AUTO_LIGHT_MINUTES`, `AUTO_FULL_AT`, `AUTO_FULL_DAYS`, `AUTO_LOG`, `AUTO_LOG_MAX_KB`, `REFRESH_CACHE_MINUTES`; `MIGRATE_ON_BOOT`; bot-protection `HUMAN_POW_ENABLED`, `HUMAN_POW_BITS`, `HUMAN_TOKEN_SECRET`, `HUMAN_TOKEN_TTL_DAYS`, `HUMAN_CHALLENGE_TTL_MINUTES`, `BOT_UA_FILTER_ENABLED`, `BOT_UA_EXTRA`, `BOT_UA_ALLOW`; web build flag `VITE_HUMAN_POW`.
 
 ## 1. Overview
 
@@ -88,7 +93,7 @@ For any future change:
 - If a backup cron is kept: `logs/pipeline.log` shows its next tick landed cleanly.
 - The Setup Node.js App log shows no startup errors.
 
-**Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (b) translating the migration and running its SQL in phpMyAdmin **plus inserting its bookkeeping row** so a future `npm run migrate` doesn't try to re-apply it. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying.
+**Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) setting `MIGRATE_ON_BOOT=1` in `.env` and **Restart**ing the app — the server runs `knex migrate:latest` on boot and only serves once the schema is current (fail-fast on error; the cleanest no-SSH option, new in v1.0.1), (b) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (c) translating the migration and running its SQL in phpMyAdmin **plus inserting its bookkeeping row** so a future `npm run migrate` doesn't try to re-apply it. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying. (With `MIGRATE_ON_BOOT=1` you can leave it on permanently: an already-current schema is a no-op.)
 
 For the v1.0.1 migration specifically, option (b) is:
 ```sql
@@ -117,3 +122,41 @@ VALUES ('20260709000001_fixtures_elapsed.js',
 ## 7. Later: CI/CD (when SSH lands)
 
 This manual flow is deliberately dependency-free. If the host later gains SSH (or you move to a VPS), the natural next step is to automate the build-and-upload — e.g. a small deploy script or a CI job that runs `npm test` + `npm run build:web` and rsyncs the tree, or a Git-based pull with a post-receive/`.cpanel.yml` build hook. Not needed today; captured here so the manual steps above aren't mistaken for the permanent design.
+
+## 8. Bot protection (opt-in, new in v1.0.1)
+
+Two independent layers keep bots and AI scrapers off the public site. Both are **OFF by default** — local dev and an un-gated deploy behave exactly as before. Enable them for production via the server `.env` plus (for the human gate) one web build flag. No third-party service, account, or API keys.
+
+### 8.1 Proof-of-work "verify you're human" gate
+
+Before the SPA renders, the browser solves a small computational puzzle (hashcash-style). The server verifies it and issues a **check-once token** (default ~1 week) that every `/api/*` route then requires — so a bot that skips the gate and calls the API directly gets `401`. The challenge and the token are both HMAC-signed by the server, so it stores **no** per-challenge state.
+
+**Enable it on BOTH sides (they must match):**
+
+1. **Server `.env`** (in the Application Root):
+   - `HUMAN_POW_ENABLED=1`
+   - `HUMAN_TOKEN_SECRET=<a long random string>` — the HMAC key. **Set a stable value** so the check-once token survives restarts/deploys; if left unset the server uses an ephemeral per-boot secret (works, but every visitor re-verifies after each restart). Generate one with:
+     ```sh
+     node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+     ```
+   - Optional tuning: `HUMAN_POW_BITS` (difficulty, default `18` ≈ under a second in-browser — raise for more attacker cost, lower for less friction), `HUMAN_TOKEN_TTL_DAYS` (check-once lifetime, default `7`), `HUMAN_CHALLENGE_TTL_MINUTES` (default `10`).
+2. **Web build** — compile the gate into the bundle by building with the flag set:
+   ```sh
+   VITE_HUMAN_POW=1 npm run build:web
+   ```
+   (or add `VITE_HUMAN_POW=1` to your local `.env` before building, alongside the other `VITE_*` vars). Then `npm run package:deploy` and upload the web zip as usual.
+
+**Why both:** if only the server enforces, the un-gated SPA can't obtain a token and its `/api` calls fail with `401`. If only the build is gated, the gate detects the missing endpoint and **passes through** (no lockout on a mismatch). A trusted machine client can bypass the gate entirely with a valid `API_TOKEN` bearer (§7).
+
+### 8.2 Bot user-agent blocklist + AI `robots.txt`
+
+- `BOT_UA_FILTER_ENABLED=1` returns `403` **site-wide, before any route** to known AI scrapers (GPTBot, ClaudeBot, CCBot, PerplexityBot, Bytespider, Google-Extended, …), aggressive SEO crawlers (AhrefsBot, SemrushBot, …), and raw HTTP clients / headless automation (`curl`, `wget`, `python-requests`, `scrapy`, HeadlessChrome, …). General search engines (Googlebot, Bingbot) are deliberately **not** blocked, so landing-page SEO is unaffected.
+- Tune the list without a code change: `BOT_UA_EXTRA` = comma-separated UA substrings to *also* block; `BOT_UA_ALLOW` = substrings to exempt (wins over the built-in list).
+- `GET /robots.txt` is **always served** (no flag needed) and disallows the same AI crawlers plus `/api/` — the polite signal for bots that honor it; the UA blocklist above catches the ones that don't.
+
+### 8.3 Verifying after you enable it
+
+- Load `/` in a browser → a brief "Verifying you're human" screen → the app. Reload → **no** gate (check-once token in localStorage). 
+- `GET /api/records` with no `X-Human-Token` → `401 {human_required:true}`; the SPA attaches the token automatically once verified.
+- `curl -A 'GPTBot' https://<domain>/` → `403`; a real browser UA → `200`.
+- `GET /robots.txt` lists the AI `Disallow` rules.
