@@ -7,7 +7,7 @@ import { fetchBetikaGames } from './betika.js';
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
-import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail } from './db/auto-rules.js';
+import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
 import { _date, _dtime } from './utils.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
@@ -28,9 +28,12 @@ export const refreshJob = {
     date: null,
     dates: [],
     step: null,
+    last_step: null,        // step reached at finish/cancel (survives after step->null)
     started_at: null,
     finished_at: null,
     error: null,
+    cancelled: false,       // last run was aborted by the user (F3)
+    cancelRequested: false, // cooperative-cancel flag the run polls between steps
     summary: null,
 };
 
@@ -67,29 +70,39 @@ export function startJob({ mode, dates, run, onFinish = null }) {
         date: dates[0] ?? null,
         dates,
         step: 'starting',
+        last_step: null,
         started_at: new Date().toISOString(),
         finished_at: null,
         error: null,
+        cancelled: false,
+        cancelRequested: false,
         summary: null,
     });
-    run(step => { refreshJob.step = step; })
+    // The run polls shouldCancel() between steps and aborts cooperatively; the
+    // cancelRequested flag is the source of truth for the finish classifier.
+    run(step => { refreshJob.step = step; }, () => refreshJob.cancelRequested)
         .then(summary => { refreshJob.summary = summary ?? null; })
         .catch(e => {
             refreshJob.error = String(e?.message ?? e);
-            console.error(e);
+            if (!refreshJob.cancelRequested) console.error(e); // a cancel abort isn't an error
         })
         .finally(() => {
+            const outcome = refreshOutcome(refreshJob); // 'ok' | 'error' | 'cancelled'
             refreshJob.running = false;
+            refreshJob.last_step = refreshJob.step;
             refreshJob.step = null;
             refreshJob.finished_at = new Date().toISOString();
-            if (!refreshJob.error) {
+            refreshJob.cancelled = outcome === 'cancelled';
+            if (outcome === 'cancelled') refreshJob.error = null; // user abort, not a failure
+            if (outcome === 'ok') {
                 dataVersion += 1;
                 lastSuccess = { at: refreshJob.finished_at, mode, dates };
                 for (const d of dates) lastFresh.set(d, Date.now());
             }
             const secs = Math.round((Date.now() - startedMs) / 1000);
-            _log(`${mode} ${refreshJob.error ? 'FAIL' : 'ok'} ${secs}s dates=${dates.join(',') || '-'}`
-                + (refreshJob.error ? ` error=${refreshJob.error}` : ''));
+            _log(`${mode} ${outcome.toUpperCase()} ${secs}s dates=${dates.join(',') || '-'}`
+                + (outcome === 'error' ? ` error=${refreshJob.error}` : ''));
+            refreshJob.cancelRequested = false; // clear for the next job
             try {
                 onFinish?.(refreshJob);
             } catch (e) {
@@ -99,14 +112,25 @@ export function startJob({ mode, dates, run, onFinish = null }) {
     return true;
 }
 
+// Request a cooperative cancel of the in-flight job (F3). The running job polls
+// the flag between steps and stops early - already-completed steps stay (the
+// pipeline is idempotent, so a later "resume" re-run is cheap). Returns false
+// when nothing is running (nothing to cancel).
+export function requestCancel() {
+    if (!refreshJob.running) return false;
+    refreshJob.cancelRequested = true;
+    return true;
+}
+
 // LIGHT pass: cheapest near-real-time subset. No fixtures-by-date fetch (the
 // settle refresh updates in-play statuses/scores/elapsed per id), no deep
 // stats/history/snapshots/predictions/AI (those belong to the full sweep and
 // manual date refreshes). Completed matches are excluded from odds scraping
 // pre-fetch, and past dates are never touched.
-export async function lightRefresh(onStep = null) {
+export async function lightRefresh(onStep = null, shouldCancel = null) {
     const today = _dtime(_date()).substring(0, 10);
     const _step = label => {
+        if (typeof shouldCancel === 'function' && shouldCancel()) throw new Error('cancelled');
         console.debug(`[light ${today}] ${label}...`);
         if (typeof onStep === 'function') onStep(label);
     };
@@ -171,14 +195,14 @@ export function startAutoRefresh() {
                 startJob({
                     mode: 'full',
                     dates: _sweepDates(config.AUTO_FULL_DAYS),
-                    run: onStep => runStartPipeline(config.AUTO_FULL_DAYS, onStep),
+                    run: (onStep, shouldCancel) => runStartPipeline(config.AUTO_FULL_DAYS, onStep, shouldCancel),
                 });
             } else if (isLightDue(nowMs, lastLightMs, config.AUTO_LIGHT_MINUTES)) {
                 lastLightMs = nowMs;
                 startJob({
                     mode: 'light',
                     dates: [_dtime(_date()).substring(0, 10)],
-                    run: lightRefresh,
+                    run: (onStep, shouldCancel) => lightRefresh(onStep, shouldCancel),
                 });
             }
         } catch (e) {

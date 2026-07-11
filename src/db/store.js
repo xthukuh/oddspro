@@ -1,5 +1,6 @@
 import { db } from './connection.js';
 import { diffOddsRows } from './odds-diff.js';
+import { withRetry } from './retry-rules.js';
 
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
@@ -87,18 +88,27 @@ export async function saveMatches(games) {
             counts.skipped++;
             continue;
         }
-        await db.transaction(async trx => {
+        // The per-match odds refresh is a delete+insert on odds_markets - the
+        // classic InnoDB index-gap-lock deadlock site when a concurrent process
+        // (another serve/CLI/cron) writes the same match's odds. The whole
+        // transaction is idempotent (recomputes the diff), so retry it
+        // transiently rather than aborting the refresh (see retry-rules.js).
+        // `counts` is bumped inside so a retried attempt starts from a fresh diff.
+        let inserted = false, updated = false, markets = 0;
+        await withRetry(() => db.transaction(async trx => {
+            inserted = updated = false;
+            markets = 0;
             let match_id;
             if (found) {
                 match_id = found.id;
                 // Explicit bump: ON UPDATE CURRENT_TIMESTAMP skips no-op updates,
                 // but updated_at must reflect every odds refresh (UI freshness).
                 await trx('matches').where('id', match_id).update({ ..._matchRow(g), updated_at: db.fn.now() });
-                counts.updated++;
+                updated = true;
             } else {
                 const [id] = await trx('matches').insert(_matchRow(g));
                 match_id = id;
-                counts.inserted++;
+                inserted = true;
             }
             const rows = _marketRows(match_id, g.markets);
             const existingOdds = await trx('odds_markets').where('match_id', match_id)
@@ -107,8 +117,11 @@ export async function saveMatches(games) {
             if (staleIds.length) await trx('odds_markets').whereIn('id', staleIds).update({ is_stale: true });
             if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
             if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
-            counts.markets += rows.length;
-        });
+            markets = rows.length;
+        }));
+        if (inserted) counts.inserted++;
+        if (updated) counts.updated++;
+        counts.markets += markets;
     }
     return counts;
 }

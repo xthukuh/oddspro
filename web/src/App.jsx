@@ -1,15 +1,27 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
-import { applyClientFilters, applyOutcomeToggles, splitFilters } from './filterValues.js';
+import useOutsideDismiss from './useOutsideDismiss.js';
+import { getTheme, setTheme } from './theme.js';
+import { availableColumnKeys } from './columns.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
+import { safeSelection } from '../../src/db/magic-rules.js';
+import { tipHit } from '../../src/db/tip-rules.js';
+import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
+import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
 import HelpModal from './components/HelpModal.jsx';
+import Logo from './components/Logo.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
+import OverflowMenu from './components/OverflowMenu.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
+import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
+import ViewPills from './components/ViewPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconMenu, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -22,6 +34,8 @@ const LS_LINKS = 'oddspro.links.unavailable';
 // Providers whose rows show in the table (settings multi-select; default all -
 // the catalog discovers new bookmakers, so null means "everything known")
 const LS_PROVIDERS = 'oddspro.providers.visible';
+const LS_PROVIDER_ORDER = 'oddspro.providers.order'; // priority order (all providers)
+const LS_ONE_EACH = 'oddspro.show.oneEach';          // one row per game by priority
 // Whether concluded games stay in the table (settings toggle; default on)
 const LS_COMPLETED = 'oddspro.show.completed';
 // Settled-outcome display toggles (settings; all default off, client-side over
@@ -29,6 +43,13 @@ const LS_COMPLETED = 'oddspro.show.completed';
 const LS_HIDE_HITS = 'oddspro.show.hideHits';
 const LS_HIDE_MISS = 'oddspro.show.hideMiss';
 const LS_NO_MISS = 'oddspro.show.noMiss';
+// Safe-only toggle (settings; default off): keep only the day's safest slip
+// legs per the shared safeSelection gates (magic-rules DEFAULT_SAFE)
+const LS_SAFE_ONLY = 'oddspro.show.safeOnly';
+// Safe-only policy overrides (settings; merged over the server DEFAULT_SAFE
+// policy and passed as safeSelection opts - the browser can't read .env, so
+// this is how a user tunes the gates locally). Object, not array.
+const LS_SAFE_OVERRIDES = 'oddspro.safe.overrides';
 // Legacy single magic-strategy id (superseded by the unified sort chain below;
 // still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
@@ -36,6 +57,25 @@ const LS_MAGIC = 'oddspro.magic.strategy';
 // list (index 0 = highest priority). Entries are { type:'column', key, dir }
 // or { type:'magic', id }.
 const LS_SORT = 'oddspro.sort';
+// Visible base/synthetic columns (R27b/R28a; null = all shown). "Pin position"
+// freezes the No column's numbers. Row selection persists PER DISPLAY DATE
+// (keyed by match_id) under the `.d.` prefix so "Clear all selections" can wipe
+// every date without touching the hide toggle.
+const LS_COLS_BASE = 'oddspro.cols.base';
+const LS_NO_PIN = 'oddspro.cols.noPin';
+const LS_SELECT_PREFIX = 'oddspro.select.d.';
+const LS_SELECT_HIDE = 'oddspro.select.hide';
+// "Keep selection" - inverse of Hide selection (show only checked rows). The two
+// are mutually exclusive (enabling one clears the other in the setters below).
+const LS_SELECT_KEEP = 'oddspro.select.keep';
+
+// The base + synthetic columns a user can show/hide (Select omitted from sort).
+const BASE_COL_OPTIONS = [
+    { key: 'select', label: 'Select' },
+    { key: 'no', label: 'No' },
+    ...BASE_COLUMNS,
+];
+const _selectKey = date => LS_SELECT_PREFIX + (date || 'all');
 
 function _load(key) {
     try {
@@ -43,6 +83,16 @@ function _load(key) {
         return Array.isArray(v) ? v : null;
     } catch {
         return null;
+    }
+}
+
+// Plain-object loader (safe-limit overrides); non-objects fall back to {}.
+function _loadObj(key) {
+    try {
+        const v = JSON.parse(localStorage.getItem(key));
+        return v && typeof v === 'object' && !Array.isArray(v) ? v : {};
+    } catch {
+        return {};
     }
 }
 
@@ -75,7 +125,11 @@ const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0
 // it out (noon-anchored to dodge tz day-shift). Native <input type="date">
 // can't be reformatted, so a formatted label is overlaid on a transparent
 // picker input in the header.
-const _dmy = iso => { const [y, m, d] = iso.split('-'); return `${+d}/${+m}/${y}`; };
+// Human-friendly nav label "Thu, Jul 9" (noon-anchored to dodge tz day-shift);
+// the tooltip spells out the full date.
+const _human = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
+    weekday: 'short', month: 'short', day: 'numeric',
+});
 const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, {
     weekday: 'long', year: 'numeric', month: 'long', day: 'numeric',
 });
@@ -87,6 +141,10 @@ const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefine
 function _hitRates(rows) {
     const seen = new Set();
     const hot = { hits: 0, settled: 0 }, tips = { hits: 0, settled: 0 };
+    // Runner-up scoreboards (R26c): "what if we'd bet the 2nd / 3rd pick".
+    // Only the chosen tip stores an outcome, so the runners-up are graded from
+    // the final score via tipHit - settled iff the fixture has a final score.
+    const up2 = { hits: 0, settled: 0 }, up3 = { hits: 0, settled: 0 };
     for (const r of rows) {
         if (seen.has(r.api_id)) continue;
         seen.add(r.api_id);
@@ -94,23 +152,53 @@ function _hitRates(rows) {
             hot.settled += 1;
             if (r.hot_outcome === 'hit') hot.hits += 1;
         }
+        // Chosen tip settled? Then grade the runners-up over the SAME fixtures
+        // (same denominator basis) so "2nd / 3rd" is comparable to "Tips".
         if (r.tip_market && (r.tip_outcome === 'hit' || r.tip_outcome === 'miss')) {
             tips.settled += 1;
             if (r.tip_outcome === 'hit') tips.hits += 1;
+            const [hs, as] = String(r.score ?? '').split('-').map(Number);
+            const ups = Array.isArray(r.tip_breakdown?.runners_up) ? r.tip_breakdown.runners_up : [];
+            if (Number.isFinite(hs) && Number.isFinite(as)) {
+                for (const [i, bucket] of [[0, up2], [1, up3]]) {
+                    const market = ups[i]?.market;
+                    if (!market) continue;
+                    bucket.settled += 1;
+                    if (tipHit(market, hs, as)) bucket.hits += 1;
+                }
+            }
         }
     }
-    return { hot, tips };
+    return { hot, tips, up2, up3 };
 }
 
 const _rate = ({ hits, settled }) => (settled
     ? `${hits}/${settled} (${(hits / settled * 100).toFixed(1)}%)`
-    : '—');
+    : '-');
+// Compact footer form: integer percent only (the full fraction lives in the
+// tooltip). Keeps the status bar short + uniform.
+const _ratePct = ({ hits, settled }) => (settled ? `${Math.round(hits / settled * 100)}%` : '-');
 
 // 'HH:MM' local wall-clock for the status bar's last-refresh stamp
 const _hm = iso => {
     const d = new Date(iso);
     const p = n => String(n).padStart(2, '0');
     return `${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
+// Grouped number for the footer betting ledger (odds / value / P-L).
+const _money = v => (v == null ? '-' : Number(v).toLocaleString(undefined, { maximumFractionDigits: 2 }));
+
+// The betslip playground persists its whole config (incl. the per-pick stake)
+// under this key. The footer ledger reuses that stake, so the two never diverge.
+const LS_BETSLIPS = 'oddspro.betslips';
+const _loadBetslipStake = () => {
+    try {
+        const s = Number(JSON.parse(localStorage.getItem(LS_BETSLIPS))?.config?.stake);
+        return Number.isFinite(s) && s > 0 ? s : 100; // 100 = betslip DEFAULT_CONFIG.stake
+    } catch {
+        return 100;
+    }
 };
 
 // Selected date round-trips through the URL (?date=YYYY-MM-DD; ?date=all is
@@ -128,11 +216,26 @@ export default function App() {
     const [columnOrder, setColumnOrder] = useState(() => _load(LS_ORDER));
     const [linkProviders, setLinkProviders] = useState(() => _load(LS_LINKS) ?? []);
     const [providerKeys, setProviderKeys] = useState(() => _load(LS_PROVIDERS));
+    const [providerOrder, setProviderOrder] = useState(() => _load(LS_PROVIDER_ORDER));
+    const [oneEach, setOneEach] = useState(() => localStorage.getItem(LS_ONE_EACH) === '1');
     const [showCompleted, setShowCompleted] = useState(() => localStorage.getItem(LS_COMPLETED) !== '0');
     const [hideHits, setHideHits] = useState(() => localStorage.getItem(LS_HIDE_HITS) === '1');
     const [hideMiss, setHideMiss] = useState(() => localStorage.getItem(LS_HIDE_MISS) === '1');
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
+    const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
+    const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
+    // Base/synthetic column visibility (null = all shown), No pin, and the
+    // "Hide selection" cut. Row selection (per display date) is loaded below.
+    const [visibleBaseKeys, setVisibleBaseKeys] = useState(() => _load(LS_COLS_BASE));
+    const [noPin, setNoPin] = useState(() => localStorage.getItem(LS_NO_PIN) === '1');
+    const [hideSelected, setHideSelected] = useState(() => localStorage.getItem(LS_SELECT_HIDE) === '1');
+    const [keepSelected, setKeepSelected] = useState(() => localStorage.getItem(LS_SELECT_KEEP) === '1');
+    // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
+    // applied the saved value pre-paint; this just mirrors it into React state.
+    const [theme, setThemeState] = useState(getTheme);
     const [date, setDate] = useState(() => _dateFromUrl() ?? _today());
+    // Row selection for the loaded date (Set<match_id>); reloaded on date change.
+    const [selection, setSelection] = useState(() => new Set(_load(_selectKey(_dateFromUrl() ?? _today())) ?? []));
     const [sortChain, setSortChain] = useState(_loadSort);
     const [magicData, setMagicData] = useState(null); // /api/magic-sort payload
     const [magicError, setMagicError] = useState(null);
@@ -143,7 +246,14 @@ export default function App() {
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
+    // Per-pick stake mirrored from the betslip playground's persisted config, so
+    // the footer P/L ledger uses the same number. Re-read when the slips modal
+    // closes (that's where it's edited) - see the effect below.
+    const [betslipStake, setBetslipStake] = useState(_loadBetslipStake);
     const [showHelp, setShowHelp] = useState(false);
+    const [showCal, setShowCal] = useState(false);
+    const [showMagic, setShowMagic] = useState(false);
+    const [showOverflow, setShowOverflow] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
     const [notice, setNotice] = useState(null); // transient neutral banner
@@ -153,8 +263,18 @@ export default function App() {
     // current date for interval callbacks (they must not re-subscribe per date).
     const lastVersionRef = useRef(null);
     const silentRef = useRef(false);
+    // Last serialized records query actually fetched - the records effect skips a
+    // re-run whose query is byte-identical (an unstable-reference dep would
+    // otherwise refetch every render; see the effect's note).
+    const lastQueryRef = useRef(null);
     const dateRef = useRef(date);
     useEffect(() => { dateRef.current = date; }, [date]);
+    // Wrappers (trigger + panel) for the header popups' tap-away dismissal - a
+    // backdrop <div> can't cover the page from inside the backdrop-filtered nav.
+    const calWrapRef = useRef(null);
+    const overflowWrapRef = useRef(null);
+    useOutsideDismiss(calWrapRef, showCal, () => setShowCal(false));
+    useOutsideDismiss(overflowWrapRef, showOverflow, () => setShowOverflow(false));
 
     // Column catalog once; default selections when nothing persisted yet
     useEffect(() => {
@@ -174,6 +294,16 @@ export default function App() {
         return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id));
     }, [sortChain, magicData]);
     const cal = magicData?.calibration ?? null;
+    // Safe-only policy served from the API (SAFE_* env → DEFAULT_SAFE fallback);
+    // undefined until magic-sort loads, when safeSelection uses its own defaults.
+    // The user's local overrides layer on top; the merged object drives both the
+    // footer count and the Safe-only cut.
+    const safeCfg = magicData?.safe ?? null;
+    const effectiveSafe = useMemo(
+        () => ({ ...(safeCfg ?? {}), ...safeOverrides }),
+        [safeCfg, safeOverrides],
+    );
+    const safeCap = effectiveSafe.maxPerDay ?? 3;
     const activeMagicIds = useMemo(
         () => activeChain.filter(e => e.type === 'magic').map(e => e.id),
         [activeChain],
@@ -201,28 +331,65 @@ export default function App() {
         () => (catalog ? splitFilters(filters, catalog) : { server: filters, client: [] }),
         [filters, catalog],
     );
+    // Leaf-condition count (filters can be a flat array or a nested group).
+    const filterCount = conditionCount(filters);
     // Column descriptors for the client engine: the FULL catalog (plus the
     // table-only score column), independent of visible-column selections -
     // hidden columns still filter because rows carry every field.
     const filterColumns = useMemo(() => (catalog ? [
         ...catalog.base.map(c => ({ key: c.key, group: 'base' })),
         { key: 'score', group: 'base' },
+        { key: 'no', group: 'base' }, // synthetic row-number (R27d), filterable via _no
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
-    // Advanced-filter the loaded rows, then apply the settled-outcome toggles
-    // (Hide hits / Hide miss / No miss) over what survives.
-    const rows = useMemo(
-        () => applyOutcomeToggles(
-            applyClientFilters(result?.data ?? [], clientFilters, filterColumns),
-            { hideHits, hideMiss, noMiss },
-        ),
-        [result, clientFilters, filterColumns, hideHits, hideMiss, noMiss],
+    // Selection-stamped + hide-cut data: the single upstream source every record
+    // view derives from, so "Hide selection" removes checked rows from the table,
+    // the filter option lists, the day calcs AND the betslip pool at once. Each
+    // row gains a `select` boolean (identity = match_id), which also powers the
+    // Select column and the Select filter field.
+    const stampedData = useMemo(() => stampSelection(result?.data ?? [], selection), [result, selection]);
+    // Load-order anchor for the synthetic "No" column (R27): each loaded row's
+    // 1-based position in the fetched set, rebuilt only when a new fetch lands
+    // (result reference) - client-filter edits and selection changes never touch
+    // `result`, so the numbering stays put. Stamping `_no` HERE (upstream of the
+    // client filters, R27d) is what lets `no` be a FILTERABLE field, not just a
+    // sortable/display column; the DataTable reads the same `_no`.
+    const noAnchor = useMemo(() => {
+        const m = new Map();
+        let i = 0;
+        for (const r of result?.data ?? []) if (!m.has(r.match_id)) m.set(r.match_id, ++i);
+        return m;
+    }, [result]);
+    const numberedData = useMemo(() => {
+        for (const r of stampedData) r._no = noAnchor.get(r.match_id) ?? null;
+        return stampedData;
+    }, [stampedData, noAnchor]);
+    // Selection view cut: Hide selection drops checked rows, Keep selection drops
+    // UNCHECKED rows (inverse). Applied here so it flows into the table, filter
+    // options, day calcs AND the betslip pool at once. The two are mutually
+    // exclusive in the UI, so at most one ever narrows the set.
+    const visibleData = useMemo(
+        () => applySelectionKeep(applySelectionHide(numberedData, hideSelected), keepSelected),
+        [numberedData, hideSelected, keepSelected],
     );
-    // Day-level hit-rate scoreboard: computed over the whole loaded selection
-    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
-    // picks and stays stable when you filter or hide rows in the view.
-    const dayRates = useMemo(() => _hitRates(result?.data ?? []), [result]);
+    const visibleBaseSet = useMemo(() => (visibleBaseKeys ? new Set(visibleBaseKeys) : null), [visibleBaseKeys]);
+    // Market/stat keys present in the loaded day - drives date-dynamic option
+    // lists in the settings selectors and the filter builder (absent columns
+    // are omitted so the controls honestly reflect the day). Recomputes on
+    // date/refresh via `result`.
+    const available = useMemo(
+        () => availableColumnKeys(visibleData, catalog),
+        [visibleData, catalog],
+    );
+    // Safe picks are day-level over the whole loaded selection (result.data),
+    // NOT the filtered rows - other toggles/filters must not change who wins
+    // the per-day cap, and the footer count stays honest. One representative
+    // row per fixture; the table filters by api_id membership.
+    const safePicks = useMemo(
+        () => safeSelection(visibleData, cal, effectiveSafe),
+        [visibleData, cal, effectiveSafe],
+    );
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
     // not a fresh `[]`): a new array each render would change the
@@ -230,11 +397,48 @@ export default function App() {
     // on a failed catalog fetch spins an infinite refetch loop (see the
     // "records effect" note below).
     const providers = catalog?.providers ?? EMPTY_PROVIDERS;
-    const selectedProviders = useMemo(() => {
-        if (!providerKeys) return providers;
+    // Priority order over ALL providers: saved order first (valid entries), any
+    // new/unsaved bookmakers appended last, unknown dropped. Drives the provider
+    // control's row order and the one-of-each pick. Declared before `rows`
+    // because the one-of-each dedupe in that memo reads it.
+    const orderedProviders = useMemo(() => {
+        if (!providers.length) return providers;
         const valid = new Set(providers);
-        return providerKeys.filter(p => valid.has(p));
-    }, [providerKeys, providers]);
+        const saved = (providerOrder ?? []).filter(p => valid.has(p));
+        return [...saved, ...providers.filter(p => !saved.includes(p))];
+    }, [providerOrder, providers]);
+    // Advanced-filter the loaded rows, then apply the settled-outcome toggles
+    // (Hide hits / Hide miss / No miss), then the Safe-only membership cut
+    // (keeps ALL provider rows of qualifying fixtures - tint pairing intact).
+    const rows = useMemo(() => {
+        let out = applyOutcomeToggles(
+            applyClientFilters(visibleData, clientFilters, filterColumns),
+            { hideHits, hideMiss, noMiss },
+        );
+        if (safeOnly) {
+            const ids = new Set(safePicks.map(r => r.api_id));
+            out = out.filter(r => ids.has(r.api_id));
+        }
+        // One-of-each collapses to a single row per game (highest-priority
+        // enabled provider); loaded rows are already the enabled providers.
+        if (oneEach) out = applyOneOfEach(out, orderedProviders);
+        return out;
+    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks, oneEach, orderedProviders]);
+    // Day-level hit-rate scoreboard: computed over the whole loaded selection
+    // (result.data), NOT the client-filtered rows - the KPI reflects the day's
+    // picks and stays stable when you filter or hide rows in the view.
+    const dayRates = useMemo(() => _hitRates(visibleData), [visibleData]);
+    // Enabled providers in priority order (null persisted keys = all enabled).
+    const selectedProviders = useMemo(() => {
+        if (!providerKeys) return orderedProviders;
+        const enabled = new Set(providerKeys);
+        return orderedProviders.filter(p => enabled.has(p));
+    }, [providerKeys, orderedProviders]);
+    // Rows for the provider control: ordered, each flagged enabled.
+    const providerItems = useMemo(
+        () => orderedProviders.map(p => ({ key: p, label: p, enabled: providerKeys ? providerKeys.includes(p) : true })),
+        [orderedProviders, providerKeys],
+    );
 
     // Records whenever the SERVER query shape changes (or a refresh lands
     // new data). Client-only filter edits re-filter locally, never refetch:
@@ -244,28 +448,27 @@ export default function App() {
     // setState, and on a failing request that becomes an infinite refetch loop.
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
-        let stale = false;
+        // Only constrain providers when a strict subset is chosen
+        const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
+        // The exact query this fetch represents. `lastQueryRef` doubles as the
+        // "current query" marker: a response is applied only while it still holds
+        // this key, so a superseded (stale) response is ignored WITHOUT a per-run
+        // cleanup flag. That also lets us skip a re-run whose query is
+        // byte-identical (defense-in-depth: an unstable-reference dep would
+        // otherwise refetch every render) - safe precisely because an unchanged
+        // query leaves any in-flight fetch valid. A zero-record result never
+        // mutates these inputs, so it can never re-trigger the effect.
+        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}`;
+        if (lastQueryRef.current === queryKey) return;
+        lastQueryRef.current = queryKey;
+        const current = () => lastQueryRef.current === queryKey;
         // Silent background reloads (auto-refresh landed new data) skip the
         // loading dim - the table just updates in place.
         if (!silentRef.current) setLoading(true);
-        fetchRecords({
-            date: date || 'all',
-            filters: serverFilters,
-            completed: showCompleted,
-            // Only constrain when a strict subset is chosen
-            providers: providerKeys && selectedProviders.length < providers.length ? selectedProviders : null,
-        })
-            .then(res => {
-                if (stale) return;
-                setResult(res);
-                setError(null);
-            })
-            .catch(e => !stale && setError(String(e.message ?? e)))
-            .finally(() => {
-                silentRef.current = false;
-                if (!stale) setLoading(false);
-            });
-        return () => { stale = true; };
+        fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
+            .then(res => { if (current()) { setResult(res); setError(null); } })
+            .catch(e => { if (current()) setError(String(e.message ?? e)); })
+            .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).
@@ -283,12 +486,24 @@ export default function App() {
         return () => clearTimeout(id);
     }, [notice]);
 
+    // Re-read the betslip stake whenever the slips modal closes (that's the only
+    // place it's edited), so the footer ledger reflects the latest value.
+    useEffect(() => {
+        if (!showSlips) setBetslipStake(_loadBetslipStake());
+    }, [showSlips]);
+
     // Back/forward restore the date encoded in the URL
     useEffect(() => {
         const onPop = () => setDate(_dateFromUrl() ?? _today());
         window.addEventListener('popstate', onPop);
         return () => window.removeEventListener('popstate', onPop);
     }, []);
+
+    // Load the persisted row selection for the newly-shown date (selections are
+    // per-date, keyed by match_id, so they survive filtering AND reload).
+    useEffect(() => {
+        setSelection(new Set(_load(_selectKey(date)) ?? []));
+    }, [date]);
 
     // Freshness gate: reload (silently) when the server's data_version moved
     // AND the successful run's scope covers the loaded date. The FIRST
@@ -344,7 +559,10 @@ export default function App() {
                     if (st.mode === 'manual') {
                         if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
                         setRefreshTick(t => t + 1);
-                        if (st.error) setError(`Refresh failed: ${st.error}`);
+                        // Never surface the raw job error (it can be a ~2 KB SQL
+                        // dump, e.g. a transient deadlock). The full detail lives
+                        // in console.error + logs/auto-refresh.log server-side.
+                        if (st.error) setError('Refresh failed - please try again in a moment.');
                     } else {
                         maybeReload(st);
                     }
@@ -366,7 +584,7 @@ export default function App() {
                 const mins = body.last_refreshed_at
                     ? Math.max(1, Math.round((Date.now() - new Date(body.last_refreshed_at).getTime()) / 60_000))
                     : null;
-                setNotice(`Already fresh${mins ? ` — refreshed ${mins}m ago` : ''}. Reloading the view.`);
+                setNotice(`Already fresh${mins ? ` - refreshed ${mins}m ago` : ''}. Reloading the view.`);
                 setRefreshTick(t => t + 1);
                 return;
             }
@@ -453,9 +671,32 @@ export default function App() {
         setLinkProviders(keys);
         localStorage.setItem(LS_LINKS, JSON.stringify(keys));
     };
-    const saveProviders = keys => {
-        setProviderKeys(keys);
-        localStorage.setItem(LS_PROVIDERS, JSON.stringify(keys));
+    // Enable/disable a provider; persist the enabled set in priority order.
+    const toggleProvider = key => {
+        const enabled = new Set(providerKeys ?? providers); // null persisted = all on
+        enabled.has(key) ? enabled.delete(key) : enabled.add(key);
+        const next = orderedProviders.filter(p => enabled.has(p));
+        setProviderKeys(next);
+        localStorage.setItem(LS_PROVIDERS, JSON.stringify(next));
+    };
+    // Move a provider up/down the priority order; persist the full order.
+    const moveProvider = (key, dir) => {
+        const arr = [...orderedProviders];
+        const i = arr.indexOf(key);
+        const j = i + dir;
+        if (i < 0 || j < 0 || j >= arr.length) return;
+        [arr[i], arr[j]] = [arr[j], arr[i]];
+        setProviderOrder(arr);
+        localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(arr));
+    };
+    // Persist a full provider priority order (ReorderList "move to position #").
+    const reorderProviders = keys => {
+        setProviderOrder(keys);
+        localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(keys));
+    };
+    const saveOneEach = value => {
+        setOneEach(value);
+        localStorage.setItem(LS_ONE_EACH, value ? '1' : '0');
     };
     const saveShowCompleted = value => {
         setShowCompleted(value);
@@ -473,6 +714,89 @@ export default function App() {
         setNoMiss(value);
         localStorage.setItem(LS_NO_MISS, value ? '1' : '0');
     };
+    const saveSafeOnly = value => {
+        setSafeOnly(value);
+        localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
+    };
+    const changeTheme = value => setThemeState(setTheme(value));
+    // Safe-limit overrides: set one key, or reset to the server policy.
+    const saveSafeOverride = (key, value) => setSafeOverrides(prev => {
+        const next = { ...prev, [key]: value };
+        localStorage.setItem(LS_SAFE_OVERRIDES, JSON.stringify(next));
+        return next;
+    });
+    const resetSafeOverrides = () => {
+        setSafeOverrides({});
+        localStorage.removeItem(LS_SAFE_OVERRIDES);
+    };
+    // Row selection (persist per current date).
+    const saveSelection = next => {
+        setSelection(next);
+        const key = _selectKey(date);
+        if (next.size) localStorage.setItem(key, JSON.stringify([...next]));
+        else localStorage.removeItem(key);
+    };
+    const toggleSelect = id => {
+        const next = new Set(selection);
+        next.has(id) ? next.delete(id) : next.add(id);
+        saveSelection(next);
+    };
+    const toggleAllSelect = (ids, checked) => {
+        const next = new Set(selection);
+        for (const id of ids) checked ? next.add(id) : next.delete(id);
+        saveSelection(next);
+    };
+    // Wipe every date's persisted selection (the per-date `.d.` keys only).
+    const clearAllSelections = () => {
+        for (const k of Object.keys(localStorage)) if (k.startsWith(LS_SELECT_PREFIX)) localStorage.removeItem(k);
+        setSelection(new Set());
+    };
+    // Export the selected rows as a full-record CSV (all fields incl. the ones
+    // hidden from the table + every market/stat). Acts on the SELECTION, so it
+    // ignores the Hide-selection cut (stampedData, not visibleData).
+    const exportSelection = () => {
+        const records = stampedData.filter(r => r.select);
+        if (!records.length) return;
+        const csv = buildRecordCsv(records, catalog);
+        const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8' }); // BOM helps Excel detect UTF-8
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `oddspro-selection-${date || 'all'}.csv`;
+        document.body.appendChild(a);
+        a.click();
+        a.remove();
+        URL.revokeObjectURL(url);
+    };
+    // Base/synthetic column visibility. Hiding the Select column clears the
+    // current date's selection (R28a).
+    const saveVisibleBase = keys => {
+        setVisibleBaseKeys(keys);
+        localStorage.setItem(LS_COLS_BASE, JSON.stringify(keys));
+        if (!keys.includes('select')) saveSelection(new Set());
+    };
+    const saveNoPin = value => {
+        setNoPin(value);
+        localStorage.setItem(LS_NO_PIN, value ? '1' : '0');
+    };
+    // Hide / Keep selection are opposites - turning one on clears the other so
+    // the view can never be emptied by both narrowing at once.
+    const saveHideSelected = value => {
+        setHideSelected(value);
+        localStorage.setItem(LS_SELECT_HIDE, value ? '1' : '0');
+        if (value && keepSelected) {
+            setKeepSelected(false);
+            localStorage.setItem(LS_SELECT_KEEP, '0');
+        }
+    };
+    const saveKeepSelected = value => {
+        setKeepSelected(value);
+        localStorage.setItem(LS_SELECT_KEEP, value ? '1' : '0');
+        if (value && hideSelected) {
+            setHideSelected(false);
+            localStorage.setItem(LS_SELECT_HIDE, '0');
+        }
+    };
 
     const TODAY = _today();
     const DAY_MS = 86400000;
@@ -481,170 +805,114 @@ export default function App() {
     const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
     const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
 
+    const navBtn = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-label hover:bg-accent-soft disabled:opacity-40 disabled:hover:bg-transparent';
+    const navBtnActive = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-accent bg-accent-soft';
+
     return (
-        <div className="min-h-screen bg-slate-100 text-slate-800">
-            {/* Two-tier responsive topbar: brand + merged date-nav on one line,
-                action buttons on the next below md (single row from md up). */}
-            <header className="bg-slate-900 text-white px-2 py-2 md:px-4 md:py-3 flex flex-col gap-2 md:flex-row md:items-center">
-                <div className="flex items-center gap-2">
-                    {/* The SVG badge's background is #0f172a (= bg-slate-900,
-                        the topbar) so it blends in; the sky border + white "OP"
-                        are what read against the bar. */}
-                    <a href="/" title="ODDS PRO" className="shrink-0 hover:opacity-80">
-                        <img src="/icon.svg" alt="Odds Pro" className="h-8 w-8" />
-                    </a>
-                    {/* Merged segmented date-nav: [⌂] [‹] [ D/M/YYYY ] [›]. The
-                        centre cell is a transparent native picker under a
-                        formatted label (native date inputs can't be reformatted);
-                        tooltip spells the full day, clearing shows all dates. */}
-                    <div className="inline-flex items-stretch overflow-hidden rounded-md border border-slate-700 bg-slate-800 text-sm">
-                        {date !== TODAY && (
-                            <button
-                                onClick={() => changeDate(TODAY)}
-                                title="Jump to today"
-                                className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700"
-                            >
-                                ⌂
-                            </button>
-                        )}
-                        <button
-                            onClick={() => changeDate(PREV_DATE)}
-                            disabled={date <= MIN_DATE}
-                            title={`Previous (${PREV_DATE})`}
-                            className="cursor-pointer border-r border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                            &#8249;
-                        </button>
-                        <label className="relative inline-flex items-center" title={date ? _fullDate(date) : 'All dates'}>
-                            <span className="pointer-events-none min-w-[6.5rem] px-3 py-1 text-center tabular-nums">
-                                {date ? _dmy(date) : 'All dates'}
-                            </span>
-                            <input
-                                type="date"
-                                value={date}
-                                min={MIN_DATE}
-                                max={MAX_DATE}
-                                onFocus={e => e.target.showPicker?.()}
-                                onClick={e => e.target.showPicker?.()}
-                                onChange={e => changeDate(e.target.value)}
-                                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                                aria-label="Select date (clear to show all dates)"
-                            />
-                        </label>
-                        <button
-                            onClick={() => changeDate(NEXT_DATE)}
-                            disabled={date >= MAX_DATE}
-                            title={`Next (${NEXT_DATE})`}
-                            className="cursor-pointer border-l border-slate-700 px-2 py-1 hover:bg-slate-700 disabled:opacity-40 disabled:hover:bg-transparent"
-                        >
-                            &#8250;
-                        </button>
-                    </div>
+        <div className="h-[100dvh] flex flex-col bg-app text-label overflow-hidden">
+            {/* iPadOS nav bar: a distinct surface (own bg + hairline + shadow +
+                blur) so it reads as its own bar, separated from the content.
+                3 zones: logo (home->today) · date nav+calendar · actions
+                (collapse into a ⋯ menu below sm). */}
+            <header className="shrink-0 grid grid-cols-[auto_1fr_auto] sm:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 px-2.5 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-b border-separator shadow-sm relative z-40">
+                <div className="flex items-center min-w-0">
+                    <Logo onHome={() => changeDate(TODAY)} />
                 </div>
-                {/* App-header style action bar: icon-only buttons (Android/iOS
-                    convention) with uniform touch targets + accessible labels;
-                    text lives in tooltips/aria-label, not on the chrome. */}
-                <div className="flex items-center justify-between gap-1.5 md:ml-auto md:justify-end">
-                    <button
-                        onClick={onRefresh}
-                        disabled={!date || refresh?.running}
-                        aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
-                        title={refresh?.running
-                            ? `Refreshing ${refresh.date}${refresh.step ? ` — ${refresh.step}` : ''}…`
-                            : date ? 'Re-fetch fixtures, results & odds for this date' : 'Pick a date to refresh'}
-                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none ${refresh?.running
-                            ? 'bg-amber-600 border-amber-500 cursor-wait'
-                            : 'bg-slate-800 border-slate-700 hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed'}`}
-                    >
-                        <span className={refresh?.running ? 'inline-block animate-spin' : ''}>⟳</span>
+                {/* Centre: chevrons + calendar-popover trigger */}
+                <div ref={calWrapRef} className="relative flex items-center gap-0.5 justify-self-center">
+                    <button onClick={() => changeDate(PREV_DATE)} disabled={date <= MIN_DATE}
+                        title={`Previous (${PREV_DATE})`} aria-label="Previous day" className={navBtn}>
+                        <IconChevronLeft />
                     </button>
-                    <MagicMenu
-                        data={magicData}
-                        error={magicError}
-                        activeIds={activeMagicIds}
-                        onToggle={onToggleMagic}
-                        onClearMagic={onClearMagic}
-                    />
-                    <button
-                        onClick={() => setShowSlips(true)}
-                        aria-label="Betslip playground"
-                        title="Betslip playground - build virtual multi-bet slips from the day's tips"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        🧾
+                    <button onClick={() => setShowCal(v => !v)} title={date ? _fullDate(date) : 'All dates'}
+                        aria-label="Pick a date"
+                        className="cursor-pointer h-10 min-w-[7rem] sm:min-w-[9.5rem] px-2 sm:px-3 inline-flex items-center justify-center gap-1.5 rounded-[10px] text-[15px] sm:text-[17px] font-semibold hover:bg-accent-soft">
+                        <span>{date ? _human(date) : 'All dates'}</span>
+                        <IconChevronDown className="text-accent" />
                     </button>
-                    <button
-                        onClick={() => setShowFilters(v => !v)}
-                        aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`}
-                        title="Filter the table rows"
-                        className={`cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center gap-0.5 rounded-md border text-lg leading-none ${showFilters || filters.length
-                            ? 'bg-sky-600 border-sky-500' : 'bg-slate-800 border-slate-700 hover:bg-slate-700'}`}
-                    >
-                        ▽{filters.length ? <span className="text-xs tabular-nums">{filters.length}</span> : null}
+                    <button onClick={() => changeDate(NEXT_DATE)} disabled={date >= MAX_DATE}
+                        title={`Next (${NEXT_DATE})`} aria-label="Next day" className={navBtn}>
+                        <IconChevronRight />
                     </button>
-                    <button
-                        onClick={() => setShowHelp(true)}
-                        aria-label="Help"
-                        title="Help - what Odds Pro does + demo video"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none font-semibold bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        ?
-                    </button>
-                    <button
-                        onClick={() => setShowSettings(true)}
-                        aria-label="Display settings"
-                        title="Display settings"
-                        className="cursor-pointer h-9 min-w-9 px-2 inline-flex items-center justify-center rounded-md border text-lg leading-none bg-slate-800 border-slate-700 hover:bg-slate-700"
-                    >
-                        ⚙
-                    </button>
+                    {showCal && (
+                        <CalendarPopover date={date} today={TODAY} min={MIN_DATE} max={MAX_DATE}
+                            onPick={d => changeDate(d)} onClose={() => setShowCal(false)} />
+                    )}
+                </div>
+                {/* Right: full action row (>=sm) or ⋯ overflow (<sm) */}
+                <div className="relative flex items-center justify-self-end">
+                    {/* Tiny greyed build version, tucked under the right icons (E4) -
+                        absolute + pointer-events-none so it never shifts or blocks them. */}
+                    <span className="hidden sm:block absolute right-1 -bottom-1 text-[9px] leading-none text-label-3 tabular-nums pointer-events-none">
+                        v{__APP_VERSION__}
+                    </span>
+                    <div className="hidden sm:flex items-center gap-0.5">
+                        <button onClick={onRefresh} disabled={!date || refresh?.running}
+                            aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
+                            title={refresh?.running
+                                ? `Refreshing ${refresh.date}${refresh.step ? ` - ${refresh.step}` : ''}…`
+                                : date
+                                    ? `Refresh fixtures, results & odds${refresh?.last_success ? ` - last ${_hm(refresh.last_success.at)}` : ''}`
+                                    : 'Pick a date to refresh'}
+                            className={navBtn + (refresh?.running ? ' text-accent cursor-wait' : '')}>
+                            {refresh?.running
+                                ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" />
+                                : <IconRefresh />}
+                        </button>
+                        <button onClick={() => setShowMagic(true)} aria-label="Magic sort"
+                            title="Sort tips most-likely-to-win first (backtested ranking strategies)"
+                            className={activeMagicIds.length ? navBtnActive : navBtn}>
+                            <IconMagic />{activeMagicIds.length > 1 ? <span className="text-[11px] tabular-nums ml-0.5">{activeMagicIds.length}</span> : null}
+                        </button>
+                        <button onClick={() => setShowSlips(true)} aria-label="Betslip playground" title="Betslip playground - build virtual multi-bet slips from the day's tips" className={navBtn}><IconSlips /></button>
+                        <button onClick={() => setShowFilters(v => !v)} aria-label={`Filters${filterCount ? ` (${filterCount} active)` : ''}`} title="Filter the table rows"
+                            className={(showFilters || filterCount) ? navBtnActive : navBtn}>
+                            <IconFilter />{filterCount ? <span className="text-[11px] tabular-nums ml-0.5">{filterCount}</span> : null}
+                        </button>
+                        <div className="w-px h-5 bg-separator mx-1.5" />
+                        <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
+                        <button onClick={() => setShowSettings(true)} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
+                    </div>
+                    <div ref={overflowWrapRef} className="relative sm:hidden">
+                        <button onClick={() => setShowOverflow(v => !v)} aria-label="More actions" title="More"
+                            className={showOverflow ? navBtnActive : navBtn}><IconMenu /></button>
+                        {showOverflow && (
+                            <OverflowMenu
+                                refreshing={refresh?.running} canRefresh={!!date && !refresh?.running}
+                                filterCount={filterCount} magicActive={activeMagicIds.length > 0}
+                                onRefresh={() => { onRefresh(); setShowOverflow(false); }}
+                                onMagic={() => { setShowMagic(true); setShowOverflow(false); }}
+                                onSlips={() => { setShowSlips(true); setShowOverflow(false); }}
+                                onFilters={() => { setShowFilters(v => !v); setShowOverflow(false); }}
+                                onHelp={() => { setShowHelp(true); setShowOverflow(false); }}
+                                onSettings={() => { setShowSettings(true); setShowOverflow(false); }}
+                                onClose={() => setShowOverflow(false)} />
+                        )}
+                    </div>
                 </div>
             </header>
 
-            <SortPills
-                chain={activeChain}
-                entryLabel={entryLabel}
-                onRemove={onRemoveEntry}
-                onClear={() => onReorderChain([])}
-            />
-
-            {showFilters && catalog && (
-                <FilterBuilder
-                    catalog={catalog}
-                    filters={filters}
-                    onApply={setFilters}
+            <main className="flex-1 min-h-0 flex flex-col px-3.5 pt-2 pb-2 gap-2 overflow-hidden">
+                {error && (
+                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-miss/40 bg-miss/10 text-miss text-sm flex items-start gap-2" role="alert">
+                        <span className="grow">{error}</span>
+                        <button onClick={() => setError(null)} aria-label="Dismiss error" title="Dismiss" className="cursor-pointer shrink-0 text-miss/70 hover:text-miss text-lg leading-none">&times;</button>
+                    </div>
+                )}
+                {notice && (
+                    <div className="shrink-0 px-4 py-2 rounded-2xl border border-accent/40 bg-accent-soft text-accent text-sm flex items-start gap-2" role="status">
+                        <span className="grow">{notice}</span>
+                        <button onClick={() => setNotice(null)} aria-label="Dismiss notice" title="Dismiss" className="cursor-pointer shrink-0 text-accent/70 hover:text-accent text-lg leading-none">&times;</button>
+                    </div>
+                )}
+                <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
+                <ViewPills
+                    showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
+                    noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
+                    onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
+                    onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
+                    onOpenFilters={() => setShowFilters(true)} onClearFilters={() => setFilters([])}
                 />
-            )}
-
-            {error && (
-                <div className="m-4 px-4 py-2 rounded border border-red-300 bg-red-50 text-red-700 text-sm flex items-start gap-2" role="alert">
-                    <span className="grow">{error}</span>
-                    <button
-                        onClick={() => setError(null)}
-                        aria-label="Dismiss error"
-                        title="Dismiss"
-                        className="cursor-pointer shrink-0 text-red-400 hover:text-red-700 text-lg leading-none"
-                    >
-                        &times;
-                    </button>
-                </div>
-            )}
-
-            {notice && (
-                <div className="m-4 px-4 py-2 rounded border border-sky-300 bg-sky-50 text-sky-700 text-sm flex items-start gap-2" role="status">
-                    <span className="grow">{notice}</span>
-                    <button
-                        onClick={() => setNotice(null)}
-                        aria-label="Dismiss notice"
-                        title="Dismiss"
-                        className="cursor-pointer shrink-0 text-sky-400 hover:text-sky-700 text-lg leading-none"
-                    >
-                        &times;
-                    </button>
-                </div>
-            )}
-
-            <main className="p-4 pb-10">
                 <DataTable
                     catalog={catalog}
                     rows={rows}
@@ -656,47 +924,101 @@ export default function App() {
                     onSort={onSort}
                     loading={loading}
                     linkProviders={linkProviders}
+                    visibleBase={visibleBaseSet}
+                    selection={selection}
+                    onToggleSelect={toggleSelect}
+                    onToggleAll={toggleAllSelect}
+                    noPin={noPin}
+                    filterCount={filterCount}
+                    onClearFilters={() => setFilters([])}
                     scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
             </main>
 
-            {/* Bottom status bar (fixed, z-30 - under the z-40 modals): record
-                count, the day-level hit-rate scoreboard and the last refresh
-                time. Small text with a subtle lift shadow, wraps on narrow
-                screens; <main> reserves pb-10 so content clears it. */}
+            {/* Status bar: a normal flex child of the app shell (no longer fixed).
+                Whole items wrap to more rows on narrow widths; refresh/last-refresh
+                state now lives on the toolbar sync button, not here. */}
             {(() => {
                 const total = result?.data?.length ?? 0;
                 const filtered = rows.length !== total;
-                const last = refresh?.last_success;
+                // Betting ledger over the rows CURRENTLY SHOWN (recomputes as the
+                // table re-renders): each displayed pick = one flat betslip-stake
+                // bet, one per fixture. Count, total odds, potential value, and the
+                // settled wins/losses/P-L.
+                const bet = displayedSummary(rows, betslipStake);
                 return (
-                    <div className="fixed bottom-0 inset-x-0 z-30 bg-slate-100/90 backdrop-blur border-t border-slate-300 px-3 py-1 text-xs text-slate-500 [text-shadow:0_1px_0_rgba(255,255,255,0.7)] flex flex-wrap items-center gap-x-2 gap-y-0.5">
-                        <span>
-                            {filtered ? `${rows.length}/${total}` : total}
-                            {' '}record{total === 1 && !filtered ? '' : 's'}
-                        </span>
-                        <span className="text-slate-300">·</span>
-                        <Tooltip content="Over 2.5 hot picks for the day: settled hits / settled picks (unique fixtures; pending excluded). Day-level - unaffected by view filters.">
-                            <span>🔥 O2.5: {_rate(dayRates.hot)}</span>
-                        </Tooltip>
-                        <span className="text-slate-300">·</span>
-                        <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
-                            <span>Tips: {_rate(dayRates.tips)}</span>
-                        </Tooltip>
-                        {(last || refresh?.running) && (
-                            <Tooltip content={refresh?.running
-                                ? `Refreshing (${refresh.mode ?? 'manual'})${refresh.step ? ` — ${refresh.step}` : ''}…`
-                                : `Last data refresh: ${new Date(last.at).toLocaleString()} (${last.mode})`}>
-                                <span className="ml-auto tabular-nums">
-                                    <span className={refresh?.running ? 'inline-block animate-pulse' : ''}>⟳</span>
-                                    {' '}{refresh?.running
-                                        ? (refresh.step ?? 'refreshing')
-                                        : _hm(last.at)}
-                                </span>
+                    <footer className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-[11px] text-label-2 tabular-nums z-20">
+                        {/* Day KPIs - compact (percent only; fractions in tooltips).
+                            One flex row, gap-spaced (no ragged "·" separators). */}
+                        <div className="flex items-center gap-x-3">
+                            <Tooltip content={`${filtered ? `${rows.length} of ${total}` : total} record${total === 1 && !filtered ? '' : 's'} for this view.`}>
+                                <span className="whitespace-nowrap font-medium text-label">{filtered ? `${rows.length}/${total}` : total}</span>
                             </Tooltip>
+                            <Tooltip content={`Over 2.5 hot picks: ${_rate(dayRates.hot)} settled. Day-level - unaffected by view filters.`}>
+                                <span className="whitespace-nowrap"><span className="text-hot">🔥</span> {_ratePct(dayRates.hot)}</span>
+                            </Tooltip>
+                            <Tooltip content={`Tips: ${_rate(dayRates.tips)} settled (AI-vetoed included). Day-level - unaffected by view filters.`}>
+                                <span className="whitespace-nowrap">Tips {_ratePct(dayRates.tips)}</span>
+                            </Tooltip>
+                            {/* R26c: 2nd/3rd-choice hit-rates, muted, only when present */}
+                            {dayRates.up2.settled > 0 && (
+                                <Tooltip content={`If you'd taken the 2nd / 3rd-choice tip instead: 2nd ${_rate(dayRates.up2)}, 3rd ${_rate(dayRates.up3)} (graded from the final score).`}>
+                                    <span className="whitespace-nowrap text-label-3">2·{_ratePct(dayRates.up2)} 3·{_ratePct(dayRates.up3)}</span>
+                                </Tooltip>
+                            )}
+                            <Tooltip content={`Games passing the safety checks for multi-bet slips (signals agree, none weak, short odds, best ${safeCap}/day). Turn on 'Safe only' in Settings to show just these.`}>
+                                <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 {safePicks.length}</span>
+                            </Tooltip>
+                        </div>
+                        {/* Ledger over the rows shown - each pick a flat-stake bet */}
+                        {bet.picks > 0 && (
+                            <div className="flex items-center gap-x-3 sm:border-l sm:border-separator sm:pl-4">
+                                <Tooltip content={`The rows shown as flat ${_money(betslipStake)}-unit bets, one per fixture: ${bet.picks} pick${bet.picks === 1 ? '' : 's'} staking ${_money(betslipStake * bet.picks)}. Stake comes from the betslip playground.`}>
+                                    <span className="whitespace-nowrap">💰 {bet.picks}</span>
+                                </Tooltip>
+                                <Tooltip content={`Sum of the ${bet.picks} picks' odds (total odds).`}>
+                                    <span className="whitespace-nowrap">Σ{_money(bet.totalOdds)}</span>
+                                </Tooltip>
+                                <Tooltip content={`Potential return if every shown pick won: stake × total odds = ${_money(bet.value)}. A ceiling, not a forecast.`}>
+                                    <span className="whitespace-nowrap text-label-3">≈{_money(bet.value)}</span>
+                                </Tooltip>
+                                {bet.settled > 0 && (
+                                    <>
+                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: ${bet.won} won, ${bet.lost} lost.`}>
+                                            <span className="whitespace-nowrap"><span className="text-hit">{bet.won}✓</span> <span className="text-miss">{bet.lost}✗</span></span>
+                                        </Tooltip>
+                                        <Tooltip content={`P/L over settled shown picks: staked ${_money(bet.staked)}, returned ${_money(bet.returned)}, P/L = returned − staked (pending not counted).`}>
+                                            <span className={`whitespace-nowrap font-semibold ${bet.profit >= 0 ? 'text-hit' : 'text-miss'}`}>
+                                                {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}
+                                            </span>
+                                        </Tooltip>
+                                    </>
+                                )}
+                            </div>
                         )}
-                    </div>
+                    </footer>
                 );
             })()}
+
+            {showMagic && (
+                <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
+                    onToggle={id => { onToggleMagic(id); setShowMagic(false); }}
+                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+            )}
+
+            {showFilters && catalog && (
+                <Sheet onClose={() => setShowFilters(false)} className="max-w-2xl">
+                    <FilterBuilder
+                        catalog={catalog}
+                        available={available}
+                        rows={visibleData}
+                        filterColumns={filterColumns}
+                        filters={filters}
+                        onApply={setFilters}
+                        onClose={() => setShowFilters(false)}
+                    />
+                </Sheet>
+            )}
 
             {showSlips && (
                 <BetslipPlayground
@@ -715,16 +1037,28 @@ export default function App() {
             {showSettings && catalog && (
                 <SettingsModal
                     catalog={catalog}
+                    theme={theme}
+                    onTheme={changeTheme}
+                    availableMarkets={available.markets}
+                    availableStats={available.stats}
                     marketKeys={selectedMarkets}
                     statKeys={selectedStats}
                     columnOrder={columnOrder}
                     providers={providers}
-                    visibleProviders={selectedProviders}
+                    providerItems={providerItems}
                     linkProviders={linkProviders}
                     showCompleted={showCompleted}
                     hideHits={hideHits}
                     hideMiss={hideMiss}
                     noMiss={noMiss}
+                    oneEach={oneEach}
+                    safeOnly={safeOnly}
+                    safeMaxPerDay={safeCap}
+                    safe={effectiveSafe}
+                    safeDefaults={safeCfg}
+                    safeOverridden={Object.keys(safeOverrides).length > 0}
+                    onSafeSet={saveSafeOverride}
+                    onSafeReset={resetSafeOverrides}
                     sortChain={activeChain}
                     entryLabel={entryLabel}
                     onReorderSort={onReorderChain}
@@ -732,12 +1066,28 @@ export default function App() {
                     onMarkets={saveMarkets}
                     onStats={saveStats}
                     onOrder={saveOrder}
-                    onVisibleProviders={saveProviders}
+                    baseColOptions={BASE_COL_OPTIONS}
+                    visibleBaseKeys={visibleBaseKeys}
+                    onVisibleBase={saveVisibleBase}
+                    noPin={noPin}
+                    onNoPin={saveNoPin}
+                    hideSelected={hideSelected}
+                    onHideSelected={saveHideSelected}
+                    keepSelected={keepSelected}
+                    onKeepSelected={saveKeepSelected}
+                    selectionCount={selection.size}
+                    onClearSelections={clearAllSelections}
+                    onExportSelection={exportSelection}
+                    onToggleProvider={toggleProvider}
+                    onMoveProvider={moveProvider}
+                    onReorderProviders={reorderProviders}
                     onLinkProviders={saveLinkProviders}
                     onShowCompleted={saveShowCompleted}
                     onHideHits={saveHideHits}
                     onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss}
+                    onOneEach={saveOneEach}
+                    onSafeOnly={saveSafeOnly}
                     onClose={() => setShowSettings(false)}
                 />
             )}

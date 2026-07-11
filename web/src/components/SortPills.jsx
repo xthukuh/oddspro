@@ -7,20 +7,20 @@ const _key = e => (e.type === 'magic' ? `magic:${e.id}` : `col:${e.key}`);
 export default function SortPills({ chain, entryLabel, onRemove, onClear }) {
     if (!chain?.length) return null;
     return (
-        <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-200 bg-white px-2 py-2 md:px-4">
-            <span className="text-xs text-slate-400 mr-1">Sorted by</span>
+        <div className="flex flex-wrap items-center gap-1.5 shrink-0 py-0.5">
+            <span className="text-xs text-label-2 mr-1">Sorted by</span>
             {chain.map((e, i) => (
                 <span
                     key={_key(e)}
-                    className="inline-flex items-center gap-1 rounded border border-slate-300 bg-slate-50 pl-2 pr-1 py-0.5 text-xs"
+                    className="inline-flex items-center gap-1 rounded-[10px] border border-separator bg-surface pl-2 pr-1 py-0.5 text-xs"
                 >
-                    <span className="text-slate-400 tabular-nums">{i + 1}</span>
-                    <span className="font-medium">{entryLabel(e)}</span>
-                    {e.type === 'column' && <span className="text-sky-600">{e.dir === 'asc' ? '▲' : '▼'}</span>}
+                    <span className="text-label-3 tabular-nums">{i + 1}</span>
+                    <span className="font-semibold">{entryLabel(e)}</span>
+                    {e.type === 'column' && <span className="text-accent">{e.dir === 'asc' ? '▲' : '▼'}</span>}
                     <button
                         onClick={() => onRemove(e)}
                         title="Remove this sort"
-                        className="cursor-pointer text-slate-400 hover:text-red-600 px-0.5 leading-none"
+                        className="cursor-pointer text-label-3 hover:text-miss px-0.5 leading-none"
                     >
                         &times;
                     </button>
@@ -29,7 +29,7 @@ export default function SortPills({ chain, entryLabel, onRemove, onClear }) {
             <button
                 onClick={onClear}
                 title="Clear all sorts"
-                className="cursor-pointer ml-1 text-xs text-slate-500 hover:text-red-600 hover:underline"
+                className="cursor-pointer ml-1 text-xs text-label-2 hover:text-miss"
             >
                 Clear all
             </button>

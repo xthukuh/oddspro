@@ -21,6 +21,8 @@ const BASE_FIELDS = {
     provider: { sql: 'm.provider', type: 'string' },
     start_time: { sql: 'm.start_time', type: 'datetime' },
     fixture: { sql: "CONCAT(m.home_team_name, ' - ', m.away_team_name)", raw: true, type: 'string' },
+    home_team: { sql: 'm.home_team_name', type: 'string' },
+    away_team: { sql: 'm.away_team_name', type: 'string' },
     goals: {
         sql: "(CASE WHEN f.status IN ('FT','AET','PEN','AWD','WO') THEN m.home_score_fulltime + m.away_score_fulltime END)",
         raw: true, type: 'number',

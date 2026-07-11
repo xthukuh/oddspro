@@ -1,13 +1,13 @@
 // Client-side filter engine: conditions over columns the server can't
-// WHERE on (the JS-derived STATS columns, score) run in the browser — the
+// WHERE on (the JS-derived STATS columns, score) run in the browser - the
 // table already holds the whole selection (per_page=all), mirroring how
 // sorting went client-side. Pure module (imports only sortValues.js) so
 // node:test covers it offline like the other rule modules.
 
-import { sortValue } from './sortValues.js';
-// Shared VERBATIM with the server (src/db/records.js) so a CSV list splits
-// identically both sides - vite's fs.allow covers the out-of-root import.
-import { parseFilterList } from '../../src/db/filter-csv.js';
+// Condition/group evaluation + the raw-value helper live in filterExpr.js (one
+// source of truth for filter semantics - this module delegates so the flat-AND
+// path and the advanced nested/expression path can never drift).
+import { rawValue, filterRows, parseTipFilter } from './filterExpr.js';
 
 // Keys the API accepts in /api/records filters (catalog base + market
 // columns flagged filterable). Everything else must filter client-side.
@@ -18,87 +18,106 @@ export function serverKeys(catalog) {
     ]);
 }
 
-// Partition applied filters: a condition is server-side only when every
-// column it references (key, and the RHS column in col-mode) is a server
-// key — a single client-side reference pulls the whole condition local.
+// Base fields whose SQL column differs from the DISPLAYED value, so they must
+// filter client-side over what the user sees. `league` renders "Country - Name"
+// but its SQL target is l.name alone - filtering the display is both correct and
+// exactly what the value-picker offers. (The whole day is loaded, so running it
+// client-side costs nothing.)
+export const CLIENT_ONLY_KEYS = new Set(['league']);
+
+// Regex ops have no SQL form; expression conditions are opaque to SQL - both
+// must evaluate over the loaded day.
+const CLIENT_ONLY_OPS = new Set(['match', 'not-match']);
+
+// R26b: a `tip` condition whose value carries a candidate/outcome prefix
+// (`2:`, `H:`, `M2:`, …) can't be a plain `fp.tip_market LIKE` - the server
+// would match the literal "H2:" text and return nothing. Such conditions must
+// evaluate client-side (where parseTipFilter resolves the runner-up + settles
+// hit/miss). A plain, un-prefixed tip value stays server-side, unchanged.
+function tipHasPrefix(f) {
+    if (!f || f.key !== 'tip' || f.col != null || typeof f.value !== 'string') return false;
+    const p = parseTipFilter(f.value);
+    return p.index !== 1 || p.outcome !== null;
+}
+
+// Partition applied filters into a server (SQL) subset and a client subset.
+// A flat array is an implicit top-level AND, so each condition is placed
+// independently: server-side only when every column it references is a server
+// key AND the op has a SQL form. An ADVANCED model (a `{type:'group'}` object -
+// nested groups / OR joins) can't be expressed as flat AND SQL, so it runs
+// entirely client-side (the server loads the whole date; applyClientFilters
+// narrows it). CLIENT_ONLY_KEYS / _OPS and expr conditions force local.
 export function splitFilters(filters, catalog) {
+    if (filters && !Array.isArray(filters) && filters.type === 'group') {
+        return { server: [], client: filters };
+    }
     const keys = serverKeys(catalog);
     const server = [], client = [];
     for (const f of Array.isArray(filters) ? filters : []) {
-        const local = !keys.has(f.key) || (f.col != null && !keys.has(f.col));
+        const local = f.type === 'expr'
+            || CLIENT_ONLY_OPS.has(f.op)
+            || CLIENT_ONLY_KEYS.has(f.key)
+            || tipHasPrefix(f)
+            || !keys.has(f.key)
+            || (f.col != null && !keys.has(f.col));
         (local ? client : server).push(f);
     }
     return { server, client };
 }
 
-// Predicates over a three-way comparison (-1/0/1); `like` is handled
-// separately against the raw displayed text.
-const OPS = {
-    eq: c => c === 0,
-    ne: c => c !== 0,
-    gt: c => c > 0,
-    gte: c => c >= 0,
-    lt: c => c < 0,
-    lte: c => c <= 0,
-};
-
-// Compare a derived row value against the condition's RHS (a literal or
-// another derived value). null when either side is missing or unparsable:
-// missing data never satisfies a predicate — same spirit as nulls-last
-// sorting. Numbers compare numerically, everything else case-insensitively.
-function _compare(a, b) {
-    if (a == null || b == null || b === '') return null;
-    if (typeof a === 'number') {
-        const n = typeof b === 'number' ? b : Number(b);
-        return Number.isNaN(n) ? null : Math.sign(a - n);
+// Count leaf conditions in a filter model (flat array or nested group) - drives
+// the "N active" filter badge and the ViewPills chip. Sub-groups recurse; each
+// leaf condition (plain or expr) counts one.
+export function conditionCount(filters) {
+    if (Array.isArray(filters)) return filters.length;
+    if (filters && filters.type === 'group') {
+        return (filters.items ?? []).reduce(
+            (n, it) => n + (it && it.type === 'group' ? conditionCount(it) : 1), 0);
     }
-    return Math.sign(String(a).toLowerCase().localeCompare(String(b).toLowerCase()));
+    return 0;
 }
 
-// Raw (displayed) value for `like`: the underlying field text, so e.g.
-// `home_form like WWW` matches the letters, not the derived points. The
-// tip column's text is its market pick (server parity: like -> tip_market).
-function _raw(row, col) {
-    if (col.key === 'tip') return row.tip_market ?? null;
-    if (col.group === 'market') return row.markets?.[col.key] ?? null;
-    if (col.key.startsWith('fs:')) return row.stats?.[col.key] ?? null;
-    return row[col.key] ?? null;
-}
-
-// AND-combined client conditions. Comparison ops evaluate the SAME derived
-// value sorting uses (sortValue: form → points, "gf/ga (avg)" → avg,
-// "H / A" → sum, score → total goals) so filtering always agrees with the
-// column's sort order. `columns` descriptors come from the full catalog —
-// independent of which columns are visible, hidden columns filter fine.
+// AND-combined client conditions over the loaded day. A flat condition array is
+// an implicit top-level AND group; filterRows (filterExpr.js) evaluates each
+// condition with the SAME derived semantics sorting uses (form → points,
+// "gf/ga (avg)" → avg, "H / A" → sum, score → total goals), so filtering always
+// agrees with the column's sort order. Hidden columns filter fine - descriptors
+// come from the full catalog, independent of visibility.
 export function applyClientFilters(rows, filters, columns) {
-    if (!Array.isArray(filters) || !filters.length) return rows;
-    const byKey = new Map(columns.map(c => [c.key, c]));
-    const col = k => byKey.get(k) ?? { key: k };
-    return rows.filter(row => filters.every(f => {
-        const lhs = col(f.key);
-        // Text/set ops (no column-to-column form) match the RAW displayed value,
-        // not the derived sort value. A missing raw never satisfies (nulls-last
-        // spirit), matching the server's NOT LIKE / NOT IN NULL handling.
-        if ((f.op === 'like' || f.op === 'not-contains') && f.col == null) {
-            const raw = _raw(row, lhs);
-            if (raw == null) return false;
-            const has = String(raw).toLowerCase().includes(String(f.value).toLowerCase());
-            return f.op === 'like' ? has : !has;
-        }
-        if ((f.op === 'in' || f.op === 'not-in') && f.col == null) {
-            const raw = _raw(row, lhs);
-            if (raw == null) return false;
-            // _compare === 0 is number-vs-number when both parse numeric (price
-            // 2.5 matches "2.5"), else case-insensitive string equality.
-            const inSet = parseFilterList(f.value).some(it => _compare(raw, it) === 0);
-            return f.op === 'in' ? inSet : !inSet;
-        }
-        const test = OPS[f.op];
-        if (!test) return false;
-        const rhs = f.col != null ? sortValue(row, col(f.col)) : f.value;
-        const cmp = _compare(sortValue(row, lhs), rhs);
-        return cmp != null && test(cmp);
-    }));
+    return filterRows(rows, filters, columns);
+}
+
+// Distinct displayed values of a column across the loaded rows, for filter
+// value pickers on low-cardinality fields (league, status, provider, season,
+// round). Uses the RAW displayed value (rawValue) so the options match what the
+// user sees AND what the filter compares. Returns [] once the distinct count
+// exceeds `cap` (too many to be a useful list - the caller falls back to free
+// text). Numbers sort numerically, strings case-insensitively.
+export function distinctValues(rows, col, cap = 50) {
+    const seen = new Set();
+    for (const r of rows ?? []) {
+        const v = rawValue(r, col);
+        if (v == null || v === '') continue;
+        seen.add(typeof v === 'number' ? v : String(v));
+        if (seen.size > cap) return [];
+    }
+    return [...seen].sort((a, b) => (
+        typeof a === 'number' && typeof b === 'number'
+            ? a - b
+            : String(a).localeCompare(String(b), undefined, { sensitivity: 'base' })
+    ));
+}
+
+// Serialize picker selections back into the `in`/`not-in` CSV shape
+// parseFilterList understands: quote any item holding a comma, whitespace or a
+// quote, doubling inner quotes. Inverse of parseFilterList.
+export function toFilterCsv(items) {
+    return (items ?? [])
+        .map(raw => {
+            const s = String(raw);
+            return /[",\s]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s;
+        })
+        .join(',');
 }
 
 // Settled-outcome display toggles (client-side, over the whole loaded day):
@@ -121,4 +140,77 @@ export function applyOutcomeToggles(rows, { hideHits = false, hideMiss = false, 
         if (noMiss && (r.tip_market == null || failed.has(r.tip_market))) return false;
         return true;
     });
+}
+
+// Row selection (the "Select" checkbox column): stamp each row's `select`
+// boolean from the persisted id set (keyed by stable match_id), so the Select
+// column, the Select filter field ($row['select']) and the hide-cut all read
+// one field. Returns new row objects (never mutates the fetched data).
+export function stampSelection(rows, selectedIds) {
+    const ids = selectedIds instanceof Set ? selectedIds : new Set(selectedIds ?? []);
+    return (rows ?? []).map(r => ({ ...r, select: ids.has(r.match_id) }));
+}
+
+// "With Selected → Hide selection": drop checked rows from every record view
+// (table, filter options, day calcs, betslip pool) when the toggle is on. Keyed
+// off the stamped `select` flag, so it's identity-based and survives filtering.
+export function applySelectionHide(rows, hide) {
+    return hide ? (rows ?? []).filter(r => !r.select) : rows;
+}
+
+// "With Selected → Keep selection": the inverse of Hide selection - drop every
+// UNCHECKED row so only the checked ones remain across every record view. Same
+// identity-based `select` flag (survives filtering). Mutually exclusive with
+// Hide selection in the UI (both on would empty the view).
+export function applySelectionKeep(rows, keep) {
+    return keep ? (rows ?? []).filter(r => r.select) : rows;
+}
+
+// Footer betting-ledger summary over the DISPLAYED rows: treat each shown pick
+// as one flat `stake`-unit bet, deduped to one bet per canonical fixture
+// (api_id) since a fixture's tip is fixture-level (each provider row repeats it).
+// Only tipped fixtures with a real positive price count.
+//   picks     - unique displayed fixtures carrying a bettable tip
+//   totalOdds - Σ of the picks' prices ("total odds"); × stake = potential value
+//   value     - stake × totalOdds (gross return if EVERY pick won - a ceiling)
+//   won/lost  - settled hits / misses; settled = won + lost
+//   staked    - stake × settled  (only settled bets are realised)
+//   returned  - Σ over settled hits of stake × price
+//   profit    - returned − staked (settled P/L; pending stakes not yet lost -
+//               same convention as the betslip playground's slipTotals)
+export function displayedSummary(rows, stake = 1) {
+    const seen = new Set();
+    let picks = 0, totalOdds = 0, won = 0, lost = 0, returned = 0;
+    for (const r of rows ?? []) {
+        const price = Number(r.tip_price);
+        if (r.tip_market == null || !Number.isFinite(price) || price <= 0) continue;
+        if (r.api_id != null) { if (seen.has(r.api_id)) continue; seen.add(r.api_id); }
+        picks += 1;
+        totalOdds += price;
+        if (r.tip_outcome === 'hit') { won += 1; returned += stake * price; }
+        else if (r.tip_outcome === 'miss') { lost += 1; }
+    }
+    const settled = won + lost;
+    const staked = stake * settled;
+    return { picks, totalOdds, value: stake * totalOdds, won, lost, settled, staked, returned, profit: returned - staked };
+}
+
+// One-of-each view: collapse to a single row per canonical fixture (api_id),
+// keeping the row from the highest-priority provider present (`priority` is the
+// ordered provider list, index 0 = top). Providers absent from the list rank
+// last; rows without an api_id are never merged. A game only a lower-priority
+// provider carries still appears, so enabled providers complement one another
+// and no game is missed. Kept rows keep their incoming (sorted) order.
+export function applyOneOfEach(rows, priority = []) {
+    if (!Array.isArray(rows) || rows.length < 2) return rows;
+    const rank = new Map(priority.map((p, i) => [p, i]));
+    const rankOf = p => (rank.has(p) ? rank.get(p) : Number.MAX_SAFE_INTEGER);
+    const best = new Map(); // api_id (or the row itself when id-less) -> chosen row
+    for (const r of rows) {
+        if (r.api_id == null) { best.set(r, r); continue; }
+        const cur = best.get(r.api_id);
+        if (cur === undefined || rankOf(r.provider) < rankOf(cur.provider)) best.set(r.api_id, r);
+    }
+    const keep = new Set(best.values());
+    return rows.filter(r => keep.has(r));
 }

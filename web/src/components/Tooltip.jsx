@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { Z } from '../zLayers.js';
 
 // Reusable tooltip that works on TOUCH (tap to toggle) as well as desktop
 // (hover). Native `title=` tooltips never appear on touch devices, yet the
@@ -73,11 +74,11 @@ export default function Tooltip({ content, children, className = '' }) {
             {children}
             {open && (
                 <>
-                    {tap && <div className="fixed inset-0 z-40" onClick={e => { e.stopPropagation(); close(); }} />}
+                    {tap && <div className={`fixed inset-0 ${Z.tooltipCatcher}`} onClick={e => { e.stopPropagation(); close(); }} />}
                     <div
                         role="tooltip"
                         style={{ top: pos.top, left: pos.left }}
-                        className="fixed z-50 w-max max-w-[280px] max-h-[60vh] overflow-y-auto whitespace-pre-line pointer-events-none bg-slate-800 text-slate-100 text-xs leading-snug rounded-md shadow-xl px-2.5 py-1.5"
+                        className={`fixed ${Z.tooltip} w-max max-w-[280px] max-h-[60vh] overflow-y-auto whitespace-pre-line pointer-events-none bg-surface text-label border border-separator-2 text-xs leading-snug rounded-xl shadow-2xl px-2.5 py-1.5`}
                     >
                         {content}
                     </div>

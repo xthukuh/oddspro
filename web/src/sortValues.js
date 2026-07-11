@@ -46,6 +46,13 @@ const _str = v => (v == null || v === '' ? null : String(v).toLowerCase());
 // Per-column extractors; market and fs: columns fall through to the group
 // handling in sortValue.
 const VALUES = {
+    // Synthetic "No" column: its load-order anchor position, stamped on the row
+    // by App upstream of the client filters (so `no` is filterable too, R27d);
+    // null when unstamped -> sorts last, like any missing value.
+    no: r => _num(r._no),
+    // Synthetic "Select" column: the row's checkbox state (stamped boolean);
+    // sorts checked-first under descending. Non-boolean -> null (sorts last).
+    select: r => (r.select == null ? null : (r.select ? 1 : 0)),
     api_id: r => _num(r.api_id),
     start_time: r => _date(r.start_time),
     fixture: r => _str(r.fixture),
@@ -56,6 +63,10 @@ const VALUES = {
     tip: r => (r.tip_confidence == null && !r.hot
         ? null
         : (Number(r.tip_confidence) || 0) + (r.hot ? 1 : 0)),
+    // The chosen tip's overall confidence as an integer win % (0-100), matching
+    // the % the tip cell displays - a filter-only field (no hot bonus, no table
+    // column) so users can screen by "win % ≥ 70".
+    tip_confidence: r => (r.tip_confidence == null ? null : Math.round(Number(r.tip_confidence) * 100)),
     status: r => _str(r.status),
     updated_at: r => _date(r.updated_at),
     locked_at: r => _date(r.locked_at),

@@ -11,3 +11,18 @@ export function shouldReloadForJob(job, loadedDate) {
     if (job.mode === 'full') return true;
     return Array.isArray(job.dates) && job.dates.includes(loadedDate);
 }
+
+// Decide whether the loaded date's data is stale enough to nudge a refresh
+// (F2). Only today/future dates can go stale - past fixtures are settled and
+// frozen, so their data never ages. `freshestAt` is the newest odds
+// `updated_at` across the loaded rows (ms epoch or ISO string), or null when
+// nothing is loaded yet. Returns false for past dates, empty selections, or the
+// all-dates view; true only when live-day data exists and is older than
+// `maxAgeMinutes`.
+export function isDateStale({ freshestAt, isPast, isAllDates = false, now = Date.now(), maxAgeMinutes = 20 } = {}) {
+    if (isAllDates || isPast) return false;   // frozen / mixed - no single-date staleness
+    if (freshestAt == null) return false;     // nothing loaded - not "stale", just empty
+    const ts = typeof freshestAt === 'number' ? freshestAt : new Date(freshestAt).getTime();
+    if (!Number.isFinite(ts)) return false;
+    return (now - ts) / 60000 > maxAgeMinutes;
+}

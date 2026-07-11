@@ -10,49 +10,41 @@ import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
+// Pure settler (zero-import) - grades a runner-up market from the final score
+// (the settle pass only stores the CHOSEN tip's outcome).
+import { tipHit } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
+import { IconSpinner } from './icons.jsx';
+import { BASE_COLUMNS } from '../baseColumns.js';
+// Re-exported so existing importers (App, SettingsModal) keep their path.
+export { BASE_COLUMNS } from '../baseColumns.js';
 
+// Distinct, non-semantic badge hues (AX4): blue vs violet, so a provider chip
+// never collides with hit(green)/accent(teal)/hot(orange)/miss(red). New
+// bookmakers fall back to a neutral fill.
 const PROVIDER_STYLE = {
-    betpawa: 'bg-emerald-100 text-emerald-800',
-    betika: 'bg-sky-100 text-sky-800',
+    betpawa: 'bg-provider-a/15 text-provider-a',
+    betika: 'bg-provider-b/15 text-provider-b',
 };
-
-// Base columns are always shown (README temp-csv order); match_url folds
-// into the fixture cell as an outbound link. Exported for the settings
-// modal's column-order control.
-export const BASE_COLUMNS = [
-    { key: 'api_id', label: 'API ID' },
-    { key: 'start_time', label: 'Start' },
-    { key: 'fixture', label: 'Fixture' },
-    { key: 'provider', label: 'Provider' },
-    { key: 'score', label: 'Score' },
-    { key: 'goals', label: 'Goals' },
-    { key: 'tip', label: 'Tip' },
-    { key: 'status', label: 'Status' },
-    { key: 'updated_at', label: 'Updated' },
-    { key: 'locked_at', label: 'Locked' },
-];
 
 // Two alternating row tones cycled by canonical fixture (api_id) in
 // first-appearance order: the same fixture shown once per provider shares a
 // tone, adjacent fixtures always differ. Opaque classes on purpose - the
 // sticky Score cell reuses them to cover content scrolling underneath.
-const ROW_TINTS = ['bg-white', 'bg-slate-100'];
+const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
 
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
 const HEADER_META = {
-    api_id: { short: 'ID', info: 'API-Football fixture id' },
-    start_time: { info: 'Kickoff time' },
+    no: { info: 'Row number in the current order. Sort by it, or freeze it with "Pin position" in Settings so re-sorting doesn\'t renumber.' },
+    start_time: { info: 'Kickoff time (with the fixture id) - hover a cell for the full date & match details' },
     fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
     goals: { info: 'Total goals at full time' },
-    tip: { info: 'Safest bettable outcome + blended confidence - 🔥 marks an over-2.5 hot pick' },
-    status: { info: 'Fixture status' },
-    updated_at: { info: 'Last bookmaker odds refresh' },
-    locked_at: { info: 'Betting closed - odds frozen and final' },
+    tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
+    status: { info: 'Fixture status - hover a cell for the odds-refresh & betting-closed times' },
     league: { info: 'Country - league' },
     season: { info: 'Season (starting year)' },
     round: { info: 'Competition round' },
@@ -110,6 +102,14 @@ function _time(value) {
     return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+// Time only (HH:MM). The date is redundant now that the whole table is one day
+// (the toolbar shows it), so the Start column drops the date to save width.
+function _hm(value) {
+    const d = new Date(value);
+    const p = n => String(n).padStart(2, '0');
+    return `${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
 const _dt = value => (value ? new Date(value).toLocaleString() : null);
 
 // H2H tooltip: recent meeting lines (date, names, score) + overflow marker
@@ -127,12 +127,14 @@ function _h2hTitle(row) {
 // Interactive inner elements (fixture link, tip span, hot badge) carry their
 // own titles, which win on direct hover.
 const CELL_TITLES = {
-    api_id: row => [
+    // Start now carries the fixture id + canonical name + league context that the
+    // removed ID column used to own, on top of the full kickoff timestamp.
+    start_time: row => [
+        _dt(row.start_time),
         `Fixture #${row.api_id}`,
         row.fixture_api,
         [row.league, row.season, row.round].filter(v => v != null).join(' · ') || null,
     ].filter(Boolean).join('\n'),
-    start_time: row => _dt(row.start_time),
     fixture: row => (row.fixture_api && row.fixture_api !== row.fixture ? row.fixture_api : null),
     score: row => {
         if (!row.score) return null;
@@ -152,14 +154,19 @@ const CELL_TITLES = {
             _dt(row.locked_at ?? row.updated_at),
         ].filter(Boolean).join('\n');
     },
+    // Status absorbs the removed Updated/Locked columns: the human status (plus
+    // live minute) then the odds-refresh and betting-closed timestamps.
     status: row => {
-        const info = STATUS_INFO[row.status] ?? null;
-        return info && LIVE_MINUTE.has(row.status) && row.elapsed != null
-            ? `${info} — ${row.elapsed}'`
+        const info = STATUS_INFO[row.status] ?? row.status;
+        const head = info && LIVE_MINUTE.has(row.status) && row.elapsed != null
+            ? `${info} - ${row.elapsed}'`
             : info;
+        return [
+            head,
+            row.updated_at ? `Updated ${_dt(row.updated_at)}` : null,
+            row.locked_at ? `Locked ${_dt(row.locked_at)}` : null,
+        ].filter(Boolean).join('\n');
     },
-    updated_at: row => _dt(row.updated_at),
-    locked_at: row => _dt(row.locked_at),
     home_rank: row => (row.home_rank != null ? `${row.home_team ?? 'Home'} - current league rank` : null),
     away_rank: row => (row.away_rank != null ? `${row.away_team ?? 'Away'} - current league rank` : null),
     home_form: row => (row.home_form ? `${row.home_team ?? 'Home'} - ${HEADER_META.home_form.info}` : null),
@@ -210,31 +217,61 @@ function _cellTitle(row, col) {
     return [base, hint].filter(Boolean).join('\n') || undefined;
 }
 
-// Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. The
-// tooltip carries the AI reason (when adjudicated) or the signal audit.
+// Over 2.5 hot-pick badge: 🔥 while pending, 🔥✓/🔥✗ once settled. Tooltip is
+// deliberately non-revealing - the signal audit / AI reason (our edge) stays
+// out of the UI (see TipPopover's SHOW_INTERNALS).
 function _hotBadge(row) {
     // Non-hot rows are also settled in the ledger (calibration); only actual
     // picks earn the badge - a frozen pick keeps hot=1 forever.
     if (!row.hot) return null;
-    const detail = row.hot_reason
-        ?? (Array.isArray(row.hot_signals)
-            ? row.hot_signals.map(s => `${s.key}: ${s.value ?? '-'}`).join(' · ')
-            : '');
-    const title = `Over 2.5 hot pick${row.hot_score != null ? ` (score ${row.hot_score})` : ''}${detail ? ` - ${detail}` : ''}`;
+    const title = 'Likely a high-scoring game (3+ goals). Click the tip for more.';
     return (
         <span className="mr-1 cursor-help" title={title}>
             🔥
-            {row.hot_outcome === 'hit' && <span className="text-emerald-600 font-bold">✓</span>}
-            {row.hot_outcome === 'miss' && <span className="text-rose-600 font-bold">✗</span>}
+            {row.hot_outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
+            {row.hot_outcome === 'miss' && <span className="text-miss font-bold">✗</span>}
         </span>
     );
 }
 
+// Win-% weight tiers (AX1): the confidence is the number the app exists to
+// surface, so strong picks pop in accent, mid stays default, weak is muted -
+// instead of the flat dim grey it used to share with inert metadata.
+function _pctClass(conf) {
+    if (conf == null) return 'text-label-3';
+    if (conf >= 0.70) return 'text-accent font-semibold';
+    if (conf >= 0.65) return '';
+    return 'text-label-3';
+}
+
+// Settle any market for a final fixture from its canonical score. Runners-up
+// carry no stored outcome (only the chosen tip is graded), so we grade them
+// here; a non-final row (no score) returns null -> pending, no tick.
+function _marketOutcome(row, market) {
+    if (!row.score) return null;
+    const [hs, as] = row.score.split('-').map(Number);
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
+    return tipHit(market, hs, as) ? 'hit' : 'miss';
+}
+
+function _tick(outcome) {
+    if (outcome === 'hit') return <span className="text-hit font-bold"> ✓</span>;
+    if (outcome === 'miss') return <span className="text-miss font-bold"> ✗</span>;
+    return null;
+}
+
 function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
-    if (key === 'start_time') return _time(row.start_time);
-    if (key === 'updated_at' || key === 'locked_at') {
-        return row[key] ? _time(row[key]) : <span className="text-slate-300">-</span>;
+    if (key === 'start_time') {
+        // Two lines (R30): the fixture id as a tiny greyed label on top, the
+        // kickoff time below - uses the taller row the multi-line Tip introduced
+        // and saves horizontal width. Full id/date context lives in the tooltip.
+        return (
+            <div className="leading-tight whitespace-nowrap">
+                <div className="text-label-3 text-[10px] tabular-nums">{row.api_id}</div>
+                <div className="tabular-nums">{_hm(row.start_time)}</div>
+            </div>
+        );
     }
     if (key === 'tip') {
         // Safest bettable outcome + blended confidence; 🔥 marks the fixture
@@ -244,10 +281,10 @@ function _cell(row, col, linkProviders, openTip) {
             // Distinguish "not enough data" (eligibility skip) from "no value
             // found" ('no_pick') and from old rows without a stored reason.
             const reason = row.tip_skip_reason;
-            if (!reason) return <span className="text-slate-300">-</span>;
+            if (!reason) return <span className="text-label-3">-</span>;
             return (
                 <span
-                    className="text-slate-300 italic cursor-pointer"
+                    className="text-label-3 italic cursor-pointer decoration-dotted underline-offset-2 hover:underline"
                     title={`${skipLabel(reason)}\nClick for details`}
                     onClick={e => openTip(row, e)}
                 >
@@ -256,31 +293,51 @@ function _cell(row, col, linkProviders, openTip) {
             );
         }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
-        // The pinned (sticky) duplicate drops the % to stay compact; the real
-        // Tip column keeps it. Full breakdown is a tap away either way.
-        const compact = col.pin;
+        // The pinned (sticky) duplicate renders IDENTICALLY to the real Tip
+        // column - it's sized to that column's measured width, so full parity
+        // (%, runners-up, ticks) fills the space it was already given.
         const vetoed = row.tip_ai_verdict === 'veto';
+        // Non-revealing tooltip: the pick, its odds and confidence - never HOW
+        // it's derived (see TipPopover's SHOW_INTERNALS).
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
-            + ` - market+stats confidence${pct ? ` ${pct}` : ''}`
-            + (row.hot ? ' - 🔥 over-2.5 hot pick fixture' : '')
-            + (vetoed ? ` - AI veto: ${row.tip_ai_reason ?? 'see details'}` : '')
-            + '\nClick for reasoning';
+            + (pct ? ` - confidence ${pct}` : '')
+            + (row.hot ? ' - 🔥 likely high-scoring' : '')
+            + (vetoed ? ' - flagged for caution' : '')
+            + '\nClick for details';
         // A missed tip turns red wholesale; a hit stays calm with its ✓; an
         // AI-vetoed tip is struck through (it stays on record and settles -
         // the performance report measures what the veto was worth).
         const missed = row.tip_outcome === 'miss';
+        // Top-3 picks stacked (chosen + up to two runners-up). The chosen is the
+        // sort value, so it stays bold/full-size; runners-up are smaller & muted,
+        // each with its own settled ✓/✗ (graded from the score). Rendered the
+        // same in the real column and its left-pinned duplicate.
+        const ups = Array.isArray(row.tip_breakdown?.runners_up)
+            ? row.tip_breakdown.runners_up.slice(0, 2) : [];
         return (
-            <span
-                className={`whitespace-nowrap cursor-pointer ${missed ? 'text-rose-600' : vetoed ? 'text-slate-400' : ''}`}
+            <div
+                className="group/tip cursor-pointer leading-tight"
                 title={title}
                 onClick={e => openTip(row, e)}
             >
-                {row.hot ? '🔥 ' : ''}
-                <span className={`font-medium ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                {pct && !compact && <span className={missed || vetoed ? '' : 'text-slate-500'}> · {pct}</span>}
-                {row.tip_outcome === 'hit' && <span className="text-emerald-600 font-bold"> ✓</span>}
-                {missed && <span className="font-bold"> ✗</span>}
-            </span>
+                <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
+                    {row.hot ? '🔥 ' : ''}
+                    <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
+                    {pct && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
+                    {_tick(row.tip_outcome)}
+                </div>
+                {ups.map((r, i) => {
+                    const rpct = r.confidence != null ? `${Math.round(r.confidence * 100)}%` : null;
+                    return (
+                        <div key={i} className="whitespace-nowrap text-[11px] text-label-3">
+                            <span className="tabular-nums">{i + 2}.</span>{' '}
+                            <span>{r.market}</span>
+                            {rpct && <span> · {rpct}</span>}
+                            {_tick(_marketOutcome(row, r.market))}
+                        </div>
+                    );
+                })}
+            </div>
         );
     }
     if (key === 'provider') {
@@ -291,35 +348,54 @@ function _cell(row, col, linkProviders, openTip) {
         );
     }
     if (key === 'fixture') {
-        // Unavailable matches (concluded or no live markets) lose their link
-        // unless the provider is opted in via Settings (betpawa keeps
-        // concluded match pages up for ~6h).
-        const dead = row.available === false;
+        // A match link dies once betting closes. The server marks `available`
+        // false when the fixture is terminal / completed OR the latest refresh
+        // returned zero markets (no betting options). On TOP of that we disable
+        // the link client-side once KICKOFF has passed (start_time <= the
+        // client's clock): many books (e.g. Betika) drop the pre-match link at
+        // kickoff, well before the server records zero markets. Providers opted
+        // in via Settings keep their link regardless (betpawa serves live /
+        // concluded pages ~6h). Re-evaluates on the 60s freshness re-render.
+        const started = row.start_time != null && new Date(row.start_time).getTime() <= Date.now();
+        const dead = row.available === false || started;
         const badge = _hotBadge(row);
         if (row.match_url && (!dead || linkProviders.has(row.provider))) {
             return (
                 <>
                     {badge}
-                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-sky-700 hover:underline">
+                    <a href={row.match_url} target="_blank" rel="noreferrer" className="text-accent hover:opacity-70">
                         {row.fixture}
                     </a>
                 </>
             );
         }
+        const deadTitle = row.available === false ? 'Betting unavailable' : 'Betting closed - match has started';
         return (
             <>
                 {badge}
-                {dead ? <span title="Betting unavailable">{row.fixture}</span> : row.fixture}
+                {dead ? <span title={deadTitle}>{row.fixture}</span> : row.fixture}
             </>
         );
     }
+    if (key === 'status' && LIVE_MINUTE.has(row.status) && row.elapsed != null) {
+        // In-play: surface the live minute on a second muted line - the taller
+        // row (R30, driven by the multi-line Tip/Start cells) gives it space, so
+        // the minute reads at a glance without hovering the tooltip. Static
+        // statuses stay single-line via the generic path below.
+        return (
+            <div className="leading-tight whitespace-nowrap">
+                <div>{row.status}</div>
+                <div className="text-label-3 text-[10px] tabular-nums">{row.elapsed}&rsquo;</div>
+            </div>
+        );
+    }
     const value = key.startsWith('fs:') ? row.stats[key] : row[key];
-    if (value == null) return <span className="text-slate-300">-</span>;
+    if (value == null) return <span className="text-label-3">-</span>;
     // Prefix text columns with their hidden derived sort value (e.g. 8:LWWWD).
     if (_isPrefixed(key)) {
         const v = sortValue(row, col);
         if (v != null) {
-            return <><span className="text-slate-400">{_sortNum(v)}:</span>{value}</>;
+            return <><span className="text-label-3">{_sortNum(v)}:</span>{value}</>;
         }
     }
     return value;
@@ -332,26 +408,38 @@ function _cell(row, col, linkProviders, openTip) {
 function _marketCell(row, key) {
     const frozen = row.available === false;
     const fresh = row.markets[key];
+    // A non-positive price (0.00) is a suspended/void market, not a real odd -
+    // render it as a distinct placeholder so it can't read as a genuine number.
+    if (fresh != null && fresh <= 0) {
+        return <span className="text-label-3" title="Suspended - no price">✕</span>;
+    }
     if (fresh != null) {
         return frozen
-            ? <span className="text-slate-400" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>
+            ? <span className="text-label-3" title="Frozen - betting unavailable">{fresh.toFixed(2)}</span>
             : fresh.toFixed(2);
     }
     const stale = row.markets_stale?.[key];
-    if (stale != null) return <span className="text-slate-400" title="No longer offered">{stale.toFixed(2)}</span>;
-    return <span className="text-slate-300">-</span>;
+    if (stale != null) return <span className="text-label-3" title="No longer offered">{stale.toFixed(2)}</span>;
+    return <span className="text-label-3">-</span>;
 }
 
 // Magic column cell: the row's rank under the active strategy + its raw
 // score (strategies keep their native scales - no fake percentages).
 function _magicCell(row, meta) {
     const m = meta?.info.get(row.api_id);
-    if (!m) return <span className="text-slate-300">—</span>;
+    if (!m) return <span className="text-label-3">-</span>;
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
 
-export default function DataTable({ catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey }) {
+export default function DataTable({
+    catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey,
+    visibleBase = null, selection, onToggleSelect, onToggleAll, noPin = false,
+    filterCount = 0, onClearFilters,
+}) {
     const links = new Set(linkProviders ?? []);
+    // Base/synthetic column visibility (R27b/R28a): null = all shown.
+    const baseVisible = key => !visibleBase || visibleBase.has(key);
+    const showSelect = baseVisible('select');
 
     // Tip justification popover, anchored at the click point (one at a time)
     const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
@@ -364,11 +452,25 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // empty market/stat columns (base columns always show).
     const columns = useMemo(() => {
         const statLabel = new Map(catalog?.stats.map(c => [c.key, c.label]) ?? []);
-        const cols = applyOrder([
+        // The synthetic "No" row-number column joins the base set (orderable +
+        // sortable); "Select" is handled separately (always-left pin). Base
+        // columns are now individually hideable via `visibleBase`.
+        const baseCols = [
+            { key: 'no', label: 'No', group: 'base' },
             ...BASE_COLUMNS.map(c => ({ ...c, group: 'base' })),
+        ].filter(c => baseVisible(c.key));
+        let cols = applyOrder([
+            ...baseCols,
             ...marketKeys.map(key => ({ key, label: key, group: 'market' })),
             ...statKeys.map(key => ({ key, label: statLabel.get(key) ?? key, group: 'stat' })),
         ], columnOrder);
+        // "No" defaults to the first column after the pinned Select checkbox.
+        // A saved order predating the column (legacy) would otherwise append it
+        // at the end; only an order that EXPLICITLY lists `no` may move it.
+        if (baseVisible('no') && !(Array.isArray(columnOrder) && columnOrder.includes('no'))) {
+            const noCol = cols.find(c => c.key === 'no');
+            if (noCol) cols = [noCol, ...cols.filter(c => c.key !== 'no')];
+        }
         if (!rows.length) return cols;
         return cols.filter(col => {
             if (col.group === 'base') return true;
@@ -378,15 +480,23 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
             if (col.key.startsWith('fs:')) return rows.some(r => r.stats?.[col.key] != null);
             return rows.some(r => r[col.key] != null);
         });
-    }, [catalog, rows, marketKeys, statKeys, columnOrder]);
+    }, [catalog, rows, marketKeys, statKeys, columnOrder, visibleBase]);
 
-    // One ordering for the whole unified chain (column sorts + magic
-    // strategies interleaved by priority); tipless/vetoed rows sink on magic
-    // entries, nulls sink on column entries.
-    const sorted = useMemo(
-        () => orderRows(rows, chain, columns, cal),
-        [rows, chain, columns, cal],
-    );
+    // One ordering for the whole unified chain (column sorts + magic strategies
+    // interleaved by priority); tipless/vetoed rows sink on magic entries, nulls
+    // sink on column entries. The `_no` load-order anchor is stamped by App
+    // (upstream of the client filters, so `no` is filterable too) - a No-column
+    // sort reads it via sortValue.
+    const sorted = useMemo(() => orderRows(rows, chain, columns, cal), [rows, chain, columns, cal]);
+
+    // Displayed row number per row: live position in the sorted order, or the
+    // frozen load-order anchor (`_no`) when "pin position" is on (so re-sorting
+    // doesn't renumber).
+    const noByRow = useMemo(() => {
+        const m = new Map();
+        sorted.forEach((r, i) => m.set(r.match_id, noPin ? (r._no ?? i + 1) : i + 1));
+        return m;
+    }, [sorted, noPin]);
 
     // The magic column tracks the highest-priority magic entry in the chain
     // (if any). Score from that strategy; rank per unique fixture in the FINAL
@@ -436,8 +546,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // amount, so the states never oscillate at the boundary.
     // Only Score and Tip stay pinned (on every screen size) - keeping the set
     // small leaves room for other columns on narrow widths. The ephemeral magic
-    // column scrolls with the rest.
-    const PIN_KEYS = ['score', 'tip'];
+    // column scrolls with the rest. Score only pins when the day actually HAS
+    // scores (upcoming fixtures are all dashes - no point stickying an empty
+    // column); Tip is always pinnable.
+    const scoreHasData = rows.some(r => r.score != null && r.score !== '');
+    const PIN_KEYS = scoreHasData ? ['score', 'tip'] : ['tip'];
     const containerRef = useRef(null);
     const pinThRefs = useRef({}); // key -> the real column's <th>
     const [pinState, setPinState] = useState({}); // key -> pinned?
@@ -446,6 +559,11 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
     // (date/server-filter navigation) is an intentional reset to the top.
     const posRef = useRef({ top: 0, left: 0 });
     const scrollKeyRef = useRef(scrollKey);
+    // Right-edge fade affordance (AX8): true once the table is scrolled to its
+    // right end (or isn't horizontally scrollable) - the fade then hides. The
+    // left edge needs no fade: the pinned columns already occupy it.
+    const [atEnd, setAtEnd] = useState(true);
+    const _atEnd = cont => cont.scrollLeft + cont.clientWidth >= cont.scrollWidth - 1;
     useLayoutEffect(() => {
         const cont = containerRef.current;
         if (!cont) return;
@@ -457,11 +575,13 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
             cont.scrollTop = posRef.current.top;
             cont.scrollLeft = posRef.current.left;
         }
+        setAtEnd(_atEnd(cont));
     }, [rows, scrollKey]);
     const onScroll = () => {
         const cont = containerRef.current;
         if (!cont) return;
         posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
+        setAtEnd(_atEnd(cont));
         const contLeft = cont.getBoundingClientRect().left;
         setPinState(prev => {
             const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
@@ -478,27 +598,55 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
             return changed ? next : prev;
         });
     };
+    // The Select column (R28) is a permanent left-pinned column (fixed width,
+    // no scrolling duplicate) sitting at the very left edge; the Score/Tip pins
+    // stack to its right.
+    const SELECT_W = 40;
+    const selectCol = showSelect ? { key: 'select', group: 'select', pin: true, left: 0, width: SELECT_W } : null;
     // Pins keep the columns' own (drag-order) relative order and stack with
     // cumulative left offsets so they never overlap.
-    let pinLeft = 0;
-    const pins = displayColumns.filter(c => pinState[c.key]).map(c => {
-        const p = { ...c, pin: true, left: pinLeft };
-        pinLeft += pinThRefs.current[c.key]?.offsetWidth ?? 0;
+    let pinLeft = selectCol ? SELECT_W : 0;
+    // Require PIN_KEYS membership too: if Score just lost its data it leaves
+    // PIN_KEYS, but a stale pinState.score must not still pin the empty column.
+    const pins = displayColumns.filter(c => PIN_KEYS.includes(c.key) && pinState[c.key]).map(c => {
+        // Pin the duplicate to the EXACT measured width of its real column and
+        // advance the next pin's offset by the same value, so two adjacent pins
+        // (any order, e.g. Tip before Score) butt together with no gap for the
+        // scrolling content to bleed through.
+        const w = pinThRefs.current[c.key]?.offsetWidth ?? 0;
+        const p = { ...c, pin: true, left: pinLeft, width: w || undefined };
+        pinLeft += w;
         return p;
     });
-    const pinned = pins.length ? [...pins, ...displayColumns] : displayColumns;
+    const pinned = [...(selectCol ? [selectCol] : []), ...pins, ...displayColumns];
+
+    // Check-all state over the currently displayed rows (R28).
+    const selCount = sorted.reduce((n, r) => n + (r.select ? 1 : 0), 0);
+    const allSelected = sorted.length > 0 && selCount === sorted.length;
+    const someSelected = selCount > 0 && !allSelected;
 
     return (
         <>
         {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} onClose={() => setTipPop(null)} />}
+        <div className="relative flex-1 min-h-0 flex flex-col">
+        {/* Non-silent load: blur the stale table + float a spinner over it
+            (silent background reloads pass loading=false, so they never dim). */}
+        {loading && (
+            <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
+                <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface/90 border border-separator-2 shadow-lg [backdrop-filter:blur(6px)]">
+                    <IconSpinner className="[animation:op-spin_0.8s_linear_infinite] text-accent" />
+                    <span className="text-xs font-medium text-label-2">Loading…</span>
+                </div>
+            </div>
+        )}
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`overflow-auto max-h-[calc(100vh-13rem)] sm:max-h-[calc(100vh-10.5rem)] bg-white rounded-lg border border-slate-200 shadow-sm ${loading ? 'opacity-60' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm transition-[filter,opacity] ${loading ? 'blur-[1.5px] opacity-70' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
-                    <tr className="text-left text-slate-600 select-none">
+                    <tr className="text-left text-label-2 select-none">
                         {pinned.map(col => {
                             const s = order.get(col.key);
                             const meta = HEADER_META[col.key];
@@ -509,30 +657,47 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             // cells themselves (tr backgrounds/borders don't
                             // stick); a pinned corner cell wins both axes.
                             const sticky = col.pin
-                                ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_#e2e8f0]'
-                                : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_#e2e8f0]';
+                                ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_var(--separator-2)]'
+                                : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_var(--separator-2)]';
+                            const isSelect = col.group === 'select';
+                            const noSort = col.key === 'magic' || isSelect;
                             return (
                                 <th
                                     key={col.pin ? `pin:${col.key}` : col.key}
-                                    style={col.pin ? { left: col.left } : undefined}
+                                    style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
                                     ref={!col.pin && PIN_KEYS.includes(col.key)
                                         ? el => { pinThRefs.current[col.key] = el; }
                                         : undefined}
-                                    onClick={col.key === 'magic' ? undefined : e => onSort(col.key, e.shiftKey)}
-                                    className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-slate-100'} ${col.group === 'market' ? 'text-center' : ''}`}
+                                    onClick={noSort ? undefined : e => onSort(col.key, e.shiftKey)}
+                                    className={`${sticky} bg-surface-2 px-2.5 py-2 font-semibold ${noSort ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' || isSelect ? 'text-center' : ''}`}
                                     title={col.key === 'magic'
                                         ? `Magic sort${magicLabels.length > 1 ? `s (${magicLabels.length})` : ''}: ${magicLabels.join(', ')} - #rank · strategy score`
-                                        : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
+                                        : isSelect
+                                            ? `Select / deselect all ${sorted.length} shown row${sorted.length === 1 ? '' : 's'}`
+                                            : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
                                 >
-                                    {meta?.short ?? col.label}
-                                    {s && (
-                                        <span className="ml-1 text-sky-600">
-                                            {s.dir === 'asc' ? '▲' : '▼'}
-                                            {chain.length > 1 && <sup>{s.i + 1}</sup>}
-                                        </span>
-                                    )}
-                                    {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
-                                        <sup className="ml-0.5 text-sky-600">{magicPos + 1}</sup>
+                                    {isSelect ? (
+                                        <input
+                                            type="checkbox"
+                                            aria-label="Select all"
+                                            checked={allSelected}
+                                            ref={el => { if (el) el.indeterminate = someSelected; }}
+                                            onChange={() => onToggleAll?.(sorted.map(r => r.match_id), !allSelected)}
+                                            className="accent-accent h-4 w-4 align-middle cursor-pointer"
+                                        />
+                                    ) : (
+                                        <>
+                                            {meta?.short ?? col.label}
+                                            {s && (
+                                                <span className="ml-1 text-accent">
+                                                    {s.dir === 'asc' ? '▲' : '▼'}
+                                                    {chain.length > 1 && <sup>{s.i + 1}</sup>}
+                                                </span>
+                                            )}
+                                            {col.key === 'magic' && magicPos >= 0 && chain.length > 1 && (
+                                                <sup className="ml-0.5 text-accent">{magicPos + 1}</sup>
+                                            )}
+                                        </>
                                     )}
                                 </th>
                             );
@@ -543,13 +708,27 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                     {sorted.map(row => (
                         <tr
                             key={row.match_id}
-                            className={`group border-b border-slate-100 ${tint.get(row.api_id) ?? ''} hover:bg-slate-200/70`}
+                            // Opaque bg fallback MUST match the pinned cell's fallback below
+                            // (both 'bg-surface') so a tint-less row can't bleed the app
+                            // background through the gap beside the left-pinned columns.
+                            className={`group border-b border-hairline ${tint.get(row.api_id) ?? 'bg-surface'} hover:bg-fill`}
                         >
                             {pinned.map(col => {
-                                const content = col.key === 'magic' ? _magicCell(row, magicMeta)
+                                const isSelect = col.group === 'select';
+                                const content = isSelect ? (
+                                    <input
+                                        type="checkbox"
+                                        aria-label="Select row"
+                                        checked={!!row.select}
+                                        onChange={() => onToggleSelect?.(row.match_id)}
+                                        className="accent-accent h-4 w-4 cursor-pointer"
+                                    />
+                                ) : col.key === 'no' ? (
+                                    <span className="text-label-3 tabular-nums">{noByRow.get(row.match_id) ?? ''}</span>
+                                ) : col.key === 'magic' ? _magicCell(row, magicMeta)
                                     : col.group === 'market' ? _marketCell(row, col.key)
                                     : _cell(row, col, links, openTip);
-                                const cellTitle = _cellTitle(row, col);
+                                const cellTitle = isSelect ? undefined : _cellTitle(row, col);
                                 // Tip & fixture own their tap actions (popover / link) and
                                 // keep their native titles; every other cell routes its
                                 // hidden-content title through the touch-friendly Tooltip.
@@ -558,9 +737,9 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                                     <td
                                         key={col.pin ? `pin:${col.key}` : col.key}
                                         title={wrap ? undefined : cellTitle}
-                                        style={col.pin ? { left: col.left } : undefined}
-                                        className={`px-2 py-1 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${col.pin
-                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-white'} group-hover:bg-slate-200 shadow-[inset_-1px_0_0_#e2e8f0]`
+                                        style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
+                                        className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
+                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:bg-fill shadow-[inset_-1px_0_0_var(--separator-2)]`
                                             : ''}`}
                                     >
                                         {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}
@@ -569,15 +748,43 @@ export default function DataTable({ catalog, rows, marketKeys, statKeys, columnO
                             })}
                         </tr>
                     ))}
-                    {!rows.length && (
+                    {!rows.length && !loading && (
                         <tr>
-                            <td colSpan={pinned.length} className="px-2 py-8 text-center text-slate-400">
-                                {loading ? 'Loading...' : 'No correlated records for this selection.'}
+                            <td colSpan={pinned.length} className="px-2 py-10 text-center">
+                                <div className="flex flex-col items-center gap-2 text-label-3">
+                                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="opacity-70">
+                                        <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.6"/>
+                                        <path d="M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                                        <path d="M8 11h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                                    </svg>
+                                    <span className="text-sm text-label-2">
+                                        {filterCount > 0
+                                            ? 'No rows match your filters.'
+                                            : 'No correlated records for this selection.'}
+                                    </span>
+                                    {filterCount > 0 && onClearFilters && (
+                                        <button
+                                            onClick={onClearFilters}
+                                            className="cursor-pointer mt-0.5 px-3 h-8 rounded-full border border-accent/50 text-accent text-xs font-semibold hover:bg-accent hover:text-white"
+                                        >
+                                            Clear {filterCount} filter{filterCount === 1 ? '' : 's'}
+                                        </button>
+                                    )}
+                                </div>
                             </td>
                         </tr>
                     )}
                 </tbody>
             </table>
+        </div>
+        {/* Right-edge fade (AX8): a subtle "more columns →" affordance that
+            hides once scrolled to the end (or when nothing overflows). Sits
+            over the scroll container, pointer-transparent so it never blocks
+            interaction. */}
+        <div
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-0 right-0 w-8 z-10 bg-gradient-to-l from-surface to-transparent transition-opacity duration-200 ${atEnd ? 'opacity-0' : 'opacity-100'}`}
+        />
         </div>
         </>
     );

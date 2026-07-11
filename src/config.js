@@ -2,6 +2,8 @@ import 'dotenv/config';
 import { z } from 'zod';
 import { DEFAULT_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
+import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
+import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
@@ -59,6 +61,25 @@ const EnvSchema = z.object({
     // with separate pools - shared hosting connection caps may need this lower.
     DB_POOL_MIN: z.coerce.number().int().min(0).default(0),
     DB_POOL_MAX: z.coerce.number().int().min(1).default(10),
+    // Self-apply pending knex migrations when the server (src/server.js) boots.
+    // OFF by default (local/dev restarts never migrate); a shell-less shared
+    // host (cPanel) sets this so restarting the Node app runs migrate:latest.
+    // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
+    MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
+    // --- SPA bot-protection (opt-in; src/server.js + web/src/HumanGate.jsx) ---
+    // Stateless proof-of-work "verify you're human" gate. Enable on BOTH sides
+    // together: HUMAN_POW_ENABLED here AND VITE_HUMAN_POW at web build time.
+    HUMAN_POW_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    HUMAN_POW_BITS: z.coerce.number().int().min(1).max(28).default(18),   // difficulty (~2^bits hashes, <1s in-browser)
+    HUMAN_TOKEN_SECRET: z.string().min(1).optional(),                     // HMAC key; set for a stable check-once across restarts
+    HUMAN_TOKEN_TTL_DAYS: z.coerce.number().min(0.01).default(7),         // check-once lifetime (~1 week per the user's ask)
+    HUMAN_CHALLENGE_TTL_MINUTES: z.coerce.number().min(1).default(10),
+    // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
+    // Blocks AI scrapers / aggressive crawlers / raw HTTP clients; general search
+    // engines are intentionally left alone (landing-page SEO).
+    BOT_UA_FILTER_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    BOT_UA_EXTRA: z.string().default(''),   // comma-separated extra UA substrings to block
+    BOT_UA_ALLOW: z.string().default(''),   // comma-separated UA substrings to exempt
     // Verbose per-step timing logs (src/pipeline.js) via src/utils.js#debugLog.
     // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
     DEBUG: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
@@ -81,6 +102,17 @@ const EnvSchema = z.object({
     // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
     // date was successfully refreshed - any mode - within this window. 0 = off.
     REFRESH_CACHE_MINUTES: z.coerce.number().min(0).default(5),
+    // Safe-only slip-leg selection (the web's 🛡 Safe-only toggle). Defaults =
+    // DEFAULT_SAFE in src/db/magic-rules.js; the browser can't read .env, so
+    // these are shipped to the client via /api/magic-sort (server and client
+    // agree - no divergence). SAFE_MAX_PER_DAY is the "how many per day" knob;
+    // the gate thresholds are best tuned from scripts/analyze-safe-tips.js.
+    SAFE_STRATEGY: z.string().default(DEFAULT_SAFE.strategy)
+        .refine(v => STRATEGIES.some(s => s.id === v), 'SAFE_STRATEGY must be a known magic strategy id'),
+    SAFE_MIN_PARTS: z.coerce.number().int().min(1).max(3).default(DEFAULT_SAFE.minParts),
+    SAFE_MIN_AGREEMENT: z.coerce.number().min(0).max(1).default(DEFAULT_SAFE.minAgreement),
+    SAFE_MAX_PRICE: z.coerce.number().min(1).default(DEFAULT_SAFE.maxPrice),
+    SAFE_MAX_PER_DAY: z.coerce.number().int().min(1).default(DEFAULT_SAFE.maxPerDay),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app

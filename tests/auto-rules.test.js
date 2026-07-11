@@ -4,8 +4,23 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail,
+    parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
 } from '../src/db/auto-rules.js';
+
+// refreshOutcome (F3): classify a finished refresh job.
+test('refreshOutcome reports ok for a clean run', () => {
+    assert.equal(refreshOutcome({ error: null, cancelRequested: false }), 'ok');
+    assert.equal(refreshOutcome({}), 'ok');
+});
+
+test('refreshOutcome reports error when a run threw without a cancel', () => {
+    assert.equal(refreshOutcome({ error: 'boom', cancelRequested: false }), 'error');
+});
+
+test('refreshOutcome treats a cancel as cancelled even if the abort threw', () => {
+    assert.equal(refreshOutcome({ error: 'cancelled', cancelRequested: true }), 'cancelled');
+    assert.equal(refreshOutcome({ error: null, cancelRequested: true }), 'cancelled');
+});
 
 const utc = iso => new Date(iso).getTime();
 

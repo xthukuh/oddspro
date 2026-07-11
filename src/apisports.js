@@ -3,6 +3,8 @@ import { z } from 'zod';
 import { config } from './config.js';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
+import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
+import { withRetry } from './db/retry-rules.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -69,22 +71,43 @@ const FixtureItem = z.object({
 
 // Track daily quota from response headers; halt cleanly at the configured floor.
 let _remaining = Infinity;
+// Per-minute burst budget (x-ratelimit-remaining header): pace, don't die.
+let _minuteRemaining = Infinity;
 
-// Quota-aware GET returning the validated `response` array of a single page
+const _sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+// Quota-aware GET returning the validated `response` array of a single page.
+// The daily floor stays fatal (run halted, progress saved); the per-minute
+// limit is transient - paced proactively on the header and retried (bounded)
+// when a burst still slips through as an errors.rateLimit response.
 async function _getPage(path, params) {
-    if (_remaining <= config.APISPORTS_MIN_REMAINING) {
-        throw new Error(
-            `api-sports quota floor reached (${_remaining} requests remaining <= ${config.APISPORTS_MIN_REMAINING}). `
-            + 'Run halted; progress so far is saved.'
-        );
+    for (let attempt = 0; ; attempt++) {
+        if (_remaining <= config.APISPORTS_MIN_REMAINING) {
+            throw new Error(
+                `api-sports quota floor reached (${_remaining} requests remaining <= ${config.APISPORTS_MIN_REMAINING}). `
+                + 'Run halted; progress so far is saved.'
+            );
+        }
+        if (_minuteRemaining <= 1) {
+            await _sleep(msToNextMinute(Date.now()));
+            _minuteRemaining = Infinity; // fresh window; headers re-sync below
+        }
+        const res = await ApisportsClient.get(path, { params });
+        const rem = Number(res.headers?.['x-ratelimit-requests-remaining']);
+        if (Number.isFinite(rem)) _remaining = rem;
+        const mrem = minuteRemaining(res.headers);
+        if (mrem != null) _minuteRemaining = mrem;
+        const data = ApiEnvelope.parse(res.data);
+        const errs = Array.isArray(data.errors) ? data.errors : Object.entries(data.errors);
+        if (!errs.length) return data;
+        if (shouldRetryRateLimit(data.errors, attempt)) {
+            console.debug(`API-Football rate-limited (${path}) - waiting for the next minute window (retry ${attempt + 1})`);
+            await _sleep(msToNextMinute(Date.now()));
+            _minuteRemaining = Infinity;
+            continue;
+        }
+        throw new Error(`api-sports error (${path}): ${JSON.stringify(data.errors)}`);
     }
-    const res = await ApisportsClient.get(path, { params });
-    const rem = Number(res.headers?.['x-ratelimit-requests-remaining']);
-    if (Number.isFinite(rem)) _remaining = rem;
-    const data = ApiEnvelope.parse(res.data);
-    const errs = Array.isArray(data.errors) ? data.errors : Object.entries(data.errors);
-    if (errs.length) throw new Error(`api-sports error (${path}): ${JSON.stringify(data.errors)}`);
-    return data;
 }
 
 // Quota-aware GET following pagination to the full `response` array
@@ -154,19 +177,24 @@ async function _saveFixtureItems(items) {
         for (const t of tt) teams.set(t.id, t);
         fixtures.push(fixture);
     }
+    // These idempotent upserts can deadlock against a concurrent process's
+    // warehouse write (a 2nd serve/CLI/cron) on the shared leagues/teams/fixtures
+    // rows - the observed manual-refresh "Insert SQL error". Retry transiently
+    // (see retry-rules.js) instead of failing the whole refresh.
     if (leagues.size) {
-        await db('leagues').insert([...leagues.values()]).onConflict('id').merge(['name', 'type', 'country', 'logo']);
+        await withRetry(() => db('leagues').insert([...leagues.values()]).onConflict('id').merge(['name', 'type', 'country', 'logo']));
     }
     if (teams.size) {
-        await db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']);
+        await withRetry(() => db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']));
     }
     // merge excludes *_fetched_at flags - they are owned by the stats action
     for (let i = 0; i < fixtures.length; i += 200) {
-        await db('fixtures').insert(fixtures.slice(i, i + 200)).onConflict('id').merge([
+        const chunk = fixtures.slice(i, i + 200);
+        await withRetry(() => db('fixtures').insert(chunk).onConflict('id').merge([
             'league_id', 'season', 'round', 'kickoff', 'home_team_id', 'away_team_id',
             'status', 'elapsed', 'goals_home', 'goals_away', 'ht_home', 'ht_away', 'ft_home', 'ft_away',
             'et_home', 'et_away', 'pen_home', 'pen_away', 'venue', 'referee', 'metadata',
-        ]);
+        ]));
     }
     return { leagues: leagues.size, teams: teams.size, fixtures: fixtures.length };
 }

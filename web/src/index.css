@@ -1,15 +1,147 @@
-/* Inter Variable (self-hosted): highly legible at the compact table size,
-   with tabular-friendly numerals for aligned odds columns. */
+/* Inter Variable stays the cross-platform fallback; the Apple system stack
+   renders SF natively on iPad/macOS. */
 @import '@fontsource-variable/inter';
 @import "tailwindcss";
 
-@theme {
-    --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+/* Expose the runtime CSS vars as Tailwind tokens. `inline` makes utilities
+   reference the var directly, so the :root overrides below flip live. */
+@theme inline {
+    --font-sans: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+        'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+    --color-app: var(--bg);
+    --color-surface: var(--surface);
+    --color-surface-2: var(--surface-2);
+    --color-nav: var(--nav-bg);
+    --color-fill: var(--fill);
+    --color-fill-hover: var(--fill-hover);
+    --color-accent: var(--accent);
+    --color-accent-soft: var(--accent-soft);
+    --color-label: var(--label);
+    --color-label-2: var(--label-2);
+    --color-label-3: var(--label-3);
+    --color-separator: var(--separator);
+    --color-separator-2: var(--separator-2);
+    --color-hit: var(--green);
+    --color-miss: var(--red);
+    --color-hot: var(--orange);
+    --color-logo: var(--logo);
+    /* Provider badge hues (AX4) - blue/violet, deliberately OFF the semantic
+       green(hit)/teal(accent)/orange(hot)/red(miss) set so a chip never reads
+       as a status marker. */
+    --color-provider-a: var(--provider-a);
+    --color-provider-b: var(--provider-b);
 }
 
-/* Dark navbar date input: the native webkit calendar glyph renders near-black
-   by default and disappears on bg-slate-800 - invert it to match the text. */
-.date-input-dark::-webkit-calendar-picker-indicator {
-    filter: invert(1);
-    cursor: pointer;
+/* ── Light theme (default / System-light) ─────────────────────────────────
+   Teal accent (#0FB5A6) replaces iOS blue everywhere it drives links, active
+   states and primary buttons. Semantic green/orange/red stay put. The nav is
+   pure white against the grey app bg so the toolbar reads as its own bar. */
+:root {
+    color-scheme: light dark;                 /* System: follow the OS */
+    --bg: #F1F1F4;
+    --surface: #FFFFFF;
+    --surface-2: #F5F5F7;
+    --nav-bg: #FFFFFF;
+    --chrome: rgba(249, 249, 250, 0.92);
+    --label: #16151A;
+    --label-2: rgba(60, 58, 67, 0.62);
+    --label-3: rgba(60, 58, 67, 0.32);
+    --separator: rgba(60, 58, 67, 0.22);
+    --separator-2: rgba(60, 58, 67, 0.11);
+    --fill: rgba(118, 116, 128, 0.1);
+    --fill-hover: rgba(118, 116, 128, 0.18);
+    --accent: #0E9C90;
+    --accent-soft: rgba(15, 181, 166, 0.12);
+    --green: #34C759;
+    --orange: #FF9500;
+    --red: #FF3B30;
+    --logo: #5856dc;
+    --provider-a: #2563EB;   /* betpawa - blue */
+    --provider-b: #7C3AED;   /* betika - violet */
 }
+
+/* ── Dark theme ("warm slate") ────────────────────────────────────────────
+   Lifted off pure black to a warm charcoal so it reads cozy, not clinical;
+   warm-white labels, brighter teal accent, an isolated tinted nav. Kept
+   byte-for-byte identical to the :root[data-theme="dark"] override below so a
+   forced theme exactly matches its System-dark equivalent. */
+@media (prefers-color-scheme: dark) {
+    :root {
+        --bg: #1A191D;
+        --surface: #262428;
+        --surface-2: #302E33;
+        --nav-bg: #211F24;
+        --chrome: rgba(33, 31, 36, 0.86);
+        --label: #F6F4F2;
+        --label-2: rgba(246, 244, 242, 0.62);
+        --label-3: rgba(246, 244, 242, 0.34);
+        --separator: rgba(240, 236, 240, 0.15);
+        --separator-2: rgba(240, 236, 240, 0.08);
+        --fill: rgba(150, 146, 152, 0.16);
+        --fill-hover: rgba(150, 146, 152, 0.26);
+        --accent: #17C9BA;
+        --accent-soft: rgba(23, 201, 186, 0.2);
+        --green: #30D158;
+        --orange: #FF9F0A;
+        --red: #FF453A;
+        --logo: #FFFFFF;
+        --provider-a: #6BA5FF;   /* betpawa - blue (brighter for dark) */
+        --provider-b: #B79BFF;   /* betika - violet (brighter for dark) */
+    }
+}
+
+/* Explicit override wins over the OS setting in BOTH directions. color-scheme
+   is pinned per theme so native controls (select popups, scrollbars, date
+   pickers) follow the FORCED theme, not the OS — the theme switcher relies on
+   this, and it fixes the dark-mode filter dropdowns. */
+:root[data-theme="light"] {
+    color-scheme: light;
+    --bg: #F1F1F4; --surface: #FFFFFF; --surface-2: #F5F5F7; --nav-bg: #FFFFFF;
+    --chrome: rgba(249, 249, 250, 0.92); --label: #16151A; --label-2: rgba(60, 58, 67, 0.62);
+    --label-3: rgba(60, 58, 67, 0.32); --separator: rgba(60, 58, 67, 0.22);
+    --separator-2: rgba(60, 58, 67, 0.11); --fill: rgba(118, 116, 128, 0.1);
+    --fill-hover: rgba(118, 116, 128, 0.18); --accent: #0E9C90;
+    --accent-soft: rgba(15, 181, 166, 0.12); --green: #34C759; --orange: #FF9500;
+    --red: #FF3B30; --logo: #5856dc; --provider-a: #2563EB; --provider-b: #7C3AED;
+}
+:root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1A191D; --surface: #262428; --surface-2: #302E33; --nav-bg: #211F24;
+    --chrome: rgba(33, 31, 36, 0.86); --label: #F6F4F2; --label-2: rgba(246, 244, 242, 0.62);
+    --label-3: rgba(246, 244, 242, 0.34); --separator: rgba(240, 236, 240, 0.15);
+    --separator-2: rgba(240, 236, 240, 0.08); --fill: rgba(150, 146, 152, 0.16);
+    --fill-hover: rgba(150, 146, 152, 0.26); --accent: #17C9BA;
+    --accent-soft: rgba(23, 201, 186, 0.2); --green: #30D158; --orange: #FF9F0A;
+    --red: #FF453A; --logo: #FFFFFF; --provider-a: #6BA5FF; --provider-b: #B79BFF;
+}
+
+body {
+    background: var(--bg);
+    color: var(--label);
+    -webkit-font-smoothing: antialiased;
+    letter-spacing: -0.01em;
+}
+
+.border-hairline { border-color: var(--separator-2); }
+
+/* Native <select> popups render via the OS, which only respects color-scheme
+   (pinned per theme above). Painting the options explicitly guarantees legible
+   text in dark mode across engines that honour option styling. */
+select { color-scheme: inherit; }
+select option {
+    background: var(--surface);
+    color: var(--label);
+}
+
+/* Touch: don't let a double-tap zoom fire on interactive chrome, and give
+   tap feedback without the grey iOS flash. */
+button, [role="button"], a, label, summary {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+}
+
+/* iOS sheet/popover animations (from the v3 prototype). */
+@keyframes op-sheet-in { from { opacity: 0; transform: translateY(24px) scale(0.98); } to { opacity: 1; transform: none; } }
+@keyframes op-fade { from { opacity: 0; } to { opacity: 1; } }
+@keyframes op-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } to { opacity: 1; transform: none; } }
+@keyframes op-spin { to { transform: rotate(360deg); } }
