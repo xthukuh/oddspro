@@ -4,10 +4,10 @@
 // sorting went client-side. Pure module (imports only sortValues.js) so
 // node:test covers it offline like the other rule modules.
 
-import { sortValue } from './sortValues.js';
-// Shared VERBATIM with the server (src/db/records.js) so a CSV list splits
-// identically both sides - vite's fs.allow covers the out-of-root import.
-import { parseFilterList } from '../../src/db/filter-csv.js';
+// Condition/group evaluation + the raw-value helper live in filterExpr.js (one
+// source of truth for filter semantics — this module delegates so the flat-AND
+// path and the advanced nested/expression path can never drift).
+import { rawValue, filterRows } from './filterExpr.js';
 
 // Keys the API accepts in /api/records filters (catalog base + market
 // columns flagged filterable). Everything else must filter client-side.
@@ -25,15 +25,27 @@ export function serverKeys(catalog) {
 // client-side costs nothing.)
 export const CLIENT_ONLY_KEYS = new Set(['league']);
 
-// Partition applied filters: a condition is server-side only when every
-// column it references (key, and the RHS column in col-mode) is a server
-// key — a single client-side reference pulls the whole condition local.
-// CLIENT_ONLY_KEYS force the condition local regardless.
+// Regex ops have no SQL form; expression conditions are opaque to SQL — both
+// must evaluate over the loaded day.
+const CLIENT_ONLY_OPS = new Set(['match', 'not-match']);
+
+// Partition applied filters into a server (SQL) subset and a client subset.
+// A flat array is an implicit top-level AND, so each condition is placed
+// independently: server-side only when every column it references is a server
+// key AND the op has a SQL form. An ADVANCED model (a `{type:'group'}` object —
+// nested groups / OR joins) can't be expressed as flat AND SQL, so it runs
+// entirely client-side (the server loads the whole date; applyClientFilters
+// narrows it). CLIENT_ONLY_KEYS / _OPS and expr conditions force local.
 export function splitFilters(filters, catalog) {
+    if (filters && !Array.isArray(filters) && filters.type === 'group') {
+        return { server: [], client: filters };
+    }
     const keys = serverKeys(catalog);
     const server = [], client = [];
     for (const f of Array.isArray(filters) ? filters : []) {
-        const local = CLIENT_ONLY_KEYS.has(f.key)
+        const local = f.type === 'expr'
+            || CLIENT_ONLY_OPS.has(f.op)
+            || CLIENT_ONLY_KEYS.has(f.key)
             || !keys.has(f.key)
             || (f.col != null && !keys.has(f.col));
         (local ? client : server).push(f);
@@ -41,86 +53,38 @@ export function splitFilters(filters, catalog) {
     return { server, client };
 }
 
-// Predicates over a three-way comparison (-1/0/1); `like` is handled
-// separately against the raw displayed text.
-const OPS = {
-    eq: c => c === 0,
-    ne: c => c !== 0,
-    gt: c => c > 0,
-    gte: c => c >= 0,
-    lt: c => c < 0,
-    lte: c => c <= 0,
-};
-
-// Compare a derived row value against the condition's RHS (a literal or
-// another derived value). null when either side is missing or unparsable:
-// missing data never satisfies a predicate — same spirit as nulls-last
-// sorting. Numbers compare numerically, everything else case-insensitively.
-function _compare(a, b) {
-    if (a == null || b == null || b === '') return null;
-    if (typeof a === 'number') {
-        const n = typeof b === 'number' ? b : Number(b);
-        return Number.isNaN(n) ? null : Math.sign(a - n);
+// Count leaf conditions in a filter model (flat array or nested group) — drives
+// the "N active" filter badge and the ViewPills chip. Sub-groups recurse; each
+// leaf condition (plain or expr) counts one.
+export function conditionCount(filters) {
+    if (Array.isArray(filters)) return filters.length;
+    if (filters && filters.type === 'group') {
+        return (filters.items ?? []).reduce(
+            (n, it) => n + (it && it.type === 'group' ? conditionCount(it) : 1), 0);
     }
-    return Math.sign(String(a).toLowerCase().localeCompare(String(b).toLowerCase()));
+    return 0;
 }
 
-// Raw (displayed) value for `like`: the underlying field text, so e.g.
-// `home_form like WWW` matches the letters, not the derived points. The
-// tip column's text is its market pick (server parity: like -> tip_market).
-function _raw(row, col) {
-    if (col.key === 'tip') return row.tip_market ?? null;
-    if (col.group === 'market') return row.markets?.[col.key] ?? null;
-    if (col.key.startsWith('fs:')) return row.stats?.[col.key] ?? null;
-    return row[col.key] ?? null;
-}
-
-// AND-combined client conditions. Comparison ops evaluate the SAME derived
-// value sorting uses (sortValue: form → points, "gf/ga (avg)" → avg,
-// "H / A" → sum, score → total goals) so filtering always agrees with the
-// column's sort order. `columns` descriptors come from the full catalog —
-// independent of which columns are visible, hidden columns filter fine.
+// AND-combined client conditions over the loaded day. A flat condition array is
+// an implicit top-level AND group; filterRows (filterExpr.js) evaluates each
+// condition with the SAME derived semantics sorting uses (form → points,
+// "gf/ga (avg)" → avg, "H / A" → sum, score → total goals), so filtering always
+// agrees with the column's sort order. Hidden columns filter fine — descriptors
+// come from the full catalog, independent of visibility.
 export function applyClientFilters(rows, filters, columns) {
-    if (!Array.isArray(filters) || !filters.length) return rows;
-    const byKey = new Map(columns.map(c => [c.key, c]));
-    const col = k => byKey.get(k) ?? { key: k };
-    return rows.filter(row => filters.every(f => {
-        const lhs = col(f.key);
-        // Text/set ops (no column-to-column form) match the RAW displayed value,
-        // not the derived sort value. A missing raw never satisfies (nulls-last
-        // spirit), matching the server's NOT LIKE / NOT IN NULL handling.
-        if ((f.op === 'like' || f.op === 'not-contains') && f.col == null) {
-            const raw = _raw(row, lhs);
-            if (raw == null) return false;
-            const has = String(raw).toLowerCase().includes(String(f.value).toLowerCase());
-            return f.op === 'like' ? has : !has;
-        }
-        if ((f.op === 'in' || f.op === 'not-in') && f.col == null) {
-            const raw = _raw(row, lhs);
-            if (raw == null) return false;
-            // _compare === 0 is number-vs-number when both parse numeric (price
-            // 2.5 matches "2.5"), else case-insensitive string equality.
-            const inSet = parseFilterList(f.value).some(it => _compare(raw, it) === 0);
-            return f.op === 'in' ? inSet : !inSet;
-        }
-        const test = OPS[f.op];
-        if (!test) return false;
-        const rhs = f.col != null ? sortValue(row, col(f.col)) : f.value;
-        const cmp = _compare(sortValue(row, lhs), rhs);
-        return cmp != null && test(cmp);
-    }));
+    return filterRows(rows, filters, columns);
 }
 
 // Distinct displayed values of a column across the loaded rows, for filter
 // value pickers on low-cardinality fields (league, status, provider, season,
-// round). Uses the RAW displayed value (_raw) so the options match what the
+// round). Uses the RAW displayed value (rawValue) so the options match what the
 // user sees AND what the filter compares. Returns [] once the distinct count
 // exceeds `cap` (too many to be a useful list — the caller falls back to free
 // text). Numbers sort numerically, strings case-insensitively.
 export function distinctValues(rows, col, cap = 50) {
     const seen = new Set();
     for (const r of rows ?? []) {
-        const v = _raw(r, col);
+        const v = rawValue(r, col);
         if (v == null || v === '') continue;
         seen.add(typeof v === 'number' ? v : String(v));
         if (seen.size > cap) return [];

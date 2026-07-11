@@ -13,6 +13,8 @@ import { BASE_COLUMNS } from './baseColumns.js';
 // visible base set). Labels read the same as everywhere else in the UI.
 const EXTRA_BASE_LABELS = {
     league: 'League',
+    home_team: 'Home Team',
+    away_team: 'Away Team',
     hot: 'Over 2.5 pick',
     hot_score: 'Over 2.5 score',
     // Filterable data fields that are no longer their own TABLE column (id folds

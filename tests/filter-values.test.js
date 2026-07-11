@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
-    distinctValues, toFilterCsv, applyOneOfEach,
+    distinctValues, toFilterCsv, applyOneOfEach, conditionCount,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -192,6 +192,47 @@ test('in normalizes numbers, so a market price matches its CSV item', () => {
     const rows = [row({ markets: { 1: 2.1 } }), row({ markets: { 1: 3.0 } }), row({ markets: { 1: 1.8 } })];
     const out = applyClientFilters(rows, [{ key: '1', op: 'in', value: '2.1,3.0' }], COLUMNS);
     assert.deepEqual(out.map(r => r.markets[1]), [2.1, 3.0]);
+});
+
+test('splitFilters routes regex ops and expr conditions client-side', () => {
+    const filters = [
+        { key: 'goals', op: 'gte', value: '2' },          // SQL-able -> server
+        { key: 'goals', op: 'match', value: '^2' },       // regex -> client
+        { key: 'provider', op: 'not-match', value: 'x' }, // regex -> client
+        { type: 'expr', expr: "$row['goals'] > 2" },      // expression -> client
+    ];
+    const { server, client } = splitFilters(filters, CATALOG);
+    assert.deepEqual(server.map(f => f.op), ['gte']);
+    assert.equal(client.length, 3);
+});
+
+test('splitFilters sends an advanced group model entirely client-side', () => {
+    const model = {
+        type: 'group', join: 'or', items: [
+            { key: 'goals', op: 'gte', value: '2' },
+            { key: 'provider', op: 'eq', value: 'betika' },
+        ],
+    };
+    const { server, client } = splitFilters(model, CATALOG);
+    assert.deepEqual(server, []);
+    assert.equal(client, model); // the whole model runs locally
+});
+
+test('conditionCount counts leaf conditions in flat arrays and nested groups', () => {
+    assert.equal(conditionCount([]), 0);
+    assert.equal(conditionCount([{ key: 'goals', op: 'gte', value: '2' }]), 1);
+    const model = {
+        type: 'group', join: 'and', items: [
+            { key: 'goals', op: 'gte', value: '2' },
+            {
+                type: 'group', join: 'or', items: [
+                    { key: 'provider', op: 'eq', value: 'x' },
+                    { type: 'expr', expr: '1' },
+                ],
+            },
+        ],
+    };
+    assert.equal(conditionCount(model), 3);
 });
 
 test('splitFilters forces league (CLIENT_ONLY_KEYS) client even when a server key', () => {

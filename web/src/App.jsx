@@ -3,7 +3,7 @@ import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRe
 import { shouldReloadForJob } from './freshness.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
@@ -253,6 +253,8 @@ export default function App() {
         () => (catalog ? splitFilters(filters, catalog) : { server: filters, client: [] }),
         [filters, catalog],
     );
+    // Leaf-condition count (filters can be a flat array or a nested group).
+    const filterCount = conditionCount(filters);
     // Column descriptors for the client engine: the FULL catalog (plus the
     // table-only score column), independent of visible-column selections -
     // hidden columns still filter because rows carry every field.
@@ -661,9 +663,9 @@ export default function App() {
                             <IconMagic />{activeMagicIds.length > 1 ? <span className="text-[11px] tabular-nums ml-0.5">{activeMagicIds.length}</span> : null}
                         </button>
                         <button onClick={() => setShowSlips(true)} aria-label="Betslip playground" title="Betslip playground - build virtual multi-bet slips from the day's tips" className={navBtn}><IconSlips /></button>
-                        <button onClick={() => setShowFilters(v => !v)} aria-label={`Filters${filters.length ? ` (${filters.length} active)` : ''}`} title="Filter the table rows"
-                            className={(showFilters || filters.length) ? navBtnActive : navBtn}>
-                            <IconFilter />{filters.length ? <span className="text-[11px] tabular-nums ml-0.5">{filters.length}</span> : null}
+                        <button onClick={() => setShowFilters(v => !v)} aria-label={`Filters${filterCount ? ` (${filterCount} active)` : ''}`} title="Filter the table rows"
+                            className={(showFilters || filterCount) ? navBtnActive : navBtn}>
+                            <IconFilter />{filterCount ? <span className="text-[11px] tabular-nums ml-0.5">{filterCount}</span> : null}
                         </button>
                         <div className="w-px h-5 bg-separator mx-1.5" />
                         <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
@@ -675,7 +677,7 @@ export default function App() {
                         {showOverflow && (
                             <OverflowMenu
                                 refreshing={refresh?.running} canRefresh={!!date && !refresh?.running}
-                                filterCount={filters.length} magicActive={activeMagicIds.length > 0}
+                                filterCount={filterCount} magicActive={activeMagicIds.length > 0}
                                 onRefresh={() => { onRefresh(); setShowOverflow(false); }}
                                 onMagic={() => { setShowMagic(true); setShowOverflow(false); }}
                                 onSlips={() => { setShowSlips(true); setShowOverflow(false); }}
@@ -704,7 +706,7 @@ export default function App() {
                 <SortPills chain={activeChain} entryLabel={entryLabel} onRemove={onRemoveEntry} onClear={() => onReorderChain([])} />
                 <ViewPills
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
-                    noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filters.length}
+                    noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
                     onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
                     onOpenFilters={() => setShowFilters(true)} onClearFilters={() => setFilters([])}
