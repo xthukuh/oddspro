@@ -926,16 +926,27 @@ export default function App() {
                                     <span className="whitespace-nowrap">💰 {bet.picks} pick{bet.picks === 1 ? '' : 's'}</span>
                                 </Tooltip>
                                 <span className="text-label-3">·</span>
-                                <Tooltip content={`Sum of the ${bet.picks} picks' odds. At ${_money(betslipStake)} per pick that returns ≈${_money(bet.value)} if every pick won (a ceiling, not a forecast).`}>
-                                    <span className="whitespace-nowrap">odds Σ {_money(bet.totalOdds)} <span className="text-label-3">→ ≈{_money(bet.value)}</span></span>
+                                <Tooltip content={`Sum of the ${bet.picks} picks' odds (total odds).`}>
+                                    <span className="whitespace-nowrap">odds Σ {_money(bet.totalOdds)}</span>
+                                </Tooltip>
+                                <span className="text-label-3">·</span>
+                                <Tooltip content={`Potential total return at ${_money(betslipStake)} per pick if every displayed pick won (stake × total odds) — a ceiling, not a forecast.`}>
+                                    <span className="whitespace-nowrap">value ≈{_money(bet.value)}</span>
                                 </Tooltip>
                                 {bet.settled > 0 && (
                                     <>
                                         <span className="text-label-3">·</span>
-                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: ${bet.won} won, ${bet.lost} lost. Staked ${_money(bet.staked)}, returned ${_money(bet.returned)}. P/L = returned − staked (pending picks not counted).`}>
-                                            <span className={`whitespace-nowrap font-medium ${bet.profit >= 0 ? 'text-hit' : 'text-miss'}`}>
-                                                P/L {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}{' '}
-                                                <span className="font-normal text-label-2">({bet.won}<span className="text-hit">✓</span> {bet.lost}<span className="text-miss">✗</span>)</span>
+                                        <Tooltip content={`Displayed picks that already won — at ${_money(betslipStake)}/pick they returned ${_money(bet.returned)}.`}>
+                                            <span className="whitespace-nowrap text-hit">{bet.won} won</span>
+                                        </Tooltip>
+                                        <span className="text-label-3">·</span>
+                                        <Tooltip content={`Displayed picks that already lost — ${_money(betslipStake)}/pick forfeited.`}>
+                                            <span className="whitespace-nowrap text-miss">{bet.lost} lost</span>
+                                        </Tooltip>
+                                        <span className="text-label-3">·</span>
+                                        <Tooltip content={`Settled shown picks at ${_money(betslipStake)}/pick: staked ${_money(bet.staked)}, returned ${_money(bet.returned)}. P/L = returned − staked (pending picks not counted).`}>
+                                            <span className={`whitespace-nowrap font-semibold ${bet.profit >= 0 ? 'text-hit' : 'text-miss'}`}>
+                                                P/L {bet.profit >= 0 ? '+' : ''}{_money(bet.profit)}
                                             </span>
                                         </Tooltip>
                                     </>
