@@ -28,7 +28,8 @@ export default function CalendarPopover({ date, today, min, max, onPick, onClose
     };
     return (
         <>
-            <div onClick={onClose} className={`fixed inset-0 ${Z.popupCatcher}`} />
+            {/* pointerdown (not click) so the tap-away dismiss fires on iOS too */}
+            <div onPointerDown={onClose} className={`fixed inset-0 cursor-pointer ${Z.popupCatcher}`} />
             <div className={`absolute top-[54px] left-1/2 -translate-x-1/2 w-[300px] bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 p-4 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <div className="flex items-center justify-between mb-3">
                     <div className="text-base font-bold">{title}</div>

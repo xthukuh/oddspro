@@ -5,6 +5,7 @@ import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
+import { tipHit } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
@@ -139,6 +140,10 @@ const _fullDate = iso => new Date(`${iso}T12:00:00`).toLocaleDateString(undefine
 function _hitRates(rows) {
     const seen = new Set();
     const hot = { hits: 0, settled: 0 }, tips = { hits: 0, settled: 0 };
+    // Runner-up scoreboards (R26c): "what if we'd bet the 2nd / 3rd pick".
+    // Only the chosen tip stores an outcome, so the runners-up are graded from
+    // the final score via tipHit - settled iff the fixture has a final score.
+    const up2 = { hits: 0, settled: 0 }, up3 = { hits: 0, settled: 0 };
     for (const r of rows) {
         if (seen.has(r.api_id)) continue;
         seen.add(r.api_id);
@@ -146,12 +151,24 @@ function _hitRates(rows) {
             hot.settled += 1;
             if (r.hot_outcome === 'hit') hot.hits += 1;
         }
+        // Chosen tip settled? Then grade the runners-up over the SAME fixtures
+        // (same denominator basis) so "2nd / 3rd" is comparable to "Tips".
         if (r.tip_market && (r.tip_outcome === 'hit' || r.tip_outcome === 'miss')) {
             tips.settled += 1;
             if (r.tip_outcome === 'hit') tips.hits += 1;
+            const [hs, as] = String(r.score ?? '').split('-').map(Number);
+            const ups = Array.isArray(r.tip_breakdown?.runners_up) ? r.tip_breakdown.runners_up : [];
+            if (Number.isFinite(hs) && Number.isFinite(as)) {
+                for (const [i, bucket] of [[0, up2], [1, up3]]) {
+                    const market = ups[i]?.market;
+                    if (!market) continue;
+                    bucket.settled += 1;
+                    if (tipHit(market, hs, as)) bucket.hits += 1;
+                }
+            }
         }
     }
-    return { hot, tips };
+    return { hot, tips, up2, up3 };
 }
 
 const _rate = ({ hits, settled }) => (settled
@@ -902,6 +919,8 @@ export default function App() {
                     onToggleSelect={toggleSelect}
                     onToggleAll={toggleAllSelect}
                     noPin={noPin}
+                    filterCount={filterCount}
+                    onClearFilters={() => setFilters([])}
                     scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
             </main>
@@ -933,6 +952,24 @@ export default function App() {
                             <Tooltip content="Tips for the day: settled hits / settled tips (unique fixtures; pending excluded, AI-vetoed included). Day-level - unaffected by view filters.">
                                 <span className="whitespace-nowrap">Tips: {_rate(dayRates.tips)}</span>
                             </Tooltip>
+                            {/* R26c: how the 2nd / 3rd-choice picks would have settled
+                                (graded from the final score) - only when there are any. */}
+                            {dayRates.up2.settled > 0 && (
+                                <>
+                                    <span className="text-label-3">·</span>
+                                    <Tooltip content="If you'd taken the 2nd-choice tip instead: settled hits / settled (unique fixtures). Graded from the final score.">
+                                        <span className="whitespace-nowrap text-label-3">2nd: {_rate(dayRates.up2)}</span>
+                                    </Tooltip>
+                                </>
+                            )}
+                            {dayRates.up3.settled > 0 && (
+                                <>
+                                    <span className="text-label-3">·</span>
+                                    <Tooltip content="If you'd taken the 3rd-choice tip instead: settled hits / settled (unique fixtures). Graded from the final score.">
+                                        <span className="whitespace-nowrap text-label-3">3rd: {_rate(dayRates.up3)}</span>
+                                    </Tooltip>
+                                </>
+                            )}
                             <span className="text-label-3">·</span>
                             <Tooltip content={`Games that pass the safety checks for multi-bet slips: the signals (bookmaker odds, team form, expert data) agree with none weak, short odds, best ${safeCap} per day by market probability. Day-level - unaffected by view filters. Turn on 'Safe only' in Settings to show just these.`}>
                                 <span className={`whitespace-nowrap ${safeOnly ? 'text-accent' : ''}`}>🛡 Safe: {safePicks.length}</span>

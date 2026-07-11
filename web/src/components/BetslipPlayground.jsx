@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { buildSlips, estimateLegProb, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import { buildSlips, estimateLegProb, legPicks, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
+import { tipHit } from '../../../src/db/tip-rules.js';
 import { orderRows } from '../ordering.js';
 import NumberInput from './NumberInput.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
@@ -29,6 +30,16 @@ const _hm = iso => {
     return `${p(d.getHours())}:${p(d.getMinutes())}`;
 };
 const _shortDate = iso => (iso ? new Date(`${iso}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }) : null);
+
+// Grade a market from a fixture's final score (R26d): only the CHOSEN tip
+// stores an outcome, so a switched-to runner-up is settled here. null = pending
+// (no final score) - no tick.
+function _gradeMarket(score, market) {
+    if (!score) return null;
+    const [hs, as] = String(score).split('-').map(Number);
+    if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
+    return tipHit(market, hs, as) ? 'hit' : 'miss';
+}
 
 // Stored slips + limits survive reloads AND date changes, so one multi-bet slip
 // can accumulate tips from several days. Legs are self-contained (each carries
@@ -109,16 +120,31 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
         const ranked = chain?.length
             ? orderRows(unique, chain, columns, cal)
             : magicSortRows(unique, 'confidence', calibration);
-        return ranked.map(r => ({
-            api_id: r.api_id,
-            fixture: r.fixture,
-            market: r.tip_market,
-            price: r.tip_price,
-            prob: estimateLegProb(tipView(r), calibration),
-            outcome: r.tip_outcome ?? null,
-            date, // origin date - lets legs from other days render un-dimmed
-            time: _hm(r.start_time), // kickoff HH:MM (D5 same-day leg tag)
-        }));
+        return ranked.map(r => {
+            // Switchable pick options (R26d): chosen tip + up to two runners-up,
+            // each with its re-estimated prob and a settled outcome (chosen keeps
+            // its stored outcome; runners-up are graded from the final score).
+            const picks = legPicks(r, calibration).map((p, i) => ({
+                ...p,
+                outcome: i === 0 ? (r.tip_outcome ?? null) : _gradeMarket(r.score, p.market),
+            }));
+            const chosen = picks[0] ?? {
+                market: r.tip_market, price: r.tip_price,
+                prob: estimateLegProb(tipView(r), calibration), outcome: r.tip_outcome ?? null,
+            };
+            return {
+                api_id: r.api_id,
+                fixture: r.fixture,
+                market: chosen.market,
+                price: chosen.price,
+                prob: chosen.prob,
+                outcome: chosen.outcome,
+                date, // origin date - lets legs from other days render un-dimmed
+                time: _hm(r.start_time), // kickoff HH:MM (D5 same-day leg tag)
+                picks,   // R26d: switchable market options (index 0 = chosen)
+                pick: 0, // selected pick index
+            };
+        });
     }, [rows, chain, columns, cal, calibration, date]);
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
@@ -180,6 +206,27 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     const removeLeg = (slipId, apiId) => setSlips(prev => prev.map(s => (
         s.id === slipId ? { ...s, legs: s.legs.filter(l => l.api_id !== apiId) } : s
     )));
+    // R26d: switch a leg to a different pick (chosen / 2nd / 3rd) - copies that
+    // option's market/price/prob/outcome onto the leg so the slip odds, survival
+    // and settlement all recompute from it.
+    const setLegPick = (slipId, apiId, index) => setSlips(prev => prev.map(s => {
+        if (s.id !== slipId) return s;
+        return { ...s, legs: s.legs.map(l => {
+            if (l.api_id !== apiId) return l;
+            const opt = l.picks?.[index];
+            if (!opt) return l;
+            return { ...l, pick: index, market: opt.market, price: opt.price, prob: opt.prob, outcome: opt.outcome };
+        }) };
+    }));
+    // AX7: tap a (potentially near-duplicate) fixture name to wrap it in full,
+    // tap again to re-truncate. Shared by the candidate list and the slip legs.
+    const [expandedNames, setExpandedNames] = useState(() => new Set());
+    const toggleName = id => setExpandedNames(prev => {
+        const next = new Set(prev);
+        next.has(id) ? next.delete(id) : next.add(id);
+        return next;
+    });
+    const nameCls = id => (expandedNames.has(id) ? 'whitespace-normal break-words' : 'truncate');
 
     const activeSlip = slips.find(s => s.id === activeId) ?? slips[0] ?? null;
     // The active slip has reached its leg cap - the tip ＋ auto-hides (D2).
@@ -369,7 +416,11 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                             +
                                         </button>
                                     )}
-                                    <span className="truncate grow" title={c.fixture}>{c.fixture}</span>
+                                    <span
+                                        className={`grow cursor-pointer ${nameCls(c.api_id)}`}
+                                        title={c.fixture}
+                                        onClick={e => { e.stopPropagation(); toggleName(c.api_id); }}
+                                    >{c.fixture}</span>
                                     <span className="font-medium whitespace-nowrap">{c.market}</span>
                                     <span className="tabular-nums">{c.price?.toFixed(2) ?? '—'}</span>
                                     {c.outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
@@ -444,7 +495,11 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                 className={`flex items-center gap-2 text-xs py-1 ${dropped ? 'opacity-50' : ''} ${
                                                     verdict.broken.includes(l.api_id) ? 'text-miss' : ''}`}
                                             >
-                                                <span className="truncate grow" title={l.fixture}>{l.fixture}</span>
+                                                <span
+                                                    className={`grow cursor-pointer ${nameCls(l.api_id)}`}
+                                                    title={l.fixture}
+                                                    onClick={e => { e.stopPropagation(); toggleName(l.api_id); }}
+                                                >{l.fixture}</span>
                                                 {dropped && (
                                                     <span className="text-hot" title="No longer a tip on today's view">gone</span>
                                                 )}
@@ -452,7 +507,25 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                                                 {sameDay
                                                     ? (l.time && <span className="text-label-3 tabular-nums" title="Kickoff">{l.time}</span>)
                                                     : <span className="text-label-3" title={`From ${l.date}`}>{_shortDate(l.date)}</span>}
-                                                <span className="font-medium whitespace-nowrap">{l.market}</span>
+                                                {/* R26d: switch this leg to a runner-up market (recomputes
+                                                    odds/survival/outcome). Only when >1 option exists. */}
+                                                {l.picks?.length > 1 ? (
+                                                    <select
+                                                        value={l.pick ?? 0}
+                                                        onClick={e => e.stopPropagation()}
+                                                        onChange={e => setLegPick(slip.id, l.api_id, Number(e.target.value))}
+                                                        title="Swap this leg's market (chosen / 2nd / 3rd pick)"
+                                                        className="bg-fill text-label rounded px-1 h-6 text-xs outline-none cursor-pointer max-w-[6.5rem]"
+                                                    >
+                                                        {l.picks.map((p, i) => (
+                                                            <option key={i} value={i}>
+                                                                {i + 1}. {p.market}{p.price ? ` @ ${p.price.toFixed(2)}` : ''}
+                                                            </option>
+                                                        ))}
+                                                    </select>
+                                                ) : (
+                                                    <span className="font-medium whitespace-nowrap">{l.market}</span>
+                                                )}
                                                 <span className="tabular-nums">{l.price?.toFixed(2) ?? '—'}</span>
                                                 {l.outcome === 'hit' && <span className="text-hit font-bold">✓</span>}
                                                 {l.outcome === 'miss' && <span className="text-miss font-bold">✗</span>}

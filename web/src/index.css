@@ -25,6 +25,11 @@
     --color-miss: var(--red);
     --color-hot: var(--orange);
     --color-logo: var(--logo);
+    /* Provider badge hues (AX4) - blue/violet, deliberately OFF the semantic
+       green(hit)/teal(accent)/orange(hot)/red(miss) set so a chip never reads
+       as a status marker. */
+    --color-provider-a: var(--provider-a);
+    --color-provider-b: var(--provider-b);
 }
 
 /* ── Light theme (default / System-light) ─────────────────────────────────
@@ -51,6 +56,8 @@
     --orange: #FF9500;
     --red: #FF3B30;
     --logo: #5856dc;
+    --provider-a: #2563EB;   /* betpawa - blue */
+    --provider-b: #7C3AED;   /* betika - violet */
 }
 
 /* ── Dark theme ("warm slate") ────────────────────────────────────────────
@@ -78,6 +85,8 @@
         --orange: #FF9F0A;
         --red: #FF453A;
         --logo: #FFFFFF;
+        --provider-a: #6BA5FF;   /* betpawa - blue (brighter for dark) */
+        --provider-b: #B79BFF;   /* betika - violet (brighter for dark) */
     }
 }
 
@@ -93,7 +102,7 @@
     --separator-2: rgba(60, 58, 67, 0.11); --fill: rgba(118, 116, 128, 0.1);
     --fill-hover: rgba(118, 116, 128, 0.18); --accent: #0E9C90;
     --accent-soft: rgba(15, 181, 166, 0.12); --green: #34C759; --orange: #FF9500;
-    --red: #FF3B30; --logo: #5856dc;
+    --red: #FF3B30; --logo: #5856dc; --provider-a: #2563EB; --provider-b: #7C3AED;
 }
 :root[data-theme="dark"] {
     color-scheme: dark;
@@ -103,7 +112,7 @@
     --separator-2: rgba(240, 236, 240, 0.08); --fill: rgba(150, 146, 152, 0.16);
     --fill-hover: rgba(150, 146, 152, 0.26); --accent: #17C9BA;
     --accent-soft: rgba(23, 201, 186, 0.2); --green: #30D158; --orange: #FF9F0A;
-    --red: #FF453A; --logo: #FFFFFF;
+    --red: #FF453A; --logo: #FFFFFF; --provider-a: #6BA5FF; --provider-b: #B79BFF;
 }
 
 body {

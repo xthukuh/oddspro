@@ -20,9 +20,12 @@ import { BASE_COLUMNS } from '../baseColumns.js';
 // Re-exported so existing importers (App, SettingsModal) keep their path.
 export { BASE_COLUMNS } from '../baseColumns.js';
 
+// Distinct, non-semantic badge hues (AX4): blue vs violet, so a provider chip
+// never collides with hit(green)/accent(teal)/hot(orange)/miss(red). New
+// bookmakers fall back to a neutral fill.
 const PROVIDER_STYLE = {
-    betpawa: 'bg-hit/15 text-hit',
-    betika: 'bg-accent-soft text-accent',
+    betpawa: 'bg-provider-a/15 text-provider-a',
+    betika: 'bg-provider-b/15 text-provider-b',
 };
 
 // Two alternating row tones cycled by canonical fixture (api_id) in
@@ -426,6 +429,7 @@ function _magicCell(row, meta) {
 export default function DataTable({
     catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey,
     visibleBase = null, selection, onToggleSelect, onToggleAll, noPin = false,
+    filterCount = 0, onClearFilters,
 }) {
     const links = new Set(linkProviders ?? []);
     // Base/synthetic column visibility (R27b/R28a): null = all shown.
@@ -547,6 +551,11 @@ export default function DataTable({
     // (date/server-filter navigation) is an intentional reset to the top.
     const posRef = useRef({ top: 0, left: 0 });
     const scrollKeyRef = useRef(scrollKey);
+    // Right-edge fade affordance (AX8): true once the table is scrolled to its
+    // right end (or isn't horizontally scrollable) - the fade then hides. The
+    // left edge needs no fade: the pinned columns already occupy it.
+    const [atEnd, setAtEnd] = useState(true);
+    const _atEnd = cont => cont.scrollLeft + cont.clientWidth >= cont.scrollWidth - 1;
     useLayoutEffect(() => {
         const cont = containerRef.current;
         if (!cont) return;
@@ -558,11 +567,13 @@ export default function DataTable({
             cont.scrollTop = posRef.current.top;
             cont.scrollLeft = posRef.current.left;
         }
+        setAtEnd(_atEnd(cont));
     }, [rows, scrollKey]);
     const onScroll = () => {
         const cont = containerRef.current;
         if (!cont) return;
         posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
+        setAtEnd(_atEnd(cont));
         const contLeft = cont.getBoundingClientRect().left;
         setPinState(prev => {
             const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
@@ -729,14 +740,41 @@ export default function DataTable({
                     ))}
                     {!rows.length && !loading && (
                         <tr>
-                            <td colSpan={pinned.length} className="px-2 py-8 text-center text-label-3">
-                                No correlated records for this selection.
+                            <td colSpan={pinned.length} className="px-2 py-10 text-center">
+                                <div className="flex flex-col items-center gap-2 text-label-3">
+                                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" aria-hidden="true" className="opacity-70">
+                                        <circle cx="11" cy="11" r="7" stroke="currentColor" strokeWidth="1.6"/>
+                                        <path d="M16.5 16.5L21 21" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                                        <path d="M8 11h6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/>
+                                    </svg>
+                                    <span className="text-sm text-label-2">
+                                        {filterCount > 0
+                                            ? 'No rows match your filters.'
+                                            : 'No correlated records for this selection.'}
+                                    </span>
+                                    {filterCount > 0 && onClearFilters && (
+                                        <button
+                                            onClick={onClearFilters}
+                                            className="cursor-pointer mt-0.5 px-3 h-8 rounded-full border border-accent/50 text-accent text-xs font-semibold hover:bg-accent hover:text-white"
+                                        >
+                                            Clear {filterCount} filter{filterCount === 1 ? '' : 's'}
+                                        </button>
+                                    )}
+                                </div>
                             </td>
                         </tr>
                     )}
                 </tbody>
             </table>
         </div>
+        {/* Right-edge fade (AX8): a subtle "more columns →" affordance that
+            hides once scrolled to the end (or when nothing overflows). Sits
+            over the scroll container, pointer-transparent so it never blocks
+            interaction. */}
+        <div
+            aria-hidden="true"
+            className={`pointer-events-none absolute inset-y-0 right-0 w-8 z-10 bg-gradient-to-l from-surface to-transparent transition-opacity duration-200 ${atEnd ? 'opacity-0' : 'opacity-100'}`}
+        />
         </div>
         </>
     );

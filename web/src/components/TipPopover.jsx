@@ -153,7 +153,8 @@ export default function TipPopover({ row, x, y, onClose }) {
         {/* Invisible dismiss overlay: a background click closes the popover and
             is swallowed here, so it can't fall through to a column header and
             trigger a sort. */}
-        <div className={`fixed inset-0 ${Z.popupCatcher}`} onClick={onClose} />
+        {/* pointerdown (not click) so the tap-away dismiss fires on iOS too */}
+        <div className={`fixed inset-0 cursor-pointer ${Z.popupCatcher}`} onPointerDown={onClose} />
         <div
             style={style}
             className={`fixed ${Z.popup} w-80 max-h-[25rem] overflow-y-auto bg-surface text-label border border-separator-2 rounded-2xl shadow-2xl p-3 text-xs`}

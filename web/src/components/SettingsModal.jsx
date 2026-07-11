@@ -39,9 +39,11 @@ function ThemeToggle({ theme, onTheme }) {
 
 // A checkbox row with a generous tap area. `title` gives it a hover tooltip.
 function Toggle({ checked, onChange, title, children }) {
+    // The whole row is one ≥44px tap target (AX5): tapping the label text -
+    // not just the 16px box - flips it, comfortable on touch.
     return (
-        <label className="flex items-center gap-2.5 text-sm cursor-pointer py-1.5" title={title}>
-            <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="accent-accent h-4 w-4" />
+        <label className="flex items-center gap-2.5 text-sm cursor-pointer select-none min-h-[44px] py-1.5" title={title}>
+            <input type="checkbox" checked={checked} onChange={e => onChange(e.target.checked)} className="accent-accent h-4 w-4 shrink-0" />
             <span>{children}</span>
         </label>
     );

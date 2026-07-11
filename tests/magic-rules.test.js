@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb,
+    tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb, legPicks,
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
     buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
 } from '../src/db/magic-rules.js';
@@ -52,6 +52,52 @@ test('tipView tolerates malformed breakdown JSON and missing fields', () => {
     assert.equal(t.confidence, null);
     assert.equal(t.outcome, null);
     assert.equal(t.vetoed, false);
+});
+
+// --- legPicks (betslip per-leg market switcher, R26d) ---
+
+test('legPicks returns the chosen pick plus up to two runners-up, each re-estimated', () => {
+    const r = row({
+        tip_market: 'O 2.5', tip_price: 1.5, tip_confidence: 0.72,
+        tip_breakdown: {
+            market: 'O 2.5', price: 1.5, confidence: 0.72, market_prob: 0.7,
+            runners_up: [
+                { market: 'O 1.5', price: 1.2, confidence: 0.81, market_prob: 0.8 },
+                { market: '1X', price: 1.3, confidence: 0.66, market_prob: 0.64 },
+            ],
+        },
+    });
+    const picks = legPicks(r, null);
+    assert.equal(picks.length, 3);
+    assert.deepEqual(picks.map(p => p.market), ['O 2.5', 'O 1.5', '1X']);
+    assert.deepEqual(picks.map(p => p.price), [1.5, 1.2, 1.3]);
+    // cal=null → estimateLegProb falls back to each candidate's own confidence
+    assert.equal(picks[0].prob, 0.72);
+    assert.equal(picks[1].prob, 0.81);
+    assert.equal(picks[2].prob, 0.66);
+});
+
+test('legPicks returns just the chosen pick when there are no runners-up', () => {
+    const picks = legPicks(row({ tip_breakdown: { market: '1X', confidence: 0.75, market_prob: 0.7, runners_up: [] } }), null);
+    assert.equal(picks.length, 1);
+    assert.equal(picks[0].market, '1X');
+});
+
+test('legPicks parses a string breakdown and skips malformed runners-up', () => {
+    const r = row({
+        tip_market: 'O 3.5', tip_price: 1.8, tip_confidence: 0.6,
+        tip_breakdown: JSON.stringify({
+            market: 'O 3.5', price: 1.8, confidence: 0.6, market_prob: 0.55,
+            runners_up: [{ market: null }, { market: 'U 4.5', price: 1.4, confidence: 0.58, market_prob: 0.6 }],
+        }),
+    });
+    const picks = legPicks(r, null);
+    assert.deepEqual(picks.map(p => p.market), ['O 3.5', 'U 4.5']);
+});
+
+test('legPicks returns [] for a tipless row', () => {
+    assert.deepEqual(legPicks({ tip_market: null }, null), []);
+    assert.deepEqual(legPicks(null, null), []);
 });
 
 // --- calibration ---

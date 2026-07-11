@@ -123,6 +123,27 @@ export function estimateLegProb(tip, cal) {
     return p == null ? null : _round(Math.min(0.98, Math.max(0.05, p)));
 }
 
+// Betslip per-leg market options (R26d): the chosen tip plus its stored
+// runners-up (up to two), each as { market, price, prob } with the win estimate
+// re-scored through the calibration for THAT market/price - so switching a leg
+// to a runner-up updates its odds AND its survival honestly. Outcome grading is
+// left to the caller (it needs the fixture's final score). Pure/testable:
+// reuses tipView (chosen) + the runners_up carried in tip_breakdown.
+export function legPicks(r, cal) {
+    const chosen = tipView(r);
+    if (!chosen) return [];
+    const picks = [{ market: chosen.market, price: chosen.price, prob: estimateLegProb(chosen, cal) }];
+    const ups = Array.isArray(chosen.breakdown?.runners_up) ? chosen.breakdown.runners_up : [];
+    for (const ru of ups.slice(0, 2)) {
+        if (!ru || ru.market == null) continue;
+        // A runner-up carries its own blend components - wrap them as a tipView
+        // so estimateLegProb buckets it exactly like the chosen tip.
+        const view = { market: ru.market, price: _num(ru.price), confidence: _num(ru.confidence), breakdown: ru };
+        picks.push({ market: ru.market, price: _num(ru.price), prob: estimateLegProb(view, cal) });
+    }
+    return picks;
+}
+
 const _bd = tip => tip.breakdown ?? {};
 
 const _agreementParts = tip => [_bd(tip).market_prob, _bd(tip).stats_prob, _bd(tip).api_prob]

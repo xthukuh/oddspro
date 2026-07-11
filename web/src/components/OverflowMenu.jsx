@@ -4,7 +4,10 @@ import { Z } from '../zLayers.js';
 
 // Right-justified mobile overflow: the toolbar actions as a simple tap list
 // (date nav stays inline in the bar). Each row fires the same handler as its
-// full-size button. Backdrop click closes.
+// full-size button. Tapping the backdrop closes it - via pointerdown (not
+// click), which fires reliably on touch: iOS Safari doesn't synthesize a click
+// on a bare non-interactive <div>, so an onClick backdrop failed to dismiss on
+// mobile.
 function Row({ icon, label, onClick, disabled, active, trailing }) {
     return (
         <button onClick={onClick} disabled={disabled}
@@ -25,7 +28,7 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
     }, [onClose]);
     return (
         <>
-            <div onClick={onClose} className={`fixed inset-0 ${Z.popupCatcher}`} />
+            <div onPointerDown={onClose} className={`fixed inset-0 cursor-pointer ${Z.popupCatcher}`} />
             <div className={`absolute right-0 top-[46px] w-56 bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 py-1 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <Row icon={refreshing ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" /> : <IconRefresh />}
                     label={refreshing ? 'Refreshing…' : 'Refresh'} onClick={onRefresh} disabled={!canRefresh} />
