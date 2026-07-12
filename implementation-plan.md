@@ -328,7 +328,15 @@ Objective (user): adopt the provider-style ↑/↓ dropdown for the other reorde
 - [x] Settings reorg — merged the Columns + Sorting sections into one compact "Columns & sorting" row (Markets / Stats / Column order / Sort priority dropdowns), freeing the vertical space the always-visible drag lists took. No functional regression; net −69 LOC.
 - [x] Collapsible betslip panes — `BetslipPlayground.jsx` Tips/Slips headers are ▸ collapse toggles; a `bodyCls` hides the body below `md` only, so one pane gives the other room on stacked small screens (desktop side-by-side unaffected).
 - [x] Verify — suite 201/201, `build:web` clean, DevTools E2E: settings screenshot (4 tidy sections), Column order arrows swap + persist, Sort priority dir-tag + × + arrows, betslip 390px Tips collapse flex→none→flex. No console errors.
-- NOTE: live site still needs the MANUAL `web/dist` upload.
+
+## v1.0.1 release — UI tweaks + deploy prep + SHIP (2026-07-11/12) ✅ DEPLOYED
+Detailed ledger: `docs/v1.0.1-ui-tweaks-checklist.md` (source of truth for every A–J item). Summary:
+- [x] **UI-tweak pass A–J** (dev) — A overlay/z-layer foundation, B table content cleanup, C filters overhaul (pure no-eval `web/src/filterExpr.js` recursive AND/OR + `$row[...]` engine), D betslip touch, E forms/shell uniformity, F loading/refresh UX; H deadlock-retry (`src/db/retry-rules.js`) + sticky-Tip parity + refresh simplification; I audit-extras (provider hues, 44px rows, edge-fade, empty-state, footer runner-up rates); J popup tap-away dismiss (`useOutsideDismiss.js`), compact footer, betslip full-slip guard, prediction methodology hidden behind `SHOW_INTERNALS=false`, client-clock kickoff link-disable. Plus mid-session R26–R31 (Select checkbox column + CSV export, No row-number column, per-leg market switcher, footer betting ledger).
+- [x] **Phase G — deploy readiness + bot-protection.** `MIGRATE_ON_BOOT` boot-time `knex migrate:latest` (opt-in, fail-fast, pure `src/db/migrate-rules.js`) — the no-SSH migration path; opt-in bot-protection (stateless proof-of-work human gate `src/human-pow.js` + `web/src/humanPow.js`; bot-UA blocklist + AI `robots.txt` in `src/bot-rules.js`, Googlebot/Bingbot exempt) — all off by default, config in `docs/DEPLOYMENT.md §8`; G1/G2 docs (DEPLOYMENT §8, CLAUDE.md, memory-bank).
+- [x] **Merged `dev`→`main` `cde3772`** (local `--no-ff`, `gh` unavailable). Suite grew to **311/311**.
+- [x] **DEPLOYED to oddspro.ke 2026-07-12** — manual local `npm run build:web` → cPanel File-Manager upload (no SSH, no auto-deploy). v1.0.1 is the live version.
+- [x] **Post-deploy hotfix `edddc88` on `main`:** calendar floor `MIN_DATE` `'2026-07-02'`→`'2026-07-05'` (`web/src/App.jsx`). Synced back `main`→`dev` 2026-07-12; branches re-synced dev↔main.
+- Outstanding (user's manual step): **rotate the leaked GitHub PAT** in `origin`'s URL (hygiene; not a deploy blocker).
 
 ## Issues / notes
 - 2026-07-02: MySQL (Docker, reachable via 127.0.0.1:3306, client seen as 172.19.0.1) denied `root` with empty password. Halted per DB-connection-failure rule. RESOLVED: user added credentials to `.env` (Laravel-style names: `DB_DATABASE`/`DB_USERNAME`/`DB_CHARSET`/`DB_COLLATION`) — config.js/knexfile.js aligned to those names.
