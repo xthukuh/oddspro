@@ -5,6 +5,7 @@ import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
 import { withRetry } from './db/retry-rules.js';
+import { buildEventRows } from './apisports-events.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -301,16 +302,6 @@ const LineupItem = z.object({
     substitutes: z.array(z.object({ player: _PlayerObj })).nullable().optional(),
 });
 
-const EventItem = z.object({
-    time: z.object({ elapsed: z.number(), extra: z.number().nullable().optional() }),
-    team: z.object({ id: z.number().nullable().optional() }).partial().nullable().optional(),
-    player: z.object({ id: z.number().nullable().optional(), name: z.string().nullable().optional() }).partial().nullable().optional(),
-    assist: z.object({ id: z.number().nullable().optional(), name: z.string().nullable().optional() }).partial().nullable().optional(),
-    type: z.string(),
-    detail: z.string().nullable().optional(),
-    comments: z.string().nullable().optional(),
-});
-
 // Replace + flag one fixture's team statistics. Returns row count.
 async function _fetchFixtureStatistics(fixture_id, giveup) {
     const items = (await _get('/fixtures/statistics', { fixture: fixture_id })).map(i => StatisticsItem.parse(i));
@@ -375,20 +366,7 @@ async function _fetchFixtureLineups(fixture_id, giveup) {
 
 // Replace + flag one fixture's events. Returns row count.
 async function _fetchFixtureEvents(fixture_id, giveup) {
-    const items = (await _get('/fixtures/events', { fixture: fixture_id })).map(i => EventItem.parse(i));
-    const rows = items.map(item => ({
-        fixture_id,
-        team_id: item.team?.id ?? null,
-        elapsed: item.time.elapsed,
-        extra: item.time.extra ?? null,
-        type: item.type,
-        detail: item.detail ?? null,
-        comments: item.comments ?? null,
-        player_id: item.player?.id ?? null,
-        player_name: item.player?.name ?? null,
-        assist_id: item.assist?.id ?? null,
-        assist_name: item.assist?.name ?? null,
-    }));
+    const rows = buildEventRows(await _get('/fixtures/events', { fixture: fixture_id }), fixture_id);
     if (!rows.length && !giveup) return 0;
     await db.transaction(async trx => {
         await trx('fixture_events').where('fixture_id', fixture_id).del();
@@ -410,14 +388,23 @@ export async function fetchApisportsStats() {
     const counts = { fixtures: targets.length, statistics: 0, lineups: 0, players: 0, events: 0 };
     const tick = _progress('API-Football - deep stats');
     await _batch(targets, async (f, i, len) => {
-        const giveup = (Date.now() - new Date(f.kickoff).getTime()) > STATS_GIVEUP_HOURS * 3600_000;
-        if (!f.stats_fetched_at) counts.statistics += await _fetchFixtureStatistics(f.id, giveup);
-        if (!f.lineups_fetched_at) {
-            const r = await _fetchFixtureLineups(f.id, giveup);
-            counts.lineups += r.lineups;
-            counts.players += r.players;
+        try {
+            const giveup = (Date.now() - new Date(f.kickoff).getTime()) > STATS_GIVEUP_HOURS * 3600_000;
+            if (!f.stats_fetched_at) counts.statistics += await _fetchFixtureStatistics(f.id, giveup);
+            if (!f.lineups_fetched_at) {
+                const r = await _fetchFixtureLineups(f.id, giveup);
+                counts.lineups += r.lineups;
+                counts.players += r.players;
+            }
+            if (!f.events_fetched_at) counts.events += await _fetchFixtureEvents(f.id, giveup);
+        } catch (e) {
+            // One fixture's malformed API payload must not abort the whole sweep.
+            // Data-shape errors (zod) are logged and skipped - the fixture stays
+            // unflagged and is retried next run. Everything else (quota floor,
+            // network) still propagates so the run halts cleanly and saves progress.
+            if (!(e instanceof z.ZodError)) throw e;
+            console.warn(`API-Football - deep stats: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
         }
-        if (!f.events_fetched_at) counts.events += await _fetchFixtureEvents(f.id, giveup);
         tick(len);
     }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
