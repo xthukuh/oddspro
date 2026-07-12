@@ -800,7 +800,7 @@ export default function App() {
 
     const TODAY = _today();
     const DAY_MS = 86400000;
-    const MIN_DATE = '2026-07-02';
+    const MIN_DATE = '2026-07-05';
     const MAX_DATE = new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
     const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
     const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
