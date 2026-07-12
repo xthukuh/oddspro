@@ -12,7 +12,7 @@ import { Z } from '../zLayers.js';
 // edge and stays hidden. That detailed reasoning is preserved below, gated
 // behind SHOW_INTERNALS - flip it (or thread a `premium` prop) when the
 // session-based premium tier lands and paid users unlock the full breakdown.
-const SHOW_INTERNALS = false;
+const SHOW_INTERNALS = true;
 
 const _pct = v => (v == null ? '-' : `${Math.round(v * 100)}%`);
 
