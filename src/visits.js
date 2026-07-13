@@ -75,11 +75,12 @@ export async function visitsSummary() {
         .orderByRaw('DATE(visited_at)');
     const series = seriesRows.map(r => ({ day: r.day, visits: Number(r.visits) || 0, unique: Number(r.unique) || 0 }));
 
-    const [byDevice, byBrowser, byOs, byCountry, topReferers] = await Promise.all([
+    const [byDevice, byBrowser, byOs, byCountry, byRegion, topReferers] = await Promise.all([
         breakdown('device_type'),
         breakdown('browser'),
         breakdown('os'),
         breakdown('country'),
+        breakdown('region'),
         breakdown('referer', 10),
     ]);
 
@@ -95,7 +96,7 @@ export async function visitsSummary() {
         generated_at: new Date().toISOString(),
         windows: { today, last7, last30, all },
         series,
-        breakdowns: { device: byDevice, browser: byBrowser, os: byOs, country: byCountry },
+        breakdowns: { device: byDevice, browser: byBrowser, os: byOs, country: byCountry, region: byRegion },
         top_referers: topReferers,
         recent: recentRows,
     };

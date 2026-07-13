@@ -107,6 +107,17 @@ const EnvSchema = z.object({
     // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
     // date was successfully refreshed - any mode - within this window. 0 = off.
     REFRESH_CACHE_MINUTES: z.coerce.number().min(0).default(5),
+    // Visitor geo backfill (src/geo.js): a background sweep resolves each newly
+    // seen visitor IP to country/region and caches the result per-IP (ip_geo),
+    // marking unresolvable/private IPs so they're never re-queried. Default
+    // provider is ip-api.com's free batch endpoint (no key; HTTP-only free tier
+    // = visitor IPs go to a third party - point GEO_API_BATCH_URL at a keyed
+    // HTTPS or self-hosted resolver to change that). Runs only when there are
+    // public IPs to resolve, so a localhost-only dev box makes no external calls.
+    GEO_RESOLVE_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    GEO_INTERVAL_MINUTES: z.coerce.number().int().min(1).default(10),  // sweep cadence
+    GEO_BATCH_LIMIT: z.coerce.number().int().min(1).max(100).default(100), // IPs resolved per sweep (ip-api batch cap = 100)
+    GEO_API_BATCH_URL: z.string().default('http://ip-api.com/batch'),
     // Safe-only slip-leg selection (the web's 🛡 Safe-only toggle). Defaults =
     // DEFAULT_SAFE in src/db/magic-rules.js; the browser can't read .env, so
     // these are shipped to the client via /api/magic-sort (server and client

@@ -102,17 +102,18 @@ export const ADMIN_HTML = `<!doctype html>
     html += '<div><h2>Browser</h2>' + bars(d.breakdowns.browser) + '</div>';
     html += '<div><h2>OS</h2>' + bars(d.breakdowns.os) + '</div>';
     html += '<div><h2>Country</h2>' + bars(d.breakdowns.country) + '</div>';
+    html += '<div><h2>Region</h2>' + bars(d.breakdowns.region) + '</div>';
     html += '</div>';
 
     html += '<h2>Top referrers</h2>' + bars(d.top_referers);
 
     html += '<h2>Recent visits</h2><div class="scroll"><table><thead><tr>' +
       '<th>Time (EAT)</th><th>IP</th><th>Device</th><th>Browser</th><th>OS</th>' +
-      '<th>Country</th><th>Path</th><th>Referrer</th></tr></thead><tbody>' +
+      '<th>Country</th><th>Region</th><th>Path</th><th>Referrer</th></tr></thead><tbody>' +
       d.recent.map(function (r) {
         return '<tr><td>' + esc(r.visited_at) + '</td><td>' + esc(r.ip) + '</td><td>' +
           esc(r.device_type) + '</td><td>' + esc(r.browser) + '</td><td>' + esc(r.os) + '</td><td>' +
-          esc(r.country) + '</td><td>' + esc(r.path) + '</td><td>' + esc(r.referer) + '</td></tr>';
+          esc(r.country) + '</td><td>' + esc(r.region) + '</td><td>' + esc(r.path) + '</td><td>' + esc(r.referer) + '</td></tr>';
       }).join('') + '</tbody></table></div>';
 
     html += '<p class="muted" style="margin-top:18px">Generated ' + esc(d.generated_at) +

@@ -6,6 +6,7 @@ import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks, performanceSummary } from './hotpicks.js';
 import { exportRecords } from './export.js';
+import { backfillGeo } from './geo.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 import { _date, _dtime } from './utils.js';
@@ -117,6 +118,12 @@ import { _date, _dtime } from './utils.js';
     if (action === 'results') {
         const c = await settleApisportsResults();
         console.debug(`[+] results: ${c.refreshed} fixtures refreshed, ${c.settled} matches settled, ${c.fallback_completed} fallback-completed (quota remaining: ${c.quota_remaining}).`);
+        return;
+    }
+
+    if (action === 'geo') {
+        const c = await backfillGeo();
+        console.debug(`[+] geo: ${c.discovered} new IP(s) - ${c.resolved} resolved, ${c.unresolvable} unresolvable, ${c.private} private; ${c.applied ?? 0} visit rows updated.`);
         return;
     }
 

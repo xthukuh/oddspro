@@ -14,6 +14,7 @@ import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken } fro
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
+import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { ADMIN_HTML } from './admin-dashboard.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -306,12 +307,21 @@ app.get('/api/refresh', (req, res) => res.json(refreshStatus()));
 // resolve to the React index.html.
 app.get('/admin', (req, res) => res.type('html').send(ADMIN_HTML));
 
-// Built frontend (npm run build:web) with SPA fallback for non-/api routes
+// Built frontend (npm run build:web) with SPA fallback for non-/api routes.
+// index.html is served no-cache so every app load revalidates - the browser
+// re-requests it (rather than serving a memory-cached copy), which both picks up
+// new deploys AND lets the visit-log middleware record repeat visitors. The
+// hash-named assets keep their default (immutable) caching.
 const dist = path.resolve('web', 'dist');
 if (existsSync(dist)) {
-    app.use(express.static(dist));
+    app.use(express.static(dist, {
+        setHeaders: (res, filePath) => {
+            if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
+        },
+    }));
     app.use((req, res, next) => {
         if (req.method !== 'GET' || req.path.startsWith('/api/')) return next();
+        res.setHeader('Cache-Control', 'no-cache');
         res.sendFile(path.join(dist, 'index.html'));
     });
 }
@@ -339,6 +349,7 @@ migrateOnBoot().then(() => {
     server = app.listen(config.API_PORT, config.API_HOST, () => {
         console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
         startAutoRefresh();
+        startGeoScheduler();
     });
 }).catch(err => {
     // Fail fast: don't serve on an uncertain schema. The host surfaces the exit
@@ -351,6 +362,7 @@ migrateOnBoot().then(() => {
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         stopAutoRefresh();
+        stopGeoScheduler();
         if (server) server.close(() => closeDb().finally(() => process.exit(0)));
         else closeDb().finally(() => process.exit(0));
     });
