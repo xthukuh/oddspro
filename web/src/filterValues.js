@@ -8,6 +8,7 @@
 // source of truth for filter semantics - this module delegates so the flat-AND
 // path and the advanced nested/expression path can never drift).
 import { rawValue, filterRows, parseTipFilter } from './filterExpr.js';
+import { hasSufficientStats } from '../../src/db/magic-rules.js';
 
 // Keys the API accepts in /api/records filters (catalog base + market
 // columns flagged filterable). Everything else must filter client-side.
@@ -145,6 +146,16 @@ export function applyOutcomeToggles(rows, { hideHits = false, hideMiss = false, 
         if (noMiss && (r.tip_market == null || failed.has(r.tip_market))) return false;
         return true;
     });
+}
+
+// Risk gate ("exclude games without sufficient stats"): drop fixtures whose tip
+// rests on thin evidence (tipless, or rolling sample / H2H below the safe
+// policy's minSamples/minH2H). Auto-applied when a magic sort or Safe-only is
+// active. Uses the SAME hasSufficientStats gate as the server safe selection so
+// "risky" means one thing everywhere. `cfg` is the effective safe policy
+// (server DEFAULT_SAFE + user overrides).
+export function applyRiskGate(rows, cfg) {
+    return rows.filter(r => hasSufficientStats(r, cfg));
 }
 
 // Row selection (the "Select" checkbox column): stamp each row's `select`

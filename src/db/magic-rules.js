@@ -72,7 +72,7 @@ const _tally = (buckets, label, hit) => {
 export function computeCalibration(tips, shrinkK = 10) {
     const cal = {
         settled: 0, global_rate: null, shrink_k: shrinkK,
-        bands: {}, groups: {}, cells: {}, lines: {}, prices: {},
+        bands: {}, groups: {}, cells: {}, lines: {}, prices: {}, markets: {},
     };
     let hits = 0;
     for (const t of tips) {
@@ -87,6 +87,7 @@ export function computeCalibration(tips, shrinkK = 10) {
         _tally(cal.cells, `${band}|${group}`, hit);
         if (/^[OU] /.test(String(t.market))) _tally(cal.lines, t.market, hit);
         _tally(cal.prices, priceBand(t.price), hit);
+        _tally(cal.markets, String(t.market), hit);   // per-exact-market (safePrior)
     }
     cal.global_rate = cal.settled ? _round(hits / cal.settled) : null;
     return cal;
@@ -144,6 +145,39 @@ export function legPicks(r, cal) {
     return picks;
 }
 
+// Warehouse out-of-sample precision anchors (scripts/backtest-sure-tips.js,
+// 15k+ fixtures). Used ONLY as the beta-shrink ANCHOR for the live per-market
+// hit rate - NEVER as the returned prior on their own. Stats-only precision is
+// price-blind and, for goal markets, anti-correlated with live ROI (the
+// adversarial review's central finding: an 87% "precise" Under is priced below
+// the 1.2 floor - the bettable slice has zero edge). So the live term must
+// dominate; the anchor only fills markets the live sample hasn't covered yet.
+// Markets absent here fall back to the live global rate, never a hardcoded
+// constant. Deliberately NO team-total / BTTS anchors - those markets are not
+// tipped (their warehouse precision is a sub-1.2 price mirage) and a primed
+// prior would mis-rank them if ever surfaced.
+export const WAREHOUSE_WLO = {
+    '1X': 0.807, 'X2': 0.669, '12': 0.777,
+    'O 0.5': 0.90, 'O 1.5': 0.811, 'O 2.5': 0.683, 'O 3.5': 0.60,
+    'U 3.5': 0.760, 'U 4.5': 0.868, 'U 5.5': 0.90, 'U 6.5': 0.94,
+    '1': 0.58, '2': 0.50,
+};
+
+// Live-shrunk market-safety prior: the market's LIVE hit rate (cal.markets)
+// beta-shrunk (k=20, warehouse-dominant until the live sample is deep) toward
+// its warehouse anchor (or the live global rate when no anchor exists). This
+// RESOLVES the warehouse<->live reversal the review flagged: X2's weak
+// warehouse 0.669 shrinks UP toward its strong live 83.6% (~0.80), U4.5's
+// strong 0.868 shrinks DOWN toward its weak live 69.3% (~0.72). So the sort
+// favours what actually WINS on real odds, not price-blind stats precision,
+// and self-corrects as data grows. Falls back to the anchor with no live data.
+export function safePrior(market, cal, k = 20) {
+    const anchor = WAREHOUSE_WLO[market] ?? (cal?.global_rate ?? 0.6);
+    const bucket = cal?.markets?.[market];
+    if (!bucket || !bucket.n) return _round(anchor);
+    return _round((bucket.hits + k * anchor) / (bucket.n + k));
+}
+
 const _bd = tip => tip.breakdown ?? {};
 
 const _agreementParts = tip => [_bd(tip).market_prob, _bd(tip).stats_prob, _bd(tip).api_prob]
@@ -163,6 +197,22 @@ export function tipAgreement(tip) {
 // empty calibration degrades, never throws. score() may return null - the
 // row then sinks like a tipless one.
 export const STRATEGIES = [
+    {
+        id: 'sure',
+        label: 'Most likely to win',
+        // The default sort. Ranks a day's tips by market-safety x blend
+        // confidence, where market-safety (safePrior) is the market's LIVE hit
+        // rate shrunk toward its warehouse anchor. Favours the markets that
+        // actually win on real odds (double-chance result markets) over
+        // price-blind "high-precision" Unders, and sharpens as data grows. In
+        // the LODO ranking bake-off, safePrior x confidence lifted top-3 daily
+        // precision 76.7% -> 93.3% and slip survival 4/10 -> 8-9/10.
+        // HONESTY: this maximizes win PROBABILITY (slip survival), NOT profit -
+        // the book's vig keeps even the best selection ~-3% flat-stake EV.
+        score: (tip, cal) => (tip.confidence == null
+            ? null
+            : _round(safePrior(tip.market, cal) * tip.confidence)),
+    },
     {
         id: 'confidence',
         label: 'Blend confidence',
@@ -278,15 +328,53 @@ export function magicSortRows(rows, strategyId, cal) {
 // purpose - the web imports this module verbatim, env overrides would
 // silently diverge client/server. Re-run the script weekly before touching.
 export const DEFAULT_SAFE = {
-    strategy: 'market',   // ranking that decides who wins the per-day cap
-    minParts: 2,          // at least two blend components present
-    minAgreement: 0.65,   // floor on the weakest present component
+    strategy: 'sure',     // ranking that decides who wins the per-day cap. Swapping
+                          // 'market' -> 'sure' lifted the LODO replay leg-rate
+                          // 81.5% -> 88.9% at the same volume (adversarial review).
+    minParts: 2,          // at least two blend components present. PINNED at 2 -
+                          // parts==3 is a double-chance-only confound (O/U tips
+                          // carry no api part), which starves the pool.
+    minAgreement: 0.65,   // floor on the weakest present component (live sweet spot 0.65-0.72)
     maxPrice: 1.6,        // short-priced legs only (1.2 floor set at generation)
     maxPerDay: 3,         // quality over quantity - zero qualifiers = no bet
+    minSamples: 6,        // min rolling sample per side (excludes thin/risky bets;
+                          // live: sufficient tips 74.8% vs thin 70.7%). ~no-op vs
+                          // the generation minGames=5 floor (98.3% of tips pass).
+    minH2H: 0,            // min head-to-head meetings. PINNED off - minH2H>=3
+                          // starves the pool (helps only result markets; re-test
+                          // on double-chance-only via analyze-safe-tips.js).
 };
 
-// One tip's pass/fail against the safe gates. Vetoed, tipless and
-// thin-breakdown rows (no components recorded) always fail.
+// Three risk tiers (Safety Net Protocol). Only minAgreement / maxPrice /
+// maxPerDay vary - minParts, minSamples, minH2H are pinned floors (the review
+// showed varying them either does nothing or is a confound). All ranked by the
+// 'sure' sort. 'balanced' equals the shipped DEFAULT_SAFE (zero regression).
+export const SAFE_TIERS = {
+    'max-precision': { minAgreement: 0.72, maxPrice: 1.5, maxPerDay: 2 },
+    balanced: { minAgreement: 0.65, maxPrice: 1.6, maxPerDay: 3 },
+    volume: { minAgreement: 0.60, maxPrice: 2.0, maxPerDay: 5 },
+};
+
+// True when a row's tip has ENOUGH evidence to not be a "risky" bet: enough
+// rolling sample on both sides and (optionally) enough H2H. Tolerant by design
+// - a row that records no samples (pre-2026-07-04 rows, test rows) is NOT
+// failed here; the minParts/agreement gates already screen those. Tipless rows
+// ARE risky. Shared verbatim by safeQualifies AND the web risk-gate filter so
+// "sufficient stats" means one thing everywhere.
+export function hasSufficientStats(row, opts = DEFAULT_SAFE) {
+    const o = { ...DEFAULT_SAFE, ...opts };
+    const tip = tipView(row);
+    if (!tip) return false;
+    const s = tip.breakdown?.samples;
+    if (!s) return true;
+    const minN = Math.min(_num(s.home_n) ?? 0, _num(s.away_n) ?? 0);
+    if ((o.minSamples ?? 0) > 0 && minN < o.minSamples) return false;
+    if ((o.minH2H ?? 0) > 0 && (_num(s.h2h_n) ?? 0) < o.minH2H) return false;
+    return true;
+}
+
+// One tip's pass/fail against the safe gates. Vetoed, tipless, thin-breakdown
+// (no components recorded) and insufficient-sample rows always fail.
 export function safeQualifies(row, opts = DEFAULT_SAFE) {
     const o = { ...DEFAULT_SAFE, ...opts };
     const tip = tipView(row);
@@ -294,7 +382,8 @@ export function safeQualifies(row, opts = DEFAULT_SAFE) {
     if (_agreementParts(tip).length < o.minParts) return false;
     const agree = tipAgreement(tip);
     if (agree == null || agree < o.minAgreement) return false;
-    return tip.price != null && tip.price <= o.maxPrice;
+    if (tip.price == null || tip.price > o.maxPrice) return false;
+    return hasSufficientStats(row, o);
 }
 
 // Grouping day for a row: the ledger's `day` is already the EAT day string
@@ -557,6 +646,16 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
         };
     });
 
+    // The `sure` strategy is the default table sort, so the client must always
+    // receive it (activeChain prunes magic entries not in this list). Pin it in
+    // even when its early-sample slip survival keeps it out of the raw top-N.
+    const ranked = _tierRank(results, minDays);
+    let strategies = ranked.slice(0, topN);
+    if (!strategies.some(s => s.id === 'sure')) {
+        const sure = ranked.find(s => s.id === 'sure');
+        if (sure) strategies = [sure, ...strategies.slice(0, Math.max(0, topN - 1))];
+    }
+
     return {
         sample: {
             settled: settled.length,
@@ -565,7 +664,7 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
             min_days: minDays,
             sufficient: eligibleDays >= minDays,
         },
-        strategies: _tierRank(results, minDays).slice(0, topN),
+        strategies,
         // Full-set calibration: what the client scores TODAY's rows with.
         calibration: computeCalibration(settled.map(e => e.tip), shrinkK),
     };

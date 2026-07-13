@@ -129,6 +129,11 @@ const EnvSchema = z.object({
     SAFE_MIN_AGREEMENT: z.coerce.number().min(0).max(1).default(DEFAULT_SAFE.minAgreement),
     SAFE_MAX_PRICE: z.coerce.number().min(1).default(DEFAULT_SAFE.maxPrice),
     SAFE_MAX_PER_DAY: z.coerce.number().int().min(1).default(DEFAULT_SAFE.maxPerDay),
+    // Stats-sufficiency ("exclude risky bets") gate - min rolling sample per
+    // side and min head-to-head meetings. Shipped to the client so the magic/
+    // Safe risk filter uses identical thresholds. 0 = that gate off.
+    SAFE_MIN_SAMPLES: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minSamples),
+    SAFE_MIN_H2H: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minH2H),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app

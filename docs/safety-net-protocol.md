@@ -15,6 +15,18 @@ Recovery is a **multi-week grind of small edges**, not a sprint. The fastest
 way to lose the remaining bankroll is to bet bigger to "catch up" — that is the
 one move this protocol forbids.
 
+> **2026-07-13 reality check (see `docs/sure-win-analysis.md`).** A full
+> warehouse + live-odds study confirmed there is **no positive-EV market** on our
+> books — the vig makes even the best selection ≈ **−3% flat-stake EV**, and the
+> highest-*precision* markets (near-certain Unders, team totals) are priced below
+> the 1.20 floor / have ~zero edge where bettable. The default sort is now
+> **"Most likely to win"** (`sure`), which ranks by each market's **live** hit
+> rate (shrunk toward the warehouse) × confidence — it maximizes *survival*, not
+> profit. The one live-established +EV market is **X2** (double chance, +15% ROI
+> on n=67, still a small sample); **12 is our biggest live loser** (−8%). Treat
+> `sure` as "which of today's bets is least likely to bust", never as a
+> money-printer.
+
 ## What the data says (as of 2026-07-09)
 
 | Fact | Number |
@@ -99,6 +111,14 @@ downside.
 - **Trust raw confidence.** The replay shows blend confidence is NOT monotonic
   with winning (2/7 slip survival as a sort). Market probability + the
   empirical calibration are what the safe ranking uses instead.
+- **Add more markets for "safer alternatives"** (team-total Unders, BTTS). The
+  2026-07-13 review measured every candidate on real stored odds: team-total
+  Unders' 81–88% precision is a sub-1.20 price mirage that collapses to 64–65%
+  on the bettable slice (+0.4pp edge, −6 to −9% ROI); BTTS is priced with ~0
+  edge (−6%). They are precise-but-unbettable or efficiently-priced — adding them
+  would inject negative-EV legs. If ever revisited they must clear **live**
+  break-even, never warehouse precision. Draw-No-Bet stays deferred (push/void
+  the hit/miss enum can't hold).
 
 ## Growth path
 

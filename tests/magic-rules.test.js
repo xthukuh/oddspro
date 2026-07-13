@@ -7,6 +7,7 @@ import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb, legPicks,
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
     buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
+    safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -127,6 +128,8 @@ test('computeCalibration tallies bands, groups, cells, lines and prices', () => 
     assert.deepEqual(cal.cells['0.60-0.69|over_under'], { n: 2, hits: 2 });
     assert.deepEqual(cal.lines['O 2.5'], { n: 2, hits: 2 });
     assert.deepEqual(cal.prices['1.35-1.54'], { n: 2, hits: 2 });
+    assert.deepEqual(cal.markets['1X'], { n: 2, hits: 1 });      // per-exact-market
+    assert.deepEqual(cal.markets['O 2.5'], { n: 2, hits: 2 });
     assert.equal(cal.shrink_k, 10);
 });
 
@@ -150,6 +153,64 @@ test('estimateLegProb prefers the cell posterior, falls back to confidence, clam
     assert.equal(estimateLegProb(tv({ confidence: 0.72 }), null), 0.72);
     assert.equal(estimateLegProb(tv({ confidence: 0.999 }), null), 0.98); // clamp
     assert.equal(estimateLegProb(null, null), null);
+});
+
+// --- safePrior (live hit rate shrunk toward the warehouse anchor) ---
+
+test('safePrior falls back to the warehouse anchor with no calibration', () => {
+    assert.equal(safePrior('X2', null), WAREHOUSE_WLO['X2']);       // 0.669
+    assert.equal(safePrior('U 4.5', null), WAREHOUSE_WLO['U 4.5']); // 0.868
+    // Unknown market with no cal -> neutral 0.6 (never a hardcoded high prior)
+    assert.equal(safePrior('GG', null), 0.6);
+});
+
+test('safePrior shrinks the live rate toward the anchor and resolves the warehouse<->live reversal', () => {
+    // X2: weak warehouse anchor (0.669) but strong live -> shrinks UP.
+    const calX2 = { global_rate: 0.73, markets: { X2: { n: 67, hits: 56 } } }; // live 83.6%
+    // (56 + 20*0.669) / (67 + 20) = 69.38 / 87 = 0.7975
+    assert.equal(safePrior('X2', calX2), _round((56 + 20 * 0.669) / 87));
+    assert.ok(safePrior('X2', calX2) > WAREHOUSE_WLO['X2'], 'strong live pulls X2 up');
+    // U 4.5: strong warehouse anchor (0.868) but weak live -> shrinks DOWN.
+    const calU = { global_rate: 0.73, markets: { 'U 4.5': { n: 127, hits: 88 } } }; // live 69.3%
+    assert.ok(safePrior('U 4.5', calU) < WAREHOUSE_WLO['U 4.5'], 'weak live pulls U 4.5 down');
+    // Market with no anchor uses the live global rate as the shrink target.
+    assert.equal(safePrior('GG', { global_rate: 0.7, markets: {} }), 0.7);
+});
+
+test('sure strategy = safePrior x confidence, ranking live-winners over price-blind precision', () => {
+    const cal = computeCalibration([
+        ...Array.from({ length: 67 }, (_, i) => tv({ market: 'X2', confidence: 0.75, outcome: i < 56 ? 'hit' : 'miss' })),
+        ...Array.from({ length: 192 }, (_, i) => tv({ market: '12', confidence: 0.75, outcome: i < 138 ? 'hit' : 'miss' })),
+    ]);
+    // Same confidence 0.75: X2 (live 83.6%) must outrank 12 (live 71.9%) purely
+    // via safePrior - the live term corrects the warehouse ordering.
+    const sX2 = scoreTip({ tip_market: 'X2', tip_confidence: 0.75, tip_breakdown: '{}' }, 'sure', cal);
+    const s12 = scoreTip({ tip_market: '12', tip_confidence: 0.75, tip_breakdown: '{}' }, 'sure', cal);
+    assert.ok(sX2 > s12, `X2 (${sX2}) should outrank 12 (${s12}) under sure`);
+    assert.equal(scoreTip({ tip_market: null }, 'sure', cal), null); // tipless sinks
+});
+
+// --- hasSufficientStats (the risky-exclusion gate) ---
+
+test('hasSufficientStats excludes thin samples but tolerates rows without recorded samples', () => {
+    const mk = (samples) => ({ tip_market: '1X', tip_price: 1.3, tip_confidence: 0.7,
+        tip_breakdown: samples ? { market_prob: 0.8, stats_prob: 0.7, samples } : { market_prob: 0.8 } });
+    assert.equal(hasSufficientStats(mk({ home_n: 7, away_n: 6, h2h_n: 4 })), true);
+    assert.equal(hasSufficientStats(mk({ home_n: 4, away_n: 8, h2h_n: 4 })), false); // min side < 6
+    assert.equal(hasSufficientStats(mk(null)), true);                                // no samples -> tolerated
+    assert.equal(hasSufficientStats({ tip_market: null }), false);                   // tipless -> risky
+    // minH2H is off by default; raising it gates
+    assert.equal(hasSufficientStats(mk({ home_n: 7, away_n: 7, h2h_n: 1 }), { minH2H: 3 }), false);
+    assert.equal(hasSufficientStats(mk({ home_n: 7, away_n: 7, h2h_n: 1 })), true);
+});
+
+test('SAFE_TIERS keeps minParts pinned and only balanced equals the shipped default', () => {
+    assert.deepEqual(SAFE_TIERS.balanced, { minAgreement: 0.65, maxPrice: 1.6, maxPerDay: 3 });
+    assert.ok(SAFE_TIERS['max-precision'].maxPerDay < SAFE_TIERS.volume.maxPerDay);
+    // balanced merged over DEFAULT_SAFE reproduces the shipped gate values
+    const bal = { ...DEFAULT_SAFE, ...SAFE_TIERS.balanced };
+    assert.equal(bal.minAgreement, DEFAULT_SAFE.minAgreement);
+    assert.equal(bal.maxPerDay, DEFAULT_SAFE.maxPerDay);
 });
 
 // --- strategies ---
@@ -274,14 +335,15 @@ test('safeSelection collapses provider duplicates to one pick per api_id', () =>
 });
 
 test('safeSelection ranks by the pinned strategy and caps per day', () => {
-    // market_prob decides under DEFAULT_SAFE.strategy = 'market'
+    // Explicit strategy:'market' so market_prob decides (the shipped default is
+    // now 'sure', which for one market + equal confidence would tie here).
     const rows = [3, 1, 4, 2, 5].map(i => safe({
         api_id: i,
         tip_breakdown: { market_prob: 0.72 + i * 0.01, stats_prob: 0.75, api_prob: 0.78 },
     }));
-    const picks = safeSelection(rows, null);
+    const picks = safeSelection(rows, null, { strategy: 'market' });
     assert.deepEqual(picks.map(r => r.api_id), [5, 4, 3]); // top 3 by market_prob
-    assert.deepEqual(safeSelection(rows, null, { maxPerDay: 1 }).map(r => r.api_id), [5]);
+    assert.deepEqual(safeSelection(rows, null, { strategy: 'market', maxPerDay: 1 }).map(r => r.api_id), [5]);
 });
 
 test('safeSelection honors an alternative ranking strategy', () => {
@@ -451,7 +513,7 @@ test('report carries the documented shape', () => {
         ['days', 'survived', 'survival', 'profit', 'roi', 'avg_odds', 'quartile', 'streak'],
     );
     assert.deepEqual(Object.keys(s.stats.streak), ['days', 'avg', 'best']);
-    assert.deepEqual(Object.keys(out.calibration), ['settled', 'global_rate', 'shrink_k', 'bands', 'groups', 'cells', 'lines', 'prices']);
+    assert.deepEqual(Object.keys(out.calibration), ['settled', 'global_rate', 'shrink_k', 'bands', 'groups', 'cells', 'lines', 'prices', 'markets']);
 });
 
 test('streak counts depth-before-first-miss from the top of each day', () => {
@@ -485,7 +547,7 @@ test('strategies rank by survival, then quartile rate, then roi', () => {
             tip_outcome: d >= 4 ? 'miss' : 'hit',
         }));
     }
-    const ids = simulateStrategies(rows, { topN: 10 }).strategies.map(s => s.id);
+    const ids = simulateStrategies(rows, { topN: 20 }).strategies.map(s => s.id);
     assert.ok(ids.indexOf('confidence') < ids.indexOf('edge'),
         'higher survival must outrank');
 });
@@ -494,7 +556,7 @@ test('replayed strategies always outrank never-replayed ones (day tier)', () => 
     // 5 one-tip days: no slips anywhere, quartile only - every strategy has
     // days=0, so the tier guard is exercised and id order decides.
     const rows = Array.from({ length: 5 }, (_, d) => row({ day: `2026-07-0${d + 1}` }));
-    const out = simulateStrategies(rows, { topN: 10 });
+    const out = simulateStrategies(rows, { topN: 20 });
     assert.ok(out.strategies.every(s => s.stats.days === 0));
     assert.deepEqual(
         out.strategies.map(s => s.id),

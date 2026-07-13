@@ -13,7 +13,7 @@ import {
 } from '../src/db/magic-rules.js';
 import { tipHit } from '../src/db/tip-rules.js';
 
-const STRATEGY_GRID = ['market', 'agreement', 'bucket', 'cal_market'];
+const STRATEGY_GRID = ['sure', 'market', 'agreement', 'bucket', 'cal_market'];
 const AGREEMENT_GRID = [0.65, 0.7, 0.72, 0.75];
 const PARTS_GRID = [2, 3];
 const PRICE_GRID = [1.4, 1.6, Infinity];
