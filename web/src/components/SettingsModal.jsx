@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import MultiSelect from './MultiSelect.jsx';
 import ReorderList from './ReorderList.jsx';
 import NumberInput from './NumberInput.jsx';
@@ -7,6 +7,9 @@ import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 import { THEMES } from '../theme.js';
 import { DEFAULT_SAFE } from '../../../src/db/magic-rules.js';
+import { exportConfig, importConfig } from '../configSnapshot.js';
+
+const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
 
 // Display settings, organized into related sections:
 //   Appearance         - theme (System / Light / Dark)
@@ -122,6 +125,36 @@ export default function SettingsModal({
         if (!ok) return;
         for (const k of Object.keys(localStorage)) if (k.startsWith('oddspro.')) localStorage.removeItem(k);
         location.reload();
+    };
+
+    // Config portability (.oddspro): export a gzip snapshot of every saved
+    // preference; import replaces the whole config on this device and reloads.
+    const fileRef = useRef(null);
+    const [ioMsg, setIoMsg] = useState(null);
+    const doExport = async () => {
+        setIoMsg(null);
+        try {
+            const n = await exportConfig(APP_VERSION);
+            setIoMsg({ ok: true, text: `Exported ${n} setting${n === 1 ? '' : 's'}.` });
+        } catch (e) {
+            setIoMsg({ ok: false, text: `Export failed: ${e.message}` });
+        }
+    };
+    const onImportFile = async e => {
+        const file = e.target.files?.[0];
+        e.target.value = ''; // let the same file be re-picked later
+        if (!file) return;
+        const ok = window.confirm(
+            `Import "${file.name}"?\n\nThis REPLACES all Odds Pro settings on this device `
+            + '(betslips, filters, sorts, columns, theme…) and reloads the page.',
+        );
+        if (!ok) return;
+        try {
+            await importConfig(file);
+            location.reload();
+        } catch (err) {
+            setIoMsg({ ok: false, text: `Import failed: ${err.message}` });
+        }
     };
 
     return (
@@ -307,7 +340,7 @@ export default function SettingsModal({
                     </section>
 
                 </div>
-                <div className="flex items-center gap-3 px-6 py-3 border-t border-separator-2">
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-6 py-3 border-t border-separator-2">
                     <button
                         onClick={clearCacheReload}
                         title="Reset every saved preference on this device (slips, selections, filters, columns, theme) and reload. Server data is untouched."
@@ -315,6 +348,23 @@ export default function SettingsModal({
                     >
                         Clear cache &amp; reload
                     </button>
+                    <span className="text-separator-2" aria-hidden="true">|</span>
+                    <button
+                        onClick={doExport}
+                        title="Download a .oddspro snapshot of all your settings, betslips, filters, sorts and columns - to move your setup to another device or app instance."
+                        className="cursor-pointer text-xs text-accent hover:opacity-70"
+                    >
+                        Export config
+                    </button>
+                    <button
+                        onClick={() => fileRef.current?.click()}
+                        title="Load a .oddspro snapshot. This REPLACES all settings on this device and reloads."
+                        className="cursor-pointer text-xs text-accent hover:opacity-70"
+                    >
+                        Import config
+                    </button>
+                    <input ref={fileRef} type="file" accept=".oddspro,application/gzip" className="hidden" onChange={onImportFile} />
+                    {ioMsg && <span className={`text-xs ${ioMsg.ok ? 'text-label-2' : 'text-miss'}`}>{ioMsg.text}</span>}
                     <div className="grow" />
                     <button onClick={onClose} title="Close settings (changes are saved as you make them)" className="cursor-pointer h-11 px-6 rounded-full bg-accent text-white text-sm font-semibold hover:opacity-90">
                         Done
