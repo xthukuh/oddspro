@@ -195,15 +195,21 @@ app.get('/api/visits/daily-unique', async (req, res, next) => {
 
 // Admin guard for the traffic dashboard + its data. Reuses the bearer-token
 // mechanism but on a SEPARATE secret (ADMIN_TOKEN, falling back to API_TOKEN) so
-// a public SPA doesn't have to expose it. Also accepts ?token= for the plain
-// /admin page navigation. 404 when no admin secret is configured (feature off).
+// a public SPA doesn't have to expose it. The token is ONLY accepted in the
+// Authorization header - never a query string (which leaks into logs, browser
+// history and Referer). 404 when no admin secret is configured (feature off).
 const adminSecret = () => config.ADMIN_TOKEN || config.API_TOKEN || null;
+// Constant-time string compare (avoids a timing side-channel on the secret).
+function safeEqual(a, b) {
+    const ab = Buffer.from(String(a));
+    const bb = Buffer.from(String(b));
+    return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
+}
 function requireAdmin(req, res, next) {
     const secret = adminSecret();
     if (!secret) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
-    const bearer = req.get('authorization') === `Bearer ${secret}`;
-    const query = req.query.token && String(req.query.token) === secret;
-    if (bearer || query) return next();
+    const auth = req.get('authorization') || '';
+    if (auth.startsWith('Bearer ') && safeEqual(auth.slice(7), secret)) return next();
     return res.status(401).json({ error: 'Unauthorized' });
 }
 
