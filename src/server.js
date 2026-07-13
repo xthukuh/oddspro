@@ -12,6 +12,9 @@ import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken } from './human-pow.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
+import { shouldLogVisit } from './db/visit-rules.js';
+import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
+import { ADMIN_HTML } from './admin-dashboard.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -20,6 +23,9 @@ import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 
 const app = express();
 app.disable('x-powered-by');
+// Behind cPanel/Passenger (or any reverse proxy) the socket peer is the proxy;
+// trust it so req.ip / X-Forwarded-For reflect the real visitor (visit logging).
+app.set('trust proxy', true);
 
 // Bot user-agent blocklist (opt-in, BOT_UA_FILTER_ENABLED). Blocks known AI
 // scrapers / aggressive crawlers / raw HTTP clients site-wide before any route;
@@ -39,6 +45,18 @@ if (config.BOT_UA_FILTER_ENABLED) {
 // AI-crawler robots.txt (always served): politely disallows LLM crawlers + /api;
 // the impolite ones that ignore it are caught by the UA blocklist above.
 app.get('/robots.txt', (req, res) => res.type('text/plain').send(AI_ROBOTS_TXT));
+
+// Visitor traffic log: fire-and-forget on real page navigations (a browser GET
+// for HTML), never on /api, assets, robots.txt or /admin. Runs before the API
+// gates + static so the "/" landing (served by express.static) is still counted;
+// bot-filtered UAs already got a 403 above and never reach here. Best-effort -
+// the insert is not awaited and swallows its own errors.
+app.use((req, res, next) => {
+    if (shouldLogVisit({ method: req.method, path: req.path, accept: req.get('accept') })) {
+        logVisit(visitRowFromReq(req));
+    }
+    next();
+});
 
 // Optional bearer-token guard: X-Requested-With (below) only stops a plain
 // cross-origin form/navigation - once this server is on a public domain,
@@ -86,6 +104,9 @@ if (config.HUMAN_POW_ENABLED) {
     // handled before this runs; the path check is belt-and-suspenders.
     app.use('/api', (req, res, next) => {
         if (req.path === '/challenge' || req.path === '/human') return next();
+        // The admin dashboard authenticates with its own bearer (no human token);
+        // let its data route through - requireAdmin still enforces the secret.
+        if (req.path === '/visits/summary') return next();
         if (config.API_TOKEN && req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
         if (verifyHumanToken(HUMAN_SECRET, req.get('x-human-token')).ok) return next();
         res.status(401).json({ error: 'Human verification required.', human_required: true });
@@ -155,6 +176,41 @@ app.get('/api/performance', async (req, res, next) => {
 app.get('/api/magic-sort', async (req, res, next) => {
     try {
         res.json(await magicSortCached(req.query.refresh === '1'));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/visits/daily-unique?date= - today's (or a given EAT day's) unique
+// visitors + page views for the public status-bar badge. Cheap grouped count;
+// no PII returned (just numbers), so it needs no admin token.
+app.get('/api/visits/daily-unique', async (req, res, next) => {
+    try {
+        const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? '')) ? req.query.date : null;
+        res.json(await dailyUniqueVisitors(date));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Admin guard for the traffic dashboard + its data. Reuses the bearer-token
+// mechanism but on a SEPARATE secret (ADMIN_TOKEN, falling back to API_TOKEN) so
+// a public SPA doesn't have to expose it. Also accepts ?token= for the plain
+// /admin page navigation. 404 when no admin secret is configured (feature off).
+const adminSecret = () => config.ADMIN_TOKEN || config.API_TOKEN || null;
+function requireAdmin(req, res, next) {
+    const secret = adminSecret();
+    if (!secret) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
+    const bearer = req.get('authorization') === `Bearer ${secret}`;
+    const query = req.query.token && String(req.query.token) === secret;
+    if (bearer || query) return next();
+    return res.status(401).json({ error: 'Unauthorized' });
+}
+
+// GET /api/visits/summary - full traffic aggregates for the admin dashboard.
+app.get('/api/visits/summary', requireAdmin, async (req, res, next) => {
+    try {
+        res.json(await visitsSummary());
     } catch (e) {
         next(e);
     }
@@ -238,6 +294,11 @@ app.post('/api/refresh/cancel', (req, res) => {
 // (data_version bumps on every successful run; last_success carries its
 // mode/dates so clients reload only when their loaded date is in scope)
 app.get('/api/refresh', (req, res) => res.json(refreshStatus()));
+
+// Admin traffic dashboard shell (public HTML; the data behind it is token-gated
+// via requireAdmin). Registered before the static/SPA fallback so /admin doesn't
+// resolve to the React index.html.
+app.get('/admin', (req, res) => res.type('html').send(ADMIN_HTML));
 
 // Built frontend (npm run build:web) with SPA fallback for non-/api routes
 const dist = path.resolve('web', 'dist');

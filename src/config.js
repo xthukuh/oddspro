@@ -56,6 +56,11 @@ const EnvSchema = z.object({
     // Optional: require `Authorization: Bearer <token>` on /api/* (server.js).
     // Unset = today's behavior (same-origin X-Requested-With check only).
     API_TOKEN: z.string().min(1).optional(),
+    // Optional: admin secret guarding the traffic dashboard (GET /admin +
+    // GET /api/visits/summary). Kept SEPARATE from API_TOKEN so a public SPA
+    // (API_TOKEN unset, /api open) can still lock the admin views. Falls back to
+    // API_TOKEN when unset; admin is disabled (404) if neither is set.
+    ADMIN_TOKEN: z.string().min(1).optional(),
     // knex pool sizing (knexfile.js). Defaults preserve the existing hardcoded
     // 0/10. The cron pipeline and the always-on server are separate processes
     // with separate pools - shared hosting connection caps may need this lower.

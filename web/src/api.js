@@ -48,6 +48,12 @@ export async function fetchRecords({ date, filters, completed, providers }) {
     });
 }
 
+// Today's unique visitors + page views for the status-bar badge:
+//   { date, unique, total }
+export async function fetchDailyVisitors() {
+    return _get('/api/visits/daily-unique');
+}
+
 // Magic sort: top tip-ranking strategies by backtested 4-leg slip survival
 // + the calibration object the client scores today's rows with:
 //   { generated_at, sample: { settled, days, eligible_days, min_days,

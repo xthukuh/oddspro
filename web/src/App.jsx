@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
+import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
@@ -238,6 +238,7 @@ export default function App() {
     const [hideSelected, setHideSelected] = useState(() => localStorage.getItem(LS_SELECT_HIDE) === '1');
     const [keepSelected, setKeepSelected] = useState(() => localStorage.getItem(LS_SELECT_KEEP) === '1');
     const [prioritizeSelected, setPrioritizeSelected] = useState(() => localStorage.getItem(LS_PRIORITIZE_SEL) === '1');
+    const [visitors, setVisitors] = useState(null); // { unique, total } for today (status-bar badge)
     // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
     // applied the saved value pre-paint; this just mirrors it into React state.
     const [theme, setThemeState] = useState(getTheme);
@@ -298,6 +299,16 @@ export default function App() {
     // degrades the ✨ menu - the table itself is unaffected.
     useEffect(() => {
         fetchMagicSort().then(setMagicData).catch(e => setMagicError(String(e.message ?? e)));
+    }, []);
+    // Today's unique-visitor count for the status bar (public endpoint). Polled
+    // lightly (every 2 min) so it stays current; failures are silent - the badge
+    // just doesn't render.
+    useEffect(() => {
+        let alive = true;
+        const load = () => fetchDailyVisitors().then(v => { if (alive) setVisitors(v); }).catch(() => {});
+        load();
+        const id = setInterval(load, 120000);
+        return () => { alive = false; clearInterval(id); };
     }, []);
     // Persisted magic entries revalidate against the fetched strategy list
     // (catalog-sanitizer idiom): a renamed/retired strategy drops out of the
@@ -1045,6 +1056,13 @@ export default function App() {
                                     </>
                                 )}
                             </div>
+                        )}
+                        {/* Daily unique visitors, right-justified (ml-auto pushes it to
+                            the far end on one line, wraps under on narrow widths). */}
+                        {visitors && (
+                            <Tooltip content={`${visitors.unique} unique visitor${visitors.unique === 1 ? '' : 's'} today (${visitors.total} page view${visitors.total === 1 ? '' : 's'}), by IP in East Africa Time.`}>
+                                <span className="ml-auto whitespace-nowrap text-label-3">👤 {visitors.unique}</span>
+                            </Tooltip>
                         )}
                     </footer>
                 );
