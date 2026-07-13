@@ -210,12 +210,21 @@ export async function fetchApisportsFixtures(date_ = null) {
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
+// Stop re-polling non-terminal fixtures whose kickoff is older than this.
+// API-Football sometimes never resolves obscure fixtures (stuck NS/PST forever,
+// null scores) - without a floor they would be re-fetched on every pass for good,
+// growing the refresh set unbounded. Genuinely-postponed games self-heal: a
+// reschedule moves the kickoff forward, so they drop out and re-enter naturally
+// once the new time passes. Mirrors STATS_GIVEUP_HOURS (give-up-polling policy).
+export const RESULTS_MAX_AGE_DAYS = 7;
+
 // Refresh unfinished past-kickoff fixtures; settle scores; mark matches completed.
 export async function settleApisportsResults() {
     const pending = await db('fixtures')
         .select('id')
         .whereNotIn('status', TERMINAL_STATUSES)
-        .where('kickoff', '<', db.raw('NOW()'));
+        .where('kickoff', '<', db.raw('NOW()'))
+        .where('kickoff', '>', db.raw('NOW() - INTERVAL ? DAY', [RESULTS_MAX_AGE_DAYS]));
     console.debug(`API-Football - ${pending.length} unfinished past-kickoff fixtures to refresh...`);
 
     // /fixtures?ids= accepts up to 20 ids per request
