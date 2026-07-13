@@ -75,7 +75,6 @@ export default function SettingsModal({
     safe, safeDefaults, safeOverridden, onSafeSet, onSafeReset,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
-    hideSelected, onHideSelected, keepSelected, onKeepSelected, selectionCount = 0, onClearSelections, onExportSelection,
     onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onReorderProviders, onLinkProviders, onShowCompleted,
     onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
 }) {
@@ -248,36 +247,9 @@ export default function SettingsModal({
                             One of each <span className="text-label-3">- one row per game from your top provider; other providers fill any gaps</span>
                         </Toggle>
 
-                        <div className="mt-3 rounded-xl border border-separator-2 p-3">
-                            <div className="flex items-center gap-3 mb-1">
-                                <h4 className="text-sm text-label-2">With selected <span className="text-label-3 tabular-nums">({selectionCount})</span></h4>
-                                <div className="grow" />
-                                <button
-                                    onClick={onClearSelections}
-                                    disabled={!selectionCount}
-                                    title="Clear the checkbox selection on every date"
-                                    className="text-xs text-accent hover:opacity-70 disabled:opacity-40 disabled:hover:opacity-40"
-                                >
-                                    Clear all selections
-                                </button>
-                            </div>
-                            <Toggle checked={hideSelected} onChange={onHideSelected}
-                                title="Hide the checked rows from the table, filters, day stats and the betslip pool. Existing slips keep their legs.">
-                                Hide selection <span className="text-label-3">- remove checked rows from every view (built slips keep their legs)</span>
-                            </Toggle>
-                            <Toggle checked={keepSelected} onChange={onKeepSelected}
-                                title="Show ONLY the checked rows - hide everything unchecked from the table, filters, day stats and the betslip pool. Opposite of Hide selection (the two can't both be on).">
-                                Keep selection <span className="text-label-3">- show only checked rows, hide the rest (opposite of Hide selection)</span>
-                            </Toggle>
-                            <button
-                                onClick={onExportSelection}
-                                disabled={!selectionCount}
-                                title="Download the checked rows as a CSV with full record details (every field, market and stat - including columns hidden from the table)"
-                                className="mt-1.5 cursor-pointer h-10 px-4 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill disabled:opacity-40 disabled:cursor-default disabled:hover:bg-surface"
-                            >
-                                Export CSV{selectionCount ? ` (${selectionCount})` : ''}
-                            </button>
-                        </div>
+                        <p className="text-xs text-label-3 mt-2">
+                            With-selected actions (hide, keep, invert, export CSV…) now live in the ☑ column header menu at the top-left of the table.
+                        </p>
 
                         <h4 className="text-sm text-label-2 mt-3 mb-1">Settled tips</h4>
                         <div className="flex flex-col">

@@ -4,7 +4,7 @@ import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import { tipHit } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
@@ -68,6 +68,9 @@ const LS_SELECT_HIDE = 'oddspro.select.hide';
 // "Keep selection" - inverse of Hide selection (show only checked rows). The two
 // are mutually exclusive (enabling one clears the other in the setters below).
 const LS_SELECT_KEEP = 'oddspro.select.keep';
+// "Prioritize Selected" (bulk menu) - float checked rows to the top of the table
+// regardless of the active sort. Reorders only (no rows hidden), so no ViewPill.
+const LS_PRIORITIZE_SEL = 'oddspro.show.prioritizeSel';
 
 // A client re-order/re-filter transition only shows the spinner once it outlasts
 // this (ms); quicker work commits before the timer, so it never flashes.
@@ -234,6 +237,7 @@ export default function App() {
     const [noPin, setNoPin] = useState(() => localStorage.getItem(LS_NO_PIN) === '1');
     const [hideSelected, setHideSelected] = useState(() => localStorage.getItem(LS_SELECT_HIDE) === '1');
     const [keepSelected, setKeepSelected] = useState(() => localStorage.getItem(LS_SELECT_KEEP) === '1');
+    const [prioritizeSelected, setPrioritizeSelected] = useState(() => localStorage.getItem(LS_PRIORITIZE_SEL) === '1');
     // Appearance: 'system' (default) | 'light' | 'dark'. The FOUC script already
     // applied the saved value pre-paint; this just mirrors it into React state.
     const [theme, setThemeState] = useState(getTheme);
@@ -766,16 +770,15 @@ export default function App() {
         next.has(id) ? next.delete(id) : next.add(id);
         saveSelection(next);
     };
-    const toggleAllSelect = (ids, checked) => {
-        const next = new Set(selection);
-        for (const id of ids) checked ? next.add(id) : next.delete(id);
-        saveSelection(next);
-    };
-    // Wipe every date's persisted selection (the per-date `.d.` keys only).
-    const clearAllSelections = () => {
-        for (const k of Object.keys(localStorage)) if (k.startsWith(LS_SELECT_PREFIX)) localStorage.removeItem(k);
-        setSelection(new Set());
-    };
+    // Bulk selection actions (the Select-column header menu). Select All /
+    // Invert act on the VISIBLE rows (`rows`) - WYSIWYG; Select Similar / Keep
+    // One Provider reach the whole loaded day (`stampedData`) so they find api_id
+    // siblings / lower-priority provider peers even when a filter hid them.
+    const selectAllShown = () => saveSelection(unionSelectionIds(rows, selection));
+    const deselectAll = () => saveSelection(new Set());
+    const invertShown = () => saveSelection(invertSelectionIds(rows, selection));
+    const selectSimilar = () => saveSelection(selectSimilarIds(stampedData, selection));
+    const keepOneProvider = () => saveSelection(keepOneProviderIds(stampedData, selection, orderedProviders));
     // Export the selected rows as a full-record CSV (all fields incl. the ones
     // hidden from the table + every market/stat). Acts on the SELECTION, so it
     // ignores the Hide-selection cut (stampedData, not visibleData).
@@ -804,6 +807,10 @@ export default function App() {
         setNoPin(value);
         localStorage.setItem(LS_NO_PIN, value ? '1' : '0');
     };
+    const savePrioritizeSelected = value => {
+        setPrioritizeSelected(value);
+        localStorage.setItem(LS_PRIORITIZE_SEL, value ? '1' : '0');
+    };
     // Hide / Keep selection are opposites - turning one on clears the other so
     // the view can never be emptied by both narrowing at once.
     const saveHideSelected = value => {
@@ -821,6 +828,22 @@ export default function App() {
             setHideSelected(false);
             localStorage.setItem(LS_SELECT_HIDE, '0');
         }
+    };
+    // Props for the Select-header bulk-actions menu: the tri-state indicator
+    // state, the toggle flags (Hide/Keep selection + Prioritize) and every
+    // action handler, bundled so DataTable can forward them verbatim.
+    const bulk = {
+        selectionCount: selection.size,
+        hideSelected, hideUnselected: keepSelected, prioritizeSelected,
+        onSelectAll: selectAllShown,
+        onDeselectAll: deselectAll,
+        onInvert: invertShown,
+        onSelectSimilar: selectSimilar,
+        onKeepOneProvider: keepOneProvider,
+        onToggleHideSelected: () => saveHideSelected(!hideSelected),
+        onToggleHideUnselected: () => saveKeepSelected(!keepSelected),
+        onTogglePrioritize: () => savePrioritizeSelected(!prioritizeSelected),
+        onExportCsv: exportSelection,
     };
 
     const TODAY = _today();
@@ -934,8 +957,10 @@ export default function App() {
                 <ViewPills
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
                     noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
+                    hideSelected={hideSelected} hideUnselected={keepSelected}
                     onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
+                    onHideSelected={saveHideSelected} onHideUnselected={saveKeepSelected}
                     onOpenFilters={() => setShowFilters(true)} onClearFilters={() => applyFilters([])}
                 />
                 <DataTable
@@ -952,7 +977,7 @@ export default function App() {
                     visibleBase={visibleBaseSet}
                     selection={selection}
                     onToggleSelect={toggleSelect}
-                    onToggleAll={toggleAllSelect}
+                    bulk={bulk}
                     noPin={noPin}
                     filterCount={filterCount}
                     onClearFilters={() => applyFilters([])}
@@ -1096,13 +1121,6 @@ export default function App() {
                     onVisibleBase={saveVisibleBase}
                     noPin={noPin}
                     onNoPin={saveNoPin}
-                    hideSelected={hideSelected}
-                    onHideSelected={saveHideSelected}
-                    keepSelected={keepSelected}
-                    onKeepSelected={saveKeepSelected}
-                    selectionCount={selection.size}
-                    onClearSelections={clearAllSelections}
-                    onExportSelection={exportSelection}
                     onToggleProvider={toggleProvider}
                     onMoveProvider={moveProvider}
                     onReorderProviders={reorderProviders}

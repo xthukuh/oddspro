@@ -16,6 +16,8 @@ import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 import { tipHit } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
+import BulkActionsMenu from './BulkActionsMenu.jsx';
+import { prioritizeSelectedRows } from '../filterValues.js';
 import { IconSpinner } from './icons.jsx';
 import { BASE_COLUMNS } from '../baseColumns.js';
 import { filterHint } from '../columns.js';
@@ -462,7 +464,7 @@ function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
 
 export default function DataTable({
     catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey,
-    visibleBase = null, selection, onToggleSelect, onToggleAll, noPin = false,
+    visibleBase = null, selection, onToggleSelect, bulk, noPin = false,
     filterCount = 0, onClearFilters,
 }) {
     const links = new Set(linkProviders ?? []);
@@ -516,7 +518,13 @@ export default function DataTable({
     // sink on column entries. The `_no` load-order anchor is stamped by App
     // (upstream of the client filters, so `no` is filterable too) - a No-column
     // sort reads it via sortValue.
-    const sorted = useMemo(() => orderRows(rows, chain, columns, cal), [rows, chain, columns, cal]);
+    // "Prioritize Selected" (bulk menu) floats checked rows to the top of the
+    // final order (orderRows has no pin concept); a stable partition so both
+    // groups keep their sorted order and a newly-checked row rises automatically.
+    const sorted = useMemo(() => {
+        const s = orderRows(rows, chain, columns, cal);
+        return bulk?.prioritizeSelected ? prioritizeSelectedRows(s) : s;
+    }, [rows, chain, columns, cal, bulk?.prioritizeSelected]);
 
     // Displayed row number per row: live position in the sorted order, or the
     // frozen load-order anchor (`_no`) when "pin position" is on (so re-sorting
@@ -704,30 +712,22 @@ export default function DataTable({
                                         : isSummary
                                             ? 'Frozen summary of Score, Tip and the active Magic sort - the full columns scroll to the right'
                                             : isSelect
-                                                ? `Select / deselect all ${sorted.length} shown row${sorted.length === 1 ? '' : 's'}`
+                                                ? 'Bulk selection actions'
                                                 : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column${fhint ? `\n\nFilter: ${fhint.key} · ${fhint.type}\ne.g. ${fhint.example}` : ''}`}
                                 >
                                     {isSummary ? (
                                         <span className="text-label-2">{scoreHasData ? 'Score / Tip' : 'Tip'}</span>
                                     ) : isSelect ? (
-                                        // Checkbox + a selection-count badge (accent, like the
-                                        // sort-order badge): "sel/total", collapsing to one value
-                                        // when all are selected, hidden when nothing is selected.
-                                        <div className="flex flex-col items-center gap-0.5">
-                                            <input
-                                                type="checkbox"
-                                                aria-label="Select all"
-                                                checked={allSelected}
-                                                ref={el => { if (el) el.indeterminate = someSelected; }}
-                                                onChange={() => onToggleAll?.(sorted.map(r => r.match_id), !allSelected)}
-                                                className="accent-accent h-4 w-4 align-middle cursor-pointer"
-                                            />
-                                            {selCount > 0 && (
-                                                <span className="text-accent text-[9px] font-semibold tabular-nums leading-none">
-                                                    {selCount === sorted.length ? sorted.length : `${selCount}/${sorted.length}`}
-                                                </span>
-                                            )}
-                                        </div>
+                                        // The bulk-actions menu (R29): the trigger still shows the
+                                        // tri-state selection indicator + a "sel/total" badge and
+                                        // opens the with-selected action menu (moved from Settings).
+                                        <BulkActionsMenu
+                                            allSelected={allSelected}
+                                            someSelected={someSelected}
+                                            selCount={selCount}
+                                            shownCount={sorted.length}
+                                            {...bulk}
+                                        />
                                     ) : (
                                         <>
                                             {meta?.short ?? col.label}

@@ -5,7 +5,9 @@
 // on). Renders nothing when the view is unmodified, so it costs no space then.
 export default function ViewPills({
     showCompleted, hideHits, hideMiss, noMiss, safeOnly, oneEach, filterCount,
+    hideSelected, hideUnselected,
     onShowCompleted, onHideHits, onHideMiss, onNoMiss, onSafeOnly, onOneEach,
+    onHideSelected, onHideUnselected,
     onOpenFilters, onClearFilters,
 }) {
     const items = [];
@@ -15,6 +17,8 @@ export default function ViewPills({
     if (noMiss) items.push(['noMiss', 'No miss', 'Any market that lost today is hidden', () => onNoMiss(false)]);
     if (safeOnly) items.push(['safeOnly', '🛡 Safe only', 'Only the day’s safe picks are shown', () => onSafeOnly(false)]);
     if (oneEach) items.push(['oneEach', 'One of each', 'One row per game (top provider only)', () => onOneEach(false)]);
+    if (hideSelected) items.push(['hideSelected', 'Hide selected', 'Checked rows are hidden', () => onHideSelected(false)]);
+    if (hideUnselected) items.push(['hideUnselected', 'Hide unselected', 'Only checked rows are shown', () => onHideUnselected(false)]);
     if (!items.length && !filterCount) return null;
     const pill = 'inline-flex items-center gap-1 rounded-[10px] border border-hot/50 bg-hot/10 text-hot pl-2 pr-1 py-0.5 text-xs';
     return (

@@ -219,3 +219,57 @@ export function applyOneOfEach(rows, priority = []) {
     const keep = new Set(best.values());
     return rows.filter(r => keep.has(r));
 }
+
+// --- Bulk selection actions (the Select-column header menu) ---
+// All return a NEW Set<match_id> (never mutate the passed selection) so the
+// caller can persist it through saveSelection. `selection` may be a Set or an
+// array of ids. Pure + import-free relative to config, so node:test covers them.
+const _asSet = sel => new Set(sel instanceof Set ? sel : sel ?? []);
+
+// Select All: union the given rows' ids into the selection. Callers pass the
+// VISIBLE rows so "select all" means what the user currently sees.
+export function unionSelectionIds(rows, selection) {
+    const next = _asSet(selection);
+    for (const r of rows ?? []) next.add(r.match_id);
+    return next;
+}
+
+// Invert: flip each given row's membership (checked <-> unchecked). Over the
+// VISIBLE rows, so it inverts what the user sees.
+export function invertSelectionIds(rows, selection) {
+    const next = _asSet(selection);
+    for (const r of rows ?? []) next.has(r.match_id) ? next.delete(r.match_id) : next.add(r.match_id);
+    return next;
+}
+
+// Select Similar: add every LOADED row that shares an api_id with a currently
+// selected row (the same canonical fixture's other-provider rows) - reaching
+// siblings even when a filter hid them. Rows without an api_id match nothing.
+export function selectSimilarIds(loadedRows, selection) {
+    const sel = _asSet(selection);
+    const apiIds = new Set();
+    for (const r of loadedRows ?? []) if (r.api_id != null && sel.has(r.match_id)) apiIds.add(r.api_id);
+    const next = new Set(sel);
+    for (const r of loadedRows ?? []) if (r.api_id != null && apiIds.has(r.api_id)) next.add(r.match_id);
+    return next;
+}
+
+// Keep One Provider: reduce the selection to a single row per canonical fixture,
+// keeping the highest-priority provider's row (reuses applyOneOfEach's ranking).
+// Selected rows without an api_id are all kept. `priority` = ordered provider
+// list (index 0 = top).
+export function keepOneProviderIds(loadedRows, selection, priority = []) {
+    const sel = _asSet(selection);
+    const selectedRows = (loadedRows ?? []).filter(r => sel.has(r.match_id));
+    return new Set(applyOneOfEach(selectedRows, priority).map(r => r.match_id));
+}
+
+// Prioritize Selected: stable partition floating checked rows to the top,
+// preserving each group's incoming (sorted) order. Returns the same reference
+// untouched when nothing is selected (no reordering to do).
+export function prioritizeSelectedRows(rows) {
+    if (!Array.isArray(rows)) return rows;
+    const sel = [], rest = [];
+    for (const r of rows) (r.select ? sel : rest).push(r);
+    return sel.length ? [...sel, ...rest] : rows;
+}
