@@ -4,7 +4,7 @@ import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
 import { tipHit } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
@@ -50,6 +50,10 @@ const LS_SAFE_ONLY = 'oddspro.show.safeOnly';
 // policy and passed as safeSelection opts - the browser can't read .env, so
 // this is how a user tunes the gates locally). Object, not array.
 const LS_SAFE_OVERRIDES = 'oddspro.safe.overrides';
+// Risk gate (settings; default ON): when a magic sort or Safe-only is active,
+// hide games without sufficient stats (thin rolling sample / H2H / no tip) -
+// the "exclude risky bets" filter. Uses the shared hasSufficientStats gate.
+const LS_RISK_GATE = 'oddspro.show.riskGate';
 // Legacy single magic-strategy id (superseded by the unified sort chain below;
 // still read once for a one-time migration).
 const LS_MAGIC = 'oddspro.magic.strategy';
@@ -119,7 +123,9 @@ function _loadSort() {
         localStorage.removeItem(LS_MAGIC);
         return seed;
     }
-    return [];
+    // Default sort for a fresh user: the 'sure' magic strategy (most-likely-to-
+    // win). NOT persisted, so clearing the sort (writes '[]') stays cleared.
+    return [{ type: 'magic', id: 'sure' }];
 }
 
 // Stable empty-array reference for null-catalog fallbacks - a fresh `[]` per
@@ -231,6 +237,8 @@ export default function App() {
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
     const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
     const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
+    // Risk gate defaults ON (absent key = on); only an explicit '0' disables it.
+    const [riskGate, setRiskGate] = useState(() => localStorage.getItem(LS_RISK_GATE) !== '0');
     // Base/synthetic column visibility (null = all shown), No pin, and the
     // "Hide selection" cut. Row selection (per display date) is loaded below.
     const [visibleBaseKeys, setVisibleBaseKeys] = useState(() => _load(LS_COLS_BASE));
@@ -317,7 +325,10 @@ export default function App() {
     const activeChain = useMemo(() => {
         if (!magicData) return sortChain;
         const ids = new Set(magicData.strategies.map(s => s.id));
-        return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id));
+        // 'sure' is the built-in default sort and is always scoreable client-side
+        // (it lives in the imported STRATEGIES), so never prune it even if a stale
+        // payload omits it - otherwise the default sort would silently vanish.
+        return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id) || e.id === 'sure');
     }, [sortChain, magicData]);
     const cal = magicData?.calibration ?? null;
     // Safe-only policy served from the API (SAFE_* env → DEFAULT_SAFE fallback);
@@ -441,6 +452,11 @@ export default function App() {
             applyClientFilters(visibleData, clientFilters, filterColumns),
             { hideHits, hideMiss, noMiss },
         );
+        // Risk gate: when a magic sort or Safe-only is active, drop thin-evidence
+        // (risky) games using the same sufficiency gate as the server safe pool.
+        if (riskGate && (activeMagicIds.length > 0 || safeOnly)) {
+            out = applyRiskGate(out, effectiveSafe);
+        }
         if (safeOnly) {
             const ids = new Set(safePicks.map(r => r.api_id));
             out = out.filter(r => ids.has(r.api_id));
@@ -449,7 +465,7 @@ export default function App() {
         // enabled provider); loaded rows are already the enabled providers.
         if (oneEach) out = applyOneOfEach(out, orderedProviders);
         return out;
-    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, safeOnly, safePicks, oneEach, orderedProviders]);
+    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, riskGate, activeMagicIds, effectiveSafe, safeOnly, safePicks, oneEach, orderedProviders]);
     // Day-level hit-rate scoreboard: computed over the whole loaded selection
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
@@ -759,6 +775,10 @@ export default function App() {
         setSafeOnly(value);
         localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
     };
+    const saveRiskGate = value => {
+        setRiskGate(value);
+        localStorage.setItem(LS_RISK_GATE, value ? '1' : '0');
+    };
     const changeTheme = value => setThemeState(setTheme(value));
     // Safe-limit overrides: set one key, or reset to the server policy.
     const saveSafeOverride = (key, value) => setSafeOverrides(prev => {
@@ -970,9 +990,10 @@ export default function App() {
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
                     noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
                     hideSelected={hideSelected} hideUnselected={keepSelected}
+                    riskGate={riskGate} riskGateActive={activeMagicIds.length > 0 || safeOnly}
                     onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
-                    onHideSelected={saveHideSelected} onHideUnselected={saveKeepSelected}
+                    onHideSelected={saveHideSelected} onHideUnselected={saveKeepSelected} onRiskGate={saveRiskGate}
                     onOpenFilters={() => setShowFilters(true)} onClearFilters={() => applyFilters([])}
                 />
                 <DataTable
@@ -1150,6 +1171,8 @@ export default function App() {
                     onNoMiss={saveNoMiss}
                     onOneEach={saveOneEach}
                     onSafeOnly={saveSafeOnly}
+                    riskGate={riskGate}
+                    onRiskGate={saveRiskGate}
                     onClose={() => setShowSettings(false)}
                 />
             )}

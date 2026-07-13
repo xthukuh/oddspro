@@ -5,9 +5,9 @@
 // on). Renders nothing when the view is unmodified, so it costs no space then.
 export default function ViewPills({
     showCompleted, hideHits, hideMiss, noMiss, safeOnly, oneEach, filterCount,
-    hideSelected, hideUnselected,
+    hideSelected, hideUnselected, riskGate, riskGateActive,
     onShowCompleted, onHideHits, onHideMiss, onNoMiss, onSafeOnly, onOneEach,
-    onHideSelected, onHideUnselected,
+    onHideSelected, onHideUnselected, onRiskGate,
     onOpenFilters, onClearFilters,
 }) {
     const items = [];
@@ -15,6 +15,8 @@ export default function ViewPills({
     if (hideHits) items.push(['hideHits', 'Hide hits', 'Winning tips are hidden', () => onHideHits(false)]);
     if (hideMiss) items.push(['hideMiss', 'Hide miss', 'Losing tips are hidden', () => onHideMiss(false)]);
     if (noMiss) items.push(['noMiss', 'No miss', 'Any market that lost today is hidden', () => onNoMiss(false)]);
+    // Only surfaced when actually cutting rows (magic sort / Safe-only active).
+    if (riskGate && riskGateActive) items.push(['riskGate', '✓ Sufficient stats', 'Games with thin stats (risky bets) are hidden while a magic sort or Safe-only is active', () => onRiskGate(false)]);
     if (safeOnly) items.push(['safeOnly', '🛡 Safe only', 'Only the day’s safe picks are shown', () => onSafeOnly(false)]);
     if (oneEach) items.push(['oneEach', 'One of each', 'One row per game (top provider only)', () => onOneEach(false)]);
     if (hideSelected) items.push(['hideSelected', 'Hide selected', 'Checked rows are hidden', () => onHideSelected(false)]);

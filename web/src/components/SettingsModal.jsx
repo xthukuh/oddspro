@@ -6,7 +6,7 @@ import Field from './Field.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
 import { THEMES } from '../theme.js';
-import { DEFAULT_SAFE } from '../../../src/db/magic-rules.js';
+import { DEFAULT_SAFE, SAFE_TIERS } from '../../../src/db/magic-rules.js';
 import { exportConfig, importConfig } from '../configSnapshot.js';
 
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
@@ -74,12 +74,12 @@ function SafeLimit({ label, k, safe, onSafeSet, min, max, int, step, hint }) {
 export default function SettingsModal({
     catalog, theme, onTheme, availableMarkets, availableStats,
     marketKeys, statKeys, columnOrder, providers, providerItems, linkProviders, showCompleted,
-    hideHits, hideMiss, noMiss, oneEach, safeOnly, safeMaxPerDay = 3,
+    hideHits, hideMiss, noMiss, oneEach, safeOnly, safeMaxPerDay = 3, riskGate,
     safe, safeDefaults, safeOverridden, onSafeSet, onSafeReset,
     sortChain, entryLabel, onReorderSort, onRemoveSort,
     baseColOptions = [], visibleBaseKeys, onVisibleBase, noPin, onNoPin,
     onMarkets, onStats, onOrder, onToggleProvider, onMoveProvider, onReorderProviders, onLinkProviders, onShowCompleted,
-    onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onClose,
+    onHideHits, onHideMiss, onNoMiss, onOneEach, onSafeOnly, onRiskGate, onClose,
 }) {
     const statLabel = new Map(catalog.stats.map(c => [c.key, c.label]));
     // The reorder list carries the shown, orderable columns: visible base + the
@@ -302,6 +302,10 @@ export default function SettingsModal({
                                 title={`Only the day's safest slip legs: blend signals in agreement (none weak), short odds, best ${safeMaxPerDay} per day. Zero games = no safe bet exists.`}>
                                 🛡 Safe only <span className="text-label-3">- only the day's safest slip legs: signals in agreement (none weak), short odds, best {safeMaxPerDay} per day. Zero games means no safe bet exists - the protocol working</span>
                             </Toggle>
+                            <Toggle checked={riskGate} onChange={onRiskGate}
+                                title="Hide games with thin stats (risky bets) while a magic sort or Safe-only is active. Uses the same sufficiency gate as the safe pool.">
+                                ✓ Hide risky games <span className="text-label-3">- while sorting by a magic strategy (or Safe-only), hide games without enough stats (thin form / H2H sample). On by default</span>
+                            </Toggle>
                         </div>
 
                         <div className="mt-3 rounded-xl border border-separator-2 p-3">
@@ -317,6 +321,19 @@ export default function SettingsModal({
                                     Reset to defaults
                                 </button>
                             </div>
+                            {/* Risk-tier presets: one click sets the varying gates (agreement / price /
+                                per-day). 'Balanced' equals the shipped default (no regression). */}
+                            <div className="flex items-center gap-1.5 mb-3">
+                                <span className="text-xs text-label-2 mr-1">Tier:</span>
+                                {Object.entries(SAFE_TIERS).map(([name, bundle]) => (
+                                    <button key={name}
+                                        onClick={() => { for (const [k, v] of Object.entries(bundle)) onSafeSet(k, v); }}
+                                        title={`${name}: agreement≥${bundle.minAgreement}, price≤${bundle.maxPrice}, ${bundle.maxPerDay}/day`}
+                                        className="cursor-pointer text-xs rounded-lg border border-separator-2 px-2 py-1 hover:border-accent hover:text-accent capitalize">
+                                        {name.replace('-', ' ')}
+                                    </button>
+                                ))}
+                            </div>
                             <div className="grid grid-cols-2 gap-x-4 gap-y-3">
                                 <SafeLimit label="Max per day" k="maxPerDay" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={20} int hint="Cap the number of safe picks kept per day" />
@@ -326,10 +343,15 @@ export default function SettingsModal({
                                     min={0} max={1} step={0.05} hint="Floor on the weakest present blend component (0–1)" />
                                 <SafeLimit label="Min signals" k="minParts" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={3} int hint="Require at least this many blend components present" />
+                                <SafeLimit label="Min form games" k="minSamples" safe={safe} onSafeSet={onSafeSet}
+                                    min={0} max={10} int hint="Require this many recent games per side (excludes thin/risky bets)" />
+                                <SafeLimit label="Min H2H games" k="minH2H" safe={safe} onSafeSet={onSafeSet}
+                                    min={0} max={10} int hint="Require this many head-to-head meetings (0 = off; helps result markets)" />
                             </div>
                             <p className="text-xs text-label-2 mt-2">
                                 Tighter limits = fewer, safer picks. Defaults come from the server policy
                                 {safeDefaults ? '' : ' (loading…)'}; these tune it just for your view.
+                                The <b>“Hide risky games”</b> filter above uses the “Min form / H2H games” floors.
                             </p>
                         </div>
 

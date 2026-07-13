@@ -11,6 +11,8 @@ const safePolicy = () => ({
     minAgreement: config.SAFE_MIN_AGREEMENT,
     maxPrice: config.SAFE_MAX_PRICE,
     maxPerDay: config.SAFE_MAX_PER_DAY,
+    minSamples: config.SAFE_MIN_SAMPLES,   // sufficiency ("exclude risky") gate
+    minH2H: config.SAFE_MIN_H2H,
 });
 
 // Magic-sort loader: replay the candidate tip-ranking strategies against
