@@ -250,6 +250,7 @@ export default function App() {
     const [magicError, setMagicError] = useState(null);
     const [filters, setFilters] = useState([]);
     const [result, setResult] = useState(null);
+    window.__result = result; window.__setResult = setResult; // me: debug - will remove later
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
     // Heavy client re-orders (magic sort, bulk filter apply on a big day) run as
