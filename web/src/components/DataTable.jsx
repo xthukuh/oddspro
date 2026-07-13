@@ -1,8 +1,9 @@
 // Client-sorted datatable: fixed base columns + selected market and STATS
 // columns. Click a header to sort descending first (shift-click chains
 // multi-sort); the whole selection is loaded, so sorting never hits the API.
-// Sticky chrome: the header row pins to the top, and a duplicate Score
-// column pins left only while the real one is scrolled out of view.
+// Sticky chrome: the header row pins to the top, and ONE consolidated summary
+// column (Score / Tip / Magic, colour-coded) pins left only while the real Tip
+// column is scrolled out of view.
 
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sortValue } from '../sortValues.js';
@@ -17,6 +18,7 @@ import TipPopover, { skipLabel } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
 import { IconSpinner } from './icons.jsx';
 import { BASE_COLUMNS } from '../baseColumns.js';
+import { filterHint } from '../columns.js';
 // Re-exported so existing importers (App, SettingsModal) keep their path.
 export { BASE_COLUMNS } from '../baseColumns.js';
 
@@ -42,7 +44,6 @@ const HEADER_META = {
     fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
-    goals: { info: 'Total goals at full time' },
     tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
     status: { info: 'Fixture status - hover a cell for the odds-refresh & betting-closed times' },
     league: { info: 'Country - league' },
@@ -143,14 +144,6 @@ const CELL_TITLES = {
             _time(row.start_time),
             `${row.home_team ?? 'Home'} ${hs}`,
             `${row.away_team ?? 'Away'} ${as}`,
-            _dt(row.locked_at ?? row.updated_at),
-        ].filter(Boolean).join('\n');
-    },
-    goals: row => {
-        if (!row.score) return null;
-        const [hs, as] = row.score.split('-');
-        return [
-            `${row.home_team ?? 'Home'} ${hs} - ${as} ${row.away_team ?? 'Away'}`,
             _dt(row.locked_at ?? row.updated_at),
         ].filter(Boolean).join('\n');
     },
@@ -260,6 +253,24 @@ function _tick(outcome) {
     return null;
 }
 
+// The chosen-tip main line (🔥 badge · market-as-link · confidence · settled
+// tick), shared VERBATIM by the real Tip cell and the consolidated sticky
+// summary so the two never drift. Needs a `group/tip` ancestor for the
+// market's hover-underline. Missed = red wholesale, AI-veto = struck + dim.
+function _tipMainInner(row) {
+    const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
+    const vetoed = row.tip_ai_verdict === 'veto';
+    const missed = row.tip_outcome === 'miss';
+    return (
+        <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
+            {row.hot ? '🔥 ' : ''}
+            <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${missed || vetoed ? '' : 'text-accent'} ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
+            {pct && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
+            {_tick(row.tip_outcome)}
+        </div>
+    );
+}
+
 function _cell(row, col, linkProviders, openTip) {
     const key = col.key;
     if (key === 'start_time') {
@@ -293,25 +304,18 @@ function _cell(row, col, linkProviders, openTip) {
             );
         }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
-        // The pinned (sticky) duplicate renders IDENTICALLY to the real Tip
-        // column - it's sized to that column's measured width, so full parity
-        // (%, runners-up, ticks) fills the space it was already given.
         const vetoed = row.tip_ai_verdict === 'veto';
         // Non-revealing tooltip: the pick, its odds and confidence - never HOW
-        // it's derived (see TipPopover's SHOW_INTERNALS).
+        // it's derived (see TipPopover's SHOW_DETAILS).
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + (pct ? ` - confidence ${pct}` : '')
             + (row.hot ? ' - 🔥 likely high-scoring' : '')
             + (vetoed ? ' - flagged for caution' : '')
             + '\nClick for details';
-        // A missed tip turns red wholesale; a hit stays calm with its ✓; an
-        // AI-vetoed tip is struck through (it stays on record and settles -
-        // the performance report measures what the veto was worth).
-        const missed = row.tip_outcome === 'miss';
-        // Top-3 picks stacked (chosen + up to two runners-up). The chosen is the
-        // sort value, so it stays bold/full-size; runners-up are smaller & muted,
-        // each with its own settled ✓/✗ (graded from the score). Rendered the
-        // same in the real column and its left-pinned duplicate.
+        // Top-3 picks stacked: the chosen main line (shared _tipMainInner - it's
+        // the sort value, so bold/full-size) + up to two smaller, muted runners-up,
+        // each with its own settled ✓/✗ graded from the score. The left-pinned
+        // sticky summary reuses _tipMainInner (main line only) for the same look.
         const ups = Array.isArray(row.tip_breakdown?.runners_up)
             ? row.tip_breakdown.runners_up.slice(0, 2) : [];
         return (
@@ -320,12 +324,7 @@ function _cell(row, col, linkProviders, openTip) {
                 title={title}
                 onClick={e => openTip(row, e)}
             >
-                <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
-                    {row.hot ? '🔥 ' : ''}
-                    <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-                    {pct && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
-                    {_tick(row.tip_outcome)}
-                </div>
+                {_tipMainInner(row)}
                 {ups.map((r, i) => {
                     const rpct = r.confidence != null ? `${Math.round(r.confidence * 100)}%` : null;
                     return (
@@ -429,6 +428,36 @@ function _magicCell(row, meta) {
     const m = meta?.info.get(row.api_id);
     if (!m) return <span className="text-label-3">-</span>;
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
+}
+
+// Consolidated left-pinned SUMMARY cell (v1.0.2): one sticky column stacking the
+// key decision fields, colour-coded so each reads as itself - score (neutral),
+// the main Tip pick (accent link, click opens the popover), and the active magic
+// rank (dim). Replaces the separate Score/Tip/Magic pinned duplicates; the real
+// columns (with runners-up + independent sort) still scroll in place.
+function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
+    const hasScore = scoreHasData && !!row.score;
+    let total = null;
+    if (hasScore) {
+        const [hs, as] = row.score.split('-').map(Number);
+        if (Number.isFinite(hs) && Number.isFinite(as)) total = hs + as;
+    }
+    // Extra-small (10px) so the pinned column stays as narrow as possible - it
+    // steals horizontal space from the scrolling columns the whole time it shows.
+    return (
+        <div className="leading-tight space-y-0.5 text-[10px]">
+            {hasScore && (
+                <div className="whitespace-nowrap tabular-nums">
+                    <span className="text-label font-medium">{row.score}</span>
+                    {total != null && <span className="text-label-3"> · {total} gls</span>}
+                </div>
+            )}
+            <div className="group/tip cursor-pointer whitespace-nowrap" onClick={e => openTip(row, e)}>
+                {row.tip_market ? _tipMainInner(row) : <span className="text-label-3">-</span>}
+            </div>
+            {magicMeta && <div className="text-label-3">{_magicCell(row, magicMeta)}</div>}
+        </div>
+    );
 }
 
 export default function DataTable({
@@ -537,23 +566,28 @@ export default function DataTable({
         if (!tint.has(row.api_id)) tint.set(row.api_id, ROW_TINTS[tint.size % ROW_TINTS.length]);
     }
 
-    // Left-pinned duplicates of the columns worth keeping in view (Score and
-    // Tip), each shown only while its real column is scrolled out of view.
-    // Hysteresis matters: inserting a pin shifts the table right, so a column
-    // pins when it crosses the container's left edge but unpins only once it
-    // would clear the TOTAL width of the currently-inserted pins - adding or
-    // removing a pin moves the real columns and the threshold by the same
-    // amount, so the states never oscillate at the boundary.
-    // Only Score and Tip stay pinned (on every screen size) - keeping the set
-    // small leaves room for other columns on narrow widths. The ephemeral magic
-    // column scrolls with the rest. Score only pins when the day actually HAS
-    // scores (upcoming fixtures are all dashes - no point stickying an empty
-    // column); Tip is always pinnable.
+    // ONE left-pinned SUMMARY cell (v1.0.2) keeps the key decision fields (Score
+    // / Tip / Magic) in view once the real Tip column scrolls off the left edge,
+    // stacking them colour-coded (see _summaryCell) instead of spreading 2-3
+    // separate pinned duplicates - freeing horizontal space. The real columns
+    // (own headers, runners-up, independent sort) still scroll in place.
+    // Anchored on Tip (always present), so the summary appears only once Tip is
+    // gone and never duplicates a still-visible column. Hysteresis: pin when
+    // Tip's real column crosses the container's left edge, unpin only once it
+    // clears the whole pinned region (Select + summary), so the state can't
+    // oscillate at the boundary. The score line shows only when the day HAS
+    // scores; the magic line only when a magic strategy is active.
     const scoreHasData = rows.some(r => r.score != null && r.score !== '');
-    const PIN_KEYS = scoreHasData ? ['score', 'tip'] : ['tip'];
+    const ANCHOR_KEY = 'tip';
+    const SELECT_W = 44;
+    // The summary column is CONTENT-FIT (no fixed width) so it never wastes
+    // horizontal space; this is only the hysteresis fallback until the real
+    // pinned width is measured from the DOM.
+    const SUMMARY_W_FALLBACK = 116;
     const containerRef = useRef(null);
-    const pinThRefs = useRef({}); // key -> the real column's <th>
-    const [pinState, setPinState] = useState({}); // key -> pinned?
+    const pinThRefs = useRef({}); // key -> the real anchor column's <th>
+    const summaryThRef = useRef(null); // the pinned summary <th> (measured width)
+    const [summaryPinned, setSummaryPinned] = useState(false);
     // Scroll preservation across data reloads: silent background refreshes
     // replace `rows` in place - the view must not jump. A scrollKey change
     // (date/server-filter navigation) is an intentional reset to the top.
@@ -582,43 +616,31 @@ export default function DataTable({
         if (!cont) return;
         posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
         setAtEnd(_atEnd(cont));
-        const contLeft = cont.getBoundingClientRect().left;
-        setPinState(prev => {
-            const pinnedWidth = PIN_KEYS.reduce((sum, key) =>
-                sum + (prev[key] ? pinThRefs.current[key]?.offsetWidth ?? 0 : 0), 0);
-            const next = {};
-            let changed = false;
-            for (const key of PIN_KEYS) {
-                const th = pinThRefs.current[key];
-                if (!th) continue;
-                const dx = th.getBoundingClientRect().left - contLeft;
-                next[key] = prev[key] ? dx < pinnedWidth : dx < 0;
-                if (next[key] !== !!prev[key]) changed = true;
-            }
-            return changed ? next : prev;
+        const th = pinThRefs.current[ANCHOR_KEY];
+        if (!th) return;
+        const dx = th.getBoundingClientRect().left - cont.getBoundingClientRect().left;
+        // Pinned region occupied at the left edge = the Select pin + the summary
+        // (its real measured width once shown, else the fallback estimate).
+        const summaryW = summaryThRef.current?.offsetWidth || SUMMARY_W_FALLBACK;
+        const region = (showSelect ? SELECT_W : 0) + summaryW;
+        setSummaryPinned(prev => {
+            const next = prev ? dx < region : dx < 0;
+            return next === prev ? prev : next;
         });
     };
-    // The Select column (R28) is a permanent left-pinned column (fixed width,
-    // no scrolling duplicate) sitting at the very left edge; the Score/Tip pins
-    // stack to its right.
-    const SELECT_W = 40;
+    // The Select column (R28) is a permanent left-pinned column (fixed width, no
+    // scrolling duplicate) at the very left edge; the summary pin sits to its
+    // right and appears only while the real Tip column is scrolled out of view.
     const selectCol = showSelect ? { key: 'select', group: 'select', pin: true, left: 0, width: SELECT_W } : null;
-    // Pins keep the columns' own (drag-order) relative order and stack with
-    // cumulative left offsets so they never overlap.
-    let pinLeft = selectCol ? SELECT_W : 0;
-    // Require PIN_KEYS membership too: if Score just lost its data it leaves
-    // PIN_KEYS, but a stale pinState.score must not still pin the empty column.
-    const pins = displayColumns.filter(c => PIN_KEYS.includes(c.key) && pinState[c.key]).map(c => {
-        // Pin the duplicate to the EXACT measured width of its real column and
-        // advance the next pin's offset by the same value, so two adjacent pins
-        // (any order, e.g. Tip before Score) butt together with no gap for the
-        // scrolling content to bleed through.
-        const w = pinThRefs.current[c.key]?.offsetWidth ?? 0;
-        const p = { ...c, pin: true, left: pinLeft, width: w || undefined };
-        pinLeft += w;
-        return p;
-    });
-    const pinned = [...(selectCol ? [selectCol] : []), ...pins, ...displayColumns];
+    // No fixed width: the table sizes the column to its widest (10px) content.
+    const summaryCol = summaryPinned
+        ? { key: 'pin-summary', group: 'summary', pin: true, left: showSelect ? SELECT_W : 0, width: undefined }
+        : null;
+    const pinned = [
+        ...(selectCol ? [selectCol] : []),
+        ...(summaryCol ? [summaryCol] : []),
+        ...displayColumns,
+    ];
 
     // Check-all state over the currently displayed rows (R28).
     const selCount = sorted.reduce((n, r) => n + (r.select ? 1 : 0), 0);
@@ -660,31 +682,52 @@ export default function DataTable({
                                 ? 'sticky top-0 z-30 shadow-[inset_-1px_-1px_0_var(--separator-2)]'
                                 : 'sticky top-0 z-20 shadow-[inset_0_-1px_0_var(--separator-2)]';
                             const isSelect = col.group === 'select';
-                            const noSort = col.key === 'magic' || isSelect;
+                            const isSummary = col.group === 'summary';
+                            const noSort = col.key === 'magic' || isSelect || isSummary;
+                            // Filter hint (key · type · example expression) for
+                            // real, filterable columns - not the ephemeral magic
+                            // column, the select checkbox or the summary pin.
+                            const fhint = noSort ? null : filterHint(col);
                             return (
                                 <th
                                     key={col.pin ? `pin:${col.key}` : col.key}
                                     style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
-                                    ref={!col.pin && PIN_KEYS.includes(col.key)
-                                        ? el => { pinThRefs.current[col.key] = el; }
-                                        : undefined}
+                                    ref={isSummary
+                                        ? el => { summaryThRef.current = el; }
+                                        : !col.pin && col.key === ANCHOR_KEY
+                                            ? el => { pinThRefs.current[col.key] = el; }
+                                            : undefined}
                                     onClick={noSort ? undefined : e => onSort(col.key, e.shiftKey)}
-                                    className={`${sticky} bg-surface-2 px-2.5 py-2 font-semibold ${noSort ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' || isSelect ? 'text-center' : ''}`}
+                                    className={`${sticky} bg-surface-2 ${isSummary ? 'px-2 text-[11px]' : 'px-2.5'} py-2 font-semibold ${noSort ? '' : 'cursor-pointer hover:bg-fill'} ${col.group === 'market' || isSelect ? 'text-center' : ''}`}
                                     title={col.key === 'magic'
                                         ? `Magic sort${magicLabels.length > 1 ? `s (${magicLabels.length})` : ''}: ${magicLabels.join(', ')} - #rank · strategy score`
-                                        : isSelect
-                                            ? `Select / deselect all ${sorted.length} shown row${sorted.length === 1 ? '' : 's'}`
-                                            : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column`}
+                                        : isSummary
+                                            ? 'Frozen summary of Score, Tip and the active Magic sort - the full columns scroll to the right'
+                                            : isSelect
+                                                ? `Select / deselect all ${sorted.length} shown row${sorted.length === 1 ? '' : 's'}`
+                                                : `${info ? `${info}\n` : ''}${meta?.short ? `${col.label}\n` : ''}Click to add/cycle sort (desc first) - shift-click to sort by only this column${fhint ? `\n\nFilter: ${fhint.key} · ${fhint.type}\ne.g. ${fhint.example}` : ''}`}
                                 >
-                                    {isSelect ? (
-                                        <input
-                                            type="checkbox"
-                                            aria-label="Select all"
-                                            checked={allSelected}
-                                            ref={el => { if (el) el.indeterminate = someSelected; }}
-                                            onChange={() => onToggleAll?.(sorted.map(r => r.match_id), !allSelected)}
-                                            className="accent-accent h-4 w-4 align-middle cursor-pointer"
-                                        />
+                                    {isSummary ? (
+                                        <span className="text-label-2">{scoreHasData ? 'Score / Tip' : 'Tip'}</span>
+                                    ) : isSelect ? (
+                                        // Checkbox + a selection-count badge (accent, like the
+                                        // sort-order badge): "sel/total", collapsing to one value
+                                        // when all are selected, hidden when nothing is selected.
+                                        <div className="flex flex-col items-center gap-0.5">
+                                            <input
+                                                type="checkbox"
+                                                aria-label="Select all"
+                                                checked={allSelected}
+                                                ref={el => { if (el) el.indeterminate = someSelected; }}
+                                                onChange={() => onToggleAll?.(sorted.map(r => r.match_id), !allSelected)}
+                                                className="accent-accent h-4 w-4 align-middle cursor-pointer"
+                                            />
+                                            {selCount > 0 && (
+                                                <span className="text-accent text-[9px] font-semibold tabular-nums leading-none">
+                                                    {selCount === sorted.length ? sorted.length : `${selCount}/${sorted.length}`}
+                                                </span>
+                                            )}
+                                        </div>
                                     ) : (
                                         <>
                                             {meta?.short ?? col.label}
@@ -715,6 +758,7 @@ export default function DataTable({
                         >
                             {pinned.map(col => {
                                 const isSelect = col.group === 'select';
+                                const isSummary = col.group === 'summary';
                                 const content = isSelect ? (
                                     <input
                                         type="checkbox"
@@ -723,12 +767,13 @@ export default function DataTable({
                                         onChange={() => onToggleSelect?.(row.match_id)}
                                         className="accent-accent h-4 w-4 cursor-pointer"
                                     />
-                                ) : col.key === 'no' ? (
+                                ) : isSummary ? _summaryCell(row, { scoreHasData, magicMeta, openTip })
+                                    : col.key === 'no' ? (
                                     <span className="text-label-3 tabular-nums">{noByRow.get(row.match_id) ?? ''}</span>
                                 ) : col.key === 'magic' ? _magicCell(row, magicMeta)
                                     : col.group === 'market' ? _marketCell(row, col.key)
                                     : _cell(row, col, links, openTip);
-                                const cellTitle = isSelect ? undefined : _cellTitle(row, col);
+                                const cellTitle = (isSelect || isSummary) ? undefined : _cellTitle(row, col);
                                 // Tip & fixture own their tap actions (popover / link) and
                                 // keep their native titles; every other cell routes its
                                 // hidden-content title through the touch-friendly Tooltip.
@@ -738,8 +783,13 @@ export default function DataTable({
                                         key={col.pin ? `pin:${col.key}` : col.key}
                                         title={wrap ? undefined : cellTitle}
                                         style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
-                                        className={`px-2.5 py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
-                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:bg-fill shadow-[inset_-1px_0_0_var(--separator-2)]`
+                                        // Sticky cells keep their OPAQUE row tint at all times;
+                                        // the hover fill is LAYERED over it (a translucent
+                                        // gradient), never swapped in as the bg-color - otherwise
+                                        // the hovered cell goes translucent and scrolling content
+                                        // bleeds through the pinned column.
+                                        className={`${isSummary ? 'px-2' : 'px-2.5'} py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
+                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:[background-image:linear-gradient(var(--color-fill),var(--color-fill))] shadow-[inset_-1px_0_0_var(--separator-2)]`
                                             : ''}`}
                                     >
                                         {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}

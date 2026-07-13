@@ -54,6 +54,7 @@ export function splitFilters(filters, catalog) {
     const keys = serverKeys(catalog);
     const server = [], client = [];
     for (const f of Array.isArray(filters) ? filters : []) {
+        if (f?.enabled === false) continue; // toggled off in the builder - skip entirely
         const local = f.type === 'expr'
             || CLIENT_ONLY_OPS.has(f.op)
             || CLIENT_ONLY_KEYS.has(f.key)
@@ -67,12 +68,16 @@ export function splitFilters(filters, catalog) {
 
 // Count leaf conditions in a filter model (flat array or nested group) - drives
 // the "N active" filter badge and the ViewPills chip. Sub-groups recurse; each
-// leaf condition (plain or expr) counts one.
+// leaf condition (plain or expr) counts one. Disabled nodes (enabled: false)
+// carry no constraint, so they don't count - the badge reflects only what is
+// actually narrowing the table.
 export function conditionCount(filters) {
-    if (Array.isArray(filters)) return filters.length;
+    if (Array.isArray(filters)) return filters.filter(f => f?.enabled !== false).length;
     if (filters && filters.type === 'group') {
-        return (filters.items ?? []).reduce(
-            (n, it) => n + (it && it.type === 'group' ? conditionCount(it) : 1), 0);
+        return (filters.items ?? []).reduce((n, it) => {
+            if (!it || it.enabled === false) return n;
+            return n + (it.type === 'group' ? conditionCount(it) : 1);
+        }, 0);
     }
     return 0;
 }

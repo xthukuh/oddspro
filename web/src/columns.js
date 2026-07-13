@@ -25,11 +25,49 @@ const EXTRA_BASE_LABELS = {
     // integer win % (0-100). Not a table column - filterable only.
     tip_confidence: 'Tip confidence %',
     // Filterable data fields that are no longer their own TABLE column (id folds
-    // into Start; updated/locked fold into the Status tooltip) but stay queryable.
+    // into Start; updated/locked fold into the Status tooltip; goals folds into
+    // Score) but stay queryable.
     api_id: 'ID',
     updated_at: 'Updated',
     locked_at: 'Locked',
+    goals: 'Goals',
 };
+
+// Date fields and fields whose SORT value is numeric even when the display text
+// is a string (form points, score total, h2h points, tip confidence). Shared
+// with the filter builder so the header-tooltip value-type hint matches the
+// control the builder offers for the same field.
+export const FILTER_DATE_KEYS = new Set(['start_time', 'updated_at', 'locked_at']);
+export const FILTER_NUMBER_KEYS = new Set(['no', 'goals', 'score', 'h2h_count', 'hot', 'hot_score',
+    'api_id', 'tip', 'tip_confidence', 'season', 'home_rank', 'away_rank', 'home_form', 'away_form',
+    'h2h', 'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
+
+// Filter value type of a column: odds markets + post-match (fs:*) stats + the
+// numeric-sort keys are numbers; the date keys are dates; everything else text.
+export function filterType(col) {
+    const key = col?.key;
+    if (FILTER_DATE_KEYS.has(key)) return 'date';
+    if (col?.group === 'market' || (typeof key === 'string' && key.startsWith('fs:')) || FILTER_NUMBER_KEYS.has(key)) {
+        return 'number';
+    }
+    return 'text';
+}
+
+// Header-tooltip filter hint: the exact key the expression/filter builder
+// expects, the column's value type, and a working example expression
+// ($row['key'] reads the sort value, raw('key') the display text). Helps users
+// writing custom filters know a column's queryable name and shape.
+export function filterHint(col) {
+    const key = col?.key;
+    if (!key) return null;
+    const type = filterType(col);
+    const example = type === 'text'
+        ? `contains(raw('${key}'), '…')`
+        : type === 'date'
+            ? `$row['${key}'] >= <timestamp>`
+            : `$row['${key}'] >= ${key === 'tip' ? '0.7' : col?.group === 'market' ? '1.8' : '2'}`;
+    return { key, type, example };
+}
 
 // Human label for a column key. base column -> its table title; extra base ->
 // the map above; stat -> catalog stat label; market/unknown -> the key itself

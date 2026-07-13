@@ -100,9 +100,13 @@ const EXPR_EXAMPLES = [
 const selCls = 'border border-separator bg-surface text-label rounded-[10px] h-10 px-2 text-sm outline-none';
 const inputCls = 'bg-surface border border-separator text-label rounded-[10px] h-10 px-3 text-sm w-full sm:w-44 outline-none';
 
-const NEW_COND = (key) => ({ key, op: 'gte', value: '', mode: 'value' });
-const NEW_EXPR = () => ({ type: 'expr', expr: '' });
-const NEW_GROUP = (key) => ({ type: 'group', join: 'and', items: [NEW_COND(key)] });
+// New nodes are enabled by default; the per-row checkbox toggles `enabled` so a
+// condition/group/expression can be parked (skipped in processing) without
+// being deleted. Disabled nodes are preserved through the wire (enabled: false)
+// so the toggle survives apply/reopen.
+const NEW_COND = (key) => ({ key, op: 'gte', value: '', mode: 'value', enabled: true });
+const NEW_EXPR = () => ({ type: 'expr', expr: '', enabled: true });
+const NEW_GROUP = (key) => ({ type: 'group', join: 'and', items: [NEW_COND(key)], enabled: true });
 
 // --- model helpers ------------------------------------------------------
 
@@ -110,13 +114,15 @@ const NEW_GROUP = (key) => ({ type: 'group', join: 'and', items: [NEW_COND(key)]
 // = implicit top-level AND. Conditions gain a `mode` (value/col) inferred from
 // the presence of `col`.
 function toWorkGroup(filters) {
+    // `enabled` round-trips from the wire (absent = enabled, back-compatible).
+    const en = f => f?.enabled !== false;
     const toItem = f => (f && f.type === 'group'
-        ? { type: 'group', join: f.join === 'or' ? 'or' : 'and', items: f.items.map(toItem) }
+        ? { type: 'group', join: f.join === 'or' ? 'or' : 'and', items: f.items.map(toItem), enabled: en(f) }
         : f && f.type === 'expr'
-            ? { type: 'expr', expr: f.expr ?? '' }
+            ? { type: 'expr', expr: f.expr ?? '', enabled: en(f) }
             : ('col' in (f ?? {})
-                ? { key: f.key, op: f.op, col: f.col, value: '', mode: 'col' }
-                : { key: f.key, op: f.op, value: f.value ?? '', mode: 'value' }));
+                ? { key: f.key, op: f.op, col: f.col, value: '', mode: 'col', enabled: en(f) }
+                : { key: f.key, op: f.op, value: f.value ?? '', mode: 'value', enabled: en(f) }));
     if (filters && filters.type === 'group') return toItem(filters);
     const items = (Array.isArray(filters) ? filters : []).map(toItem);
     return { type: 'group', join: 'and', items };
@@ -126,12 +132,17 @@ const isValidExpr = (expr) => {
     try { parseExpr(expr); return true; } catch { return false; }
 };
 const condComplete = c => (c.mode === 'col' ? !!c.col : c.value !== '' && c.value != null);
-const condWire = c => (c.mode === 'col'
+// Carry `enabled: false` onto a wire node when the source is toggled off (kept
+// lean + back-compatible: enabled nodes omit the flag).
+const withEnabled = (node, src) => (src?.enabled === false ? { ...node, enabled: false } : node);
+const condWire = c => withEnabled(c.mode === 'col'
     ? { key: c.key, op: c.op, col: c.col }
-    : { key: c.key, op: c.op, value: c.value });
+    : { key: c.key, op: c.op, value: c.value }, c);
 
 // Working group -> clean wire model: drop incomplete conditions, invalid/blank
-// expressions and empty sub-groups (recursively).
+// expressions and empty sub-groups (recursively). Disabled-but-complete nodes
+// are PRESERVED (with enabled: false) so a parked filter survives apply/reopen;
+// they're skipped at evaluation, not dropped here.
 function cleanGroup(group) {
     const items = [];
     for (const it of group.items) {
@@ -140,12 +151,12 @@ function cleanGroup(group) {
             if (g.items.length) items.push(g);
         } else if (it.type === 'expr') {
             const e = (it.expr ?? '').trim();
-            if (e && isValidExpr(e)) items.push({ type: 'expr', expr: e });
+            if (e && isValidExpr(e)) items.push(withEnabled({ type: 'expr', expr: e }, it));
         } else if (condComplete(it)) {
             items.push(condWire(it));
         }
     }
-    return { type: 'group', join: group.join === 'or' ? 'or' : 'and', items };
+    return withEnabled({ type: 'group', join: group.join === 'or' ? 'or' : 'and', items }, group);
 }
 
 // Emit the narrowest wire shape: a flat array when the model is a single AND of
@@ -451,10 +462,22 @@ function GroupEditor({ group, ctx, advanced, depth, onChange, onRemove }) {
             )}
             {group.items.map((it, i) => (
                 <div key={i} className="flex items-start gap-2">
+                    {/* Enable checkbox: park a condition / group / expression
+                        (skipped in processing) without deleting it. */}
+                    <input
+                        type="checkbox"
+                        checked={it.enabled !== false}
+                        onChange={() => updateItem(i, { enabled: it.enabled === false })}
+                        title={it.enabled === false
+                            ? 'Disabled - click to include this filter'
+                            : 'Enabled - click to skip this filter without removing it'}
+                        aria-label="Enable filter"
+                        className="accent-accent h-4 w-4 mt-2.5 shrink-0 cursor-pointer"
+                    />
                     <span className="text-label-3 w-9 text-right text-xs pt-2.5 shrink-0">
                         {i === 0 ? (depth === 0 ? 'where' : '') : (group.join === 'or' ? 'or' : 'and')}
                     </span>
-                    <div className="flex-1 min-w-0">
+                    <div className={`flex-1 min-w-0 ${it.enabled === false ? 'opacity-50' : ''}`}>
                         {it.type === 'group' ? (
                             <GroupEditor
                                 group={it} ctx={ctx} advanced={advanced} depth={depth + 1}

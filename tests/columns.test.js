@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { labelFor, availableColumnKeys } from '../web/src/columns.js';
+import { labelFor, availableColumnKeys, filterType, filterHint } from '../web/src/columns.js';
 
 // Catalog shaped like GET /api/columns (stats slice only - labelFor reads it).
 const CATALOG = {
@@ -46,4 +46,28 @@ test('availableColumnKeys is empty for no rows', () => {
     const { markets, stats } = availableColumnKeys([], CATALOG);
     assert.equal(markets.size, 0);
     assert.equal(stats.size, 0);
+});
+
+test('filterType classifies markets/stats/numeric/date/text fields', () => {
+    assert.equal(filterType({ key: 'O 2.5', group: 'market' }), 'number');   // odds
+    assert.equal(filterType({ key: 'fs:Total Shots', group: 'stat' }), 'number'); // post-match stat
+    assert.equal(filterType({ key: 'h2h_count', group: 'base' }), 'number');  // numeric-sort key
+    assert.equal(filterType({ key: 'home_form', group: 'base' }), 'number');  // derived-numeric
+    assert.equal(filterType({ key: 'start_time', group: 'base' }), 'date');
+    assert.equal(filterType({ key: 'fixture', group: 'base' }), 'text');
+    assert.equal(filterType({ key: 'league', group: 'stat' }), 'text');
+});
+
+test('filterHint returns key, type and a working example expression', () => {
+    assert.deepEqual(filterHint({ key: 'h2h_count', group: 'base' }),
+        { key: 'h2h_count', type: 'number', example: "$row['h2h_count'] >= 2" });
+    assert.deepEqual(filterHint({ key: 'O 2.5', group: 'market' }),
+        { key: 'O 2.5', type: 'number', example: "$row['O 2.5'] >= 1.8" });
+    assert.deepEqual(filterHint({ key: 'tip', group: 'base' }),
+        { key: 'tip', type: 'number', example: "$row['tip'] >= 0.7" });
+    assert.deepEqual(filterHint({ key: 'fixture', group: 'base' }),
+        { key: 'fixture', type: 'text', example: "contains(raw('fixture'), '…')" });
+    assert.deepEqual(filterHint({ key: 'start_time', group: 'base' }),
+        { key: 'start_time', type: 'date', example: "$row['start_time'] >= <timestamp>" });
+    assert.equal(filterHint({}), null);
 });

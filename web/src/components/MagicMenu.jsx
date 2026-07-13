@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
+import { SHOW_DETAILS } from '../details.js';
 
 // Magic-sort sheet: pick one or more backtest-ranked tip-sorting strategies
 // (GET /api/magic-sort) to reorder the table most-likely-to-win first. Stats
@@ -32,10 +33,12 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                 <SheetClose onClose={onClose} />
             </div>
-            <p className="px-6 pb-3 text-[13px] text-label-2 leading-relaxed">
-                Tip rankings replayed against every settled day: build the top-4 slip each
-                strategy would have picked, settle it at real prices. Backtests, not forecasts.
-            </p>
+            {SHOW_DETAILS && (
+                <p className="px-6 pb-3 text-[13px] text-label-2 leading-relaxed">
+                    Tip rankings replayed against every settled day: build the top-4 slip each
+                    strategy would have picked, settle it at real prices. Backtests, not forecasts.
+                </p>
+            )}
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-2">
                 {error && <div className="px-2 py-1 text-sm text-miss">{error}</div>}
                 {!error && !data && <div className="px-2 py-1 text-sm text-label-3">Loading…</div>}
@@ -47,19 +50,21 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                     >
                         <span className="flex items-center text-[15px]">
                             <span className="font-semibold text-label">{s.label}</span>
-                            {s.low_sample && (
+                            {SHOW_DETAILS && s.low_sample && (
                                 <span className="ml-2 text-xs text-hot" title={`Fewer than ${sample?.min_days ?? 5} replayable days - treat with caution`}>
                                     ⚠ small sample
                                 </span>
                             )}
                             {active.has(s.id) && <span className="ml-auto text-accent">✓</span>}
                         </span>
-                        <span className="block text-[12.5px] text-label-2 tabular-nums" title={STATS_TITLE}>
-                            slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
-                            {' · '}top picks {s.stats.quartile.hits}/{s.stats.quartile.n} ({_pct(s.stats.quartile.rate)})
-                            {' · '}streak {s.stats.streak?.avg ?? '-'}/{s.stats.streak?.best ?? '-'}
-                            {' · '}ROI {_roi(s.stats.roi)}
-                        </span>
+                        {SHOW_DETAILS && (
+                            <span className="block text-[12.5px] text-label-2 tabular-nums" title={STATS_TITLE}>
+                                slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
+                                {' · '}top picks {s.stats.quartile.hits}/{s.stats.quartile.n} ({_pct(s.stats.quartile.rate)})
+                                {' · '}streak {s.stats.streak?.avg ?? '-'}/{s.stats.streak?.best ?? '-'}
+                                {' · '}ROI {_roi(s.stats.roi)}
+                            </span>
+                        )}
                     </button>
                 ))}
                 {data && !strategies.length && (
@@ -74,7 +79,7 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 >
                     Clear magic sorts
                 </button>
-                {sample && (
+                {SHOW_DETAILS && sample && (
                     <div className="pt-1 text-xs text-label-3">
                         {sample.settled} settled tips · {sample.days} day{sample.days === 1 ? '' : 's'}
                         {!sample.sufficient && (

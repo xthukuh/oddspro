@@ -253,6 +253,32 @@ test('conditionCount counts leaf conditions in flat arrays and nested groups', (
     assert.equal(conditionCount(model), 3);
 });
 
+test('conditionCount skips disabled nodes (badge counts only active filters)', () => {
+    assert.equal(conditionCount([
+        { key: 'goals', op: 'gte', value: '2' },
+        { key: 'provider', op: 'eq', value: 'x', enabled: false }, // parked
+    ]), 1);
+    const model = {
+        type: 'group', join: 'and', items: [
+            { key: 'goals', op: 'gte', value: '2' },
+            { type: 'group', join: 'or', enabled: false, items: [ // whole group parked
+                { key: 'provider', op: 'eq', value: 'x' },
+                { type: 'expr', expr: '1' },
+            ] },
+        ],
+    };
+    assert.equal(conditionCount(model), 1);
+});
+
+test('splitFilters skips a disabled condition (server never sees it)', () => {
+    const { server, client } = splitFilters([
+        { key: 'goals', op: 'gte', value: '2' },
+        { key: 'provider', op: 'eq', value: 'x', enabled: false }, // parked
+    ], CATALOG);
+    assert.deepEqual(server, [{ key: 'goals', op: 'gte', value: '2' }]);
+    assert.deepEqual(client, []);
+});
+
 test('splitFilters forces league (CLIENT_ONLY_KEYS) client even when a server key', () => {
     // league renders "Country - Name" but its SQL column is l.name alone, so it
     // must filter on the display, client-side.

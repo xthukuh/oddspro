@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh } from './api.js';
 import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
@@ -68,6 +68,10 @@ const LS_SELECT_HIDE = 'oddspro.select.hide';
 // "Keep selection" - inverse of Hide selection (show only checked rows). The two
 // are mutually exclusive (enabling one clears the other in the setters below).
 const LS_SELECT_KEEP = 'oddspro.select.keep';
+
+// A client re-order/re-filter transition only shows the spinner once it outlasts
+// this (ms); quicker work commits before the timer, so it never flashes.
+const PENDING_SPINNER_MS = 300;
 
 // The base + synthetic columns a user can show/hide (Select omitted from sort).
 const BASE_COL_OPTIONS = [
@@ -243,6 +247,12 @@ export default function App() {
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
     const [loading, setLoading] = useState(false);
+    // Heavy client re-orders (magic sort, bulk filter apply on a big day) run as
+    // a React transition so the UI never freezes and input spam is coalesced.
+    // isPending drives a DELAYED spinner (below) - only if the work outlasts the
+    // threshold, so quick changes never flash.
+    const [isPending, startTransition] = useTransition();
+    const [showPending, setShowPending] = useState(false);
     const [showSettings, setShowSettings] = useState(false);
     const [showFilters, setShowFilters] = useState(false);
     const [showSlips, setShowSlips] = useState(false);
@@ -594,14 +604,29 @@ export default function App() {
         }
     };
 
-    // Every chain mutation persists (paired-save idiom)
+    // Every chain mutation persists (paired-save idiom). Wrapped in a transition
+    // so re-sorting a big day (magic sort included) stays interruptible and
+    // never blocks the click - the sheet closes instantly, the table catches up.
     const setSortChainPersist = useCallback(updater => {
-        setSortChain(prev => {
-            const next = typeof updater === 'function' ? updater(prev) : updater;
-            localStorage.setItem(LS_SORT, JSON.stringify(next));
-            return next;
+        startTransition(() => {
+            setSortChain(prev => {
+                const next = typeof updater === 'function' ? updater(prev) : updater;
+                localStorage.setItem(LS_SORT, JSON.stringify(next));
+                return next;
+            });
         });
-    }, []);
+    }, [startTransition]);
+
+    // Filter apply/clear is a heavy re-filter+re-sort too - same transition.
+    const applyFilters = useCallback(f => startTransition(() => setFilters(f)), [startTransition]);
+
+    // Delayed spinner: show the table's loading overlay only if a transition
+    // outlasts the threshold, so fast changes never flash a spinner.
+    useEffect(() => {
+        if (!isPending) { setShowPending(false); return; }
+        const t = setTimeout(() => setShowPending(true), PENDING_SPINNER_MS);
+        return () => clearTimeout(t);
+    }, [isPending]);
 
     // Header click: additive by default - cycle THIS column (desc -> asc ->
     // removed) while leaving the rest of the chain (columns and magic) intact;
@@ -911,7 +936,7 @@ export default function App() {
                     noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
                     onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
                     onNoMiss={saveNoMiss} onSafeOnly={saveSafeOnly} onOneEach={saveOneEach}
-                    onOpenFilters={() => setShowFilters(true)} onClearFilters={() => setFilters([])}
+                    onOpenFilters={() => setShowFilters(true)} onClearFilters={() => applyFilters([])}
                 />
                 <DataTable
                     catalog={catalog}
@@ -922,7 +947,7 @@ export default function App() {
                     chain={activeChain}
                     cal={cal}
                     onSort={onSort}
-                    loading={loading}
+                    loading={loading || showPending}
                     linkProviders={linkProviders}
                     visibleBase={visibleBaseSet}
                     selection={selection}
@@ -930,7 +955,7 @@ export default function App() {
                     onToggleAll={toggleAllSelect}
                     noPin={noPin}
                     filterCount={filterCount}
-                    onClearFilters={() => setFilters([])}
+                    onClearFilters={() => applyFilters([])}
                     scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
             </main>
@@ -1014,7 +1039,7 @@ export default function App() {
                         rows={visibleData}
                         filterColumns={filterColumns}
                         filters={filters}
-                        onApply={setFilters}
+                        onApply={applyFilters}
                         onClose={() => setShowFilters(false)}
                     />
                 </Sheet>

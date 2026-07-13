@@ -161,6 +161,24 @@ test('filterRows: an empty model returns the rows unchanged (same reference)', (
     assert.equal(filterRows(rows, { type: 'group', join: 'and', items: [] }, COLUMNS), rows);
 });
 
+test('filterRows: disabled nodes are skipped (parked, not deleted)', () => {
+    const rows = [row({ goals: 3, h2h_count: 5 }), row({ goals: 3, h2h_count: 1 })];
+    // The h2h_count condition is parked -> only the goals condition narrows.
+    const flat = [
+        { key: 'goals', op: 'gte', value: '3' },
+        { key: 'h2h_count', op: 'gte', value: '4', enabled: false },
+    ];
+    assert.deepEqual(filterRows(rows, flat, COLUMNS).map(r => r.h2h_count), [5, 1]);
+    // A disabled nested group carries no constraint either.
+    const model = { type: 'group', join: 'and', items: [
+        { key: 'goals', op: 'gte', value: '3' },
+        { type: 'group', join: 'and', enabled: false, items: [{ key: 'h2h_count', op: 'gte', value: '4' }] },
+    ] };
+    assert.deepEqual(filterRows(rows, model, COLUMNS).map(r => r.h2h_count), [5, 1]);
+    // All conditions disabled = a neutral pass (every row).
+    assert.equal(filterRows(rows, [{ key: 'goals', op: 'gte', value: '99', enabled: false }], COLUMNS).length, 2);
+});
+
 // --- expression mode: parseExpr / evalExpr (no eval) ---------------------
 test('parseExpr + evalExpr: arithmetic precedence and parentheses', () => {
     assert.equal(evalExpr(row(), '1 + 2 * 3', COLUMNS), 7);

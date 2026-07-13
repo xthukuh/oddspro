@@ -183,9 +183,12 @@ function evalItem(row, item, resolve) {
 
 // A group is an AND/OR over its items. An empty group is a neutral pass (no
 // constraint) either way, so a half-built group never blanks the table.
+// Items flagged `enabled: false` (toggled off in the builder) are skipped
+// wholesale - a disabled leaf, expr or nested group carries no constraint - so
+// users can park a filter without deleting it.
 function evalGroupResolved(row, group, resolve) {
-    const items = group?.items;
-    if (!Array.isArray(items) || !items.length) return true;
+    const items = (group?.items ?? []).filter(it => it && it.enabled !== false);
+    if (!items.length) return true;
     return group.join === 'or'
         ? items.some(it => evalItem(row, it, resolve))
         : items.every(it => evalItem(row, it, resolve));

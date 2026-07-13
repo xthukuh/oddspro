@@ -1,5 +1,6 @@
 import { useEffect } from 'react';
 import { safeQualifies } from '../../../src/db/magic-rules.js';
+import { SHOW_DETAILS } from '../details.js';
 import { Z } from '../zLayers.js';
 
 // Tip popover: a lean bet-decision card - the pick, its odds, a confidence
@@ -10,9 +11,8 @@ import { Z } from '../zLayers.js';
 // SECRET SAUCE: how the pick is DERIVED (the blend components + weights, the
 // evidence samples, the over-2.5 gate audit and the AI's own findings) is our
 // edge and stays hidden. That detailed reasoning is preserved below, gated
-// behind SHOW_INTERNALS - flip it (or thread a `premium` prop) when the
-// session-based premium tier lands and paid users unlock the full breakdown.
-const SHOW_INTERNALS = true;
+// behind SHOW_DETAILS (VITE_SHOW_DETAILS, default ON) - production sets it 0 to
+// hide the methodology; a premium tier can later unlock it per-user.
 
 const _pct = v => (v == null ? '-' : `${Math.round(v * 100)}%`);
 
@@ -208,8 +208,8 @@ export default function TipPopover({ row, x, y, onClose }) {
                         </Section>
                     )}
 
-                    {/* ── Premium / internal reasoning (SHOW_INTERNALS gated) ── */}
-                    {SHOW_INTERNALS && b && (
+                    {/* ── Premium / internal reasoning (SHOW_DETAILS gated) ── */}
+                    {SHOW_DETAILS && b && (
                         <Section title="Why this tip">
                             <div className="mb-1 text-label">
                                 Blended from three independent signals:
@@ -230,7 +230,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                 <div className="mt-1 text-label-2">{skipLabel(row.tip_skip_reason) ?? 'No tip for this fixture.'}</div>
             )}
 
-            {SHOW_INTERNALS && signals.length > 0 && (
+            {SHOW_DETAILS && signals.length > 0 && (
                 <Section title={`Will both teams score freely? (over 2.5 checks)${row.hot ? ' - 🔥 hot pick' : ''}`}>
                     <div className="mb-1 text-label-2">
                         Every check must pass (needed value in grey) for the 🔥 over-2.5 flag:
@@ -247,7 +247,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                 </Section>
             )}
 
-            {SHOW_INTERNALS && (row.tip_ai_verdict || row.hot_reason) && (
+            {SHOW_DETAILS && (row.tip_ai_verdict || row.hot_reason) && (
                 <Section title="AI double-check">
                     {row.tip_ai_verdict && (
                         <div className={vetoed ? 'text-miss' : 'text-label'}>
