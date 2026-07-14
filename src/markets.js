@@ -323,8 +323,11 @@ const _SIMPLE_TYPE_LIKE_TOKEN = {
 
 // Outcome-name predicate shared by the period-null EXACT branch and the
 // period-tagged best-effort branch (period never changes the outcome-name
-// spelling, only the type_name gets prefixed/suffixed) -- mirrors exactly the
-// regex each family's resolve() uses in canonicalMarket() above.
+// spelling, only the type_name gets prefixed/suffixed). Selects the SAME
+// outcomes each family's resolve() accepts in canonicalMarket(), but as a
+// prefix LIKE (e.g. 'yes%'/'gg%') rather than resolve()'s anchored
+// /^(yes|gg)$/i -- looser by design, so a stray longer outcome-name variant is
+// tolerated; DNB uses an exact name match, matching resolve()'s n==='1'/'2'.
 function _applySimpleFamilyName(qb, key) {
     if (key === 'DNB1') return qb.where('name', '1');
     if (key === 'DNB2') return qb.where('name', '2');
@@ -408,7 +411,11 @@ export function marketIdentity(qb, key) {
 
     // 4) TT:<ouKey>[:<period>] team-total passthrough: team identity is dropped
     //    from the key by design, so this targets any total-ish type_name plus
-    //    the decoded O/U line + side -- best-effort, filter-only.
+    //    the decoded O/U line + side -- best-effort, filter-only. KNOWN
+    //    over-match: the '%total%' token also catches 'TOTAL CORNERS' /
+    //    'Total Goals Exact' rows sharing the same handicap; excluding
+    //    '%corner%'/'%exact%' is a nice-to-have deliberately skipped for M2
+    //    (filter-only key, the handicap+side predicate already narrows heavily).
     if (core.startsWith('TT:')) {
         const ouKey = core.split(':')[1];
         const m = /^([OU]) (\d+(?:\.\d+)?)$/.exec(ouKey || '');
@@ -431,20 +438,28 @@ export function marketIdentity(qb, key) {
     }
 
     // 6) HTFT:<slug> / CS:<slug> (period tag already stripped into `core`):
-    //    constrain type_name to the family's own known spellings (DRY via
-    //    _famTypeNames -- exact when period-null, LIKE when period-tagged)
-    //    plus a best-effort name-slug LIKE (these keys carry no type_name
-    //    info of their own, only the outcome-name slug).
+    //    constrain type_name via a LIKE ALTERNATION over the family's declared
+    //    base spellings, in BOTH period states. The family `typeNames` are the
+    //    period-STRIPPED bases ('Correct Score'/'CORRECT SCORE',
+    //    'Half Time/Full Time'/'HALFTIME/FULLTIME'); the REAL raw type_names
+    //    add a period suffix/prefix around that base -- BetPawa's Full-Time
+    //    correct-score row is literally 'Correct Score | Full Time' (58,153
+    //    rows), NOT the bare 'Correct Score'. Each raw spelling CONTAINS its
+    //    base as a substring, so a substring LIKE on the base selects every
+    //    provider/period variant; an exact whereIn on the base selected NOTHING
+    //    for BetPawa (the majority provider) -- the base-vs-raw trap avoided for
+    //    _SIMPLE_FT_TYPES. Best-effort/filter-only: the token also over-matches
+    //    the combined 'Half Time/Full Time | Correct Score' market, acceptable
+    //    for a filter-only key (the name-slug LIKE narrows further). Tokens
+    //    deduped (lowercased) so the two CS spellings don't emit a redundant OR.
     if (core.startsWith('HTFT:') || core.startsWith('CS:')) {
         const group = core.startsWith('HTFT:') ? 'ht_ft' : 'correct_score';
-        const types = _famTypeNames(group);
+        const tokens = [...new Set(_famTypeNames(group).map(t => t.toLowerCase()))];
         const slug = core.split(':')[1];
-        if (!hasPeriod) {
-            if (types.length) qb.whereIn('type_name', types);
-        } else if (types.length) {
-            qb.where(b => types.forEach((t, i) => i === 0
-                ? b.whereRaw('LOWER(type_name) LIKE ?', [`%${t.toLowerCase()}%`])
-                : b.orWhereRaw('LOWER(type_name) LIKE ?', [`%${t.toLowerCase()}%`])));
+        if (tokens.length) {
+            qb.where(b => tokens.forEach((t, i) => i === 0
+                ? b.whereRaw('LOWER(type_name) LIKE ?', [`%${t}%`])
+                : b.orWhereRaw('LOWER(type_name) LIKE ?', [`%${t}%`])));
         }
         if (slug) qb.whereRaw('LOWER(REPLACE(name, " ", "-")) LIKE ?', [`%${slug}%`]);
         return qb;

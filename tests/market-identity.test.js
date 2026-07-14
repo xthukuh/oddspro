@@ -56,12 +56,16 @@ test('marketIdentity best-effort decode for TT:/combo:/HTFT:/CS: grouped keys ne
     assert.match(ttPeriod, /`handicap` = 1\.5/);
     assert.match(ttPeriod, /LOWER\(name\) LIKE 'under%'/);
 
+    // HTFT/CS constrain type_name via a LIKE alternation over the family's base
+    // spellings (in BOTH period states) so the real provider raw type_names
+    // (e.g. BetPawa's 'Correct Score | Full Time') are actually selected.
     const htft = marketIdentity(kx('odds_markets'), 'HTFT:home-home').toString();
-    assert.match(htft, /`type_name` in \('Half Time\/Full Time', 'HALFTIME\/FULLTIME'\)/);
+    assert.match(htft, /LOWER\(type_name\) LIKE '%half time\/full time%'/);
+    assert.match(htft, /LOWER\(type_name\) LIKE '%halftime\/fulltime%'/);
     assert.match(htft, /home-home/);
 
     const cs = marketIdentity(kx('odds_markets'), 'CS:2-1').toString();
-    assert.match(cs, /`type_name` in \('Correct Score', 'CORRECT SCORE'\)/);
+    assert.match(cs, /LOWER\(type_name\) LIKE '%correct score%'/);
     assert.match(cs, /2-1/);
 
     const combo = marketIdentity(kx('odds_markets'), 'combo:1x2-both-teams-to-score:1-yes').toString();
@@ -120,4 +124,72 @@ test('marketIdentity WHERE agrees with canonicalMarket for the exact named-famil
     assert.match(ouSql, new RegExp(`'${ouRow.type_name}'`));
     assert.match(ouSql, /`handicap` = 2\.5/);
     assert.match(ouSql, /LOWER\(name\) LIKE 'over%'/i);
+
+    // NG / DNB2 / EVEN — the other three named-simple-family outcomes, mirroring
+    // GG / DNB1 / ODD above (the CS bug proved these key->WHERE round-trips are
+    // worth asserting explicitly, not only in the never-type_id sweep).
+    const ngRow = { type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'NO' };
+    const ngKey = canonicalMarket(ngRow).key;
+    assert.equal(ngKey, 'NG');
+    const ngSql = marketIdentity(kx('odds_markets'), ngKey).toString();
+    assert.match(ngSql, new RegExp(`'${ngRow.type_name.replace(/[()/]/g, '\\$&')}'`));
+    assert.match(ngSql, /LOWER\(name\) LIKE 'no%'/i);
+
+    const dnb2Row = { type_name: 'Draw No Bet | Full Time', name: '2' };
+    const dnb2Key = canonicalMarket(dnb2Row).key;
+    assert.equal(dnb2Key, 'DNB2');
+    const dnb2Sql = marketIdentity(kx('odds_markets'), dnb2Key).toString();
+    assert.match(dnb2Sql, new RegExp(`'${dnb2Row.type_name}'`));
+    assert.match(dnb2Sql, /`name` = '2'/);
+
+    const evenRow = { type_name: 'Odd/Even | Full Time', name: 'Even' };
+    const evenKey = canonicalMarket(evenRow).key;
+    assert.equal(evenKey, 'EVEN');
+    const evenSql = marketIdentity(kx('odds_markets'), evenKey).toString();
+    assert.match(evenSql, new RegExp(`'${evenRow.type_name}'`));
+    assert.match(evenSql, /LOWER\(name\) LIKE 'even%'/i);
+});
+
+// Regression (reviewer, 2026-07-14): the CS:/HTFT: period-null branch must
+// select the REAL provider raw type_names, not the period-stripped BASE
+// spellings. BetPawa's raw Correct Score type_name is 'Correct Score | Full
+// Time' (58,153 rows) / Half Time/Full Time is 'Half Time/Full Time' — an
+// exact whereIn on the base ('Correct Score' / 'CORRECT SCORE') selected
+// NOTHING for BetPawa (the majority provider). A LIKE token that the raw
+// type_name contains as a substring, OR an IN-list carrying the raw spelling,
+// both correctly select the row; assert one of those holds.
+function _selectsTypeName(sql, typeName) {
+    if (sql.includes(`'${typeName}'`)) return true; // exact IN-list membership
+    const tn = typeName.toLowerCase();
+    const likeTokens = [...sql.matchAll(/LOWER\(type_name\) LIKE '%([^%']+)%'/gi)]
+        .map(m => m[1].toLowerCase());
+    return likeTokens.some(tok => tn.includes(tok));
+}
+
+test('marketIdentity CS:/HTFT: period-null WHERE selects real BetPawa provider spellings', () => {
+    const kx = knex({ client: 'mysql2' });
+
+    const csRow = { type_name: 'Correct Score | Full Time', name: '2-1' };
+    const csKey = canonicalMarket(csRow).key;
+    assert.equal(csKey, 'CS:2-1');
+    const csSql = marketIdentity(kx('odds_markets'), csKey).toString();
+    assert.ok(_selectsTypeName(csSql, csRow.type_name),
+        `CS WHERE must select ${csRow.type_name}; got: ${csSql}`);
+    assert.match(csSql, /2-1/); // the outcome-name slug is still constrained
+
+    const htftRow = { type_name: 'Half Time/Full Time', name: '1/1' };
+    const htftKey = canonicalMarket(htftRow).key;
+    assert.equal(htftKey, 'HTFT:1-1');
+    const htftSql = marketIdentity(kx('odds_markets'), htftKey).toString();
+    assert.ok(_selectsTypeName(htftSql, htftRow.type_name),
+        `HTFT WHERE must select ${htftRow.type_name}; got: ${htftSql}`);
+    assert.match(htftSql, /1-1/);
+
+    // Both providers' raw spellings must select for CS (BetPawa | Full Time,
+    // Betika bare CORRECT SCORE, and the half-period variants).
+    for (const tn of ['Correct Score | Full Time', 'CORRECT SCORE',
+        'Correct Score | First Half', '1ST HALF - CORRECT SCORE'])
+        assert.ok(_selectsTypeName(csSql, tn), `CS must select ${tn}; got: ${csSql}`);
+    for (const tn of ['Half Time/Full Time', 'HALFTIME/FULLTIME'])
+        assert.ok(_selectsTypeName(htftSql, tn), `HTFT must select ${tn}; got: ${htftSql}`);
 });
