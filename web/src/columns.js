@@ -81,6 +81,26 @@ export function labelFor(key, catalog) {
     return key;
 }
 
+// Market family grouping (PRESENTATION ONLY): humanizes the catalog's
+// fine-grained `group` tag (result/double_chance/over_under/btts/dnb/
+// odd_even/ht_ft/team_total/combo/other - from src/markets.js canonicalMarket)
+// and gives it a fixed display order, shared by the Settings market picker
+// (MultiSelect groupBy) and the FilterBuilder market optgroups - one source,
+// no drift between the two pickers. This is UNRELATED to the internal column
+// dispatch tag ('market'/'base'/'stat'/'select'/'summary' - see DataTable's
+// `col.group`), which stays untouched.
+export const MARKET_GROUP_ORDER = [
+    'result', 'double_chance', 'over_under', 'btts', 'dnb', 'odd_even', 'ht_ft', 'team_total', 'combo', 'other',
+];
+const MARKET_GROUP_LABEL = {
+    result: 'Result', double_chance: 'Double chance', over_under: 'Over/Under',
+    btts: 'Both teams to score', dnb: 'Draw no bet', odd_even: 'Odd/Even',
+    ht_ft: 'Half time / Full time', team_total: 'Team totals', combo: 'Combos', other: 'Other',
+};
+export function marketGroupLabel(group) {
+    return MARKET_GROUP_LABEL[group] ?? (group || 'Other');
+}
+
 // Market/stat keys with at least one non-null value across the loaded rows.
 //   markets: from row.markets + row.markets_stale (last-seen prices count).
 //   stats:   dynamic fs:* from row.stats; static stat columns from the

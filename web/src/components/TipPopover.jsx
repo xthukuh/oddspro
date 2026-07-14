@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 import { safeQualifies } from '../../../src/db/magic-rules.js';
 import { SHOW_DETAILS } from '../details.js';
 import { Z } from '../zLayers.js';
@@ -30,10 +30,15 @@ const MARKET_LABEL = {
     1: 'Home win', X: 'Draw', 2: 'Away win',
     '1X': 'Home win or draw', X2: 'Draw or away win', 12: 'Home or away win',
 };
-function _label(market) {
+// `marketMap` (optional key->catalog-entry Map, built from the market catalog)
+// lets an unrecognized market (BTTS/DNB/team-totals/combos/...) prefer its
+// catalog `label` over the bare key - still falls back to the raw market key
+// when no catalog entry exists (unchanged prior behavior).
+function _label(market, marketMap) {
     if (MARKET_LABEL[market]) return MARKET_LABEL[market];
     const m = /^([OU]) (\d+(?:\.\d+)?)$/.exec(market ?? '');
-    return m ? `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals` : market;
+    if (m) return `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals`;
+    return marketMap?.get(market)?.label ?? market;
 }
 
 // Layman labels for the over-2.5 gate-audit signal keys (goals-rules.js);
@@ -134,7 +139,7 @@ function Blend({ name, prob, weight, note }) {
     );
 }
 
-export default function TipPopover({ row, x, y, onClose }) {
+export default function TipPopover({ row, x, y, catalog, onClose }) {
     useEffect(() => {
         const key = e => {
             if (e.key === 'Escape') onClose();
@@ -142,6 +147,12 @@ export default function TipPopover({ row, x, y, onClose }) {
         document.addEventListener('keydown', key);
         return () => document.removeEventListener('keydown', key);
     }, [onClose]);
+
+    // Market key -> catalog entry, for _label's data-driven fallback.
+    const marketMap = useMemo(
+        () => new Map((catalog?.markets ?? []).map(m => [m.key, m])),
+        [catalog],
+    );
 
     const b = row.tip_breakdown;
     const vetoed = row.tip_ai_verdict === 'veto';
@@ -174,7 +185,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                         <span className={`font-semibold ${vetoed ? 'line-through' : ''}`}>
                             {row.tip_market}{row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}
                         </span>
-                        <span className="text-label-2"> - {_label(row.tip_market)}</span>
+                        <span className="text-label-2"> - {_label(row.tip_market, marketMap)}</span>
                         {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓ hit</span>}
                         {row.tip_outcome === 'miss' && <span className="text-miss font-bold"> ✗ miss</span>}
                     </div>
@@ -201,7 +212,7 @@ export default function TipPopover({ row, x, y, onClose }) {
                         <Section title="Other options">
                             {b.runners_up.map(r => (
                                 <div key={r.market} className="flex justify-between gap-2 text-label">
-                                    <span>{r.market} <span className="text-label-3">- {_label(r.market)}</span>{r.price != null ? ` @ ${r.price?.toFixed ? r.price.toFixed(2) : r.price}` : ''}</span>
+                                    <span>{r.market} <span className="text-label-3">- {_label(r.market, marketMap)}</span>{r.price != null ? ` @ ${r.price?.toFixed ? r.price.toFixed(2) : r.price}` : ''}</span>
                                     <span className="tabular-nums text-label-2">{_pct(r.confidence)}</span>
                                 </div>
                             ))}
