@@ -31,6 +31,40 @@
 
 ---
 
+## ⚠ Critical design note (post-inventory): Betika dynamic type_names
+
+The inventory shows **Betika emits 16,241 distinct `type_name`s over 10,534
+matches** — the stable families (`1X2`, `TOTAL`, `DOUBLE CHANCE`, `HALFTIME/FULLTIME`,
+`CORRECT SCORE`, `BOTH TEAMS TO SCORE (GG/NG)`, `HANDICAP (1X2)`…) plus a large
+**dynamic tail**: team-name-embedded types (`"Z.PSV TOTAL"`), period prefixes
+(`"1ST HALF - TOTAL"`), interval markets (`"N MINUTES - 1X2 FROM 1ST TO Nth"`),
+and combined markets (`"DOUBLE CHANCE & TOTAL"`, `"1X2 & BOTH TEAMS TO SCORE"`).
+An exact-`type_name` family table + naive `raw:` passthrough would explode the
+catalog to thousands of keys.
+
+**Two mechanisms handle this — both are REQUIRED and must be built into Tasks 1 & 3:**
+
+1. **Normalization before family lookup (Task 1, in `canonicalMarket`).** A pure
+   `_normType(type_name)` that, before matching: strips leading period/interval
+   qualifiers (`^(1ST|2ND) HALF - `, `^\d+ MINUTES - .*`), captures them as a
+   `period` tag; detects team-embedded team-totals (`(.+) TOTAL$` where the prefix
+   isn't a known keyword → `team_total` family, prefix dropped from the key);
+   leaves `"A & B"` combos as their own `combo` family (columnizable `'grouped'`).
+   Family matching is on the normalized form + period tag, so all
+   `"1ST HALF - TOTAL"` variants collapse to one `over_under`/period=`1H` family.
+2. **Coverage threshold for column eligibility (Task 3, in `discoverMarketColumns`).**
+   Only markets present on **≥ `COLUMN_MIN_MATCHES` (default 200)** distinct matches
+   become `'column'`/`'grouped'` catalog entries; everything rarer is **excluded
+   from the catalog** (still stored + SQL-filterable via an explicit raw key, but
+   never a table column or a Settings option). This is what actually caps the tail.
+
+Add `discoverMarketColumns(rows, {minMatches=200}={})` where `rows` carries a
+`matches` count per distinct `(type_name,name,handicap)` (the catalog query in
+Task 3 Step 4 must `count(distinct match_id)` per market to feed this). Tests in
+Tasks 1 & 3 must include a Betika team-total and a period-prefixed case.
+
+---
+
 ## Task 1: Market taxonomy + `canonicalMarket` (src/markets.js)
 
 **Files:**
