@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
     hashPin, verifyPin, SCRYPT_PARAMS,
     newSessionToken, hashToken, hashOtpCode,
-    registerFailedAttempt, isLocked, registerOtpAttempt,
+    registerFailedAttempt, isLocked, registerOtpAttempt, mustChangePinBlocks,
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
 } from '../src/auth-rules.js';
 
@@ -140,4 +140,23 @@ test('login / verify-otp / change-phone / profile schemas', () => {
     assert.equal(profileSchema.safeParse({ name: 'New Name' }).success, true);
     assert.equal(profileSchema.safeParse({ pin: '5678', current_pin: '1234' }).success, true);
     assert.equal(profileSchema.safeParse({ pin: '5678' }).success, false); // no current_pin
+});
+
+test('mustChangePinBlocks: everything except PIN change, logout, me and the verify flow (H4)', () => {
+    // What the SPA needs to show the change-PIN screen and exit cleanly.
+    assert.equal(mustChangePinBlocks('PUT', '/api/auth/profile'), false);
+    assert.equal(mustChangePinBlocks('POST', '/api/auth/logout'), false);
+    assert.equal(mustChangePinBlocks('GET', '/api/auth/me'), false);
+    // The verify flow stays reachable: PUT profile requires a VERIFIED phone,
+    // so blocking verify-otp would dead-end an unverified flagged user.
+    assert.equal(mustChangePinBlocks('POST', '/api/auth/verify-otp'), false);
+    assert.equal(mustChangePinBlocks('POST', '/api/auth/resend-otp'), false);
+    // A default-PIN session must not use anything else.
+    assert.equal(mustChangePinBlocks('GET', '/api/records'), true);
+    assert.equal(mustChangePinBlocks('POST', '/api/auth/change-phone'), true);
+    assert.equal(mustChangePinBlocks('GET', '/api/admin/settings'), true);
+    assert.equal(mustChangePinBlocks('PUT', '/api/admin/settings'), true);
+    // Method matters: only the exempt (method, path) PAIRS pass.
+    assert.equal(mustChangePinBlocks('GET', '/api/auth/profile'), true);
+    assert.equal(mustChangePinBlocks('put', '/api/auth/profile'), false); // method case-insensitive
 });

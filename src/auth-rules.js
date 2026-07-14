@@ -90,6 +90,24 @@ export function registerOtpAttempt(attempts, { max = 5 } = {}) {
     return { attempts: next, exhausted: next >= max };
 }
 
+// --- Forced PIN change (pure, H4) --------------------------------------------
+// While users.must_change_pin is set (the seeded default-PIN admin), a session
+// may only reach: the PIN change itself, logout (always allow leaving), /me
+// (the SPA re-discovers the flag from it on reload), and the phone-verify flow
+// (PUT profile requires a VERIFIED phone, so blocking verify would dead-end an
+// unverified flagged user). Everything else the guards answer 403
+// { pin_change_required: true }.
+const PIN_CHANGE_EXEMPT = new Set([
+    'PUT /api/auth/profile',
+    'POST /api/auth/logout',
+    'GET /api/auth/me',
+    'POST /api/auth/verify-otp',
+    'POST /api/auth/resend-otp',
+]);
+export function mustChangePinBlocks(method, path) {
+    return !PIN_CHANGE_EXEMPT.has(`${String(method).toUpperCase()} ${path}`);
+}
+
 // --- Request schemas (zod) --------------------------------------------------
 const PIN = z.string().regex(/^\d{4}$/, 'PIN must be 4 digits');
 const PHONE = z.string().refine(isValidE164, 'Enter a valid phone number');
