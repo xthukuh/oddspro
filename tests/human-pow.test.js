@@ -7,7 +7,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     sha256Hex, leadingZeroBits, issueChallenge, verifyChallenge,
-    signHumanToken, verifyHumanToken,
+    signHumanToken, verifyHumanToken, bearerMatches,
 } from '../src/human-pow.js';
 
 const SECRET = 'test-secret-key';
@@ -86,4 +86,25 @@ test('verifyHumanToken rejects expired, tampered, and wrong-secret tokens', () =
     assert.equal(verifyHumanToken(SECRET, token + 'x', { now }).reason, 'bad-signature');
     assert.equal(verifyHumanToken('other', token, { now }).reason, 'bad-signature');
     assert.equal(verifyHumanToken(SECRET, 'garbage', { now }).reason, 'malformed');
+});
+
+test('bearerMatches recognizes a registered machine bearer (constant-time)', () => {
+    const secrets = ['api-token-1', 'admin-token-2'];
+    assert.equal(bearerMatches('Bearer api-token-1', secrets), true);
+    assert.equal(bearerMatches('Bearer admin-token-2', secrets), true);
+    assert.equal(bearerMatches('Bearer wrong', secrets), false);
+    assert.equal(bearerMatches('Bearer api-token-1x', secrets), false);   // length-extended
+    assert.equal(bearerMatches('bearer api-token-1', secrets), false);    // scheme is case-exact like the existing gates
+    assert.equal(bearerMatches('Basic api-token-1', secrets), false);     // wrong scheme
+    assert.equal(bearerMatches('api-token-1', secrets), false);           // no scheme
+    assert.equal(bearerMatches('', secrets), false);
+    assert.equal(bearerMatches(null, secrets), false);
+    assert.equal(bearerMatches(undefined, secrets), false);
+});
+
+test('bearerMatches ignores unset/empty secrets (never matches a blank)', () => {
+    assert.equal(bearerMatches('Bearer ', ['']), false);        // empty bearer vs empty secret
+    assert.equal(bearerMatches('Bearer x', [undefined, null, '']), false);
+    assert.equal(bearerMatches('Bearer x', []), false);
+    assert.equal(bearerMatches('Bearer x', [undefined, 'x']), true); // unset slots are skipped, real ones match
 });

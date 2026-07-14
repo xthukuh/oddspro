@@ -25,6 +25,24 @@ function safeEqualHex(a, b) {
     return crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 }
 
+// Does an Authorization header carry a Bearer token matching ANY of the given
+// machine secrets? Constant-time per compare (length-guarded); unset/empty
+// secrets are skipped so a blank env var can never authenticate. The /api
+// gates use this to recognize route-owned bearer auth (API_TOKEN, ADMIN_TOKEN)
+// generically instead of growing a per-path allow-list.
+export function bearerMatches(authorization, secrets) {
+    const a = typeof authorization === 'string' ? authorization : '';
+    if (!a.startsWith('Bearer ')) return false;
+    const token = a.slice(7);
+    if (!token) return false;
+    let ok = false; // check every secret (no early exit) - uniform timing
+    for (const s of secrets || []) {
+        if (typeof s !== 'string' || !s.length) continue;
+        if (s.length === token.length && crypto.timingSafeEqual(Buffer.from(token), Buffer.from(s))) ok = true;
+    }
+    return ok;
+}
+
 // Number of leading zero BITS in a hex digest (the PoW difficulty measure).
 export function leadingZeroBits(hex) {
     let bits = 0;
