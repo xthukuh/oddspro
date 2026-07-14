@@ -134,6 +134,17 @@ const EnvSchema = z.object({
     // Safe risk filter uses identical thresholds. 0 = that gate off.
     SAFE_MIN_SAMPLES: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minSamples),
     SAFE_MIN_H2H: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minH2H),
+    // --- User accounts / auth (v1.1.0; src/auth-rules.js + src/auth.js) -------
+    // Server-wide pepper mixed into every scrypt PIN hash. Optional but STRONGLY
+    // recommended in production. WARNING: changing it invalidates every existing
+    // PIN hash (a deliberate global reset lever) - Phase 3's auth service warns
+    // loudly at boot when it's unset. Read directly from process.env by the users
+    // migration too, so set it BEFORE `npm run migrate` seeds the admin.
+    PIN_PEPPER: z.string().optional(),
+    // First-login bootstrap PIN for the seeded default admin (users migration).
+    // Hashed at migrate time; the admin is flagged must_change_pin, so it can
+    // only be used once to log in and immediately set a real PIN.
+    ADMIN_SEED_PIN: z.string().default('0000'),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app
