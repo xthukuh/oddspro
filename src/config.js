@@ -145,6 +145,12 @@ const EnvSchema = z.object({
     // Hashed at migrate time; the admin is flagged must_change_pin, so it can
     // only be used once to log in and immediately set a real PIN.
     ADMIN_SEED_PIN: z.string().default('0000'),
+    // Master switch for the whole user-accounts feature (routes/middleware).
+    AUTH_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    // Opaque DB session lifetime; PIN lockout policy (src/auth-rules.js).
+    SESSION_TTL_DAYS: z.coerce.number().min(0.01).default(30),
+    PIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),   // wrong PINs before lockout
+    PIN_LOCKOUT_MINUTES: z.coerce.number().int().min(1).default(15),
     // --- SMS provider + OTP (v1.1.0; src/sms/*, src/db/sms-rules.js) ----------
     // SMS is used only for phone-verification OTPs. OFF by default: with
     // SMS_ENABLED off no network call is made and the OTP is logged to the

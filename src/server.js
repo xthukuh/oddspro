@@ -16,6 +16,14 @@ import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { ADMIN_HTML } from './admin-dashboard.js';
+import {
+    AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
+    revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
+} from './auth.js';
+import {
+    signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
+} from './auth-rules.js';
+import { slidingWindowAllow } from './authlimit-rules.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -111,6 +119,145 @@ if (config.HUMAN_POW_ENABLED) {
         if (config.API_TOKEN && req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
         if (verifyHumanToken(HUMAN_SECRET, req.get('x-human-token')).ok) return next();
         res.status(401).json({ error: 'Human verification required.', human_required: true });
+    });
+}
+
+// ============================================================================
+// User accounts + sessions (v1.1.0). Opaque hashed DB sessions carried as
+// `Authorization: Bearer`; role-aware guards; per-route JSON + the same
+// X-Requested-With CSRF guard as /api/refresh. Registered AFTER the human-pow
+// gate, so when that gate is on a bot must still solve it to reach signup
+// (which mints sessions and can spend SMS credits). Logic lives in src/auth.js /
+// src/auth-rules.js / src/authlimit-rules.js.
+// ============================================================================
+const bearerToken = req => {
+    const a = req.get('authorization') || '';
+    return a.startsWith('Bearer ') ? a.slice(7) : null;
+};
+
+// Session guard factory. role: require that role; verified: require a verified
+// phone. optionalAuth attaches req.user when a valid session is present but
+// never rejects (guest-aware routes).
+function authGuard({ role, verified } = {}) {
+    return async (req, res, next) => {
+        try {
+            const ctx = await resolveSession(bearerToken(req));
+            if (!ctx) return res.status(401).json({ error: 'Sign in required', auth_required: true });
+            if (role && ctx.user.role !== role) return res.status(403).json({ error: 'Forbidden' });
+            if (verified && !ctx.user.phone_verified) {
+                return res.status(403).json({ error: 'Verify your phone number to continue', verify_required: true });
+            }
+            req.user = ctx.user;
+            req.session = ctx.session;
+            next();
+        } catch (e) { next(e); }
+    };
+}
+const requireAuth = authGuard();
+const requireAdminRole = authGuard({ role: 'admin' }); // eslint-disable-line no-unused-vars
+const requireVerified = authGuard({ verified: true });
+// eslint-disable-next-line no-unused-vars
+async function optionalAuth(req, res, next) {
+    try {
+        const ctx = await resolveSession(bearerToken(req));
+        if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+        next();
+    } catch (e) { next(e); }
+}
+
+// Best-effort in-memory rate limit (DB lockout/cooldown are authoritative -
+// trust proxy=true makes IP keys spoofable; see src/authlimit-rules.js).
+// Bounded so spoofed keys can't grow the map without limit.
+const _rlHits = new Map();
+function rateLimit(key, opts) {
+    if (_rlHits.size > 10_000) _rlHits.clear();
+    const r = slidingWindowAllow(_rlHits.get(key), Date.now(), opts);
+    _rlHits.set(key, r.hits);
+    return r;
+}
+
+// Map an AuthError / ZodError to a JSON response; anything else -> next(e).
+function authErr(e, res, next) {
+    if (e instanceof AuthError) return res.status(e.status).json({ error: e.message, ...e.details });
+    if (e?.name === 'ZodError') return res.status(400).json({ error: e.issues?.[0]?.message || 'Invalid input' });
+    next(e);
+}
+const csrfOk = (req, res) => {
+    if (req.get('x-requested-with')) return true;
+    res.status(403).json({ error: 'Missing X-Requested-With header.' });
+    return false;
+};
+const authJson = express.json({ limit: '4kb' });
+
+if (config.AUTH_ENABLED) {
+    // Create account (role=normal) + session, then send the phone-verify OTP.
+    app.post('/api/auth/signup', authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const ip = req.ip || null;
+            const rl = rateLimit(`signup:${ip}`, { windowMs: 3_600_000, max: 10 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many sign-up attempts - try again later.', retry_after_seconds: rl.retryAfterSeconds });
+            const data = signupSchema.parse(req.body);
+            const user = await createUser(data);
+            const token = await mintSession(user, { userAgent: req.get('user-agent'), ip });
+            const otp = await issueOtp(user, {});
+            res.status(201).json({ token, user: publicUser(user), otp });
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    // Sign in. user.phone_verified may be false -> the client shows the verify gate.
+    app.post('/api/auth/login', authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const { phone, pin } = loginSchema.parse(req.body);
+            const rl = rateLimit(`login:${phone}`, { windowMs: 900_000, max: 10 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many attempts - try again later.', retry_after_seconds: rl.retryAfterSeconds });
+            const user = await authenticate({ phone, pin });
+            const token = await mintSession(user, { userAgent: req.get('user-agent'), ip: req.ip });
+            res.json({ token, user: publicUser(user) });
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    app.post('/api/auth/verify-otp', requireAuth, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const { code } = verifyOtpSchema.parse(req.body);
+            res.json({ ok: true, user: await verifyOtp(req.user, { code }) });
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    app.post('/api/auth/resend-otp', requireAuth, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try { res.json(await resendOtp(req.user, {})); } catch (e) { authErr(e, res, next); }
+    });
+
+    app.post('/api/auth/change-phone', requireAuth, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const data = changePhoneSchema.parse(req.body);
+            res.json({ ok: true, ...(await changePhone(req.user, data)) });
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    app.post('/api/auth/logout', requireAuth, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            if (req.body?.all) await revokeAllForUser(req.user.id);
+            else await revokeSession(req.session.id);
+            res.json({ ok: true });
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    app.get('/api/auth/me', requireAuth, (req, res) => {
+        res.json({ user: publicUser(req.user), session: { id: req.session.id, expires_at: req.session.expires_at } });
+    });
+
+    app.put('/api/auth/profile', requireVerified, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const data = profileSchema.parse(req.body);
+            res.json({ ok: true, user: await updateProfile(req.user, data) });
+        } catch (e) { authErr(e, res, next); }
     });
 }
 

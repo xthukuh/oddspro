@@ -1,0 +1,254 @@
+import crypto from 'node:crypto';
+import { config } from './config.js';
+import { db } from './db/connection.js';
+import { withRetry, isRetryableDbError } from './db/retry-rules.js';
+import {
+    hashPin, verifyPin, newSessionToken, hashToken, hashOtpCode,
+    registerFailedAttempt, isLocked, registerOtpAttempt,
+} from './auth-rules.js';
+import {
+    generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp, canResend, resendCooldownSeconds,
+} from './db/sms-rules.js';
+import { sendSms } from './sms/index.js';
+
+// Auth service: thin knex orchestration over the pure rules (auth-rules.js) and
+// the SMS seam (sms/). Same loader idiom as magic.js/hotpicks.js. Contended
+// writes go through withRetry(isRetryableDbError). HTTP-status-carrying errors
+// use AuthError so the server maps them without a translation table.
+
+// One-time boot check: a missing pepper is allowed (dev) but flagged loudly -
+// in production every PIN hash should be peppered, and changing PIN_PEPPER later
+// invalidates all existing PINs (a deliberate global reset lever).
+if (config.AUTH_ENABLED && !config.PIN_PEPPER) {
+    console.warn('[auth] PIN_PEPPER is unset - PIN hashes have no server pepper. Set PIN_PEPPER in .env for production.');
+}
+
+const PEPPER = () => config.PIN_PEPPER || '';
+
+export class AuthError extends Error {
+    constructor(status, message, details = {}) {
+        super(message);
+        this.name = 'AuthError';
+        this.status = status;
+        this.details = details;
+    }
+}
+
+// Never leak pin_hash / internal columns to the client.
+export function publicUser(u) {
+    if (!u) return null;
+    return {
+        id: u.id,
+        name: u.name,
+        role: u.role,
+        phone: u.phone,
+        phone_region: u.phone_region,
+        phone_code: u.phone_code,
+        phone_carrier: u.phone_carrier,
+        phone_verified: Boolean(u.phone_verified),
+        must_change_pin: Boolean(u.must_change_pin),
+        is_active: Boolean(u.is_active),
+        last_login_at: u.last_login_at ?? null,
+    };
+}
+
+const userById = id => db('users').where('id', id).first();
+const userByPhone = phone => db('users').where('phone', phone).first();
+
+function otpMessage(code) {
+    return `Your Odds Pro verification code is ${code}. It expires in ${config.OTP_TTL_MINUTES} minutes.`;
+}
+
+// --- Accounts ---------------------------------------------------------------
+
+export async function createUser({ name, phone, phone_region, phone_code, pin }) {
+    if (await userByPhone(phone)) throw new AuthError(409, 'That phone number is already registered');
+    const pin_hash = hashPin(pin, { pepper: PEPPER() });
+    try {
+        const [id] = await withRetry(() => db('users').insert({
+            name, role: 'normal', phone, phone_region, phone_code,
+            phone_verified: 0, must_change_pin: 0, is_active: 1, pin_hash,
+        }), { isRetryable: isRetryableDbError });
+        return userById(id);
+    } catch (e) {
+        if (e?.code === 'ER_DUP_ENTRY') throw new AuthError(409, 'That phone number is already registered');
+        throw e;
+    }
+}
+
+// Verify phone + PIN, applying the account lockout. Returns the raw user row.
+export async function authenticate({ phone, pin }) {
+    const user = await userByPhone(phone);
+    // Generic message either way so a wrong phone can't be distinguished.
+    if (!user) throw new AuthError(401, 'Invalid phone number or PIN');
+    if (!user.is_active) throw new AuthError(403, 'This account is disabled');
+
+    const nowMs = Date.now();
+    const lock = isLocked(user.locked_until, nowMs);
+    if (lock.locked) {
+        throw new AuthError(423, 'Account temporarily locked - too many wrong PINs', { retry_after_seconds: lock.retryAfterSeconds });
+    }
+    // A lock that has expired resets the attempt counter for this fresh try.
+    const baseAttempts = user.locked_until ? 0 : user.pin_attempts;
+
+    if (verifyPin(pin, user.pin_hash, { pepper: PEPPER() })) {
+        await db('users').where('id', user.id).update({ pin_attempts: 0, locked_until: null, last_login_at: db.fn.now() });
+        return userById(user.id);
+    }
+    const { attempts, lockedUntil } = registerFailedAttempt(baseAttempts, nowMs, {
+        max: config.PIN_MAX_ATTEMPTS, lockoutMs: config.PIN_LOCKOUT_MINUTES * 60_000,
+    });
+    await db('users').where('id', user.id).update({
+        pin_attempts: attempts, locked_until: lockedUntil ? new Date(lockedUntil) : null,
+    });
+    throw new AuthError(lockedUntil ? 423 : 401, lockedUntil
+        ? 'Too many wrong PINs - account locked for a while' : 'Invalid phone number or PIN',
+        lockedUntil ? { locked: true, retry_after_seconds: config.PIN_LOCKOUT_MINUTES * 60 } : {});
+}
+
+// --- Sessions ---------------------------------------------------------------
+
+export async function mintSession(user, { userAgent = null, ip = null } = {}) {
+    const { token, tokenHash } = newSessionToken();
+    const expiresAt = new Date(Date.now() + config.SESSION_TTL_DAYS * 86_400_000);
+    await withRetry(() => db('sessions').insert({
+        user_id: user.id, token_hash: tokenHash, expires_at: expiresAt, last_seen_at: db.fn.now(),
+        user_agent: userAgent ? String(userAgent).slice(0, 512) : null,
+        ip: ip ? String(ip).slice(0, 45) : null,
+    }), { isRetryable: isRetryableDbError });
+    return token;
+}
+
+// Resolve a bearer token to { user, session } or null (unknown/expired/revoked/
+// inactive). Throttles the last_seen_at write to ~once a minute per session.
+export async function resolveSession(token) {
+    if (!token) return null;
+    const session = await db('sessions').where('token_hash', hashToken(token)).first();
+    if (!session || session.revoked_at) return null;
+    const nowMs = Date.now();
+    if (new Date(session.expires_at).getTime() <= nowMs) return null;
+    const user = await userById(session.user_id);
+    if (!user || !user.is_active) return null;
+    if (!session.last_seen_at || nowMs - new Date(session.last_seen_at).getTime() > 60_000) {
+        db('sessions').where('id', session.id).update({ last_seen_at: db.fn.now() }).catch(() => {});
+    }
+    return { user, session };
+}
+
+export async function revokeSession(sessionId) {
+    await db('sessions').where('id', sessionId).whereNull('revoked_at').update({ revoked_at: db.fn.now() });
+}
+export async function revokeAllForUser(userId) {
+    await db('sessions').where('user_id', userId).whereNull('revoked_at').update({ revoked_at: db.fn.now() });
+}
+
+// --- OTP --------------------------------------------------------------------
+
+const activeOtp = (userId, purpose) =>
+    db('otp_codes').where({ user_id: userId, purpose }).whereNull('consumed_at').orderBy('id', 'desc').first();
+
+// Generate + send a fresh code for a phone (signup + change-phone). Rotates the
+// single active row for (user, purpose). Economy: a still-valid code for the
+// SAME phone that's still within its resend cooldown is a rapid duplicate - we
+// skip spending another credit and report the remaining cooldown.
+export async function issueOtp(user, { purpose = 'phone_verify', phone } = {}) {
+    phone = phone ?? user.phone;
+    const nowMs = Date.now();
+    const existing = await activeOtp(user.id, purpose);
+    if (existing && existing.phone === phone && shouldReuseOtp(existing, nowMs)) {
+        const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, {
+            base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
+        });
+        if (!cr.ok && cr.reason === 'cooldown') {
+            return { sent: false, reused: true, retry_after_seconds: cr.retryAfterSeconds };
+        }
+    }
+    const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
+    const codeHash = hashOtpCode(code, PEPPER());
+    const expiresAt = new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES));
+    const resendCount = existing?.resend_count ?? 0;
+    if (existing) {
+        await db('otp_codes').where('id', existing.id).update({
+            phone, code_hash: codeHash, expires_at: expiresAt, attempts: 0, last_sent_at: db.fn.now(),
+        });
+    } else {
+        await db('otp_codes').insert({
+            user_id: user.id, purpose, phone, code_hash: codeHash, expires_at: expiresAt,
+            resend_count: 0, last_sent_at: db.fn.now(),
+        });
+    }
+    await sendSms({ to: phone, text: otpMessage(code) });
+    return { sent: true, retry_after_seconds: resendCooldownSeconds(resendCount, config.OTP_RESEND_BASE_SECONDS) };
+}
+
+// Cooldown-gated resend (the verify-page button). Rotates the code (we don't
+// store plaintext, so a resend is a fresh code) and bumps the backoff counter.
+export async function resendOtp(user, { purpose = 'phone_verify' } = {}) {
+    const existing = await activeOtp(user.id, purpose);
+    if (!existing) return issueOtp(user, { purpose });
+    const nowMs = Date.now();
+    const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, {
+        base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
+    });
+    if (!cr.ok) {
+        throw new AuthError(429, cr.reason === 'max' ? 'Too many resend attempts - try again later' : 'Please wait before resending',
+            { retry_after_seconds: cr.retryAfterSeconds, reason: cr.reason });
+    }
+    const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
+    const newCount = existing.resend_count + 1;
+    await db('otp_codes').where('id', existing.id).update({
+        code_hash: hashOtpCode(code, PEPPER()), expires_at: new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES)),
+        attempts: 0, resend_count: newCount, last_sent_at: db.fn.now(),
+    });
+    await sendSms({ to: existing.phone, text: otpMessage(code) });
+    return { sent: true, resend_count: newCount, retry_after_seconds: resendCooldownSeconds(newCount, config.OTP_RESEND_BASE_SECONDS) };
+}
+
+// Verify a code and mark the phone verified. Consumes the code (single-use).
+export async function verifyOtp(user, { code, purpose = 'phone_verify' }) {
+    const existing = await activeOtp(user.id, purpose);
+    if (!existing) throw new AuthError(400, 'No verification code pending - request a new one', { reason: 'none' });
+    const nowMs = Date.now();
+    if (isOtpExpired(existing, nowMs)) throw new AuthError(410, 'Code expired - request a new one', { reason: 'expired' });
+    if (existing.attempts >= config.OTP_MAX_ATTEMPTS) {
+        throw new AuthError(429, 'Too many attempts - request a new code', { reason: 'exhausted' });
+    }
+    if (existing.code_hash !== hashOtpCode(code, PEPPER())) {
+        const { attempts, exhausted } = registerOtpAttempt(existing.attempts, { max: config.OTP_MAX_ATTEMPTS });
+        await db('otp_codes').where('id', existing.id).update({ attempts });
+        throw new AuthError(400, 'Incorrect code', {
+            reason: 'mismatch', attempts_left: Math.max(0, config.OTP_MAX_ATTEMPTS - attempts), exhausted,
+        });
+    }
+    await db.transaction(async trx => {
+        await trx('otp_codes').where('id', existing.id).update({ consumed_at: trx.fn.now() });
+        await trx('users').where('id', user.id).update({ phone_verified: 1 });
+    });
+    return publicUser(await userById(user.id));
+}
+
+// --- Phone change / profile -------------------------------------------------
+
+export async function changePhone(user, { phone, phone_region, phone_code }) {
+    if (user.phone_verified) throw new AuthError(403, 'Your phone is already verified');
+    const taken = await db('users').where('phone', phone).whereNot('id', user.id).first();
+    if (taken) throw new AuthError(409, 'That phone number is already registered');
+    await db('users').where('id', user.id).update({ phone, phone_region, phone_code, phone_verified: 0 });
+    const updated = await userById(user.id);
+    const otp = await issueOtp(updated, { phone });
+    return { user: publicUser(updated), otp };
+}
+
+export async function updateProfile(user, { name, pin, current_pin }) {
+    const patch = {};
+    if (name != null) patch.name = name;
+    if (pin) {
+        if (!verifyPin(current_pin, user.pin_hash, { pepper: PEPPER() })) {
+            throw new AuthError(401, 'Your current PIN is incorrect');
+        }
+        patch.pin_hash = hashPin(pin, { pepper: PEPPER() });
+        patch.must_change_pin = 0;
+    }
+    if (Object.keys(patch).length) await db('users').where('id', user.id).update(patch);
+    return publicUser(await userById(user.id));
+}
