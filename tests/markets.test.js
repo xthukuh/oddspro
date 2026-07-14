@@ -289,3 +289,14 @@ test('discoverMarketColumns: a Betika team-total and a period-prefixed market (d
     assert.equal(halfOu.group, 'over_under');
     assert.notEqual(halfOu.key, 'O 2.5');
 });
+
+// --- Task 4 (M2): read-layer pivot key agreement with the discovered catalog ---
+test('canonicalMarket pivot key matches discoverMarketColumns key (GG)', () => {
+    const row = { type_name: 'Both Teams To Score | Full Time', name: 'Yes' };
+    const pivotKey = canonicalMarket(row).key;
+    // `matches: 500` gives GG enough coverage to clear discoverMarketColumns'
+    // minMatches threshold (GG is a discovered key, not a base MARKET_COLUMNS
+    // entry, so it needs coverage to appear in the catalog at all).
+    const cols = discoverMarketColumns([{ ...row, matches: 500 }]);
+    assert.ok(cols.some(c => c.key === pivotKey)); // frontend column and row bag agree
+});

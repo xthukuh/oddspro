@@ -1,5 +1,5 @@
 import { db } from './connection.js';
-import { isMarketKey, marketKey, whereMarket, discoverMarketColumns } from '../markets.js';
+import { isMarketKey, whereMarket, discoverMarketColumns, canonicalMarket } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 
@@ -316,18 +316,23 @@ async function _hydrate(rows) {
     // Odds -> canonical market columns. Fresh and stale rows pivot into
     // separate maps (stale = vanished from the latest bookmaker update;
     // last-seen price kept for display). Fresh row count (ALL markets, not
-    // just canonical) feeds the per-match availability flag.
+    // just canonical) feeds the per-match availability flag. Keyed by
+    // canonicalMarket() (M2 Task 4): pivots every 'column' + 'grouped' family
+    // (canonical + BTTS/DNB/odd-even/team-totals/combos/HT-FT/...), skipping
+    // only 'filter-only' markets (correct_score, raw: passthrough) - those stay
+    // stored + SQL-filterable via marketIdentity but are never pivoted for
+    // display (huge/unbounded cardinality).
     const odds = await db('odds_markets').whereIn('match_id', matchIds)
         .select('match_id', 'type_name', 'name', 'price', 'handicap', 'is_stale');
     const marketsByMatch = new Map(), staleByMatch = new Map(), freshCounts = new Map();
     for (const o of odds) {
         if (!o.is_stale) freshCounts.set(o.match_id, (freshCounts.get(o.match_id) ?? 0) + 1);
-        const key = marketKey(o);
-        if (!key) continue;
+        const m = canonicalMarket(o);
+        if (m.columnizable === 'filter-only') continue;
         const map = o.is_stale ? staleByMatch : marketsByMatch;
         let obj = map.get(o.match_id);
         if (!obj) map.set(o.match_id, obj = {});
-        obj[key] = Number(o.price);
+        obj[m.key] = Number(o.price);
     }
 
     // Frozen pre-match snapshots (preferred over live derivation when present)
