@@ -277,3 +277,180 @@ export function canonicalMarket(row) {
         columnizable: 'filter-only',
     };
 }
+
+// --- marketIdentity: generic key -> WHERE builder (M2 Task 2) ---------------
+// Generic replacement for whereMarket(): given ANY canonicalMarket() key
+// (canonical, named simple family, or best-effort grouped/raw), applies the
+// odds_markets WHERE selecting the matching row(s) and returns qb. The read
+// layer (Task 4) uses this for SQL-level sort/filter on markets beyond the
+// fixed MARKET_COLUMNS registry. Exactness varies by key shape:
+//   - canonical period-null keys (1/X/2/1X/X2/12, U|O <line>) -> delegates to
+//     the proven whereMarket() unchanged.
+//   - named simple families, period-null (GG/NG/DNB1/DNB2/ODD/EVEN) -> exact
+//     type_name + name predicate, against the REAL full-time raw spellings
+//     (never the period-stripped `base` forms MARKET_FAMILIES keys on
+//     internally -- see _SIMPLE_FT_TYPES below).
+//   - everything else (period-tagged keys, TT:/combo:/HTFT:/CS:/raw:) ->
+//     best-effort LIKE decode targeting type_name (never type_id -- betika
+//     reuses ids across markets), filter-only, and never throws.
+
+// Real FULL-TIME raw type_name spellings for the period-null named simple
+// families. NOT the period-stripped `base` strings MARKET_FAMILIES.typeNames
+// carries internally (e.g. the bare 'BOTH TEAMS TO SCORE' only ever occurs as
+// a 1ST/2ND-HALF-prefix-stripped base -- it is never a literal full-time
+// type_name; confirmed against tmp/market-inventory.txt, 18,606 lines, both
+// providers). DNB and Odd/Even are confirmed BetPawa-only -- no Betika
+// spelling exists for either, so none is invented here.
+const _SIMPLE_FT_TYPES = {
+    GG: ['Both Teams To Score | Full Time', 'BOTH TEAMS TO SCORE (GG/NG)'],
+    NG: ['Both Teams To Score | Full Time', 'BOTH TEAMS TO SCORE (GG/NG)'],
+    DNB1: ['Draw No Bet | Full Time'],
+    DNB2: ['Draw No Bet | Full Time'],
+    ODD: ['Odd/Even | Full Time'],
+    EVEN: ['Odd/Even | Full Time'],
+};
+
+// LIKE-match token for a simple family's base type_name (period-tagged
+// best-effort fallback only): period-tagged raw spellings prefix or suffix
+// this exact substring (e.g. "1ST HALF - BOTH TEAMS TO SCORE" / "Both Teams
+// To Score | First Half"), so a case-insensitive substring LIKE still finds it
+// even though there is no fixed period-tagged type_name to match exactly.
+const _SIMPLE_TYPE_LIKE_TOKEN = {
+    GG: 'both teams to score', NG: 'both teams to score',
+    DNB1: 'draw no bet', DNB2: 'draw no bet',
+    ODD: 'odd/even', EVEN: 'odd/even',
+};
+
+// Outcome-name predicate shared by the period-null EXACT branch and the
+// period-tagged best-effort branch (period never changes the outcome-name
+// spelling, only the type_name gets prefixed/suffixed) -- mirrors exactly the
+// regex each family's resolve() uses in canonicalMarket() above.
+function _applySimpleFamilyName(qb, key) {
+    if (key === 'DNB1') return qb.where('name', '1');
+    if (key === 'DNB2') return qb.where('name', '2');
+    const likes = key === 'GG' ? ['yes%', 'gg%']
+        : key === 'NG' ? ['no%', 'ng%']
+        : key === 'ODD' ? ['odd%']
+        : ['even%']; // EVEN
+    return qb.where(b => {
+        likes.forEach((p, i) => i === 0
+            ? b.whereRaw('LOWER(name) LIKE ?', [p])
+            : b.orWhereRaw('LOWER(name) LIKE ?', [p]));
+    });
+}
+
+// Best-effort period-tagged fallback for a canonical (period-null) key: keeps
+// the SAME outcome-name predicate whereMarket() would apply, but loosens the
+// type_name predicate to a substring LIKE, since period-tagged spellings
+// (Betika prefix / BetPawa suffix) have no single fixed type_name to match
+// exactly the way the period-null registry does.
+function _canonicalLike(qb, key) {
+    if (['1', 'X', '2'].includes(key)) {
+        return qb.whereRaw('LOWER(type_name) LIKE ?', ['%1x2%']).where('name', key);
+    }
+    const ou = /^([OU]) (\d\.5)$/.exec(key);
+    if (ou) {
+        return qb.where(b => b.whereRaw('LOWER(type_name) LIKE ?', ['%total%'])
+                .orWhereRaw('LOWER(type_name) LIKE ?', ['%over/under%']))
+            .where('handicap', Number(ou[2]))
+            .whereRaw('LOWER(name) LIKE ?', [(ou[1] === 'O' ? 'over' : 'under') + '%']);
+    }
+    const names = Object.entries(DC_NAME_MAP).filter(([, k]) => k === key).map(([n]) => n);
+    return qb.whereRaw('LOWER(type_name) LIKE ?', ['%double chance%']).whereIn('name', names);
+}
+
+// typeNames declared on a MARKET_FAMILIES entry, by group (DRY lookup so the
+// HTFT:/CS: best-effort branch reuses the SAME source-of-truth spellings
+// canonicalMarket() itself matches on, instead of a second hardcoded list).
+function _famTypeNames(group) {
+    return MARKET_FAMILIES.find(f => f.group === group)?.typeNames ?? [];
+}
+
+// A trailing `:1H` / `:2H` / `:<N>m` tag -- appended by canonicalMarket() to
+// any family-resolved key when the underlying row carried a period qualifier
+// -- marks a period-tagged variant. Stripped up front so every key-shape
+// branch below dispatches on the same core key regardless of period tagging;
+// raw:/combo: keys never carry this tag (their period info is already baked
+// into the slug itself), so stripping is a no-op for them.
+const _PERIOD_TAG = /^(.*):(1H|2H|\d+m)$/;
+
+export function marketIdentity(qb, key) {
+    const tagMatch = _PERIOD_TAG.exec(key);
+    const core = tagMatch ? tagMatch[1] : key;
+    const hasPeriod = Boolean(tagMatch);
+
+    // 1) Canonical keys: period-null delegates to the proven builder unchanged;
+    //    period-tagged is best-effort (loosened type_name LIKE).
+    if (isMarketKey(core)) {
+        return hasPeriod ? _canonicalLike(qb, core) : whereMarket(qb, core);
+    }
+
+    // 2) Named simple families: period-null exact; period-tagged best-effort.
+    if (Object.prototype.hasOwnProperty.call(_SIMPLE_FT_TYPES, core)) {
+        if (!hasPeriod) {
+            qb.whereIn('type_name', _SIMPLE_FT_TYPES[core]);
+        } else {
+            qb.whereRaw('LOWER(type_name) LIKE ?', [`%${_SIMPLE_TYPE_LIKE_TOKEN[core]}%`]);
+        }
+        return _applySimpleFamilyName(qb, core);
+    }
+
+    // 3) raw:<type_slug>:<name_slug>[:<handicap>] passthrough (never period-
+    //    tagged -- unknown markets carry their period info inside the slug).
+    if (core.startsWith('raw:')) {
+        const parts = core.split(':');
+        const typeSlug = parts[1], nameSlug = parts[2], hc = parts[3];
+        qb.whereRaw('LOWER(REPLACE(REPLACE(type_name, " ", "-"), "|", "-")) LIKE ?', [`%${typeSlug}%`]);
+        if (nameSlug) qb.whereRaw('LOWER(REPLACE(name, " ", "-")) LIKE ?', [`%${nameSlug}%`]);
+        if (hc != null) qb.where('handicap', Number(hc));
+        return qb;
+    }
+
+    // 4) TT:<ouKey>[:<period>] team-total passthrough: team identity is dropped
+    //    from the key by design, so this targets any total-ish type_name plus
+    //    the decoded O/U line + side -- best-effort, filter-only.
+    if (core.startsWith('TT:')) {
+        const ouKey = core.split(':')[1];
+        const m = /^([OU]) (\d+(?:\.\d+)?)$/.exec(ouKey || '');
+        qb.where(b => b.whereRaw('LOWER(type_name) LIKE ?', ['%total%'])
+            .orWhereRaw('LOWER(type_name) LIKE ?', ['%over/under%']));
+        if (m) {
+            qb.where('handicap', Number(m[2]));
+            qb.whereRaw('LOWER(name) LIKE ?', [(m[1] === 'O' ? 'over' : 'under') + '%']);
+        }
+        return qb;
+    }
+
+    // 5) combo:<typeSlug>:<nameSlug> passthrough: decode both slugs back onto
+    //    type_name/name via LIKE (lossy `_slug()` means this can never be exact).
+    if (core.startsWith('combo:')) {
+        const [, typeSlug, nameSlug] = core.split(':');
+        qb.whereRaw('LOWER(REPLACE(REPLACE(type_name, " ", "-"), "|", "-")) LIKE ?', [`%${typeSlug}%`]);
+        if (nameSlug) qb.whereRaw('LOWER(REPLACE(name, " ", "-")) LIKE ?', [`%${nameSlug}%`]);
+        return qb;
+    }
+
+    // 6) HTFT:<slug> / CS:<slug> (period tag already stripped into `core`):
+    //    constrain type_name to the family's own known spellings (DRY via
+    //    _famTypeNames -- exact when period-null, LIKE when period-tagged)
+    //    plus a best-effort name-slug LIKE (these keys carry no type_name
+    //    info of their own, only the outcome-name slug).
+    if (core.startsWith('HTFT:') || core.startsWith('CS:')) {
+        const group = core.startsWith('HTFT:') ? 'ht_ft' : 'correct_score';
+        const types = _famTypeNames(group);
+        const slug = core.split(':')[1];
+        if (!hasPeriod) {
+            if (types.length) qb.whereIn('type_name', types);
+        } else if (types.length) {
+            qb.where(b => types.forEach((t, i) => i === 0
+                ? b.whereRaw('LOWER(type_name) LIKE ?', [`%${t.toLowerCase()}%`])
+                : b.orWhereRaw('LOWER(type_name) LIKE ?', [`%${t.toLowerCase()}%`])));
+        }
+        if (slug) qb.whereRaw('LOWER(REPLACE(name, " ", "-")) LIKE ?', [`%${slug}%`]);
+        return qb;
+    }
+
+    // 7) Wholly unrecognized key shape: never crash, never emit type_id -- an
+    //    inert name-only LIKE on the key's own slug rather than throwing.
+    return qb.whereRaw('LOWER(name) LIKE ?', [`%${_slug(key)}%`]);
+}
