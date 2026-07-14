@@ -24,6 +24,7 @@ import {
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
+import { loadOverrides, effective, publicSettings, adminSettings, setOverride, resetOverride } from './settings.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -370,6 +371,55 @@ app.get('/api/visits/summary', requireAdmin, async (req, res, next) => {
     }
 });
 
+// Dynamic settings (v1.1.0). Admin routes accept EITHER an admin-role session
+// (the new SPA admin) OR the legacy ADMIN_TOKEN bearer (the traffic dashboard) -
+// a transitional dual-auth. The public subset (SAFE_* etc.) is open like
+// /api/magic-sort already is.
+async function requireAdminDual(req, res, next) {
+    const secret = adminSecret();
+    const auth = req.get('authorization') || '';
+    if (secret && auth.startsWith('Bearer ') && safeEqual(auth.slice(7), secret)) return next();
+    try {
+        const ctx = await resolveSession(bearerToken(req));
+        if (ctx && ctx.user.role === 'admin') { req.user = ctx.user; req.session = ctx.session; return next(); }
+    } catch (e) { return next(e); }
+    return res.status(401).json({ error: 'Admin access required', auth_required: true });
+}
+
+// GET /api/settings - public effective subset (client-safe operational knobs).
+app.get('/api/settings', (req, res) => res.json(publicSettings()));
+
+// GET /api/admin/settings - full catalog with default/override/effective/live.
+app.get('/api/admin/settings', requireAdminDual, (req, res) => res.json({ settings: adminSettings() }));
+
+// PUT /api/admin/settings - set one override {key,value} (or {overrides:{...}}).
+app.put('/api/admin/settings', requireAdminDual, express.json({ limit: '8kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const userId = req.user?.id ?? null;
+        const entries = req.body?.overrides && typeof req.body.overrides === 'object'
+            ? Object.entries(req.body.overrides)
+            : [[req.body?.key, req.body?.value]];
+        const results = [];
+        for (const [key, value] of entries) results.push(await setOverride(key, value, userId));
+        res.json({ ok: true, results, restart_required: results.filter(r => r.restart_required).map(r => r.key) });
+    } catch (e) {
+        if (e?.status === 400) return res.status(400).json({ error: e.message });
+        next(e);
+    }
+});
+
+// DELETE /api/admin/settings/:key - reset one override to its config default.
+app.delete('/api/admin/settings/:key', requireAdminDual, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        res.json({ ok: true, ...(await resetOverride(req.params.key)) });
+    } catch (e) {
+        if (e?.status === 400) return res.status(400).json({ error: e.message });
+        next(e);
+    }
+});
+
 // Single-slot refresh job state lives in src/auto-refresh.js - one shared
 // guard for manual AND scheduled runs: parallel refreshes would deadlock on
 // InnoDB delete+insert gap locks (same rule as `_batch` DB-writing
@@ -401,7 +451,7 @@ app.post('/api/refresh', (req, res) => {
     if (refreshStatus().running) return res.status(409).json(refreshStatus());
     // Cache reuse: a recent successful run (auto or manual) already covered
     // this date - answer "fresh" so the client just reloads what it has.
-    const cacheMs = config.REFRESH_CACHE_MINUTES * 60_000;
+    const cacheMs = effective('REFRESH_CACHE_MINUTES') * 60_000;
     const freshAt = lastFreshAt(date);
     if (cacheMs > 0 && freshAt && (Date.now() - freshAt) < cacheMs) {
         return res.json({
@@ -410,7 +460,7 @@ app.post('/api/refresh', (req, res) => {
             last_refreshed_at: new Date(freshAt).toISOString(),
         });
     }
-    const cooldownMs = config.REFRESH_COOLDOWN_MINUTES * 60_000;
+    const cooldownMs = effective('REFRESH_COOLDOWN_MINUTES') * 60_000;
     const lastFinished = refreshCooldown.get(date);
     if (cooldownMs > 0 && lastFinished && (Date.now() - lastFinished) < cooldownMs) {
         const retry_after_seconds = Math.ceil((cooldownMs - (Date.now() - lastFinished)) / 1000);
@@ -492,7 +542,7 @@ async function migrateOnBoot() {
 }
 
 let server = null;
-migrateOnBoot().then(() => {
+migrateOnBoot().then(() => loadOverrides()).then(() => {
     server = app.listen(config.API_PORT, config.API_HOST, () => {
         console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
         startAutoRefresh();

@@ -8,6 +8,7 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
 import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
+import { effective } from './settings.js';
 import { _date, _dtime } from './utils.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
@@ -175,8 +176,11 @@ let lastFullKey = null;
 // a failed run never kills the interval. unref'd - the timer alone must not
 // hold the process open during shutdown.
 export function startAutoRefresh() {
-    if (timer || !config.AUTO_REFRESH_ENABLED) return false;
-    const fullAt = parseDailyTime(config.AUTO_FULL_AT);
+    // AUTO_REFRESH_ENABLED + AUTO_FULL_AT are read ONCE here (restart-required
+    // catalog entries); AUTO_LIGHT_MINUTES + AUTO_FULL_DAYS are read per tick
+    // below (live-editable). All via the dynamic-settings service.
+    if (timer || !effective('AUTO_REFRESH_ENABLED')) return false;
+    const fullAt = parseDailyTime(effective('AUTO_FULL_AT'));
     const now = Date.now();
     // First light pass lands AUTO_LIGHT_MINUTES after boot; a (re)start
     // already past AUTO_FULL_AT must not fire a surprise full sweep - that
@@ -192,12 +196,13 @@ export function startAutoRefresh() {
                 // no retry storms of an expensive sweep (failures land in the
                 // log; the next light pass still keeps data moving).
                 lastFullKey = eatDateKey(nowMs);
+                const fullDays = effective('AUTO_FULL_DAYS');
                 startJob({
                     mode: 'full',
-                    dates: _sweepDates(config.AUTO_FULL_DAYS),
-                    run: (onStep, shouldCancel) => runStartPipeline(config.AUTO_FULL_DAYS, onStep, shouldCancel),
+                    dates: _sweepDates(fullDays),
+                    run: (onStep, shouldCancel) => runStartPipeline(fullDays, onStep, shouldCancel),
                 });
-            } else if (isLightDue(nowMs, lastLightMs, config.AUTO_LIGHT_MINUTES)) {
+            } else if (isLightDue(nowMs, lastLightMs, effective('AUTO_LIGHT_MINUTES'))) {
                 lastLightMs = nowMs;
                 startJob({
                     mode: 'light',
@@ -211,8 +216,8 @@ export function startAutoRefresh() {
     };
     timer = setInterval(tick, 30_000);
     timer.unref?.();
-    const fullLabel = fullAt != null ? `${config.AUTO_FULL_AT} EAT (+${config.AUTO_FULL_DAYS}d)` : 'off';
-    const lightLabel = config.AUTO_LIGHT_MINUTES > 0 ? `every ${config.AUTO_LIGHT_MINUTES}m` : 'off';
+    const fullLabel = fullAt != null ? `${effective('AUTO_FULL_AT')} EAT (+${effective('AUTO_FULL_DAYS')}d)` : 'off';
+    const lightLabel = effective('AUTO_LIGHT_MINUTES') > 0 ? `every ${effective('AUTO_LIGHT_MINUTES')}m` : 'off';
     console.debug(`[auto] scheduler on - light ${lightLabel}, full ${fullLabel}`);
     _log(`scheduler started - light ${lightLabel}, full ${fullLabel}`);
     return true;
