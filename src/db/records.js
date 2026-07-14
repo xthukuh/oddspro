@@ -1,5 +1,5 @@
 import { db } from './connection.js';
-import { isMarketKey, whereMarket, discoverMarketColumns, canonicalMarket } from '../markets.js';
+import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKey } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 
@@ -122,12 +122,21 @@ function _sqlTarget(query, key, joined, op = null) {
         if (TEXT_TARGET_OPS.has(op) && base.like_sql) return base.like_sql;
         return base.raw ? db.raw(base.sql) : base.sql;
     }
-    if (!isMarketKey(key)) return null;
+    // Base fields handled above; stats (fs:) are display-only (never sort/
+    // filterable). Any other key must be a market key marketIdentity() can
+    // resolve to a REAL WHERE: isKnownMarketKey rejects the exact set that would
+    // hit marketIdentity's non-throwing catch-all (branch 7), so an unknown key
+    // still returns null -> queryRecords throws a TypeError -> server 400. This
+    // intentionally also accepts below-threshold / filter-only raw: keys: they
+    // build valid pivots, making filter-only markets API-filterable per the
+    // design (the M2 UI just doesn't offer them as columns).
+    if (!key || key.startsWith('fs:')) return null;
+    if (!isKnownMarketKey(key)) return null;
     let alias = joined.get(key);
     if (!alias) {
         alias = `mk${joined.size}`;
         joined.set(key, alias);
-        const sub = whereMarket(db('odds_markets'), key)
+        const sub = marketIdentity(db('odds_markets'), key)
             .where('is_stale', 0) // dead odds never drive sort/filter
             .groupBy('match_id')
             .select('match_id')

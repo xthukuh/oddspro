@@ -470,6 +470,25 @@ export function marketIdentity(qb, key) {
     return qb.whereRaw('LOWER(name) LIKE ?', [`%${_slug(key)}%`]);
 }
 
+// Pure predicate: does `key` name a market marketIdentity() can resolve to a
+// REAL WHERE (its branches 1-6), as opposed to falling through to the
+// non-throwing catch-all (branch 7)? The read layer (records.js _sqlTarget)
+// uses this as the sort/filter key-shape gate: an accepted key builds a valid
+// MIN(price) pivot; a rejected key returns null -> queryRecords throws ->
+// server 400. It MUST mirror marketIdentity()'s recognized branches exactly --
+// if a key shape is added/removed there, change it here too, or the gate and
+// the builder will drift (a key this accepts but marketIdentity can't resolve
+// would build a garbage pivot; a key this rejects but marketIdentity handles
+// would 400 a legitimate market).
+export function isKnownMarketKey(key) {
+    if (typeof key !== 'string' || !key) return false;
+    const tagMatch = _PERIOD_TAG.exec(key);
+    const core = tagMatch ? tagMatch[1] : key;
+    if (isMarketKey(core)) return true;                                            // branch 1: canonical (period-null or -tagged)
+    if (Object.prototype.hasOwnProperty.call(_SIMPLE_FT_TYPES, core)) return true; // branch 2: named simple families (GG/NG/DNB/ODD/EVEN)
+    return /^(raw:|TT:|combo:|HTFT:|CS:)/.test(key);                               // branches 3-6: passthrough families
+}
+
 // --- discoverMarketColumns: market column catalog + coverage threshold (M2 Task 3) ---
 // Canonical MARKET_COLUMNS lead the catalog (stable order + their own `default`
 // flags) UNCONDITIONALLY -- they are the base column set and must never drop

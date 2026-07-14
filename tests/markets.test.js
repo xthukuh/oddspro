@@ -300,3 +300,28 @@ test('canonicalMarket pivot key matches discoverMarketColumns key (GG)', () => {
     const cols = discoverMarketColumns([{ ...row, matches: 500 }]);
     assert.ok(cols.some(c => c.key === pivotKey)); // frontend column and row bag agree
 });
+
+// --- Task 4 (M2): isKnownMarketKey -- the records.js _sqlTarget key-shape gate ---
+// Mirrors marketIdentity()'s recognized branches 1-6; must REJECT exactly the
+// keys that would hit its non-throwing catch-all (branch 7). The ACCEPT set
+// unlocks generic sort/filter over every discovered key shape; the REJECT set
+// keeps garbage keys returning null -> queryRecords TypeError -> server 400.
+import { isKnownMarketKey } from '../src/markets.js';
+
+test('isKnownMarketKey accepts every marketIdentity-resolvable key shape', () => {
+    const accept = [
+        '1', 'O 2.5',               // canonical, period-null
+        '1:1H', 'O 2.5:2H',         // canonical, period-tagged
+        'GG', 'DNB1', 'EVEN',       // named simple families
+        'GG:1H',                    // named simple family, period-tagged
+        'TT:O 2.5', 'TT:O 2.5:1H',  // team-total passthrough (+ period tag)
+        'HTFT:home-home', 'CS:2-1', // HT/FT + correct-score passthrough
+        'combo:x:y', 'raw:foo:bar', // combo + raw passthrough
+    ];
+    for (const k of accept) assert.equal(isKnownMarketKey(k), true, k);
+});
+
+test('isKnownMarketKey rejects keys that would hit marketIdentity catch-all (garbage -> 400)', () => {
+    const reject = ['xyz123', '', 'nonsense', 'random-key', 'total', null, undefined];
+    for (const k of reject) assert.equal(isKnownMarketKey(k), false, JSON.stringify(k));
+});
