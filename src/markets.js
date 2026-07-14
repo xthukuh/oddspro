@@ -486,7 +486,7 @@ export function isKnownMarketKey(key) {
     const core = tagMatch ? tagMatch[1] : key;
     if (isMarketKey(core)) return true;                                            // branch 1: canonical (period-null or -tagged)
     if (Object.prototype.hasOwnProperty.call(_SIMPLE_FT_TYPES, core)) return true; // branch 2: named simple families (GG/NG/DNB/ODD/EVEN)
-    return /^(raw:|TT:|combo:|HTFT:|CS:)/.test(key);                               // branches 3-6: passthrough families
+    return /^(raw:|TT:|combo:|HTFT:|CS:)/.test(core);                              // branches 3-6: passthrough families (test `core`, matching marketIdentity)
 }
 
 // --- discoverMarketColumns: market column catalog + coverage threshold (M2 Task 3) ---

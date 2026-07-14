@@ -322,6 +322,10 @@ test('isKnownMarketKey accepts every marketIdentity-resolvable key shape', () =>
 });
 
 test('isKnownMarketKey rejects keys that would hit marketIdentity catch-all (garbage -> 400)', () => {
-    const reject = ['xyz123', '', 'nonsense', 'random-key', 'total', null, undefined];
+    // Degenerate <prefix>:<periodtag> keys (empty body) core-strip to a bare
+    // prefix that marketIdentity's core.startsWith(...) branches don't match ->
+    // catch-all; the gate must reject them too (canonicalMarket never emits them).
+    const reject = ['xyz123', '', 'nonsense', 'random-key', 'total', null, undefined,
+        'TT:1H', 'raw:1H', 'combo:1H', 'CS:1H', 'HTFT:1H'];
     for (const k of reject) assert.equal(isKnownMarketKey(k), false, JSON.stringify(k));
 });

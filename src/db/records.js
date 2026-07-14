@@ -101,7 +101,7 @@ export async function columnCatalog() {
     return {
         providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
-        markets: discoverMarketColumns(marketRows).map(c => ({ ...c, sortable: true, filterable: true })),
+        markets: discoverMarketColumns(marketRows), // already carries sortable/filterable
         stats: [
             ...STAT_COLUMNS.map(c => ({ ...c, sortable: false, filterable: false })),
             ...types.map(({ type }) => ({
