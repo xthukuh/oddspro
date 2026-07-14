@@ -97,6 +97,101 @@ per the standing rule that live-host/quota actions are confirmed first.
 |---|---|---|
 | 2026-07-14 | Program opened; C0 run | User reopened beat-the-book; included in plans |
 | 2026-07-14 | **C0 = NO-GO**; C1+ parked | Fair comparison + recency re-test — no bettable independent edge |
+| 2026-07-14 | Deep-stat spike scoped → **DON'T FUND yet** | Backfill cheap (~2.3k req, 1.6% quota) but bettable evaluable sample caps at ~11 match-days (< 30-day C3 bar); xG absent from high-volume tippable leagues. See "Spike scoping". |
+
+## Spike scoping (2026-07-14)
+
+*Read-only warehouse scoping of the C1/C2 "deep-stat spike" — the only remaining
+hypothesis that could flip C0 (pre-match per-team rolling **deep**-stat aggregates:
+shots / xG created-conceded / possession). No fetches, no writes; every figure
+from the live DB via `tmp/audit-07-spike-scoping.mjs` (+ `audit-07-probe.mjs`).*
+**Verdict: DON'T FUND yet — the blocker is calendar depth, not backfill cost.**
+
+### 4a. Feasibility flag — which deep stats does the API actually return?
+`fixture_statistics` stores **19 distinct types** across just **130 FT fixtures**
+(0.5% of 25,952). Crucially, **xG IS present** as `expected_goals` — but on only
+**65 fixtures**, and `Ball Possession` (128), `Total Shots` (130) are the widest.
+So the spike's premise feature (xG) *exists on this plan* — the blocker is
+coverage, not availability of the field.
+
+**But xG is concentrated in leagues we barely tip.** The 65 xG fixtures live in:
+World Cup (18), Sweden Allsvenskan (15), Brazil Serie B (10), Norway Eliteserien
+(8), UEFA Europa League (6), Ecuador Liga Pro (4)… The **high-volume correlated
+leagues return NO xG**: USL League Two (16 stat fixtures, **0 xG**), and all the
+Argentine/Brazilian lower divisions + Friendlies have 0 stats/0 xG. So a backfill
+of our actual tippable board may return **shots-only, not xG** — this must be
+confirmed by a **cheap 1-2 sample `/fixtures/statistics` call on historical
+fixtures from the *target tippable leagues*** BEFORE any spike (do NOT spend now).
+
+### 1. Candidate leagues (correlated, i.e. carry linked odds)
+121 correlated leagues, **1,472 correlated FT fixtures total, all inside a 13-day
+window**. Top by FT volume (`statCov` = existing deep-stat %, `xG` = fixtures with
+expected_goals, `stdCov` = both-teams standings-rank %, `days` = distinct match-days):
+
+| League | FT | statCov | xG | stdCov | days | span |
+|---|---|---|---|---|---|---|
+| World - Friendlies Clubs | 294 | 0% | 0 | 0% | 11 | Jul 02–13 |
+| USA - USL League Two | 88 | 18% | **0** | 0% | 11 | Jul 03–13 |
+| Brazil - Paulista U20 | 42 | 0% | 0 | 95% | 8 | Jul 03–13 |
+| Argentina - Primera Nacional | 35 | 0% | 0 | 100% | 6 | Jul 04–14 |
+| Argentina - Torneo Federal A | 26 | 23% | 0 | 100% | 5 | Jul 04–14 |
+| Sweden - Allsvenskan | 16 | 100% | **15** | 100% | 7 | Jul 03–13 |
+| Brazil - Serie B | 17 | 88% | **10** | 100% | 11 | Jul 03–14 |
+| Ecuador - Liga Pro | 16 | 56% | 4 | 100% | 8 | Jul 04–13 |
+
+**Quality problem:** the volume leaders are **context-excluded** (Friendlies, U20 —
+`TIP_CONTEXT_EXCLUDE`) or **xG-barren** (USL League Two). The xG-proven, tippable
+leagues (Sweden, Brazil Serie B, Norway, Ecuador) each carry only ~16 correlated FT
+over ≤11 days. Every correlated league spans **1 season / ≤11 match-days** — the
+warehouse has been collecting odds for 13 days.
+
+### 2. Backfill cost (top-3-by-volume candidate set; ≥1 `/fixtures/statistics` req/fixture)
+| Span | FT fixtures in pool | already have stats | **requests needed** | % of 150k/day |
+|---|---|---|---|---|
+| most recent season | 2,355 | 16 | **2,339** (1,955 unflagged) | **1.56%** |
+| most recent 2 seasons | 2,672 | 16 | **2,656** (2,272 unflagged) | **1.77%** |
+
+The pool includes each team's history-backfill prior games (needed for the rolling
+window). **Cost is trivial** — ~2.3k requests ≈ 0.016 days of the 150k/day quota,
+far above the `APISPORTS_MIN_REMAINING=5` floor. Cost is NOT the constraint.
+
+### 3. Evaluable sample (post-backfill, the actual constraint)
+Assume every candidate FT fixture gets deep stats. A **bettable** test fixture must
+be *correlated* (carry odds, to grade vs the market) AND have **both teams with ≥5
+prior candidate-set stat-games**:
+
+| Span | correlated test fixtures | evaluable (bettable) | **evaluable match-days** |
+|---|---|---|---|
+| most recent season | 424 | 95 | **11** |
+| most recent 2 seasons | 424 | 126 | **11** |
+
+Current pre-backfill bettable evaluable sample: **0** (only 130 stat fixtures exist,
+none with 5 prior stat-games for both teams). Post-backfill it rises to ~95–126
+fixtures — **but over only 11 distinct match-days.** The odds exist only in the
+13-day window, so **bettable match-days are hard-capped at ~13 no matter how much
+we backfill.** The C3 gate needs **≥30 independent match-days**; 11 is far short,
+and no fetch closes that gap — only calendar time does.
+
+### 5. Recommendation — DON'T FUND (yet)
+- **Not a cost problem:** the backfill is ~2.3k requests (1.6% of one day's quota).
+- **It's a depth problem:** the bettable, market-gradable backtest tops out at
+  ~11 match-days (< the 30-day C3 bar), capped by the 13-day odds window — backfill
+  cannot manufacture more bettable days.
+- **It may not even be an xG problem we can solve:** xG is available but absent from
+  our high-volume tippable leagues; a backfill could return shots-only there.
+- **Concrete proposal:** (a) keep running the pipeline to **accrue ≥30 EAT odds-days**
+  (free, ~3 more weeks) — this is the true prerequisite; (b) run a **1-2 call
+  xG-availability probe** on historical fixtures of the *tippable, non-friendly*
+  leagues we actually bet (e.g. Sweden Allsvenskan, Brazil Serie B, plus a couple of
+  the Argentine/Brazilian divisions that dominate our board) to confirm the API
+  returns `expected_goals` for them; (c) **only if both pass**, fund the cheap
+  statistics backfill for the xG-confirmed tippable leagues and run C2/C3. **Until
+  the warehouse has ≥30 odds-days, the spike cannot clear its own gate — do not fund
+  it now.**
+
+(`audit-07-spike-scoping.mjs` → `tmp/audit-06/spike-scoping.json`; `audit-07-probe.mjs`)
+
+---
 
 ## 7. Cross-links
 - Premise evidence: `docs/fair-comparison-and-false-positives.md`
