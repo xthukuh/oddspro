@@ -5,6 +5,7 @@ import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
 import { withRetry } from './db/retry-rules.js';
+import { isRetryableNetworkError } from './db/net-rules.js';
 import { buildEventRows } from './apisports-events.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
@@ -93,7 +94,15 @@ async function _getPage(path, params) {
             await _sleep(msToNextMinute(Date.now()));
             _minuteRemaining = Infinity; // fresh window; headers re-sync below
         }
-        const res = await ApisportsClient.get(path, { params });
+        // Transient socket/TLS/DNS faults (e.g. ECONNRESET before the TLS
+        // handshake) get a bounded retry so one blip doesn't abort the whole
+        // sweep - the GET is idempotent. Quota-floor + per-minute pacing above
+        // are outside the wrap (never retried); HTTP error responses carry a
+        // `.response` and are excluded by the predicate (rate-limit path owns
+        // them). Distinct from the outer rate-limit `attempt` counter.
+        const res = await withRetry(() => ApisportsClient.get(path, { params }), {
+            tries: 3, base: 400, isRetryable: isRetryableNetworkError,
+        });
         const rem = Number(res.headers?.['x-ratelimit-requests-remaining']);
         if (Number.isFinite(rem)) _remaining = rem;
         const mrem = minuteRemaining(res.headers);
