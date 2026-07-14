@@ -128,3 +128,16 @@ export function parseBongaDelivery(data) {
 export function classifyBongaStatus(status) {
     return Number(status) === 222 ? 'ok' : 'fatal';
 }
+
+// SECURITY: is an outbound URL cleartext HTTP to a NON-loopback host? Bonga's
+// vendor-published send endpoint is plain http:// (an IP:port with no TLS), so
+// the API secret + recipient number + message transit UNENCRYPTED. Loopback
+// (a local HTTPS-terminating proxy) is exempt. The send path warns once when
+// this is true; operators can override BONGA_API_URL_SEND with their own HTTPS
+// proxy. Pure so it's unit-tested offline.
+export function isCleartextUrl(url) {
+    const s = String(url || '');
+    if (!s.toLowerCase().startsWith('http://')) return false;
+    const host = s.slice(7).split(/[/:?#]/)[0].toLowerCase();
+    return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(host);
+}

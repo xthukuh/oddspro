@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
     isValidE164, toMsisdn, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
     resendCooldownSeconds, canResend, parseBongaSend, parseBongaBalance,
-    parseBongaDelivery, classifyBongaStatus,
+    parseBongaDelivery, classifyBongaStatus, isCleartextUrl,
 } from '../src/db/sms-rules.js';
 
 test('isValidE164 accepts real numbers and rejects junk', () => {
@@ -102,4 +102,14 @@ test('classifyBongaStatus: 222 ok, everything else fatal (never retried)', () =>
     assert.equal(classifyBongaStatus('222'), 'ok');
     assert.equal(classifyBongaStatus(666), 'fatal');
     assert.equal(classifyBongaStatus(0), 'fatal');
+});
+
+test('isCleartextUrl flags non-loopback http:// (credential-in-cleartext guard)', () => {
+    assert.equal(isCleartextUrl('http://167.172.14.50:4002/v1/send-sms'), true);  // the Bonga send host
+    assert.equal(isCleartextUrl('http://sms.example.com/send'), true);
+    assert.equal(isCleartextUrl('https://app.bongasms.co.ke/api/send'), false);   // TLS
+    assert.equal(isCleartextUrl('http://localhost:8080/proxy'), false);            // local proxy exempt
+    assert.equal(isCleartextUrl('http://127.0.0.1:8080/proxy'), false);
+    assert.equal(isCleartextUrl(''), false);
+    assert.equal(isCleartextUrl(null), false);
 });

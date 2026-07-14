@@ -1,6 +1,7 @@
 import { config } from '../config.js';
 import { withRetry } from '../db/retry-rules.js';
 import { isRetryableNetworkError } from '../db/net-rules.js';
+import { isCleartextUrl } from '../db/sms-rules.js';
 import * as bonga from './bonga.js';
 
 // SMS provider seam. Bonga is the only provider today; getProvider() is the
@@ -17,6 +18,21 @@ import * as bonga from './bonga.js';
 const PROVIDERS = { bonga };
 const RETRY = { tries: 3, base: 500, isRetryable: isRetryableNetworkError };
 
+// One-time cleartext-transport warning: Bonga's send host is plain HTTP, so the
+// API secret + recipient + message travel UNENCRYPTED. We can't default to HTTPS
+// (the vendor publishes no TLS send endpoint) and refusing to send would break
+// the only working path, so we warn loudly and let operators route
+// BONGA_API_URL_SEND through their own HTTPS proxy. See docs/DEPLOYMENT.md.
+let _warnedInsecure = false;
+function _warnInsecureOnce() {
+    if (_warnedInsecure || !isCleartextUrl(config.BONGA_API_URL_SEND)) return;
+    _warnedInsecure = true;
+    console.warn(`[sms] SECURITY: SMS send endpoint ${config.BONGA_API_URL_SEND} is plaintext HTTP - `
+        + 'the API secret, recipient number and message transit UNENCRYPTED. This is the Bonga '
+        + 'vendor-published send host (balance/delivery use HTTPS). Route BONGA_API_URL_SEND through '
+        + 'an HTTPS proxy you control to protect credentials.');
+}
+
 export function getProvider() {
     return PROVIDERS.bonga; // future: pick by config.SMS_PROVIDER
 }
@@ -32,6 +48,7 @@ export async function sendSms({ to, text }) {
         console.debug(`[sms:dev] SMS disabled - would send to ${to}: ${text}`);
         return { ok: true, dev: true, messageId: null };
     }
+    _warnInsecureOnce();
     const res = await withRetry(() => getProvider().send({ to, text }), RETRY);
     return { ok: res.ok, messageId: res.messageId, status: res.status, message: res.message };
 }
