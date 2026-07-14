@@ -7,7 +7,7 @@ import {
     registerFailedAttempt, isLocked, registerOtpAttempt,
 } from './auth-rules.js';
 import {
-    generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp, canResend, resendCooldownSeconds,
+    generateOtp, otpExpiry, isOtpExpired, canResend, resendCooldownSeconds, otpIssueDecision,
 } from './db/sms-rules.js';
 import { sendSms } from './sms/index.js';
 
@@ -147,29 +147,44 @@ export async function revokeAllForUser(userId) {
 const activeOtp = (userId, purpose) =>
     db('otp_codes').where({ user_id: userId, purpose }).whereNull('consumed_at').orderBy('id', 'desc').first();
 
+// The issue-gate (cooldown + hard cap) keyed on the USER's active row whatever
+// the target phone - alternating numbers must not reset the clock (SMS flood).
+// Decision logic is pure (sms-rules otpIssueDecision, offline-tested).
+const otpGate = (existing, phone, nowMs) => otpIssueDecision(existing, phone, nowMs, {
+    base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
+});
+function throwOtpRejected(gate) {
+    throw new AuthError(429, gate.reason === 'max'
+        ? 'Too many codes requested - try again later'
+        : 'Please wait before requesting another code',
+        { retry_after_seconds: gate.retryAfterSeconds, reason: gate.reason });
+}
+
 // Generate + send a fresh code for a phone (signup + change-phone). Rotates the
 // single active row for (user, purpose). Economy: a still-valid code for the
 // SAME phone that's still within its resend cooldown is a rapid duplicate - we
-// skip spending another credit and report the remaining cooldown.
+// skip spending another credit and report the remaining cooldown. Any other
+// send inside the cooldown (or past the resend cap) is a 429.
 export async function issueOtp(user, { purpose = 'phone_verify', phone } = {}) {
     phone = phone ?? user.phone;
     const nowMs = Date.now();
     const existing = await activeOtp(user.id, purpose);
-    if (existing && existing.phone === phone && shouldReuseOtp(existing, nowMs)) {
-        const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, {
-            base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
-        });
-        if (!cr.ok && cr.reason === 'cooldown') {
-            return { sent: false, reused: true, retry_after_seconds: cr.retryAfterSeconds };
-        }
+    const gate = otpGate(existing, phone, nowMs);
+    if (gate.action === 'reuse') {
+        return { sent: false, reused: true, retry_after_seconds: gate.retryAfterSeconds };
     }
+    if (gate.action === 'reject') throwOtpRejected(gate);
     const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
     const codeHash = hashOtpCode(code, PEPPER());
     const expiresAt = new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES));
-    const resendCount = existing?.resend_count ?? 0;
+    // Every rotate-send counts against the cap and grows the backoff - a
+    // change-phone send must never stay at count 0 (the 60·n schedule and
+    // OTP_MAX_RESENDS were dead letters without this).
+    const resendCount = existing ? existing.resend_count + 1 : 0;
     if (existing) {
         await db('otp_codes').where('id', existing.id).update({
-            phone, code_hash: codeHash, expires_at: expiresAt, attempts: 0, last_sent_at: db.fn.now(),
+            phone, code_hash: codeHash, expires_at: expiresAt, attempts: 0,
+            resend_count: resendCount, last_sent_at: db.fn.now(),
         });
     } else {
         await db('otp_codes').insert({
@@ -196,11 +211,14 @@ export async function resendOtp(user, { purpose = 'phone_verify' } = {}) {
     }
     const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
     const newCount = existing.resend_count + 1;
+    // A resend always targets the account's CURRENT phone (and re-anchors the
+    // row to it) - a stale row phone must never receive another code.
     await db('otp_codes').where('id', existing.id).update({
+        phone: user.phone,
         code_hash: hashOtpCode(code, PEPPER()), expires_at: new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES)),
         attempts: 0, resend_count: newCount, last_sent_at: db.fn.now(),
     });
-    await sendSms({ to: existing.phone, text: otpMessage(code) });
+    await sendSms({ to: user.phone, text: otpMessage(code) });
     return { sent: true, resend_count: newCount, retry_after_seconds: resendCooldownSeconds(newCount, config.OTP_RESEND_BASE_SECONDS) };
 }
 
@@ -210,6 +228,11 @@ export async function verifyOtp(user, { code, purpose = 'phone_verify' }) {
     if (!existing) throw new AuthError(400, 'No verification code pending - request a new one', { reason: 'none' });
     const nowMs = Date.now();
     if (isOtpExpired(existing, nowMs)) throw new AuthError(410, 'Code expired - request a new one', { reason: 'expired' });
+    // The code must have been sent to the account's CURRENT phone - a stale row
+    // (e.g. a raced change-phone) must never verify a number that received no code.
+    if (existing.phone !== user.phone) {
+        throw new AuthError(409, 'Your phone number changed since this code was sent - request a new one', { reason: 'phone_changed' });
+    }
     if (existing.attempts >= config.OTP_MAX_ATTEMPTS) {
         throw new AuthError(429, 'Too many attempts - request a new code', { reason: 'exhausted' });
     }
@@ -233,6 +256,12 @@ export async function changePhone(user, { phone, phone_region, phone_code }) {
     if (user.phone_verified) throw new AuthError(403, 'Your phone is already verified');
     const taken = await db('users').where('phone', phone).whereNot('id', user.id).first();
     if (taken) throw new AuthError(409, 'That phone number is already registered');
+    // Flood gate BEFORE touching users.phone: a blocked request must leave the
+    // account and its active OTP row untouched - a half-applied change would
+    // let a later resend SMS the old number while verify flags the new one.
+    const existing = await activeOtp(user.id, 'phone_verify');
+    const gate = otpGate(existing, phone, Date.now());
+    if (gate.action === 'reject') throwOtpRejected(gate);
     await db('users').where('id', user.id).update({ phone, phone_region, phone_code, phone_verified: 0 });
     const updated = await userById(user.id);
     const otp = await issueOtp(updated, { phone });

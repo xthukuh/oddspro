@@ -63,6 +63,24 @@ export function canResend(nowMs, lastSentAt, resendCount, { base = 60, max = Inf
     return { ok: false, reason: 'cooldown', retryAfterSeconds: Math.ceil(required - elapsed) };
 }
 
+// Should an issue request (signup / change-phone) send a fresh code? The
+// cooldown + cap are gated on the USER's active row, never on the target phone
+// - alternating two numbers must not reset the clock (the SMS-flood exploit).
+//   send   - no active row, or the cooldown has elapsed and the cap allows.
+//   reuse  - same phone, still-valid code, inside the cooldown: the code already
+//            on its way still works, so report the wait instead of spending SMS.
+//   reject - inside the cooldown for a different phone (or a dead code), or the
+//            hard resend cap is hit - the caller should answer 429.
+export function otpIssueDecision(existing, phone, nowMs, { base = 60, max = Infinity } = {}) {
+    if (!existing) return { action: 'send' };
+    const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, { base, max });
+    if (cr.ok) return { action: 'send' };
+    if (cr.reason === 'cooldown' && existing.phone === phone && shouldReuseOtp(existing, nowMs)) {
+        return { action: 'reuse', retryAfterSeconds: cr.retryAfterSeconds };
+    }
+    return { action: 'reject', reason: cr.reason, retryAfterSeconds: cr.retryAfterSeconds };
+}
+
 // --- Bonga provider responses (zod) -----------------------------------------
 // status: 222 = success, 666 = error. Coerced (the API may send it as a
 // string); optional fields stay tolerant so a shape drift doesn't throw.

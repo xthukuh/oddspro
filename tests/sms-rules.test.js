@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     isValidE164, toMsisdn, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
-    resendCooldownSeconds, canResend, parseBongaSend, parseBongaBalance,
+    resendCooldownSeconds, canResend, otpIssueDecision, parseBongaSend, parseBongaBalance,
     parseBongaDelivery, classifyBongaStatus, isCleartextUrl,
 } from '../src/db/sms-rules.js';
 
@@ -69,6 +69,67 @@ test('canResend enforces the cooldown and the max-resends cap', () => {
     r = canResend(now, now - 10_000_000, 5, { base: 60, max: 5 });
     assert.equal(r.ok, false);
     assert.equal(r.reason, 'max');
+});
+
+test('otpIssueDecision: fresh user (no active row) sends', () => {
+    const now = 3_000_000_000_000;
+    assert.deepEqual(otpIssueDecision(null, '+254700000001', now, { base: 60, max: 5 }), { action: 'send' });
+});
+
+test('otpIssueDecision: same phone + valid code inside the cooldown reuses (no new SMS)', () => {
+    const now = 3_000_000_000_000;
+    const row = {
+        phone: '+254700000001', consumed_at: null, resend_count: 0,
+        last_sent_at: now - 30_000, expires_at: now + 570_000,
+    };
+    const d = otpIssueDecision(row, '+254700000001', now, { base: 60, max: 5 });
+    assert.equal(d.action, 'reuse');
+    assert.equal(d.retryAfterSeconds, 30);
+});
+
+test('otpIssueDecision: a DIFFERENT phone inside the cooldown is rejected (flood exploit)', () => {
+    const now = 3_000_000_000_000;
+    const row = {
+        phone: '+254700000001', consumed_at: null, resend_count: 0,
+        last_sent_at: now - 30_000, expires_at: now + 570_000,
+    };
+    // The H1 exploit: alternating two numbers must NOT reset the cooldown clock.
+    const d = otpIssueDecision(row, '+254700000002', now, { base: 60, max: 5 });
+    assert.equal(d.action, 'reject');
+    assert.equal(d.reason, 'cooldown');
+    assert.equal(d.retryAfterSeconds, 30);
+});
+
+test('otpIssueDecision: cooldown elapsed sends again, whatever the phone', () => {
+    const now = 3_000_000_000_000;
+    const row = {
+        phone: '+254700000001', consumed_at: null, resend_count: 1,
+        last_sent_at: now - 121_000, expires_at: now + 500_000, // needs 120s, 121 elapsed
+    };
+    assert.deepEqual(otpIssueDecision(row, '+254700000001', now, { base: 60, max: 5 }), { action: 'send' });
+    assert.deepEqual(otpIssueDecision(row, '+254700000002', now, { base: 60, max: 5 }), { action: 'send' });
+});
+
+test('otpIssueDecision: the hard resend cap rejects even a same-phone valid code', () => {
+    const now = 3_000_000_000_000;
+    const row = {
+        phone: '+254700000001', consumed_at: null, resend_count: 5,
+        last_sent_at: now - 10_000_000, expires_at: now + 500_000, // long past any cooldown
+    };
+    const d = otpIssueDecision(row, '+254700000001', now, { base: 60, max: 5 });
+    assert.equal(d.action, 'reject');
+    assert.equal(d.reason, 'max');
+});
+
+test('otpIssueDecision: same phone but a dead code inside the cooldown rejects (nothing to reuse)', () => {
+    const now = 3_000_000_000_000;
+    const expired = {
+        phone: '+254700000001', consumed_at: null, resend_count: 3,
+        last_sent_at: now - 30_000, expires_at: now - 1_000, // needs 240s cooldown, code already expired
+    };
+    const d = otpIssueDecision(expired, '+254700000001', now, { base: 60, max: 5 });
+    assert.equal(d.action, 'reject');
+    assert.equal(d.reason, 'cooldown');
 });
 
 test('parseBongaSend maps a 222 success and a 666 error', () => {
