@@ -469,3 +469,74 @@ export function marketIdentity(qb, key) {
     //    inert name-only LIKE on the key's own slug rather than throwing.
     return qb.whereRaw('LOWER(name) LIKE ?', [`%${_slug(key)}%`]);
 }
+
+// --- discoverMarketColumns: market column catalog + coverage threshold (M2 Task 3) ---
+// Canonical MARKET_COLUMNS lead the catalog (stable order + their own `default`
+// flags) UNCONDITIONALLY -- they are the base column set and must never drop
+// out even when the warehouse briefly holds zero/near-zero matching rows.
+// Everything else is a market DISCOVERED from odds_markets and is subject to
+// the coverage-threshold gate (design note mechanism 2): only markets seen on
+// >= `minMatches` distinct matches become catalog entries ('column' or
+// 'grouped'); rarer ones stay out of the catalog (never a table column, still
+// directly queryable via marketIdentity for a caller holding the raw key).
+// 'filter-only' families (correct_score, raw:, ...) are excluded from the
+// catalog regardless of coverage -- they are never column-eligible.
+//
+// CRITICAL: canonicalMarket() UNIFIES multiple raw (type_name,name,handicap)
+// spellings into one key (e.g. BetPawa "Both Teams To Score | Full Time" and
+// Betika "BOTH TEAMS TO SCORE (GG/NG)" both -> GG), so coverage must be SUMMED
+// per canonical key across every raw tuple that maps to it, not judged
+// per-tuple -- this is what actually caps the Betika 16k-type_name tail (the
+// dynamic team_total/combo/raw markets are almost all thin per exact tuple,
+// but some canonical-ish families would be wrongly starved if judged alone).
+const DEFAULT_EXTRA_KEYS = new Set(['GG', 'NG', 'DNB1', 'DNB2']); // spec: BTTS + DNB default
+
+// Canonical keys don't round-trip through a row; give them their known group
+// via a representative probe row (the OU probe's line/side don't matter -- all
+// Over/Under lines share the 'over_under' group).
+function _probeRow(key) {
+    if (['1', 'X', '2'].includes(key)) return { type_name: '1X2 | Full Time', name: key };
+    if (['1X', 'X2', '12'].includes(key)) return { type_name: 'Double Chance | Full Time', name: key };
+    return { type_name: 'Over/Under | Full Time', name: 'Over', handicap: 2.5 };
+}
+
+// Distinct (type_name,name,handicap) rows carrying a `matches` count
+// (count(distinct match_id) per tuple -- the catalog query supplies this) ->
+// the ordered market column catalog. Canonical columns first (always
+// included), then discovered 'column'/'grouped' families whose SUMMED
+// per-canonical-key coverage clears `minMatches` (default 200); 'filter-only'
+// markets are excluded outright (available to the filter builder / SQL via a
+// separate raw-key path, never as a table column).
+export function discoverMarketColumns(rows, { minMatches = 200 } = {}) {
+    const seen = new Map(); // key -> catalog entry, canonical MARKET_COLUMNS first
+    for (const c of MARKET_COLUMNS) {
+        seen.set(c.key, {
+            key: c.key, label: c.label, group: canonicalMarket(_probeRow(c.key)).group,
+            columnizable: 'column', default: c.default || DEFAULT_EXTRA_KEYS.has(c.key),
+            sortable: true, filterable: true,
+        });
+    }
+
+    // Pass 1: sum `matches` coverage per canonical key across every raw tuple
+    // mapping to it. Filter-only markets and tuples already covered by a
+    // canonical key are skipped up front -- they never need a threshold.
+    const coverage = new Map();   // key -> summed matches
+    const descriptor = new Map(); // key -> first-seen canonicalMarket() result
+    for (const row of Array.isArray(rows) ? rows : []) {
+        const m = canonicalMarket(row);
+        if (m.columnizable === 'filter-only') continue;
+        if (seen.has(m.key)) continue; // canonical key: already included, coverage-exempt
+        coverage.set(m.key, (coverage.get(m.key) || 0) + (Number(row.matches) || 0));
+        if (!descriptor.has(m.key)) descriptor.set(m.key, m);
+    }
+
+    // Pass 2: admit discovered keys whose SUMMED coverage clears the threshold.
+    for (const [key, m] of descriptor) {
+        if ((coverage.get(key) || 0) < minMatches) continue;
+        seen.set(key, {
+            key: m.key, label: m.label, group: m.group, columnizable: m.columnizable,
+            default: DEFAULT_EXTRA_KEYS.has(m.key), sortable: true, filterable: true,
+        });
+    }
+    return [...seen.values()];
+}

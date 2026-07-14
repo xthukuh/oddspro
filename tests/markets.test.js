@@ -212,3 +212,80 @@ test('_normType strips Betika period prefixes and BetPawa period suffixes, taggi
     assert.equal(_normType('1X2').base, '1X2');
     assert.equal(_normType('1X2').period, null);
 });
+
+// --- discoverMarketColumns: market column catalog + coverage threshold (M2 Task 3) ---
+// The catalog query provides a `matches` field (count(distinct match_id)) per
+// distinct raw (type_name,name,handicap) tuple; discoverMarketColumns turns
+// that into the ordered market column catalog, gated by a per-CANONICAL-KEY
+// coverage threshold (design note mechanism 2) so the Betika dynamic tail
+// (team_total/combo/raw singletons) never floods the catalog.
+import { discoverMarketColumns } from '../src/markets.js';
+
+test('discoverMarketColumns dedupes across providers, tags group, excludes filter-only, marks BTTS+DNB default', () => {
+    const rows = [
+        { type_name: '1X2 | Full Time', name: '1', matches: 500 },
+        { type_name: '1X2', name: '1', matches: 500 },                              // dup of canonical '1'
+        { type_name: 'Both Teams To Score | Full Time', name: 'Yes', matches: 1905 },
+        { type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'YES', matches: 9386 },
+        { type_name: 'Correct Score | Full Time', name: '2:1', matches: 99999 },     // filter-only -> excluded regardless of coverage
+    ];
+    const cols = discoverMarketColumns(rows);
+    const keys = cols.map(c => c.key);
+    assert.equal(keys.filter(k => k === '1').length, 1);         // deduped across providers
+    assert.equal(cols.find(c => c.key === '1').group, 'result');
+    assert.ok(keys.includes('GG'));
+    assert.ok(!keys.includes('CS:2-1'));                         // filter-only never a column
+    assert.equal(cols.find(c => c.key === 'GG').default, true);  // BTTS promoted to default
+    assert.equal(cols.find(c => c.key === 'GG').group, 'btts');
+});
+
+test('discoverMarketColumns: MARKET_COLUMNS keys are always present, even with zero/tiny coverage', () => {
+    const empty = discoverMarketColumns([]);
+    const emptyKeys = empty.map(c => c.key);
+    for (const c of MARKET_COLUMNS) assert.ok(emptyKeys.includes(c.key), c.key);
+
+    const tiny = discoverMarketColumns([{ type_name: '1X2 | Full Time', name: '1', matches: 1 }]);
+    assert.ok(tiny.some(c => c.key === '1' && c.default === true));
+});
+
+test('discoverMarketColumns excludes a discovered market below minMatches, includes one at/above it', () => {
+    const below = discoverMarketColumns([
+        { type_name: 'Odd/Even | Full Time', name: 'Odd', matches: 150 },
+    ]);
+    assert.ok(!below.some(c => c.key === 'ODD'));
+
+    const atThreshold = discoverMarketColumns([
+        { type_name: 'Odd/Even | Full Time', name: 'Odd', matches: 200 },
+    ]);
+    assert.ok(atThreshold.some(c => c.key === 'ODD'));
+});
+
+test('discoverMarketColumns aggregates coverage per CANONICAL KEY across raw provider tuples, not per raw tuple', () => {
+    // Each spelling alone is below minMatches; their SUM clears it.
+    const rows = [
+        { type_name: 'Both Teams To Score | Full Time', name: 'Yes', matches: 120 }, // betpawa
+        { type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'YES', matches: 100 },      // betika
+    ];
+    const perTupleOnly = discoverMarketColumns([rows[0]]);
+    assert.ok(!perTupleOnly.some(c => c.key === 'GG'));   // 120 alone < 200
+    const summed = discoverMarketColumns(rows);
+    assert.ok(summed.some(c => c.key === 'GG'));          // 120 + 100 = 220 >= 200
+});
+
+test('discoverMarketColumns: a Betika team-total and a period-prefixed market (design note cases)', () => {
+    const rows = [
+        // Betika team-embedded total ("<TEAM> TOTAL") -> team_total, grouped
+        { type_name: 'Z.PSV TOTAL', name: 'OVER 2.5', handicap: 2.5, matches: 500 },
+        // Betika period-prefixed total -> over_under family, period-tagged key,
+        // must NOT collide with the canonical full-time 'O 2.5' key
+        { type_name: '1ST HALF - TOTAL', name: 'OVER 2.5', handicap: 2.5, matches: 500 },
+    ];
+    const cols = discoverMarketColumns(rows);
+    const tt = cols.find(c => c.group === 'team_total');
+    assert.ok(tt);
+    assert.equal(tt.columnizable, 'grouped');
+    const halfOu = cols.find(c => c.key.startsWith('O 2.5:'));
+    assert.ok(halfOu);
+    assert.equal(halfOu.group, 'over_under');
+    assert.notEqual(halfOu.key, 'O 2.5');
+});

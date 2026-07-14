@@ -1,5 +1,5 @@
 import { db } from './connection.js';
-import { MARKET_COLUMNS, isMarketKey, marketKey, whereMarket } from '../markets.js';
+import { isMarketKey, marketKey, whereMarket, discoverMarketColumns } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 
@@ -91,10 +91,17 @@ const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 export async function columnCatalog() {
     const types = await db('fixture_statistics').distinct('type').orderBy('type');
     const providers = await db('matches').distinct('provider').orderBy('provider');
+    // Per-distinct-tuple match coverage feeds discoverMarketColumns' coverage
+    // threshold (see src/markets.js) - it aggregates this per canonical key,
+    // not per raw (type_name,name,handicap) tuple.
+    const marketRows = await db('odds_markets')
+        .select('type_name', 'name', 'handicap')
+        .countDistinct({ matches: 'match_id' })
+        .groupBy('type_name', 'name', 'handicap');
     return {
         providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
-        markets: MARKET_COLUMNS.map(c => ({ ...c, sortable: true, filterable: true })),
+        markets: discoverMarketColumns(marketRows).map(c => ({ ...c, sortable: true, filterable: true })),
         stats: [
             ...STAT_COLUMNS.map(c => ({ ...c, sortable: false, filterable: false })),
             ...types.map(({ type }) => ({
