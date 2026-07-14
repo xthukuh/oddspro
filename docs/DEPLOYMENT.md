@@ -148,7 +148,12 @@ Before the SPA renders, the browser solves a small computational puzzle (hashcas
    ```
    (or add `VITE_HUMAN_POW=1` to your local `.env` before building, alongside the other `VITE_*` vars). Then `npm run package:deploy` and upload the web zip as usual.
 
-**Why both:** if only the server enforces, the un-gated SPA can't obtain a token and its `/api` calls fail with `401`. If only the build is gated, the gate detects the missing endpoint and **passes through** (no lockout on a mismatch). A trusted machine client can bypass the gate entirely with a valid `API_TOKEN` bearer (§7).
+**Why both — this is the #1 deploy gotcha.** `HUMAN_POW_ENABLED` (server) and `VITE_HUMAN_POW` (web build) are **one switch in two places**; they must match. `VITE_HUMAN_POW` is baked into the bundle at **build time**, so flipping the server flag without **rebuilding and redeploying `web/dist`** silently breaks the site:
+
+- **Server ON + build OFF** → the un-gated SPA never mints a token, so **every `/api/*` call returns `401 {human_required:true}`** and the whole dashboard looks dead. (This is the failure that shipped once — the server `.env` had `HUMAN_POW_ENABLED=1` while the deployed build lacked `VITE_HUMAN_POW`.) Fix: rebuild the web with `VITE_HUMAN_POW=1`, or turn the server flag off — then redeploy `web/dist`.
+- **Server OFF + build ON** → harmless: the gate probes `/api/challenge`, sees it absent, and **passes through** (no lockout on a mismatch).
+
+Use `.env.production.example` as a paired template so both flags travel together. A trusted machine client can bypass the gate entirely with a valid `API_TOKEN` bearer (§7).
 
 ### 8.2 Bot user-agent blocklist + AI `robots.txt`
 
