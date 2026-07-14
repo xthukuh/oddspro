@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { SheetClose } from './Sheet.jsx';
 import MultiSelect from './MultiSelect.jsx';
 import NumberInput from './NumberInput.jsx';
-import { labelFor } from '../columns.js';
+import { labelFor, MARKET_GROUP_ORDER, marketGroupLabel } from '../columns.js';
 import { applyClientFilters, distinctValues, toFilterCsv } from '../filterValues.js';
 import { parseFilterList } from '../../../src/db/filter-csv.js';
 import { parseExpr } from '../filterExpr.js';
@@ -528,12 +528,33 @@ export default function FilterBuilder({ catalog, available, rows = [], filterCol
         const statOk = k => !available || available.stats.has(k);
         const field = key => ({ key, label: labelFor(key, catalog) });
         const baseOrStat = k => baseFilterable.has(k) || (statKeys.has(k) && statOk(k));
+        // Sub-group the (long) market field list by family, one optgroup per
+        // group (Result / Double chance / Over-Under / BTTS / DNB / Odd-Even /
+        // HT-FT / Team totals / Combos / Other) instead of one flat "Odds
+        // markets" bucket - the shared MARKET_GROUP_ORDER/marketGroupLabel
+        // (columns.js) keeps this in lockstep with the Settings market picker.
+        // A group value outside the fixed order (a future market family) still
+        // gets its own optgroup, appended after, so it can never silently vanish.
+        // TODO(M2+): searchable market filter field - a native <select> has no
+        // search box; would need a custom listbox control (deferred).
+        const marketByGroup = new Map();
+        for (const c of catalog.markets) {
+            if (!marketOk(c.key)) continue;
+            const g = c.group ?? 'other';
+            if (!marketByGroup.has(g)) marketByGroup.set(g, []);
+            marketByGroup.get(g).push(field(c.key));
+        }
+        const marketGroupKeys = [
+            ...MARKET_GROUP_ORDER.filter(g => marketByGroup.has(g)),
+            ...[...marketByGroup.keys()].filter(g => !MARKET_GROUP_ORDER.includes(g)),
+        ];
+        const marketGroups = marketGroupKeys.map(g => [`Markets: ${marketGroupLabel(g)}`, marketByGroup.get(g)]);
         return [
             // `select` and `no` are client-only synthetic columns (not in the
             // server catalog); force-list them like `score`/`tip_confidence`.
             ['Match info', [field('select'), field('no'), ...MATCH_KEYS.filter(baseOrStat).map(field)]],
             ['Betting', BETTING_KEYS.filter(k => baseFilterable.has(k) || CLIENT_BETTING_KEYS.has(k)).map(field)],
-            ['Odds markets', catalog.markets.filter(c => marketOk(c.key)).map(c => field(c.key))],
+            ...marketGroups,
             ['Team & H2H stats', TEAM_STAT_KEYS.filter(k => statKeys.has(k) && statOk(k)).map(field)],
             ['Post-match stats', catalog.stats.filter(c => c.key.startsWith('fs:') && statOk(c.key)).map(c => field(c.key))],
         ].filter(([, opts]) => opts.length);

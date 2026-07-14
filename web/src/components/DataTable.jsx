@@ -63,15 +63,21 @@ const HEADER_META = {
     away_goals_oth: { short: 'A:GvR', info: 'Away goals for/against vs other teams, recent games (avg total per game)' },
 };
 
-// Odds market definitions for header/cell tooltips
+// Odds market definitions for header/cell tooltips. Canonical result/DC
+// markets and O/U lines keep their plain-English description (unchanged);
+// anything outside that set (BTTS/DNB/odd-even/team totals/combos/period-
+// tagged variants/...) falls back to the market catalog's own `label` (passed
+// in as `marketMap`, a key->catalog-entry Map) instead of rendering no
+// tooltip at all.
 const MARKET_INFO = {
     1: 'Home win', X: 'Draw', 2: 'Away win',
     '1X': 'Home win or draw', X2: 'Draw or away win', 12: 'Home or away win',
 };
-function _marketInfo(key) {
+function _marketInfo(key, marketMap) {
     if (MARKET_INFO[key]) return `${MARKET_INFO[key]} (full time)`;
     const m = /^([UO]) (\d+(?:\.\d+)?)$/.exec(key);
-    return m ? `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals` : null;
+    if (m) return `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals`;
+    return marketMap?.get(key)?.label ?? null;
 }
 
 // API-Football fixture status glossary (short codes are cryptic)
@@ -199,12 +205,12 @@ function _sortHint(row, col) {
     return `⇅ sorts as: ${_sortNum(v)}`;
 }
 
-function _cellTitle(row, col) {
+function _cellTitle(row, col, marketMap) {
     const fn = CELL_TITLES[col.key];
     const base = fn
         ? fn(row)
         : col.group === 'market'
-            ? _marketInfo(col.key)
+            ? _marketInfo(col.key, marketMap)
             : col.key.startsWith('fs:') && row.stats?.[col.key] != null
                 ? 'Home / Away - post-match statistic'
                 : null;
@@ -472,6 +478,14 @@ export default function DataTable({
     const baseVisible = key => !visibleBase || visibleBase.has(key);
     const showSelect = baseVisible('select');
 
+    // Market key -> full catalog entry (label/group/...), for the data-driven
+    // tooltip fallback in _marketInfo (BTTS/DNB/team-totals/combos/... markets
+    // outside the hardcoded canonical glossary).
+    const marketCatalog = useMemo(
+        () => new Map((catalog?.markets ?? []).map(m => [m.key, m])),
+        [catalog],
+    );
+
     // Tip justification popover, anchored at the click point (one at a time)
     const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
     const openTip = (row, e) => {
@@ -657,7 +671,7 @@ export default function DataTable({
 
     return (
         <>
-        {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} onClose={() => setTipPop(null)} />}
+        {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} catalog={catalog} onClose={() => setTipPop(null)} />}
         <div className="relative flex-1 min-h-0 flex flex-col">
         {/* Non-silent load: blur the stale table + float a spinner over it
             (silent background reloads pass loading=false, so they never dim). */}
@@ -681,7 +695,7 @@ export default function DataTable({
                             const s = order.get(col.key);
                             const meta = HEADER_META[col.key];
                             const info = meta?.info
-                                ?? (col.group === 'market' ? _marketInfo(col.key) : null)
+                                ?? (col.group === 'market' ? _marketInfo(col.key, marketCatalog) : null)
                                 ?? (col.key.startsWith('fs:') ? 'Home / Away - post-match statistic' : null);
                             // Backgrounds and edge shadows live on the sticky
                             // cells themselves (tr backgrounds/borders don't
@@ -773,7 +787,7 @@ export default function DataTable({
                                 ) : col.key === 'magic' ? _magicCell(row, magicMeta)
                                     : col.group === 'market' ? _marketCell(row, col.key)
                                     : _cell(row, col, links, openTip);
-                                const cellTitle = (isSelect || isSummary) ? undefined : _cellTitle(row, col);
+                                const cellTitle = (isSelect || isSummary) ? undefined : _cellTitle(row, col, marketCatalog);
                                 // Tip & fixture own their tap actions (popover / link) and
                                 // keep their native titles; every other cell routes its
                                 // hidden-content title through the touch-friendly Tooltip.
