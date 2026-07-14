@@ -145,6 +145,31 @@ const EnvSchema = z.object({
     // Hashed at migrate time; the admin is flagged must_change_pin, so it can
     // only be used once to log in and immediately set a real PIN.
     ADMIN_SEED_PIN: z.string().default('0000'),
+    // --- SMS provider + OTP (v1.1.0; src/sms/*, src/db/sms-rules.js) ----------
+    // SMS is used only for phone-verification OTPs. OFF by default: with
+    // SMS_ENABLED off no network call is made and the OTP is logged to the
+    // server console, so signup/verify works in dev without a provider account.
+    // z.coerce.boolean would treat "0" as true; parse explicitly.
+    SMS_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    SMS_DEFAULT_REGION: z.string().default('KE'),   // ISO region for phone parsing (web input)
+    // Bonga SMS (https://app.bongasms.co.ke). The send host is plain HTTP, so
+    // its URL is z.string() (NOT .url() https). Creds are optional at parse time
+    // and checked at send time (fail-closed with a clear message when SMS_ENABLED
+    // is on but creds are missing).
+    BONGA_API_URL_SEND: z.string().default('http://167.172.14.50:4002/v1/send-sms'),
+    BONGA_API_URL_BALANCE: z.string().default('https://app.bongasms.co.ke/api/check-credits'),
+    BONGA_API_URL_DELIVERY: z.string().default('https://app.bongasms.co.ke/api/fetch-delivery'),
+    BONGA_API_CLIENT_ID: z.string().min(1).optional(),
+    BONGA_API_KEY: z.string().min(1).optional(),
+    BONGA_API_SECRET: z.string().min(1).optional(),
+    BONGA_SERVICE_ID: z.coerce.number().int().default(1),
+    // OTP policy (src/db/sms-rules.js): 6-digit codes, 10-min TTL, 5 verify
+    // attempts, resend backoff 60·n up to 5 resends.
+    OTP_TTL_MINUTES: z.coerce.number().int().min(1).default(10),
+    OTP_LENGTH: z.coerce.number().int().min(4).max(10).default(6),
+    OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
+    OTP_RESEND_BASE_SECONDS: z.coerce.number().int().min(1).default(60),
+    OTP_MAX_RESENDS: z.coerce.number().int().min(1).default(5),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app
