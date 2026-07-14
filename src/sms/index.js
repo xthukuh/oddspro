@@ -1,4 +1,5 @@
 import { config } from '../config.js';
+import { effective } from '../settings.js';
 import { withRetry } from '../db/retry-rules.js';
 import { isRetryableNetworkError } from '../db/net-rules.js';
 import { isCleartextUrl } from '../db/sms-rules.js';
@@ -37,8 +38,11 @@ export function getProvider() {
     return PROVIDERS.bonga; // future: pick by config.SMS_PROVIDER
 }
 
+// Late-read so the admin SMS_ENABLED override applies live (settings.effective
+// falls back to config env when no override / cache not loaded - e.g. CLI runs
+// that never loadOverrides()).
 export function smsEnabled() {
-    return Boolean(config.SMS_ENABLED);
+    return Boolean(effective('SMS_ENABLED'));
 }
 
 // Send one SMS. Returns { ok, messageId, dev? }. Never hits the network when

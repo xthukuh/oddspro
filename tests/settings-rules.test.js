@@ -58,6 +58,10 @@ test('publicSubset keeps only public keys', () => {
 test('catalogEntry carries the live flag (restart vs live)', () => {
     assert.equal(catalogEntry('SAFE_MAX_PRICE').live, true);
     assert.equal(catalogEntry('AUTO_FULL_AT').live, false);
-    assert.equal(catalogEntry('SMS_ENABLED').live, false);
+    // H3: SMS + bot-UA consumers late-read effective() per call/request -> live;
+    // geo reads effective() once at scheduler start -> restart required.
+    assert.equal(catalogEntry('SMS_ENABLED').live, true);
+    assert.equal(catalogEntry('BOT_UA_FILTER_ENABLED').live, true);
+    assert.equal(catalogEntry('GEO_RESOLVE_ENABLED').live, false);
     assert.equal(catalogEntry('NOPE'), null);
 });

@@ -29,9 +29,11 @@ export const SETTINGS_CATALOG = [
     // Read once when the scheduler starts -> restart required.
     { key: 'AUTO_REFRESH_ENABLED', type: 'boolean', group: 'refresh', public: false, live: false },
     { key: 'AUTO_FULL_AT', type: 'string', group: 'refresh', public: false, live: false },
-    // Feature flags read at boot / middleware registration -> restart required.
-    { key: 'SMS_ENABLED', type: 'boolean', group: 'features', public: false, live: false },
-    { key: 'BOT_UA_FILTER_ENABLED', type: 'boolean', group: 'features', public: false, live: false },
+    // Feature flags. SMS + bot-UA are late-read per send/request (sms/index.js
+    // smsEnabled, the server's bot-UA middleware) -> live. Geo is read once at
+    // scheduler start (geo.js startGeoScheduler) -> restart required.
+    { key: 'SMS_ENABLED', type: 'boolean', group: 'features', public: false, live: true },
+    { key: 'BOT_UA_FILTER_ENABLED', type: 'boolean', group: 'features', public: false, live: true },
     { key: 'GEO_RESOLVE_ENABLED', type: 'boolean', group: 'features', public: false, live: false },
 ];
 
