@@ -10,7 +10,7 @@ import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
-import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken } from './human-pow.js';
+import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken, bearerMatches } from './human-pow.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
@@ -21,7 +21,7 @@ import {
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
 } from './auth.js';
 import {
-    signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
+    signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema, mustChangePinBlocks,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverride, resetOverride } from './settings.js';
@@ -41,11 +41,14 @@ app.set('trust proxy', true);
 // scrapers / aggressive crawlers / raw HTTP clients site-wide before any route;
 // general search engines are deliberately NOT blocked (landing-page SEO). Tune
 // via BOT_UA_EXTRA (add) / BOT_UA_ALLOW (exempt). See src/bot-rules.js.
+// Always registered; the flag is late-read per request so the admin override
+// applies live (H3) - a disabled filter costs one Map lookup per request.
 const _uaList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
-if (config.BOT_UA_FILTER_ENABLED) {
+{
     const extra = _uaList(config.BOT_UA_EXTRA);
     const allow = _uaList(config.BOT_UA_ALLOW);
     app.use((req, res, next) => {
+        if (!effective('BOT_UA_FILTER_ENABLED')) return next();
         if (isBlockedUserAgent(req.get('user-agent') || '', { extra, allow })) {
             return res.status(403).type('text/plain').send('Forbidden');
         }
@@ -68,6 +71,12 @@ app.use((req, res, next) => {
     next();
 });
 
+// Recognized machine bearer secrets: routes own their auth (requireAdmin,
+// requireAdminDual), but the blanket /api gates below must not 401 those
+// clients before their route's own check runs. One list, both gates - never a
+// per-path allow-list (H2). bearerMatches skips unset entries.
+const MACHINE_BEARERS = [config.API_TOKEN, config.ADMIN_TOKEN];
+
 // Optional bearer-token guard: X-Requested-With (below) only stops a plain
 // cross-origin form/navigation - once this server is on a public domain,
 // anyone who finds the URL could POST /api/refresh directly (triggers live
@@ -75,7 +84,7 @@ app.use((req, res, next) => {
 // LAN-only (API_HOST=127.0.0.1) deployment.
 if (config.API_TOKEN) {
     app.use('/api', (req, res, next) => {
-        if (req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
+        if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return next();
         res.status(401).json({ error: 'Unauthorized' });
     });
 }
@@ -109,15 +118,14 @@ if (config.HUMAN_POW_ENABLED) {
         if (!v.ok) return res.status(400).json({ error: 'Human verification failed - please retry.', reason: v.reason });
         res.json({ token: signHumanToken(HUMAN_SECRET, { ttlMs: TOKEN_TTL }), ttl_days: config.HUMAN_TOKEN_TTL_DAYS });
     });
-    // Gate every other /api/* route on a valid human token (or an API_TOKEN
-    // bearer). The two endpoints above are registered first, so they're already
-    // handled before this runs; the path check is belt-and-suspenders.
+    // Gate every other /api/* route on a valid human token (or a recognized
+    // machine bearer - API_TOKEN and ADMIN_TOKEN clients authenticate at their
+    // routes, so the gate must not 401 them first; H2). The two endpoints above
+    // are registered first, so they're already handled before this runs; the
+    // path check is belt-and-suspenders.
     app.use('/api', (req, res, next) => {
         if (req.path === '/challenge' || req.path === '/human') return next();
-        // The admin dashboard authenticates with its own bearer (no human token);
-        // let its data route through - requireAdmin still enforces the secret.
-        if (req.path === '/visits/summary') return next();
-        if (config.API_TOKEN && req.get('authorization') === `Bearer ${config.API_TOKEN}`) return next();
+        if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return next();
         if (verifyHumanToken(HUMAN_SECRET, req.get('x-human-token')).ok) return next();
         res.status(401).json({ error: 'Human verification required.', human_required: true });
     });
@@ -144,6 +152,11 @@ function authGuard({ role, verified } = {}) {
         try {
             const ctx = await resolveSession(bearerToken(req));
             if (!ctx) return res.status(401).json({ error: 'Sign in required', auth_required: true });
+            // Forced PIN change (H4): a default-PIN session may only change its
+            // PIN, log out, or read /me until it does (pure mustChangePinBlocks).
+            if (ctx.user.must_change_pin && mustChangePinBlocks(req.method, req.path)) {
+                return res.status(403).json({ error: 'Change your PIN to continue', pin_change_required: true });
+            }
             if (role && ctx.user.role !== role) return res.status(403).json({ error: 'Forbidden' });
             if (verified && !ctx.user.phone_verified) {
                 return res.status(403).json({ error: 'Verify your phone number to continue', verify_required: true });
@@ -235,6 +248,11 @@ if (config.AUTH_ENABLED) {
     app.post('/api/auth/change-phone', requireAuth, authJson, async (req, res, next) => {
         if (!csrfOk(req, res)) return;
         try {
+            // Belt-and-suspenders over the DB-authoritative OTP issue-gate
+            // (auth.js otpGate): a user-keyed burst limit - the key comes from
+            // the session, so unlike IP keys it can't be spoofed.
+            const rl = rateLimit(`chphone:${req.user.id}`, { windowMs: 900_000, max: 5 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many phone changes - try again later.', retry_after_seconds: rl.retryAfterSeconds });
             const data = changePhoneSchema.parse(req.body);
             res.json({ ok: true, ...(await changePhone(req.user, data)) });
         } catch (e) { authErr(e, res, next); }
@@ -348,17 +366,10 @@ app.get('/api/visits/daily-unique', async (req, res, next) => {
 // Authorization header - never a query string (which leaks into logs, browser
 // history and Referer). 404 when no admin secret is configured (feature off).
 const adminSecret = () => config.ADMIN_TOKEN || config.API_TOKEN || null;
-// Constant-time string compare (avoids a timing side-channel on the secret).
-function safeEqual(a, b) {
-    const ab = Buffer.from(String(a));
-    const bb = Buffer.from(String(b));
-    return ab.length === bb.length && crypto.timingSafeEqual(ab, bb);
-}
 function requireAdmin(req, res, next) {
     const secret = adminSecret();
     if (!secret) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
-    const auth = req.get('authorization') || '';
-    if (auth.startsWith('Bearer ') && safeEqual(auth.slice(7), secret)) return next();
+    if (bearerMatches(req.get('authorization'), [secret])) return next();
     return res.status(401).json({ error: 'Unauthorized' });
 }
 
@@ -377,11 +388,17 @@ app.get('/api/visits/summary', requireAdmin, async (req, res, next) => {
 // /api/magic-sort already is.
 async function requireAdminDual(req, res, next) {
     const secret = adminSecret();
-    const auth = req.get('authorization') || '';
-    if (secret && auth.startsWith('Bearer ') && safeEqual(auth.slice(7), secret)) return next();
+    if (secret && bearerMatches(req.get('authorization'), [secret])) return next();
     try {
         const ctx = await resolveSession(bearerToken(req));
-        if (ctx && ctx.user.role === 'admin') { req.user = ctx.user; req.session = ctx.session; return next(); }
+        if (ctx && ctx.user.role === 'admin') {
+            // Same forced-PIN-change gate as authGuard (H4) - the seeded
+            // default-PIN admin must not drive the admin API either.
+            if (ctx.user.must_change_pin && mustChangePinBlocks(req.method, req.path)) {
+                return res.status(403).json({ error: 'Change your PIN to continue', pin_change_required: true });
+            }
+            req.user = ctx.user; req.session = ctx.session; return next();
+        }
     } catch (e) { return next(e); }
     return res.status(401).json({ error: 'Admin access required', auth_required: true });
 }
