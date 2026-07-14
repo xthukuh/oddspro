@@ -232,23 +232,25 @@ export function canonicalMarket(row) {
         return {
             key: `combo:${_slug(row.type_name)}:${_slug(row.name)}`,
             group: 'combo',
-            label: `${_norm(row.type_name)} — ${_norm(row.name)}`,
+            label: `${_norm(row.type_name)} - ${_norm(row.name)}`,
             columnizable: 'grouped',
         };
     }
 
     // Team-embedded totals (Betika "<TEAM> TOTAL" / BetPawa "{home}"/"{away}").
+    // The home/away collapse is intentional (design-note "prefix dropped from key",
+    // team identity kept only in the label; Task 3/4 owns any home/away split), but
+    // the PERIOD must be threaded exactly like the fixed-family branch below, else a
+    // First Half and a Full Time team-total of the same line collide on `TT:<line>`.
     const tt = _teamTotalMatch(base);
     if (tt) {
         const ouKey = _resolveOU(row);
         if (ouKey) {
             const who = tt.team || (tt.side === 'home' ? 'Home' : tt.side === 'away' ? 'Away' : '');
-            return {
-                key: `TT:${ouKey}`,
-                group: 'team_total',
-                label: `${who ? who + ' ' : ''}${ouKey}`.trim(),
-                columnizable: 'grouped',
-            };
+            const key = period ? `TT:${ouKey}:${period}` : `TT:${ouKey}`;
+            const base_label = `${who ? who + ' ' : ''}${ouKey}`.trim();
+            const label = period ? `${base_label} (${_PERIOD_LABEL[period] || period})` : base_label;
+            return { key, group: 'team_total', label, columnizable: 'grouped' };
         }
     }
 
@@ -259,6 +261,9 @@ export function canonicalMarket(row) {
         if (r) {
             const key = period ? `${r.key}:${period}` : r.key;
             const label = period ? `${r.label} (${_PERIOD_LABEL[period] || period})` : r.label;
+            // NOTE: columnizable:'column' on a PERIOD-TAGGED variant (e.g. `O 2.5:1H`)
+            // does NOT mean "promote as a MARKET_COLUMNS table column" -- it just marks
+            // the family class. Task 3/4 decides which discovered keys become columns.
             return { key, group: fam.group, label, columnizable: fam.columnizable };
         }
     }
@@ -268,7 +273,7 @@ export function canonicalMarket(row) {
     return {
         key: `raw:${_slug(row.type_name)}:${_slug(row.name)}${hc}`,
         group: 'other',
-        label: `${_norm(row.type_name)} — ${_norm(row.name)}${hc ? ` (${Number(row.handicap)})` : ''}`,
+        label: `${_norm(row.type_name)} - ${_norm(row.name)}${hc ? ` (${Number(row.handicap)})` : ''}`,
         columnizable: 'filter-only',
     };
 }

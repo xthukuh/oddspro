@@ -153,6 +153,57 @@ test('canonicalMarket: BetPawa clean {home}/{away} team-total equivalents unify 
     assert.equal(away.group, 'team_total');
 });
 
+test('canonicalMarket: team_total threads the period tag so First Half and Full Time do NOT collide', () => {
+    // The Full Time form is the live inventory spelling (tmp/market-inventory.txt);
+    // the First Half form is the structural period variant the normalizer must keep
+    // distinct. Both are the SAME line (2.5) and side (home) -- only the period differs,
+    // so a period-blind key would collide (the reviewer-reported bug).
+    const ft = canonicalMarket({ type_name: 'Over/Under | {home} | Full Time', name: 'Over', handicap: 2.5 });
+    const fh = canonicalMarket({ type_name: 'Over/Under | {home} | First Half', name: 'Over', handicap: 2.5 });
+    assert.equal(ft.group, 'team_total');
+    assert.equal(fh.group, 'team_total');
+    assert.notEqual(ft.key, fh.key);               // MUST be distinct keys
+    assert.notEqual(ft.label, fh.label);           // and distinct labels
+    assert.equal(ft.key, 'TT:O 2.5');              // full time stays the bare key
+    assert.match(fh.key, /^TT:O 2\.5:1H$/);        // first half carries the period tag
+    assert.match(fh.label, /First Half/);
+});
+
+test('canonicalMarket: combo vs team_total disambiguation on REAL inventory type_names', () => {
+    // team_total (NOT combo): real ampersand-team-name totals from the inventory.
+    // First "&"-segment is a team-name fragment, never a market keyword.
+    const teamTotals = [
+        'DAG & RED TOTAL',                  // Dagenham & Redbridge
+        'HAMPTON & R TOTAL',                // Hampton & Richmond
+        'CAMBRIAN & CLYDACH VALE TOTAL',
+        'WALTON & HERSHAM TOTAL',
+        'BRIGHTON & HOVE ALBION SRL TOTAL', // SRL (simulated) variant, real spelling
+    ];
+    for (const tn of teamTotals) {
+        const m = canonicalMarket({ type_name: tn, name: 'OVER 2.5', handicap: 2.5 });
+        assert.equal(m.group, 'team_total', tn);
+        assert.notEqual(m.group, 'combo', tn);
+    }
+    // combo (NOT team_total): real "A & B" spellings whose first segment IS a keyword,
+    // some of which also end in " TOTAL" (the landmine the combo-first ordering guards).
+    const combos = [
+        ['1X2 & TOTAL', '1 & OVER 1.5'],
+        ['HALFTIME/FULLTIME & TOTAL', '1/1 & OVER 1.5'],
+    ];
+    for (const [tn, name] of combos) {
+        const m = canonicalMarket({ type_name: tn, name, handicap: 1.5 });
+        assert.equal(m.group, 'combo', tn);
+        assert.equal(m.columnizable, 'grouped', tn);
+    }
+});
+
+test('canonicalMarket: combo/raw labels carry no em dash (web-facing text)', () => {
+    const combo = canonicalMarket({ type_name: '1X2 & TOTAL', name: '1 & OVER 1.5', handicap: 1.5 });
+    assert.doesNotMatch(combo.label, /—/);
+    const raw = canonicalMarket({ type_name: 'Some New Market X', name: 'Whatever' });
+    assert.doesNotMatch(raw.label, /—/);
+});
+
 test('_normType strips Betika period prefixes and BetPawa period suffixes, tagging period', () => {
     assert.deepEqual(_normType('1ST HALF - TOTAL'), { base: 'TOTAL', period: '1H' });
     assert.deepEqual(_normType('2ND HALF - 1X2'), { base: '1X2', period: '2H' });
