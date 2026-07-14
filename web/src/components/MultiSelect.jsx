@@ -1,4 +1,4 @@
-import { useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import useAnchoredPanel from '../useAnchoredPanel.js';
 import { Z } from '../zLayers.js';
 
@@ -14,14 +14,45 @@ import { Z } from '../zLayers.js';
 // still emits over the FULL option set, so a currently-selected column with no
 // data today is preserved and re-appears when its data returns; only "None"
 // clears everything.
-export default function MultiSelect({ label, options, selected, onChange, availableKeys = null, title }) {
+//
+// `groupBy` (optional fn(option) -> group key, OPT-IN) and `searchable`
+// (OPT-IN boolean) add a group-headed list + a substring search box, used by
+// the market picker's long, family-shaped option list. Both default OFF so
+// the other call sites (Table columns / Stats / Providers / filter value
+// pickers) keep their existing flat, search-less behavior unchanged.
+export default function MultiSelect({
+    label, options, selected, onChange, availableKeys = null, title,
+    groupBy = null, groupLabel = g => g, groupOrder = null, searchable = false,
+}) {
     const [open, setOpen] = useState(false);
+    const [query, setQuery] = useState('');
     const ref = useRef(null);   // wrapper (trigger + panel) for outside-click test
     const btnRef = useRef(null);
     const pos = useAnchoredPanel({ open, onClose: () => setOpen(false), wrapRef: ref, btnRef, rightGutter: 264 });
 
     const set = new Set(selected);
-    const shown = availableKeys ? options.filter(o => availableKeys.has(o.key)) : options;
+    let shown = availableKeys ? options.filter(o => availableKeys.has(o.key)) : options;
+    if (searchable && query.trim()) {
+        const q = query.trim().toLowerCase();
+        shown = shown.filter(o => o.label.toLowerCase().includes(q));
+    }
+    // Group the (already search/availability filtered) shown options, preserving
+    // each group's first-seen option order. `groupOrder` (a list of group keys)
+    // fixes the header order; any group not listed falls in after, in first-seen
+    // order - so a new/unmapped group key still renders instead of vanishing.
+    const grouped = useMemo(() => {
+        if (!groupBy) return null;
+        const byGroup = new Map();
+        for (const o of shown) {
+            const g = groupBy(o) ?? 'other';
+            if (!byGroup.has(g)) byGroup.set(g, []);
+            byGroup.get(g).push(o);
+        }
+        const order = groupOrder
+            ? [...groupOrder.filter(g => byGroup.has(g)), ...[...byGroup.keys()].filter(g => !groupOrder.includes(g))]
+            : [...byGroup.keys()];
+        return order.map(g => [g, byGroup.get(g)]);
+    }, [shown, groupBy, groupOrder]);
     const toggle = key => {
         const next = new Set(set);
         next.has(key) ? next.delete(key) : next.add(key);
@@ -38,13 +69,27 @@ export default function MultiSelect({ label, options, selected, onChange, availa
     // Count reflects the day when dynamic (selected-with-data / with-data).
     const shownSelected = shown.filter(o => set.has(o.key)).length;
     const count = availableKeys ? `${shownSelected}/${shown.length}` : `${selected.length}/${options.length}`;
+    const renderOption = o => (
+        <label
+            key={o.key}
+            className="flex items-center gap-2.5 text-sm cursor-pointer px-1.5 py-2 rounded-lg hover:bg-fill"
+        >
+            <input
+                type="checkbox"
+                checked={set.has(o.key)}
+                onChange={() => toggle(o.key)}
+                className="accent-accent h-4 w-4"
+            />
+            <span>{o.label}</span>
+        </label>
+    );
 
     return (
         <div className="relative inline-block" ref={ref}>
             <button
                 ref={btnRef}
                 type="button"
-                onClick={() => setOpen(v => !v)}
+                onClick={() => setOpen(v => { const next = !v; if (next) setQuery(''); return next; })}
                 title={title}
                 className="cursor-pointer flex items-center gap-2 px-3 min-h-11 py-2 rounded-[10px] border border-separator bg-surface text-label text-sm hover:bg-fill"
             >
@@ -64,23 +109,30 @@ export default function MultiSelect({ label, options, selected, onChange, availa
                             </button>
                         ))}
                     </div>
-                    {shown.map(o => (
-                        <label
-                            key={o.key}
-                            className="flex items-center gap-2.5 text-sm cursor-pointer px-1.5 py-2 rounded-lg hover:bg-fill"
-                        >
-                            <input
-                                type="checkbox"
-                                checked={set.has(o.key)}
-                                onChange={() => toggle(o.key)}
-                                className="accent-accent h-4 w-4"
-                            />
-                            <span>{o.label}</span>
-                        </label>
-                    ))}
+                    {searchable && (
+                        <input
+                            type="text"
+                            value={query}
+                            onChange={e => setQuery(e.target.value)}
+                            placeholder="Search…"
+                            autoFocus
+                            className="w-full mb-2 px-2.5 py-1.5 text-sm rounded-lg border border-separator bg-surface text-label outline-none focus:border-accent"
+                        />
+                    )}
+                    {grouped
+                        ? grouped.map(([g, opts]) => (
+                            <div key={g} className="mb-1">
+                                <div className="px-1.5 pt-1.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-label-3">
+                                    {groupLabel(g)}
+                                </div>
+                                {opts.map(renderOption)}
+                            </div>
+                        ))
+                        : shown.map(renderOption)}
                     {!shown.length && (
                         <span className="block text-sm text-label-3 px-1 py-1">
-                            {options.length ? 'No columns with data for this day.' : 'Nothing available yet.'}
+                            {searchable && query.trim() ? 'No matches.'
+                                : options.length ? 'No columns with data for this day.' : 'Nothing available yet.'}
                         </span>
                     )}
                 </div>

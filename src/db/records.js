@@ -1,5 +1,5 @@
 import { db } from './connection.js';
-import { MARKET_COLUMNS, isMarketKey, marketKey, whereMarket } from '../markets.js';
+import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKey } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 
@@ -91,10 +91,17 @@ const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 export async function columnCatalog() {
     const types = await db('fixture_statistics').distinct('type').orderBy('type');
     const providers = await db('matches').distinct('provider').orderBy('provider');
+    // Per-distinct-tuple match coverage feeds discoverMarketColumns' coverage
+    // threshold (see src/markets.js) - it aggregates this per canonical key,
+    // not per raw (type_name,name,handicap) tuple.
+    const marketRows = await db('odds_markets')
+        .select('type_name', 'name', 'handicap')
+        .countDistinct({ matches: 'match_id' })
+        .groupBy('type_name', 'name', 'handicap');
     return {
         providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
-        markets: MARKET_COLUMNS.map(c => ({ ...c, sortable: true, filterable: true })),
+        markets: discoverMarketColumns(marketRows), // already carries sortable/filterable
         stats: [
             ...STAT_COLUMNS.map(c => ({ ...c, sortable: false, filterable: false })),
             ...types.map(({ type }) => ({
@@ -115,12 +122,21 @@ function _sqlTarget(query, key, joined, op = null) {
         if (TEXT_TARGET_OPS.has(op) && base.like_sql) return base.like_sql;
         return base.raw ? db.raw(base.sql) : base.sql;
     }
-    if (!isMarketKey(key)) return null;
+    // Base fields handled above; stats (fs:) are display-only (never sort/
+    // filterable). Any other key must be a market key marketIdentity() can
+    // resolve to a REAL WHERE: isKnownMarketKey rejects the exact set that would
+    // hit marketIdentity's non-throwing catch-all (branch 7), so an unknown key
+    // still returns null -> queryRecords throws a TypeError -> server 400. This
+    // intentionally also accepts below-threshold / filter-only raw: keys: they
+    // build valid pivots, making filter-only markets API-filterable per the
+    // design (the M2 UI just doesn't offer them as columns).
+    if (!key || key.startsWith('fs:')) return null;
+    if (!isKnownMarketKey(key)) return null;
     let alias = joined.get(key);
     if (!alias) {
         alias = `mk${joined.size}`;
         joined.set(key, alias);
-        const sub = whereMarket(db('odds_markets'), key)
+        const sub = marketIdentity(db('odds_markets'), key)
             .where('is_stale', 0) // dead odds never drive sort/filter
             .groupBy('match_id')
             .select('match_id')
@@ -309,18 +325,23 @@ async function _hydrate(rows) {
     // Odds -> canonical market columns. Fresh and stale rows pivot into
     // separate maps (stale = vanished from the latest bookmaker update;
     // last-seen price kept for display). Fresh row count (ALL markets, not
-    // just canonical) feeds the per-match availability flag.
+    // just canonical) feeds the per-match availability flag. Keyed by
+    // canonicalMarket() (M2 Task 4): pivots every 'column' + 'grouped' family
+    // (canonical + BTTS/DNB/odd-even/team-totals/combos/HT-FT/...), skipping
+    // only 'filter-only' markets (correct_score, raw: passthrough) - those stay
+    // stored + SQL-filterable via marketIdentity but are never pivoted for
+    // display (huge/unbounded cardinality).
     const odds = await db('odds_markets').whereIn('match_id', matchIds)
         .select('match_id', 'type_name', 'name', 'price', 'handicap', 'is_stale');
     const marketsByMatch = new Map(), staleByMatch = new Map(), freshCounts = new Map();
     for (const o of odds) {
         if (!o.is_stale) freshCounts.set(o.match_id, (freshCounts.get(o.match_id) ?? 0) + 1);
-        const key = marketKey(o);
-        if (!key) continue;
+        const m = canonicalMarket(o);
+        if (m.columnizable === 'filter-only') continue;
         const map = o.is_stale ? staleByMatch : marketsByMatch;
         let obj = map.get(o.match_id);
         if (!obj) map.set(o.match_id, obj = {});
-        obj[key] = Number(o.price);
+        obj[m.key] = Number(o.price);
     }
 
     // Frozen pre-match snapshots (preferred over live derivation when present)

@@ -5,6 +5,7 @@ import NumberInput from './NumberInput.jsx';
 import Field from './Field.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import { BASE_COLUMNS, applyOrder } from './DataTable.jsx';
+import { MARKET_GROUP_ORDER, marketGroupLabel } from '../columns.js';
 import { THEMES } from '../theme.js';
 import { DEFAULT_SAFE, SAFE_TIERS } from '../../../src/db/magic-rules.js';
 import { exportConfig, importConfig } from '../configSnapshot.js';
@@ -190,7 +191,11 @@ export default function SettingsModal({
                                 availableKeys={availableMarkets}
                                 selected={marketKeys}
                                 onChange={onMarkets}
-                                title="Pick which odds-market columns show in the table (only markets carried by the loaded day are listed)"
+                                groupBy={o => o.group}
+                                groupLabel={marketGroupLabel}
+                                groupOrder={MARKET_GROUP_ORDER}
+                                searchable
+                                title="Pick which odds-market columns show in the table (only markets carried by the loaded day are listed) - grouped by market family, search by name"
                             />
                             <MultiSelect
                                 label="Stats"
