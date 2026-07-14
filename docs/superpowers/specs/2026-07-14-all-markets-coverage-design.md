@@ -146,8 +146,13 @@ M2, no regression to the canonical default view.
 - Learned/fuzzy market aliasing (rules suffice for the closed market vocabulary).
 - Retro-settling historical exotic markets beyond what canonical scores allow.
 
-## 9. Open questions for review
+## 9. Decisions (resolved 2026-07-14)
 
-1. M2 default view: keep exactly today's canonical columns as default (recommended), or promote a few high-value additions (BTTS, DNB) into the default set?
-2. M3 first families to attempt behind the gate: BTTS + team totals + DNB (recommended), or wait for ≥30 odds-days before any M3 at all?
-3. BetPawa fetch widening (M1): attempt to discover more market-group IDs now, or defer since 133 types already land?
+1. **M2 default view: promote BTTS + DNB** into the default columns alongside the
+   canonical 1X2/DC/O-U (both low-cardinality, well-covered, commonly bet). All
+   other markets remain opt-in.
+2. **M3 first families: BTTS + team totals + DNB**, each behind the backtest
+   evidence gate before it can surface a recommended tip. Other families
+   (HT/FT, Multigoals, correct-score, props) are M2 display/filter only for now.
+3. **M1 BetPawa fetch widening: deferred** — 133 market types already land from the
+   current 6 group IDs; further market-group discovery is a later increment.
