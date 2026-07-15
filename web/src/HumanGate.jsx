@@ -10,7 +10,9 @@ import { getHumanToken, setHumanToken } from './humanToken.js';
 // Fail-safe: if the challenge endpoint is absent (server not enforcing), it
 // lets the app through rather than locking anyone out on a config mismatch -
 // the real protection is the server-side /api gate either way.
-const OP_MARK = (
+// Shared with the auth views (AuthShell.jsx) so the full-screen surfaces carry
+// one identical brand mark.
+export const OP_MARK = (
     <svg width="60" height="32" viewBox="0 0 63.601238 34.068436" role="img" aria-label="Odds Pro" fill="var(--logo)" className="mx-auto">
         <text x="31.834799" y="19.334578" textAnchor="middle" dominantBaseline="central"
               fontFamily="-apple-system, Arial, sans-serif" fontWeight="700" fontSize="28" letterSpacing="-1">OP</text>
