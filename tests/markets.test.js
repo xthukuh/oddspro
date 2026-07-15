@@ -74,12 +74,13 @@ import { canonicalMarket, _normType } from '../src/markets.js';
 
 test('canonicalMarket unifies provider spellings and passes through unknowns', () => {
     // canonical families keep their existing keys + carry a group + columnizable
+    // (+ the additive M3 `period` field, null for full time)
     assert.deepEqual(canonicalMarket({ type_name: '1X2 | Full Time', name: '1' }),
-        { key: '1', group: 'result', label: '1', columnizable: 'column' });
+        { key: '1', group: 'result', label: '1', columnizable: 'column', period: null });
     assert.equal(canonicalMarket({ type_name: '1X2', name: '2' }).key, '2'); // betika unifies
     // BTTS + DNB become first-class columns
     assert.deepEqual(canonicalMarket({ type_name: 'Both Teams To Score | Full Time', name: 'Yes' }),
-        { key: 'GG', group: 'btts', label: 'BTTS Yes', columnizable: 'column' });
+        { key: 'GG', group: 'btts', label: 'BTTS Yes', columnizable: 'column', period: null });
     assert.equal(canonicalMarket({ type_name: 'Draw No Bet | Full Time', name: '1' }).key, 'DNB1');
     // huge-cardinality market -> filter-only, never a column, still a deterministic key
     const cs = canonicalMarket({ type_name: 'Correct Score | Full Time', name: '2:1' });
@@ -97,7 +98,7 @@ test('canonicalMarket unifies provider spellings and passes through unknowns', (
 test('canonicalMarket confirmed cross-provider BTTS/DNB spellings from the live inventory', () => {
     // betika: "BOTH TEAMS TO SCORE (GG/NG)" outcome names are literally NO/YES
     assert.deepEqual(canonicalMarket({ type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'YES' }),
-        { key: 'GG', group: 'btts', label: 'BTTS Yes', columnizable: 'column' });
+        { key: 'GG', group: 'btts', label: 'BTTS Yes', columnizable: 'column', period: null });
     assert.equal(canonicalMarket({ type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'NO' }).key, 'NG');
     // betpawa period-suffixed BTTS also unifies to the same family (period tag on the key)
     const btts1h = canonicalMarket({ type_name: 'Both Teams To Score | First Half', name: 'Yes' });
@@ -108,6 +109,30 @@ test('canonicalMarket confirmed cross-provider BTTS/DNB spellings from the live 
     // "DRAW NO BET" type_name at all -- do not assert a fake Betika DNB spelling.
     // Draw No Bet is BetPawa-only; a betika-shaped guess must NOT resolve as dnb.
     assert.notEqual(canonicalMarket({ type_name: 'DRAW NO BET', name: '1' }).group, 'dnb');
+});
+
+// --- M3 Task 6: additive `period` + team_total `tt` (side/team) exposure ---
+// buildTipBooks (src/db/tip-rules.js) reads these to keep FT-only books and to
+// resolve which side a team-total belongs to. Purely additive: no existing
+// field value changes, and every return site now carries `period`.
+test('canonicalMarket exposes period (null for full time) and tt team/side on team totals', () => {
+    // Betika team-embedded total: tt.team carries the team name, side null
+    // (Betika never labels home/away), period null (full time).
+    const tt = canonicalMarket({ type_name: 'ARSENAL TOTAL', name: 'OVER 2.5', handicap: 2.5 });
+    assert.equal(tt.group, 'team_total');
+    assert.equal(tt.tt.team, 'ARSENAL');
+    assert.equal(tt.tt.side, null);
+    assert.equal(tt.period, null);
+    // BetPawa {home} placeholder total: tt.side resolved, team null
+    const home = canonicalMarket({ type_name: 'Over/Under | {home} | Full Time', name: 'Over', handicap: 1.5 });
+    assert.equal(home.tt.side, 'home');
+    assert.equal(home.tt.team, null);
+    assert.equal(home.period, null);
+    // BetPawa 1st-half BTTS: period tag '1H' on a fixed family
+    const btts1h = canonicalMarket({ type_name: 'Both Teams To Score | First Half', name: 'Yes' });
+    assert.equal(btts1h.period, '1H');
+    // Full-time canonical carries period null (additive field present everywhere)
+    assert.equal(canonicalMarket({ type_name: '1X2 | Full Time', name: '1' }).period, null);
 });
 
 test('canonicalMarket: Betika period-prefixed markets normalize before family lookup', () => {

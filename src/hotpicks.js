@@ -1,12 +1,11 @@
 import { config } from './config.js';
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
-import { marketKey } from './markets.js';
 import {
     pairedTeamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
     apiPredictionSignal, scoreOver25,
 } from './db/goals-rules.js';
-import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipHit } from './db/tip-rules.js';
+import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
 import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai.js';
 import { _batch, _progress } from './utils.js';
@@ -33,14 +32,15 @@ const PICK_COLUMNS = [
 // (mysql2 returns JSON columns as strings).
 const _jsonCol = v => v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v));
 
-// O/U total-goals lines (mirrors markets.js OU_LINES)
-const OU_LINES = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
-
-// Canonical market prices per fixture, grouped for devigging: per market
-// group prefer the first provider carrying the FULL group (betpawa first -
-// mixing providers inside one group would break the vig removal), betika as
-// the fallback. Returns Map(fixture_id -> { x12, dc, ou }).
-async function _loadMarkets(fixtureIds) {
+// Per-fixture tip books: pull this fixture set's non-stale odds rows, group
+// them per fixture, and delegate the family-book assembly to buildTipBooks
+// (pure, M2 canonicalMarket-keyed). x12/dc/ou keep the legacy grouping (betpawa
+// first, lowest price, no overround band) for byte-compat; the new families
+// (BTTS/DNB/odd-even/team-totals) are integrity-screened with overrounds/rejects
+// recorded. Team-total side resolution needs the team names, so the caller
+// passes namesById (fixture_id -> {homeName, awayName}). Returns
+// Map(fixture_id -> buildTipBooks(...) result).
+async function _loadMarkets(fixtureIds, namesById) {
     const rows = await db('odds_markets as om')
         .join('matches as m', 'm.id', 'om.match_id')
         .whereIn('m.fixture_id', fixtureIds)
@@ -48,43 +48,20 @@ async function _loadMarkets(fixtureIds) {
         .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
     const byFixture = new Map();
     for (const r of rows) {
-        const key = marketKey(r);
-        if (!key) continue;
-        let providers = byFixture.get(r.fixture_id);
-        if (!providers) byFixture.set(r.fixture_id, providers = {});
-        const map = (providers[r.provider] ??= {});
-        const price = Number(r.price); // DECIMAL arrives as string
-        // Duplicate identities keep the lowest price (matches records.js MIN)
-        if (map[key] == null || price < map[key]) map[key] = price;
+        let list = byFixture.get(r.fixture_id);
+        if (!list) byFixture.set(r.fixture_id, list = []);
+        list.push(r);
     }
-    const _group = (providers, keys) => {
-        for (const p of ['betpawa', 'betika']) {
-            const m = providers[p];
-            if (m && keys.every(k => m[k] > 1)) {
-                return Object.fromEntries(keys.map(k => [k, m[k]]));
-            }
-        }
-        return null;
-    };
-    const groups = new Map();
-    for (const [fixture_id, providers] of byFixture) {
-        const ou = {};
-        for (const line of OU_LINES) {
-            const pair = _group(providers, [`O ${line}`, `U ${line}`]);
-            if (pair) ou[line] = { over: pair[`O ${line}`], under: pair[`U ${line}`] };
-        }
-        groups.set(fixture_id, {
-            x12: _group(providers, ['1', 'X', '2']),
-            dc: _group(providers, ['1X', 'X2', '12']),
-            ou,
-        });
+    const books = new Map();
+    for (const [fixture_id, fixtureRows] of byFixture) {
+        books.set(fixture_id, buildTipBooks(fixtureRows, namesById?.get(fixture_id) ?? {}));
     }
-    return groups;
+    return books;
 }
 
 // Settle pending hot-pick and tip outcomes from canonical final scores -
-// hit/miss decided exactly once. Cheap (pure SQL + tipHit loop, no external
-// fetches, no AI), so the auto-refresh light pass can call it standalone.
+// hit/miss/void decided exactly once. Cheap (pure SQL + tipOutcome loop, no
+// external fetches, no AI), so the auto-refresh light pass can call it standalone.
 export async function settleHotPicks() {
     const finalsIn = FINAL_STATUSES.map(() => '?').join(',');
     const [settledRes] = await db.raw(
@@ -98,8 +75,9 @@ export async function settleHotPicks() {
     );
     const settled = settledRes.affectedRows ?? 0;
 
-    // Settle tips the same way: any canonical market resolves from the final
-    // score (pure tipHit); grouped into two whereIn updates.
+    // Settle tips the same way: any tippable market resolves from the final
+    // score (pure tipOutcome); grouped into three whereIn updates. A DNB push
+    // on a draw settles 'void' (stake returned - neither hit nor miss).
     const pendingTips = await db('fixture_predictions as p')
         .join('fixtures as f', 'f.id', 'p.fixture_id')
         .whereNull('p.tip_outcome').whereNotNull('p.tip_market')
@@ -107,18 +85,18 @@ export async function settleHotPicks() {
         .select('p.fixture_id', 'p.tip_market',
             db.raw('COALESCE(f.ft_home, f.goals_home) as fh'),
             db.raw('COALESCE(f.ft_away, f.goals_away) as fa'));
-    const tipHits = [], tipMisses = [];
+    const buckets = { hit: [], miss: [], void: [] };
     for (const t of pendingTips) {
         if (t.fh == null || t.fa == null) continue;
-        (tipHit(t.tip_market, t.fh, t.fa) ? tipHits : tipMisses).push(t.fixture_id);
+        buckets[tipOutcome(t.tip_market, t.fh, t.fa)].push(t.fixture_id);
     }
-    for (const [ids, outcome] of [[tipHits, 'hit'], [tipMisses, 'miss']]) {
+    for (const [outcome, ids] of Object.entries(buckets)) {
         for (let i = 0; i < ids.length; i += 200) {
             await db('fixture_predictions').whereIn('fixture_id', ids.slice(i, i + 200))
                 .update({ tip_outcome: outcome });
         }
     }
-    const tips_settled = tipHits.length + tipMisses.length;
+    const tips_settled = buckets.hit.length + buckets.miss.length + buckets.void.length;
     return { settled, tips_settled };
 }
 
@@ -168,7 +146,8 @@ export async function updateHotPicks() {
         }
     }
 
-    const markets = await _loadMarkets(fixtureIds);
+    const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
+    const markets = await _loadMarkets(fixtureIds, namesById);
     const apiPreds = new Map((await db('fixture_api_predictions').whereIn('fixture_id', fixtureIds))
         .map(p => [p.fixture_id, p]));
     // Existing rows: reuse AI verdicts when the evaluation is unchanged
@@ -191,7 +170,8 @@ export async function updateHotPicks() {
         const cutoff = new Date(f.kickoff).getTime();
         const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
         const awayRows = fixturesByTeam.get(f.away_team_id) ?? [];
-        const groups = markets.get(f.id) ?? { x12: null, dc: null, ou: {} };
+        const groups = markets.get(f.id)
+            ?? { x12: null, dc: null, ou: {}, btts: null, dnb: null, oddEven: null, tt: { H: {}, A: {} }, overrounds: {}, rejects: {} };
         const p = groups.ou[2.5] ?? null;
         const market = p ? { ...p, impliedOver: impliedProbability(p.over, p.under) } : null;
         const apiPred = apiPreds.get(f.id);

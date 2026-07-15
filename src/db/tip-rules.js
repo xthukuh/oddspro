@@ -1,8 +1,9 @@
 // Pure "best tip" deduction: the safest bettable outcome for one fixture
 // across the canonical markets (1X2, double chance, every O/U line), scored
 // by a blended confidence - vig-removed market probability corroborated by
-// rolling history rates and API-Football percentages. Zero project imports
-// (like goals-rules.js) so tests run without .env/DB.
+// rolling history rates and API-Football percentages. Imports ONLY M2's
+// canonicalMarket (itself a zero-dependency pure module - the magic-rules ->
+// perf-rules cross-pure precedent), so tests still run without .env/DB.
 //
 // A price floor keeps tips meaningful: near-certain markets priced at ~1.0x
 // (O 0.5 against two scoring sides) are excluded - what remains at high
@@ -11,6 +12,7 @@
 // Division of labor: callers filter fixtures to FINAL_STATUSES in SQL; the
 // aggregates enforce non-null FT scores and kickoff strictly before the
 // analyzed fixture's kickoff (the leak-free cutoff).
+import { canonicalMarket } from '../markets.js';
 
 export const DEFAULT_TIP = {
     teamWindow: 7,       // rolling last-N games per team (vs other opponents)
@@ -197,6 +199,110 @@ export function selectFamilyBook(providers, keys, opts = {}) {
         if (gap > t.maxBookDivergence) return { book: null, overround: sane[0].overround, reason: 'book_divergence' };
     }
     return { book: sane[0].book, overround: sane[0].overround, reason: null };
+}
+
+// --- buildTipBooks (M3 Task 6): raw odds rows -> per-family tip books --------
+// One fixture's raw odds_markets rows -> the family books bestTip/tipEligibility
+// consume. Rows are canonicalized via M2's canonicalMarket and kept FULL-TIME
+// only (any period-tagged descriptor is dropped). x12/dc/ou reproduce the legacy
+// hotpicks _loadMarkets grouping EXACTLY (first provider carrying the full book,
+// lowest price per key, NO overround band) so canonical-only fixtures keep their
+// pre-M3 tips byte-for-byte - bestTip devigs those groups itself. The new
+// two-way families (BTTS/DNB/odd-even/team-totals) run through selectFamilyBook,
+// recording each accepted book's overround (`overrounds`) and each genuine
+// refusal's reason (`rejects`, audit) - an 'incomplete' book (family simply not
+// offered) is silently skipped. Team totals are routed to home/away from
+// canonicalMarket's `tt` (side directly, else EXACT normalized team-name match;
+// no fuzzy matching - an unresolved side is excluded).
+const _X12_KEYS = ['1', 'X', '2'];
+const _DC_KEYS = ['1X', 'X2', '12'];
+const _OU_KEY_RE = /^[OU] \d+\.5$/;
+const _SIMPLE_FT_KEYS = new Set(['1', 'X', '2', '1X', 'X2', '12', 'GG', 'NG', 'DNB1', 'DNB2', 'ODD', 'EVEN']);
+const _upper = s => String(s ?? '').trim().toUpperCase();
+
+// First provider (betpawa preferred) carrying the FULL key set, lowest price
+// per key already folded in. No overround band - byte-compatible with the
+// pre-M3 _loadMarkets grouping.
+function _simpleGroup(providers, keys) {
+    for (const p of ['betpawa', 'betika']) {
+        const m = providers[p];
+        if (m && keys.every(k => Number(m[k]) > 1)) {
+            return Object.fromEntries(keys.map(k => [k, Number(m[k])]));
+        }
+    }
+    return null;
+}
+
+export function buildTipBooks(oddsRows, { homeName, awayName } = {}, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const H = _upper(homeName), A = _upper(awayName);
+
+    // Per-provider bag of lowest canonical prices (FULL TIME only). Team-total
+    // rows are side-resolved into TT:<H|A>:<ouKey> book keys here so a two-way
+    // over/under book can be paired per side+line downstream.
+    const providers = {};
+    for (const r of oddsRows) {
+        const desc = canonicalMarket(r);
+        if (desc.period != null) continue;               // FT only
+        let bookKey = null;
+        if (_SIMPLE_FT_KEYS.has(desc.key) || _OU_KEY_RE.test(desc.key)) {
+            bookKey = desc.key;
+        } else if (desc.group === 'team_total') {
+            const side = desc.tt?.side === 'home' ? 'H'
+                : desc.tt?.side === 'away' ? 'A'
+                    : desc.tt?.team && _upper(desc.tt.team) === H ? 'H'
+                        : desc.tt?.team && _upper(desc.tt.team) === A ? 'A'
+                            : null;
+            const ouKey = desc.key.startsWith('TT:') ? desc.key.slice(3) : null; // 'O 2.5'
+            if (side && ouKey && _OU_KEY_RE.test(ouKey)) bookKey = `TT:${side}:${ouKey}`;
+        }
+        if (!bookKey) continue;                          // untippable / unresolved -> drop
+        const price = Number(r.price);                   // DECIMAL arrives as string
+        const bag = (providers[r.provider] ??= {});
+        if (bag[bookKey] == null || price < bag[bookKey]) bag[bookKey] = price; // lowest price
+    }
+
+    // Legacy canonical groups (byte-compat, no overround band).
+    const x12 = _simpleGroup(providers, _X12_KEYS);
+    const dc = _simpleGroup(providers, _DC_KEYS);
+    const ou = {};
+    for (const line of OU_LINES) {
+        const pair = _simpleGroup(providers, [`O ${line}`, `U ${line}`]);
+        if (pair) ou[line] = { over: pair[`O ${line}`], under: pair[`U ${line}`] };
+    }
+
+    // New two-way families via selectFamilyBook (integrity-screened).
+    const overrounds = {}, rejects = {};
+    const _family = (name, keys) => {
+        const sel = selectFamilyBook(providers, keys, t);
+        if (sel.book) { overrounds[name] = sel.overround; return sel.book; }
+        if (sel.reason && sel.reason !== 'incomplete') rejects[name] = sel.reason;
+        return null;
+    };
+    const btts = _family('btts', ['GG', 'NG']);
+    const dnb = _family('dnb', ['DNB1', 'DNB2']);
+    const oddEven = _family('oddEven', ['ODD', 'EVEN']);
+
+    // Team totals: one two-way book per resolved (side, line). bestTip stamps a
+    // single overrounds.tt on every TT candidate, so the first accepted book's
+    // overround represents the family (margin transparency, not per-line).
+    const tt = { H: {}, A: {} };
+    let ttReject = null;
+    for (const side of ['H', 'A']) {
+        for (const line of OU_LINES) {
+            const oKey = `TT:${side}:O ${line}`, uKey = `TT:${side}:U ${line}`;
+            const sel = selectFamilyBook(providers, [oKey, uKey], t);
+            if (sel.book) {
+                tt[side][line] = { over: sel.book[oKey], under: sel.book[uKey] };
+                if (overrounds.tt == null) overrounds.tt = sel.overround;
+            } else if (sel.reason && sel.reason !== 'incomplete') {
+                ttReject = ttReject || sel.reason;
+            }
+        }
+    }
+    if (overrounds.tt == null && ttReject) rejects.tt = ttReject;
+
+    return { x12, dc, ou, btts, dnb, oddEven, tt, overrounds, rejects };
 }
 
 // Mean of the non-null components, or null when none qualify
