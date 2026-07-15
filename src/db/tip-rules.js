@@ -65,12 +65,26 @@ export function teamOutcomeAggregates(rows, teamId, opponentId, cutoff, window) 
         .filter(f => !_isPair(f, teamId, opponentId))
         .slice(0, window);
     const n = recent.length;
-    if (!n) return { n: 0, winRate: null, drawRate: null, lossRate: null, overRates: null };
+    if (!n) {
+        return {
+            n: 0, winRate: null, drawRate: null, lossRate: null, overRates: null,
+            bttsRate: null, oddRate: null, scoredOverRates: null, concededOverRates: null,
+        };
+    }
     let w = 0, d = 0;
+    let btts = 0, odd = 0;
+    const scoredOver = Object.fromEntries(OU_LINES.map(l => [l, 0]));
+    const concededOver = Object.fromEntries(OU_LINES.map(l => [l, 0]));
     for (const f of recent) {
         const [gf, ga] = f.home_team_id === teamId ? [f.ft_home, f.ft_away] : [f.ft_away, f.ft_home];
         if (gf > ga) w++;
         else if (gf === ga) d++;
+        if (f.ft_home > 0 && f.ft_away > 0) btts++;
+        if ((f.ft_home + f.ft_away) % 2 === 1) odd++;
+        for (const l of OU_LINES) {
+            if (gf > l) scoredOver[l]++;
+            if (ga > l) concededOver[l]++;
+        }
     }
     return {
         n,
@@ -78,6 +92,10 @@ export function teamOutcomeAggregates(rows, teamId, opponentId, cutoff, window) 
         drawRate: _round(d / n),
         lossRate: _round((n - w - d) / n),
         overRates: _overRates(recent),
+        bttsRate: _round(btts / n),
+        oddRate: _round(odd / n),
+        scoredOverRates: Object.fromEntries(OU_LINES.map(l => [l, _round(scoredOver[l] / n)])),
+        concededOverRates: Object.fromEntries(OU_LINES.map(l => [l, _round(concededOver[l] / n)])),
     };
 }
 
@@ -100,12 +118,20 @@ export function h2hOutcomeAggregates(rows, homeId, awayId, cutoff, window) {
         .filter(f => _isPair(f, homeId, awayId))
         .slice(0, window);
     const n = meetings.length;
-    if (!n) return { n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null };
+    if (!n) {
+        return {
+            n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null,
+            bttsRate: null, oddRate: null,
+        };
+    }
     let hw = 0, d = 0;
+    let btts = 0, odd = 0;
     for (const f of meetings) {
         const [gf, ga] = f.home_team_id === homeId ? [f.ft_home, f.ft_away] : [f.ft_away, f.ft_home];
         if (gf > ga) hw++;
         else if (gf === ga) d++;
+        if (f.ft_home > 0 && f.ft_away > 0) btts++;
+        if ((f.ft_home + f.ft_away) % 2 === 1) odd++;
     }
     return {
         n,
@@ -113,6 +139,8 @@ export function h2hOutcomeAggregates(rows, homeId, awayId, cutoff, window) {
         drawRate: _round(d / n),
         awayWinRate: _round((n - hw - d) / n),
         overRates: _overRates(meetings),
+        bttsRate: _round(btts / n),
+        oddRate: _round(odd / n),
     };
 }
 

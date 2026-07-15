@@ -39,6 +39,22 @@ test('teamOutcomeAggregates computes W/D/L and per-line over rates', () => {
     assert.equal(out.overRates[6.5], 0);
 });
 
+const HIST = [
+    // team 10 home: scored 3, conceded 1 (btts, odd total, over 2.5)
+    { home_team_id: 10, away_team_id: 30, ft_home: 3, ft_away: 1, kickoff: '2026-07-01T12:00:00Z' },
+    // team 10 away: scored 0, conceded 2 (no btts, even total)
+    { home_team_id: 40, away_team_id: 10, ft_home: 2, ft_away: 0, kickoff: '2026-07-03T12:00:00Z' },
+];
+test('teamOutcomeAggregates: btts/parity/per-side goal rates', () => {
+    const a = teamOutcomeAggregates(HIST, 10, 99, Date.parse('2026-07-10'), 5);
+    assert.equal(a.n, 2);
+    assert.equal(a.bttsRate, 0.5);                // 3-1 both scored; 2-0 not
+    assert.equal(a.oddRate, 0);                   // totals 4 and 2 - both even
+    assert.equal(a.scoredOverRates[0.5], 0.5);    // scored 3 (home) and 0 (away)
+    assert.equal(a.scoredOverRates[2.5], 0.5);
+    assert.equal(a.concededOverRates[1.5], 0.5);  // conceded 1 and 2
+});
+
 test('teamOutcomeAggregates respects the cutoff, window and empty history', () => {
     const rows = [
         fx(1, 3, 2, 0, '2026-07-02 19:00:00'), // at kickoff: excluded
@@ -90,6 +106,14 @@ test('h2hOutcomeAggregates orients rates to the analyzed home team across venues
     assert.equal(out.homeWinRate, 0.5);
     assert.equal(out.drawRate, 0.25);
     assert.equal(out.awayWinRate, 0.25);
+});
+
+test('h2hOutcomeAggregates gains bttsRate/oddRate', () => {
+    const h = h2hOutcomeAggregates([
+        { home_team_id: 10, away_team_id: 20, ft_home: 2, ft_away: 1, kickoff: '2026-07-01T12:00:00Z' },
+    ], 10, 20, Date.parse('2026-07-10'), 5);
+    assert.equal(h.bttsRate, 1);
+    assert.equal(h.oddRate, 1); // total 3
 });
 
 // --- tipHit ---
