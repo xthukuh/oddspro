@@ -181,8 +181,10 @@ test('estimateLegProb prefers the cell posterior, falls back to confidence, clam
 test('safePrior falls back to the warehouse anchor with no calibration', () => {
     assert.equal(safePrior('X2', null), WAREHOUSE_WLO['X2']);       // 0.669
     assert.equal(safePrior('U 4.5', null), WAREHOUSE_WLO['U 4.5']); // 0.868
-    // Unknown market with no cal -> neutral 0.6 (never a hardcoded high prior)
-    assert.equal(safePrior('GG', null), 0.6);
+    // Anchorless market with no cal -> neutral 0.6 (never a hardcoded high
+    // prior). 'X' (draw) is a real tippable market with no WAREHOUSE_WLO entry.
+    assert.equal(WAREHOUSE_WLO['X'], undefined);
+    assert.equal(safePrior('X', null), 0.6);
 });
 
 test('safePrior shrinks the live rate toward the anchor and resolves the warehouse<->live reversal', () => {
@@ -195,7 +197,7 @@ test('safePrior shrinks the live rate toward the anchor and resolves the warehou
     const calU = { global_rate: 0.73, markets: { 'U 4.5': { n: 127, hits: 88 } } }; // live 69.3%
     assert.ok(safePrior('U 4.5', calU) < WAREHOUSE_WLO['U 4.5'], 'weak live pulls U 4.5 down');
     // Market with no anchor uses the live global rate as the shrink target.
-    assert.equal(safePrior('GG', { global_rate: 0.7, markets: {} }), 0.7);
+    assert.equal(safePrior('X', { global_rate: 0.7, markets: {} }), 0.7);
 });
 
 test('sure strategy = safePrior x confidence, ranking live-winners over price-blind precision', () => {
