@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear } from './icons.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconUser, IconUserPlus, IconLogout, IconShield } from './icons.jsx';
 import { Z } from '../zLayers.js';
 
 // Right-justified mobile overflow: the toolbar actions as a simple tap list
@@ -8,7 +8,8 @@ import { Z } from '../zLayers.js';
 // click), which fires reliably on touch: iOS Safari doesn't synthesize a click
 // on a bare non-interactive <div>, so an onClick backdrop failed to dismiss on
 // mobile.
-function Row({ icon, label, onClick, disabled, active, trailing }) {
+// Exported: AvatarMenu reuses the same tap-row idiom for its dropdown.
+export function Row({ icon, label, onClick, disabled, active, trailing }) {
     return (
         <button onClick={onClick} disabled={disabled}
             className={`cursor-pointer w-full flex items-center gap-3 px-4 py-3 text-[15px] text-left hover:bg-fill disabled:opacity-40 ${active ? 'text-accent' : 'text-label'}`}>
@@ -20,7 +21,8 @@ function Row({ icon, label, onClick, disabled, active, trailing }) {
 }
 
 export default function OverflowMenu({ refreshing, canRefresh, filterCount, magicActive,
-    onRefresh, onMagic, onSlips, onFilters, onHelp, onSettings, onClose }) {
+    onRefresh, onMagic, onSlips, onFilters, onHelp, onSettings, onClose,
+    user, onSignIn, onSignUp, onProfile, onLogout, onAdmin, onSyncPrefs }) {
     useEffect(() => {
         const onKey = e => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', onKey);
@@ -41,6 +43,25 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
                 <div className="h-px bg-separator-2 my-1" />
                 <Row icon={<IconHelp />} label="Help" onClick={onHelp} />
                 <Row icon={<IconGear />} label="Display settings" onClick={onSettings} />
+                {/* Session rows - mobile parity with the desktop AvatarMenu. */}
+                <div className="h-px bg-separator-2 my-1" />
+                {user ? (
+                    <>
+                        <div className="px-4 pt-1.5 pb-1">
+                            <div className="text-[13px] font-semibold text-label truncate">{user.name}</div>
+                            <div className="text-xs text-label-2 truncate">{user.phone}</div>
+                        </div>
+                        {user.role === 'admin' && <Row icon={<IconShield />} label="Admin" onClick={onAdmin} />}
+                        <Row icon={<IconUser />} label="Edit profile" onClick={onProfile} />
+                        <Row icon={<IconRefresh />} label="Sync settings" onClick={onSyncPrefs} />
+                        <Row icon={<IconLogout />} label="Sign out" onClick={onLogout} />
+                    </>
+                ) : (
+                    <>
+                        <Row icon={<IconUser />} label="Sign in" onClick={onSignIn} />
+                        <Row icon={<IconUserPlus />} label="Create account" onClick={onSignUp} />
+                    </>
+                )}
             </div>
         </>
     );

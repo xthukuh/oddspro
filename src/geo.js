@@ -1,4 +1,5 @@
 import { config } from './config.js';
+import { effective } from './settings.js';
 import { db } from './db/connection.js';
 import { parseGeoResult, planGeoBatch } from './db/geo-rules.js';
 
@@ -113,8 +114,11 @@ async function tick() {
 // Start the periodic backfill: a first pass ~15s after boot, then every
 // GEO_INTERVAL_MINUTES. unref'd so the timers never hold the process open. A
 // localhost-only box resolves everything as 'private' (no external calls).
+// The flag is read via settings.effective - the server boots loadOverrides()
+// before starting schedulers, so an admin override applies on restart (the
+// catalog's restart_required promise, H3).
 export function startGeoScheduler() {
-    if (timer || !config.GEO_RESOLVE_ENABLED) return false;
+    if (timer || !effective('GEO_RESOLVE_ENABLED')) return false;
     firstRun = setTimeout(tick, 15_000);
     firstRun.unref?.();
     timer = setInterval(tick, config.GEO_INTERVAL_MINUTES * 60_000);

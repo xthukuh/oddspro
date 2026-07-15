@@ -3,6 +3,15 @@
 Source spec: `C:\Users\User\.claude\plans\plan-the-oddspro-project-gleaming-truffle.md`
 Goal: MySQL data warehouse for bookmaker odds (BetPawa, Betika) + api-sports.io football stats, with cross-source match linking. Analysis/prediction/dashboards out of scope.
 
+> **Research & analysis tracks (2026-07-14).** Data-integrity + signal-reliance
+> audit and the answer to "are our stats prone to bookmaker bias?" →
+> `docs/data-integrity-and-signal-audit.md`, the fair (selection-corrected,
+> recency-robust) market-vs-stats comparison + false-positive ledger →
+> `docs/fair-comparison-and-false-positives.md`, the durable provenance & honest-
+> claims statement → `docs/data-independence.md`. **Beat-the-book roadmap →
+> `docs/beat-the-book-roadmap.md` (PARKED at C0 = NO-GO; no C1 quota spend until
+> C0 flips).** SMS/OTP (Bonga) integration → `docs/sms-bonga-integration.md`.
+
 ## Status legend
 - [ ] pending · [~] in progress · [x] completed (implemented AND verified)
 

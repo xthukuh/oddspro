@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
-import { SHOW_DETAILS } from '../details.js';
+import { useShowDetails } from '../details.js';
 
 // Magic-sort sheet: pick one or more backtest-ranked tip-sorting strategies
 // (GET /api/magic-sort) to reorder the table most-likely-to-win first. Stats
@@ -18,6 +18,8 @@ const STATS_TITLE = 'What each number means (replayed on past days):\n'
     + '· ROI - average profit per day, in stakes (+100% = doubled the stake)';
 
 export default function MagicMenu({ data, error, activeIds, onToggle, onClearMagic, onClose }) {
+    // Session-aware: methodology prose + backtest numbers hide for guests
+    const showDetails = useShowDetails();
     const strategies = data?.strategies ?? [];
     const sample = data?.sample;
     const active = new Set(activeIds ?? []);
@@ -33,7 +35,7 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 <PinToggle pinned={pinned} onToggle={() => setPinned(v => !v)} />
                 <SheetClose onClose={onClose} />
             </div>
-            {SHOW_DETAILS && (
+            {showDetails && (
                 <p className="px-6 pb-3 text-[13px] text-label-2 leading-relaxed">
                     Tip rankings replayed against every settled day: build the top-4 slip each
                     strategy would have picked, settle it at real prices. Backtests, not forecasts.
@@ -50,14 +52,14 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                     >
                         <span className="flex items-center text-[15px]">
                             <span className="font-semibold text-label">{s.label}</span>
-                            {SHOW_DETAILS && s.low_sample && (
+                            {showDetails && s.low_sample && (
                                 <span className="ml-2 text-xs text-hot" title={`Fewer than ${sample?.min_days ?? 5} replayable days - treat with caution`}>
                                     ⚠ small sample
                                 </span>
                             )}
                             {active.has(s.id) && <span className="ml-auto text-accent">✓</span>}
                         </span>
-                        {SHOW_DETAILS && (
+                        {showDetails && (
                             <span className="block text-[12.5px] text-label-2 tabular-nums" title={STATS_TITLE}>
                                 slips {s.stats.survived}/{s.stats.days} ({_pct(s.stats.survival)})
                                 {' · '}top picks {s.stats.quartile.hits}/{s.stats.quartile.n} ({_pct(s.stats.quartile.rate)})
@@ -79,7 +81,7 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 >
                     Clear magic sorts
                 </button>
-                {SHOW_DETAILS && sample && (
+                {showDetails && sample && (
                     <div className="pt-1 text-xs text-label-3">
                         {sample.settled} settled tips · {sample.days} day{sample.days === 1 ? '' : 's'}
                         {!sample.sufficient && (

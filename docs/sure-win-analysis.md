@@ -6,6 +6,18 @@ Numbers are measured from our own warehouse (24,210 finished fixtures) and the
 838 live settled tips over 2026-07-03 → 07-12. Re-run the scripts named below
 before trusting any figure as the sample grows.*
 
+> **⚠ CORRECTION (2026-07-14).** A fair, **selection-bias-corrected** re-test on a
+> pre-selection board (22,213 fixture×market rows, not just tipped games), robust
+> to out-of-sample recalibration and recency-aware (timeliness) stats, **refutes
+> the "X2 +EV" finding below** (§"What actually wins"). On the fair board X2 is
+> **−12.8% flat-stake EV**, and its tipped Wilson floor (67.1%) is now *below*
+> break-even (70.1%) → **unresolved, not +EV**. Treat every "+EV" / "established
+> +EV" / "X2 (+) resolved" statement below as **SUPERSEDED — no market is
+> positive-EV.** See `docs/fair-comparison-and-false-positives.md` and
+> `docs/data-independence.md`. The rest of this study (no +EV sure-win; the
+> price-blind precision trap; `sure` = win-probability, not profit) **stands and
+> is reinforced.**
+
 ## The one-paragraph truth
 
 **There is no positive-EV "sure-win" on these markets, and the data proves it.**
@@ -61,7 +73,7 @@ BTTS are the same story or worse (BTTS is efficiently priced, ~−6% ROI).
 
 | Market | live hit | ROI | verdict |
 |---|---|---|---|
-| **X2** (n=67) | 83.6% | **+15.2%** | Wilson floor 72.9% > break-even 71.8% → **only established +EV** |
+| **X2** (n=67) | 83.6% | +15.2% | ~~Wilson floor 72.9% > break-even → only established +EV~~ **SUPERSEDED 2026-07-14: fair-board X2 −12.8% EV, tipped Wilson floor 67.1% < break-even 70.1% → unresolved, NOT +EV (see top banner)** |
 | O 2.5 (n=75) | 74.7% | +5.3% | promising, unresolved |
 | 1X (n=87) | 78.2% | +0.2% | marginal, unresolved |
 | **12** (n=192) | 71.9% | **−8.3%** | Wilson ceiling 77.8% < break-even → **established −EV, our biggest-volume loser** |

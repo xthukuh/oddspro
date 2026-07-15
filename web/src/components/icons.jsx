@@ -42,6 +42,25 @@ export const IconChevronDown = (p) => (
 export const IconMenu = (p) => (
     <svg {...S} {...p}><path d="M3 6h14M3 10h14M3 14h14" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"/></svg>
 );
+// Session icons (v1.1.0 auth): user silhouette for the avatar/sign-in rows,
+// user+plus for create-account, door-arrow for sign-out, handset for the
+// phone line in the account header.
+export const IconUser = (p) => (
+    <svg {...S} {...p}><circle cx="10" cy="6.5" r="3.2" stroke="currentColor" strokeWidth="1.6"/><path d="M3.8 17c.7-3 3.2-4.6 6.2-4.6s5.5 1.6 6.2 4.6" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+);
+export const IconUserPlus = (p) => (
+    <svg {...S} {...p}><circle cx="8.5" cy="6.5" r="3" stroke="currentColor" strokeWidth="1.6"/><path d="M2.8 16.8c.65-2.8 3-4.3 5.7-4.3 1.5 0 2.9.45 4 1.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M15.5 11.5v5M13 14h5" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+);
+export const IconLogout = (p) => (
+    <svg {...S} {...p}><path d="M12.5 6.5V4.2a1.7 1.7 0 0 0-1.7-1.7H5.2a1.7 1.7 0 0 0-1.7 1.7v11.6a1.7 1.7 0 0 0 1.7 1.7h5.6a1.7 1.7 0 0 0 1.7-1.7v-2.3" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/><path d="M8.5 10h9M14.8 7.2 17.5 10l-2.7 2.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+);
+export const IconPhone = (p) => (
+    <svg {...S} {...p}><rect x="6" y="2.5" width="8" height="15" rx="2" stroke="currentColor" strokeWidth="1.6"/><path d="M9 14.8h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
+);
+// Shield-with-check for the admin panel row (Phase 6).
+export const IconShield = (p) => (
+    <svg {...S} {...p}><path d="M10 2.2 16.2 4.6v4.6c0 4-2.6 6.8-6.2 8.3-3.6-1.5-6.2-4.3-6.2-8.3V4.6L10 2.2z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="m7.2 9.8 2 2 3.6-3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+);
 // Push-pin toggle for the "pin view" modal control (filled = pinned, so a
 // background click won't dismiss). Emoji 📌/📍 in the spec were only examples.
 export const IconPin = ({ filled, ...p }) => (

@@ -146,3 +146,41 @@ button, [role="button"], a, label, summary {
 @keyframes op-fade { from { opacity: 0; } to { opacity: 1; } }
 @keyframes op-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } to { opacity: 1; transform: none; } }
 @keyframes op-spin { to { transform: rotate(360deg); } }
+
+/* Phone control (react-phone-number-input inside auth/PhoneField.jsx): its
+   stylesheet handles the flag/select layout; these rules re-skin it with the
+   token palette so it matches the other auth inputs in both themes. */
+.op-phone {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    width: 100%;
+    height: 2.75rem; /* h-11, same as inputCls */
+    padding: 0 0.75rem;
+    background: var(--surface);
+    border: 1px solid var(--separator);
+    border-radius: 10px;
+}
+.op-phone:focus-within { border-color: var(--accent); }
+.op-phone .PhoneInputInput {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: 0;
+    outline: none;
+    color: var(--label);
+    font-size: 15px;
+}
+.op-phone .PhoneInputCountrySelectArrow { color: var(--label-2); opacity: 1; }
+
+/* Admin data-lab (admin/DataLab.jsx) recharts chrome: axis/grid/legend wear
+   the theme tokens. CSS wins over recharts' SVG presentation attributes, so
+   these stay theme-reactive; data marks keep their JS-resolved fills (SVG
+   attributes can't hold var()). Legend text needs !important - recharts
+   inlines the series color onto it, but text wears text tokens, never the
+   series color (the swatch carries identity). */
+.op-lab .recharts-cartesian-grid line { stroke: var(--separator-2); }
+.op-lab .recharts-cartesian-axis line,
+.op-lab .recharts-cartesian-axis path { stroke: var(--separator); }
+.op-lab .recharts-text { fill: var(--label-2); font-size: 11px; }
+.op-lab .recharts-legend-item-text { color: var(--label-2) !important; font-size: 12px; }

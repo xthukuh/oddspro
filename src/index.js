@@ -7,6 +7,7 @@ import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks, performanceSummary } from './hotpicks.js';
 import { exportRecords } from './export.js';
 import { backfillGeo } from './geo.js';
+import { sendSms, smsBalance, smsDelivery } from './sms/index.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 import { _date, _dtime } from './utils.js';
@@ -124,6 +125,23 @@ import { _date, _dtime } from './utils.js';
     if (action === 'geo') {
         const c = await backfillGeo();
         console.debug(`[+] geo: ${c.discovered} new IP(s) - ${c.resolved} resolved, ${c.unresolvable} unresolvable, ${c.private} private; ${c.applied ?? 0} visit rows updated.`);
+        return;
+    }
+
+    if (action === 'sms') {
+        // sms balance | sms delivery <unique_id> | sms send <phone> <text...>
+        if (value === 'balance') {
+            console.debug('[+] sms balance:', await smsBalance());
+        } else if (value === 'delivery') {
+            if (!args[4]) throw new TypeError('Usage: sms delivery <unique_id>');
+            console.debug('[+] sms delivery:', await smsDelivery(args[4]));
+        } else if (value === 'send') {
+            if (!args[4]) throw new TypeError('Usage: sms send <+E164phone> <text...>');
+            const text = args.slice(5).join(' ') || 'Odds Pro test message';
+            console.debug('[+] sms send:', await sendSms({ to: args[4], text }));
+        } else {
+            console.warn('Usage: node src/index.js sms <balance | delivery <unique_id> | send <+phone> <text>>');
+        }
         return;
     }
 

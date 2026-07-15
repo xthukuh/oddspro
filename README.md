@@ -30,6 +30,8 @@ cp .env.example .env    # fill in MySQL (DB_*) and API-Football (X_APISPORTS_*) 
 npm run migrate         # forward-only knex migrations
 ```
 
+**User accounts (v1.1.0):** set `PIN_PEPPER` (a long random secret) **before** `npm run migrate` — the users migration seeds an admin whose PIN (`ADMIN_SEED_PIN`, default `0000`, changed on first login) is hashed with it, and changing the pepper later invalidates every stored PIN. SMS OTP verification is off by default (`SMS_ENABLED=0` logs codes to the server console for dev); see `.env.example`.
+
 ## Commands
 
 ```sh
@@ -50,6 +52,7 @@ node src/index.js predictions       # API-Football /predictions for upcoming cor
 node src/index.js hotpicks          # settle + recompute over-2.5 hot picks 🔥 + best tips
 node src/index.js performance       # flat-stake ROI / hit-rate report for tips + hot picks
 node src/index.js export [date]     # temp CSV of the date's correlated records → tmp/
+node src/index.js geo               # force a visitor-IP → country/region geo backfill pass
 
 npm run serve                       # visualization API server on :3001 (serves web/dist when built)
 npm run build:web                   # build the React frontend → web/dist/
@@ -79,3 +82,4 @@ upload** (there is no automatic deploy from `dev`/`main`). See `docs/DEPLOYMENT.
 - Date navigation via a custom calendar popover (prev / next / Today) and a per-date **Refresh** button; connected browsers also pick up the in-process auto-refreshes silently (scroll, sort and filters preserved).
 - Settings sheet: light/dark/system theme, multi-select market/STATS columns, provider priority and column/sort reordering (persisted in localStorage); an advanced filter builder.
 - Freshness tooltips per row; stale market prices greyed; matches with no live markets (or concluded) render unlinked unless re-enabled per provider in Settings. iPadOS-native look, responsive to phone.
+- **User accounts (v1.1.0):** phone + 4-digit PIN sign-up with SMS OTP verification, opaque hashed sessions, profile/PIN management, and cross-device settings sync. Guests browse a limited view (no future dates, tip reasoning redacted) — signing in unlocks upcoming games and full detail. Admins get an in-app settings editor and a data-viz lab.

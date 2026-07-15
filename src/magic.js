@@ -1,18 +1,19 @@
 import { db } from './db/connection.js';
 import { simulateStrategies } from './db/magic-rules.js';
-import { config } from './config.js';
+import { effective } from './settings.js';
 
-// The Safe-only policy (DEFAULT_SAFE overridden by SAFE_* env), shipped to the
-// client so the browser's 🛡 toggle uses the SAME gates/cap as the server-side
-// config - the module's literals are only the fallback when this is absent.
+// The Safe-only policy (DEFAULT_SAFE overridden by SAFE_* env, then by any admin
+// override via the dynamic-settings service), shipped to the client so the
+// browser's 🛡 toggle uses the SAME gates/cap as the server. Late-read via
+// settings.effective, so an admin edit takes effect on the next request.
 const safePolicy = () => ({
-    strategy: config.SAFE_STRATEGY,
-    minParts: config.SAFE_MIN_PARTS,
-    minAgreement: config.SAFE_MIN_AGREEMENT,
-    maxPrice: config.SAFE_MAX_PRICE,
-    maxPerDay: config.SAFE_MAX_PER_DAY,
-    minSamples: config.SAFE_MIN_SAMPLES,   // sufficiency ("exclude risky") gate
-    minH2H: config.SAFE_MIN_H2H,
+    strategy: effective('SAFE_STRATEGY'),
+    minParts: effective('SAFE_MIN_PARTS'),
+    minAgreement: effective('SAFE_MIN_AGREEMENT'),
+    maxPrice: effective('SAFE_MAX_PRICE'),
+    maxPerDay: effective('SAFE_MAX_PER_DAY'),
+    minSamples: effective('SAFE_MIN_SAMPLES'),   // sufficiency ("exclude risky") gate
+    minH2H: effective('SAFE_MIN_H2H'),
 });
 
 // Magic-sort loader: replay the candidate tip-ranking strategies against
@@ -39,11 +40,14 @@ export async function settledTipRows() {
         );
 }
 
-// Uncached compute over the settled-tip ledger.
+// Uncached compute over the settled-tip ledger. Deliberately does NOT carry
+// the safe policy - that is attached fresh per response (magicSortCached) so
+// a live admin SAFE_* edit reaches browsers immediately instead of hiding in
+// the per-day cache until the next day / ?refresh=1 (M6).
 export async function magicSortSummary() {
     const rows = await settledTipRows();
     // tipView (magic-rules) coerces DECIMAL strings and parses breakdown JSON
-    return { generated_at: new Date().toISOString(), safe: safePolicy(), ...simulateStrategies(rows) };
+    return { generated_at: new Date().toISOString(), ...simulateStrategies(rows) };
 }
 
 // Per-day in-memory cache: the settled ledger only grows when the hotpicks
@@ -61,5 +65,7 @@ export async function magicSortCached(refresh = false) {
             throw e;
         });
     }
-    return _cache.promise;
+    // safe policy late-read PER RESPONSE, never cached (M6): the browser's 🛡
+    // toggle must see an admin SAFE_* edit on its next fetch.
+    return { ...(await _cache.promise), safe: safePolicy() };
 }

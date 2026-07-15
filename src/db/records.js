@@ -2,6 +2,7 @@ import { db } from './connection.js';
 import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKey } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
+import { redactRecordForRole } from './access-rules.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -201,7 +202,7 @@ function _coerceList(key, value, op) {
 //   completed match) - the web "Show completed games" settings toggle
 //   providers: array limiting rows to those bookmakers (default: all)
 //   per_page: 'all' disables pagination (the web table shows a whole date)
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null } = {}) {
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null } = {}) {
     const unpaged = per_page === 'all';
     page = unpaged ? 1 : Math.max(1, Number(page) || 1);
     per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
@@ -218,6 +219,13 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     if (date) {
         const d = date instanceof Date ? date.toISOString().substring(0, 10) : String(date);
         query.whereBetween('m.start_time', [`${d} 00:00:00`, `${d} 23:59:59`]);
+    } else if (access && !access.canFuture) {
+        // Guest all-dates ceiling (Phase 8): whole days up to and including
+        // today, consistent with the per-date rule (dates beyond today 403 in
+        // the route via guestDateAllowed). CURDATE() runs in the +03:00-pinned
+        // session, so it names the same EAT day the stored kickoffs use; a
+        // plain start_time range keeps the query index-friendly.
+        query.where('m.start_time', '<', db.raw('DATE_ADD(CURDATE(), INTERVAL 1 DAY)'));
     }
     if (!completed) {
         // Same "game is over" definition as the availability flag: terminal
@@ -278,7 +286,13 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'fp.tip_ai_review',
         );
 
-    const data = await _hydrate(rows);
+    const hydrated = await _hydrate(rows);
+    // Redacted tiers (guests) lose the internal reasoning per row - pure
+    // redactRecordForRole; full tiers (and access:null callers - the CLI/CSV
+    // export and AUTH_ENABLED=0 installs) get the rows untouched.
+    const data = access && !access.fullDetail
+        ? hydrated.map(r => redactRecordForRole(r, access.role))
+        : hydrated;
     return {
         data,
         total: Number(total),
