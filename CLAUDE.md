@@ -99,5 +99,6 @@ Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker cor
 ## Conventions
 
 - ES modules, `async/await`, 4-space indentation (workspace setting — overrides the usual 2-space Node default), single quotes, semicolons.
+- Foreign keys use `ON DELETE CASCADE`/`RESTRICT`; a NULLABLE audit pointer may use `ON DELETE SET NULL` (prior art: `settings.updated_by`, batch 11 — deleting a user must not delete the settings they once touched). Migrations that seed data may read `process.env` directly (they run under the knex CLI as well as the app; prior art: the users migration's `ADMIN_SEED_PIN`/`PIN_PEPPER`).
 - All external data (API responses, env) through zod schemas; keep field schemas tolerant (`nullable().optional()`) — live data has taught this (`league.round` can be null; `/fixtures/events` `type` can be null — parsed by the tolerant `src/apisports-events.js`, and per-fixture ZodErrors are caught so one bad record can't abort a sweep).
 - `x-*-output.xx.json` files at the root are legacy fetched-data snapshots — do not delete.

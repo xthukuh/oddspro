@@ -11,6 +11,18 @@
 //            late-reads via settings.effective); live:false needs a restart
 //            (read once at boot / middleware registration / scheduler start).
 
+import { z } from 'zod';
+
+// PUT /api/admin/settings body envelope (C2 - external data through zod like
+// the sibling auth routes): either { key, value } or { overrides: {...} }.
+// Values stay z.unknown() - the real per-key validation is validateSettings
+// against the catalog below; this schema only pins the request shape.
+export const settingsPutSchema = z.object({
+    key: z.string().min(1).optional(),
+    value: z.unknown().optional(),
+    overrides: z.record(z.unknown()).optional(),
+}).refine(d => d.overrides != null || d.key != null, { message: 'Provide { key, value } or { overrides }' });
+
 export const SETTINGS_CATALOG = [
     // Safe-only slip selection - already late-read by magic.js#safePolicy and
     // shipped to the client, so these are public + live.

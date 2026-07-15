@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, validateSettings,
-    mergeOverrides, publicSubset, isMissingTableError,
+    mergeOverrides, publicSubset, isMissingTableError, settingsPutSchema,
 } from '../src/db/settings-rules.js';
 
 test('catalog excludes secrets/creds/build vars by construction', () => {
@@ -94,4 +94,12 @@ test('catalogEntry carries the live flag (restart vs live)', () => {
     assert.equal(catalogEntry('BOT_UA_FILTER_ENABLED').live, true);
     assert.equal(catalogEntry('GEO_RESOLVE_ENABLED').live, false);
     assert.equal(catalogEntry('NOPE'), null);
+});
+
+test('settingsPutSchema pins the PUT body envelope (C2)', () => {
+    assert.equal(settingsPutSchema.parse({ key: 'SAFE_MAX_PER_DAY', value: 4 }).key, 'SAFE_MAX_PER_DAY');
+    assert.deepEqual(settingsPutSchema.parse({ overrides: { SMS_ENABLED: '1' } }).overrides, { SMS_ENABLED: '1' });
+    assert.equal(settingsPutSchema.safeParse({}).success, false);          // neither form
+    assert.equal(settingsPutSchema.safeParse({ key: '' }).success, false); // blank key
+    assert.equal(settingsPutSchema.safeParse({ value: 4 }).success, false); // value without key
 });

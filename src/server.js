@@ -28,6 +28,7 @@ import { validatePrefsPut } from './db/prefs-rules.js';
 import { accessFromUser, guestDateAllowed } from './db/access-rules.js';
 import { getUserPrefs, saveUserPrefs } from './prefs.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
+import { settingsPutSchema } from './db/settings-rules.js';
 import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
@@ -509,15 +510,14 @@ app.get('/api/admin/settings', requireAdminDual, (req, res) => res.json({ settin
 app.put('/api/admin/settings', requireAdminDual, express.json({ limit: '8kb' }), async (req, res, next) => {
     if (!csrfOk(req, res)) return;
     try {
+        const body = settingsPutSchema.parse(req.body ?? {});
         const userId = req.user?.id ?? null;
-        const entries = req.body?.overrides && typeof req.body.overrides === 'object'
-            ? Object.entries(req.body.overrides)
-            : [[req.body?.key, req.body?.value]];
+        const entries = body.overrides ? Object.entries(body.overrides) : [[body.key, body.value]];
         const results = await setOverrides(entries, userId);
         res.json({ ok: true, results, restart_required: results.filter(r => r.restart_required).map(r => r.key) });
     } catch (e) {
         if (e?.status === 400) return res.status(400).json({ error: e.message });
-        next(e);
+        authErr(e, res, next); // maps a ZodError to 400 like the auth routes
     }
 });
 
@@ -680,18 +680,23 @@ async function migrateOnBoot() {
 }
 
 let server = null;
-migrateOnBoot().then(() => loadOverrides()).then(() => {
-    server = app.listen(config.API_PORT, config.API_HOST, () => {
-        console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
-        startAutoRefresh();
-        startGeoScheduler();
-    });
-}).catch(err => {
-    // Fail fast: don't serve on an uncertain schema. The host surfaces the exit
-    // + this log via Passenger; fix the migration and restart.
-    console.error('[migrate] boot migration failed - not starting server:', err);
-    closeDb().finally(() => process.exit(1));
-});
+(async () => {
+    try {
+        await migrateOnBoot();
+        await loadOverrides();
+        server = app.listen(config.API_PORT, config.API_HOST, () => {
+            console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
+            startAutoRefresh();
+            startGeoScheduler();
+        });
+    } catch (err) {
+        // Fail fast: don't serve on an uncertain schema (or unloadable
+        // overrides). The host surfaces the exit + this log via Passenger; fix
+        // the migration and restart.
+        console.error('[migrate] boot migration failed - not starting server:', err);
+        closeDb().finally(() => process.exit(1));
+    }
+})();
 
 // Graceful shutdown - stop the scheduler, close the HTTP server and the pool
 for (const signal of ['SIGINT', 'SIGTERM']) {
