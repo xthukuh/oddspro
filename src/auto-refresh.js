@@ -7,6 +7,7 @@ import { fetchBetikaGames } from './betika.js';
 import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
+import { purgeExpiredAuth } from './auth.js';
 import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
 import { effective } from './settings.js';
 import { _date, _dtime } from './utils.js';
@@ -156,6 +157,14 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     const s = await settleHotPicks();
     summary.picks_settled = s.settled;
     summary.tips_settled = s.tips_settled;
+
+    // Auth housekeeping (E3): drop long-expired sessions/OTP rows. Best-effort -
+    // a purge hiccup must never fail the data refresh.
+    try {
+        summary.auth_purged = await purgeExpiredAuth();
+    } catch (e) {
+        console.error('[light] auth purge failed:', e?.message ?? e);
+    }
     return summary;
 }
 

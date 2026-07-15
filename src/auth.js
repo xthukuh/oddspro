@@ -301,6 +301,18 @@ export async function changePhone(user, { phone, phone_region, phone_code }) {
     return { user: publicUser(updated), otp };
 }
 
+// --- Housekeeping (E3) --------------------------------------------------------
+// Purge long-expired sessions and OTP rows - both tables otherwise grow without
+// bound. 30 days past expiry keeps recent rows inspectable while the indexed
+// expires_at range keeps the DELETEs cheap. Called best-effort from the light
+// auto-refresh pass (a failure never fails the refresh).
+export async function purgeExpiredAuth() {
+    const cutoff = db.raw('NOW() - INTERVAL 30 DAY');
+    const sessions = await db('sessions').where('expires_at', '<', cutoff).del();
+    const otps = await db('otp_codes').where('expires_at', '<', cutoff).del();
+    return { sessions, otps };
+}
+
 export async function updateProfile(user, { name, pin, current_pin }) {
     const patch = {};
     if (name != null) patch.name = name;
