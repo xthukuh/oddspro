@@ -14,6 +14,12 @@ const PREFIX = 'oddspro.';
 // Transient, per-date row selections (oddspro.select.d.<date>) are data, not
 // config - they'd bloat the snapshot and mean nothing on another day/instance.
 const isTransient = key => key.startsWith('oddspro.select.d.');
+// Per-device credentials (the session + human-verification tokens) are
+// secrets, not preferences: they must never leave the device in an export,
+// and an import must neither install another device's tokens nor wipe this
+// device's own (importing config should not log the user out). Exported so
+// the exclusion rule is offline-testable alongside the pure core.
+export const isSecret = key => key === 'oddspro.session' || key === 'oddspro.human';
 
 // --- pure core ------------------------------------------------------------
 
@@ -46,20 +52,27 @@ export function parseEnvelope(obj) {
 
 // --- browser IO -----------------------------------------------------------
 
-// Every persisted oddspro.* preference except the transient per-date selections.
+// Every persisted oddspro.* preference except the transient per-date
+// selections and the per-device secrets.
 export function collectConfig() {
     const data = {};
     for (const k of Object.keys(localStorage)) {
-        if (k.startsWith(PREFIX) && !isTransient(k)) data[k] = localStorage.getItem(k);
+        if (k.startsWith(PREFIX) && !isTransient(k) && !isSecret(k)) data[k] = localStorage.getItem(k);
     }
     return data;
 }
 
 // Replace the user's config wholesale: drop every oddspro.* key (a clean slate,
 // so stale keys can't linger), then write the snapshot's entries verbatim.
+// Secrets are out of scope both ways: this device's tokens survive, and any
+// tokens embedded in an older snapshot are refused.
 export function applyConfig(data) {
-    for (const k of Object.keys(localStorage)) if (k.startsWith(PREFIX)) localStorage.removeItem(k);
-    for (const [k, v] of Object.entries(data)) localStorage.setItem(k, String(v));
+    for (const k of Object.keys(localStorage)) {
+        if (k.startsWith(PREFIX) && !isSecret(k)) localStorage.removeItem(k);
+    }
+    for (const [k, v] of Object.entries(data)) {
+        if (!isSecret(k)) localStorage.setItem(k, String(v));
+    }
 }
 
 async function gzip(str) {

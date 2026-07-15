@@ -4,6 +4,7 @@ import {
     buildEnvelope,
     parseEnvelope,
     migrateEnvelope,
+    isSecret,
     SNAPSHOT_FORMAT,
     SNAPSHOT_VERSION,
 } from '../web/src/configSnapshot.js';
@@ -67,4 +68,12 @@ test('parseEnvelope rejects a missing/invalid data payload', () => {
 test('migrateEnvelope is identity for the current version', () => {
     const env = buildEnvelope({ 'oddspro.a': '1' });
     assert.deepEqual(migrateEnvelope(env), env);
+});
+
+test('isSecret excludes the per-device credentials, nothing else', () => {
+    assert.equal(isSecret('oddspro.session'), true); // auth session token (v1.1.0)
+    assert.equal(isSecret('oddspro.human'), true); // human-pow check-once token
+    assert.equal(isSecret('oddspro.theme'), false);
+    assert.equal(isSecret('oddspro.sort'), false);
+    assert.equal(isSecret('oddspro.session.other'), false); // exact keys only
 });
