@@ -33,6 +33,7 @@ export const SETTINGS_CATALOG = [
     { key: 'SAFE_MAX_PER_DAY', type: 'int', group: 'safe', public: true, live: true, min: 1 },
     { key: 'SAFE_MIN_SAMPLES', type: 'int', group: 'safe', public: true, live: true, min: 0 },
     { key: 'SAFE_MIN_H2H', type: 'int', group: 'safe', public: true, live: true, min: 0 },
+    { key: 'SAFE_MIN_MARKET_SETTLED', type: 'int', group: 'safe', public: true, live: true, min: 0 },
     // Refresh cadence / cooldowns - late-read at call time / per tick, so live.
     { key: 'REFRESH_COOLDOWN_MINUTES', type: 'number', group: 'refresh', public: false, live: true, min: 0 },
     { key: 'REFRESH_CACHE_MINUTES', type: 'number', group: 'refresh', public: false, live: true, min: 0 },
