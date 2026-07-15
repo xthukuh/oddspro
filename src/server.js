@@ -25,6 +25,9 @@ import {
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
+import { makeJsonCache, sendJson } from './http-cache.js';
+import { queryCacheKey } from './db/cache-rules.js';
+import { _dtime } from './utils.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -299,10 +302,21 @@ function _json(value, fallback) {
     }
 }
 
+// Server-side response memo for the heavy read endpoints (src/http-cache.js):
+// keyed on the auto-refresh data_version, so entries invalidate the moment a
+// refresh SUCCEEDS (the only time query results actually change); the TTL is
+// the belt for out-of-process writers. Repeated hits skip queryRecords /
+// columnCatalog entirely and reuse the serialized+gzipped body; a matching
+// If-None-Match answers 304 with no body at all.
+const apiCache = makeJsonCache({
+    max: 12, ttlMs: 10 * 60_000,
+    version: () => refreshStatus().data_version,
+});
+
 // GET /api/columns - column catalog (base + markets + stats) for settings UI
 app.get('/api/columns', async (req, res, next) => {
     try {
-        res.json(await columnCatalog());
+        await apiCache.send(req, res, '/api/columns', () => columnCatalog());
     } catch (e) {
         next(e);
     }
@@ -313,7 +327,11 @@ app.get('/api/columns', async (req, res, next) => {
 app.get('/api/records', async (req, res, next) => {
     try {
         const { date, page, per_page, sort, filters, completed, providers } = req.query;
-        res.json(await queryRecords({
+        // Normalize the date for the cache key so absent/'today'/'now' hit the
+        // same slot as the explicit YYYY-MM-DD the web client sends.
+        const day = date === 'all' ? 'all' : _dtime(date || new Date()).slice(0, 10);
+        const key = queryCacheKey('/api/records', { ...req.query, date: day });
+        await apiCache.send(req, res, key, () => queryRecords({
             date: date === 'all' ? null : (date || new Date()),
             page,
             per_page: per_page === 'all' ? 'all' : per_page,
@@ -348,10 +366,12 @@ app.get('/api/performance', async (req, res, next) => {
 
 // GET /api/magic-sort - top tip-ranking strategies by 4-leg slip survival
 // (backtest over settled tips) + the live calibration the web table scores
-// today's rows with. Cached per day; ?refresh=1 recomputes.
+// today's rows with. Cached per day; ?refresh=1 recomputes. Deliberately NOT
+// response-memoized (its safe policy is late-read per response - M6); the
+// stateless sendJson still saves the wire via 304 + gzip.
 app.get('/api/magic-sort', async (req, res, next) => {
     try {
-        res.json(await magicSortCached(req.query.refresh === '1'));
+        await sendJson(req, res, await magicSortCached(req.query.refresh === '1'));
     } catch (e) {
         next(e);
     }
