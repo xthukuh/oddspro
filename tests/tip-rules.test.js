@@ -20,6 +20,10 @@ const noTeam = { n: 0, winRate: null, drawRate: null, lossRate: null, overRates:
 const noH2h = { n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null };
 const marketOnly = { home: noTeam, away: noTeam, h2h: noH2h, apiPercents: null };
 
+// Builds a flat { 0.5: r, ..., 6.5: r } overRates-shaped object (also used
+// for scoredOverRates/concededOverRates, which share the OU_LINES key set).
+const O = r => ({ 0.5: r, 1.5: r, 2.5: r, 3.5: r, 4.5: r, 5.5: r, 6.5: r });
+
 // --- teamOutcomeAggregates ---
 
 test('teamOutcomeAggregates computes W/D/L and per-line over rates', () => {
@@ -452,6 +456,76 @@ test('bestTip yields to the runner-up market when the near-Under is suppressed',
     };
     assert.equal(bestTip(inputs, { minUnderLine: 3.5 }).market, 'U 3.5');
     assert.equal(bestTip(inputs).market, '12');
+});
+
+// --- bestTip new-family candidates (M3) ---
+
+test('bestTip considers BTTS and can pick GG', () => {
+    const agg = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.8), bttsRate: 0.9, oddRate: 0.5, scoredOverRates: O(0.8), concededOverRates: O(0.7) };
+    const tip = bestTip({ btts: { GG: 1.55, NG: 2.3 }, home: agg, away: agg, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0.5 });
+    assert.equal(tip.market, 'GG');
+    assert.ok(tip.stats_prob > 0.8);
+});
+
+test('bestTip DNB stats renormalize over non-draw outcomes', () => {
+    // statsProb['1'] blends home.winRate/away.lossRate/h2h -> with symmetric
+    // aggregates below, statsProb 1 = .6, 2 = .2 -> DNB1 stats = .6/.8 = .75
+    const home = { n: 6, winRate: 0.6, drawRate: 0.2, lossRate: 0.2, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
+    const away = { n: 6, winRate: 0.2, drawRate: 0.2, lossRate: 0.6, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
+    const tip = bestTip({ dnb: { DNB1: 1.5, DNB2: 2.6 }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
+    const dnb1 = [tip, ...(tip.runners_up ?? [])].find(c => c.market === 'DNB1');
+    assert.equal(dnb1.stats_prob, 0.75);
+});
+
+test('bestTip TT:H uses scored-vs-conceded blend', () => {
+    const home = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.9), concededOverRates: O(0.3) };
+    const away = { n: 6, winRate: 0.3, drawRate: 0.2, lossRate: 0.5, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.3), concededOverRates: O(0.8) };
+    const tip = bestTip({ tt: { H: { 1.5: { over: 1.7, under: 2.0 } } }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
+    assert.equal(tip.market, 'TT:H:O 1.5');
+    // stats = mean(home.scoredOverRates[1.5]=.9, away.concededOverRates[1.5]=.8)
+    assert.equal(tip.stats_prob, 0.85);
+});
+
+test('legacy byte-compat: canonical-only input reproduces the pre-M3 tip exactly', () => {
+    // Same input as "bestTip lists up to two runners-up..." above - exercises
+    // x12 + dc together with a market-only blend, giving a rich return with
+    // runners_up populated. Captured from the pre-M3 bestTip (before Task 5).
+    const out = bestTip({
+        ...marketOnly,
+        x12: { 1: 1.25, X: 6.0, 2: 9.0 },
+        dc: { '1X': 1.22, X2: 2.4, 12: 1.3 },
+        ou: {},
+    });
+    assert.deepEqual(out, {
+        market: '1X',
+        price: 1.22,
+        confidence: 0.8969,
+        market_prob: 0.8969,
+        stats_prob: null,
+        api_prob: null,
+        weights: { market: 1, stats: null, api: null },
+        samples: { home_n: 0, away_n: 0, h2h_n: 0 },
+        runners_up: [
+            {
+                market: '12',
+                price: 1.3,
+                confidence: 0.8454,
+                market_prob: 0.8454,
+                stats_prob: null,
+                api_prob: null,
+                weights: { market: 1, stats: null, api: null },
+            },
+            {
+                market: '1',
+                price: 1.25,
+                confidence: 0.7423,
+                market_prob: 0.7423,
+                stats_prob: null,
+                api_prob: null,
+                weights: { market: 1, stats: null, api: null },
+            },
+        ],
+    });
 });
 
 // --- bookIntegrity / selectFamilyBook ---
