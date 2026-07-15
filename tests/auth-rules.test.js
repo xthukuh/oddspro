@@ -4,7 +4,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    hashPin, verifyPin, SCRYPT_PARAMS,
+    hashPin, verifyPin, hashPinAsync, verifyPinAsync, SCRYPT_PARAMS,
     newSessionToken, hashToken, hashOtpCode,
     registerFailedAttempt, isLocked, registerOtpAttempt, mustChangePinBlocks,
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
@@ -84,6 +84,25 @@ test('real scrypt hashes and verifies', () => {
     assert.match(h, /^scrypt\$16384\$8\$1\$/);
     assert.equal(verifyPin('4821', h, { pepper: 'p' }), true);
     assert.equal(verifyPin('4820', h, { pepper: 'p' }), false);
+});
+
+// --- Async twins (E1) - same format, interchangeable with the sync pair ------
+test('hashPinAsync/verifyPinAsync round-trip and interoperate with the sync pair', async () => {
+    const h = await hashPinAsync('4821', { pepper: 'p' });          // real async scrypt
+    assert.match(h, /^scrypt\$16384\$8\$1\$/);
+    assert.equal(await verifyPinAsync('4821', h, { pepper: 'p' }), true);
+    assert.equal(await verifyPinAsync('4820', h, { pepper: 'p' }), false);
+    assert.equal(verifyPin('4821', h, { pepper: 'p' }), true);       // async-made, sync-verified
+    const hs = hashPin('4821', { pepper: 'p' });
+    assert.equal(await verifyPinAsync('4821', hs, { pepper: 'p' }), true); // sync-made, async-verified
+});
+
+test('verifyPinAsync returns false (never rejects) on malformed/corrupt input', async () => {
+    assert.equal(await verifyPinAsync('1234', null), false);
+    assert.equal(await verifyPinAsync('1234', 'not-a-hash'), false);
+    const salt = Buffer.from('saltsaltsaltsalt').toString('base64');
+    const dk = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
+    assert.equal(await verifyPinAsync('1234', `scrypt$abc$8$1$${salt}$${dk}`), false); // corrupt cost params
 });
 
 // --- Session tokens ---------------------------------------------------------

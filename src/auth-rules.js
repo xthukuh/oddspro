@@ -18,6 +18,28 @@ import { isValidE164 } from './db/sms-rules.js'; // pure, offline - no coupling 
 export const SCRYPT_PARAMS = { N: 16384, r: 8, p: 1, keylen: 32 };
 const SCRYPT_MAXMEM = 64 * 1024 * 1024;
 
+const _encodeHash = ({ N, r, p }, salt, dk) =>
+    `scrypt$${N}$${r}$${p}$${Buffer.from(salt).toString('base64')}$${dk.toString('base64')}`;
+
+// Split a stored hash back into cost params + salt + expected key, or null on
+// any malformed input (shared by the sync and async verifiers).
+function _decodeHash(encoded) {
+    if (typeof encoded !== 'string') return null;
+    const parts = encoded.split('$');
+    if (parts.length !== 6 || parts[0] !== 'scrypt') return null;
+    const [, N, r, p, saltB64, dkB64] = parts;
+    const salt = Buffer.from(saltB64, 'base64');
+    const expected = Buffer.from(dkB64, 'base64');
+    if (!salt.length || !expected.length) return null;
+    return { N: Number(N), r: Number(r), p: Number(p), salt, expected };
+}
+
+// Promisified crypto.scrypt: the KDF runs on the libuv thread pool instead of
+// blocking the single-threaded event loop (E1). Same call shape as scryptSync.
+const _scryptAsync = (secret, salt, keylen, opts) => new Promise((resolve, reject) => {
+    crypto.scrypt(secret, salt, keylen, opts, (err, dk) => (err ? reject(err) : resolve(dk)));
+});
+
 // Hash a PIN (or any secret) with scrypt + a random per-hash salt and an
 // optional server-wide pepper. Returns a self-describing string:
 //   scrypt$<N>$<r>$<p>$<saltBase64>$<derivedKeyBase64>
@@ -30,31 +52,55 @@ export function hashPin(pin, {
 } = {}) {
     const { N, r, p, keylen } = params;
     const dk = Buffer.from(scrypt(String(pin) + pepper, salt, keylen, { N, r, p, maxmem: SCRYPT_MAXMEM }));
-    return `scrypt$${N}$${r}$${p}$${Buffer.from(salt).toString('base64')}$${dk.toString('base64')}`;
+    return _encodeHash(params, salt, dk);
 }
 
 // Verify a PIN against a stored hash. Constant-time on the derived key. Reads
 // N/r/p + salt back out of the encoded string so hashes made with older params
 // still verify after the cost is raised. Returns false on any malformed input.
 export function verifyPin(pin, encoded, { pepper = '', scrypt = crypto.scryptSync } = {}) {
-    if (typeof encoded !== 'string') return false;
-    const parts = encoded.split('$');
-    if (parts.length !== 6 || parts[0] !== 'scrypt') return false;
-    const [, N, r, p, saltB64, dkB64] = parts;
-    const salt = Buffer.from(saltB64, 'base64');
-    const expected = Buffer.from(dkB64, 'base64');
-    if (!salt.length || !expected.length) return false;
+    const d = _decodeHash(encoded);
+    if (!d) return false;
     // A corrupted stored hash (non-numeric / invalid cost params) makes scrypt
     // throw - that's still "malformed input", so it must be false, not a 500.
     let dk;
     try {
-        dk = Buffer.from(scrypt(String(pin) + pepper, salt, expected.length, {
-            N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT_MAXMEM,
+        dk = Buffer.from(scrypt(String(pin) + pepper, d.salt, d.expected.length, {
+            N: d.N, r: d.r, p: d.p, maxmem: SCRYPT_MAXMEM,
         }));
     } catch {
         return false;
     }
-    return dk.length === expected.length && crypto.timingSafeEqual(dk, expected);
+    return dk.length === d.expected.length && crypto.timingSafeEqual(dk, d.expected);
+}
+
+// Async twins of hashPin/verifyPin for request-path callers (E1): login/signup/
+// PIN-change handlers must not stall every other request on a ~16 MB sync KDF.
+// Identical hash format both ways - sync- and async-made hashes verify each
+// other. The sync pair stays for non-request contexts (the users migration).
+export async function hashPinAsync(pin, {
+    pepper = '',
+    params = SCRYPT_PARAMS,
+    salt = crypto.randomBytes(16),
+    scrypt = _scryptAsync,
+} = {}) {
+    const { N, r, p, keylen } = params;
+    const dk = Buffer.from(await scrypt(String(pin) + pepper, salt, keylen, { N, r, p, maxmem: SCRYPT_MAXMEM }));
+    return _encodeHash(params, salt, dk);
+}
+
+export async function verifyPinAsync(pin, encoded, { pepper = '', scrypt = _scryptAsync } = {}) {
+    const d = _decodeHash(encoded);
+    if (!d) return false;
+    let dk;
+    try {
+        dk = Buffer.from(await scrypt(String(pin) + pepper, d.salt, d.expected.length, {
+            N: d.N, r: d.r, p: d.p, maxmem: SCRYPT_MAXMEM,
+        }));
+    } catch {
+        return false;
+    }
+    return dk.length === d.expected.length && crypto.timingSafeEqual(dk, d.expected);
 }
 
 // --- Session tokens ---------------------------------------------------------

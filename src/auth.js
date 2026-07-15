@@ -3,7 +3,7 @@ import { config } from './config.js';
 import { db } from './db/connection.js';
 import { withRetry, isRetryableDbError } from './db/retry-rules.js';
 import {
-    hashPin, verifyPin, newSessionToken, hashToken, hashOtpCode,
+    hashPinAsync, verifyPinAsync, newSessionToken, hashToken, hashOtpCode,
     registerFailedAttempt, isLocked, registerOtpAttempt,
 } from './auth-rules.js';
 import {
@@ -63,7 +63,7 @@ function otpMessage(code) {
 
 export async function createUser({ name, phone, phone_region, phone_code, pin }) {
     if (await userByPhone(phone)) throw new AuthError(409, 'That phone number is already registered');
-    const pin_hash = hashPin(pin, { pepper: PEPPER() });
+    const pin_hash = await hashPinAsync(pin, { pepper: PEPPER() });
     try {
         const [id] = await withRetry(() => db('users').insert({
             name, role: 'normal', phone, phone_region, phone_code,
@@ -91,7 +91,7 @@ export async function authenticate({ phone, pin }) {
     // A lock that has expired resets the attempt counter for this fresh try.
     const baseAttempts = user.locked_until ? 0 : user.pin_attempts;
 
-    if (verifyPin(pin, user.pin_hash, { pepper: PEPPER() })) {
+    if (await verifyPinAsync(pin, user.pin_hash, { pepper: PEPPER() })) {
         await db('users').where('id', user.id).update({ pin_attempts: 0, locked_until: null, last_login_at: db.fn.now() });
         return userById(user.id);
     }
@@ -289,10 +289,10 @@ export async function updateProfile(user, { name, pin, current_pin }) {
     const patch = {};
     if (name != null) patch.name = name;
     if (pin) {
-        if (!verifyPin(current_pin, user.pin_hash, { pepper: PEPPER() })) {
+        if (!(await verifyPinAsync(current_pin, user.pin_hash, { pepper: PEPPER() }))) {
             throw new AuthError(401, 'Your current PIN is incorrect');
         }
-        patch.pin_hash = hashPin(pin, { pepper: PEPPER() });
+        patch.pin_hash = await hashPinAsync(pin, { pepper: PEPPER() });
         patch.must_change_pin = 0;
     }
     if (Object.keys(patch).length) await db('users').where('id', user.id).update(patch);
