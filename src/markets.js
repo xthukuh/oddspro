@@ -234,6 +234,7 @@ export function canonicalMarket(row) {
             group: 'combo',
             label: `${_norm(row.type_name)} - ${_norm(row.name)}`,
             columnizable: 'grouped',
+            period: null,
         };
     }
 
@@ -250,7 +251,13 @@ export function canonicalMarket(row) {
             const key = period ? `TT:${ouKey}:${period}` : `TT:${ouKey}`;
             const base_label = `${who ? who + ' ' : ''}${ouKey}`.trim();
             const label = period ? `${base_label} (${_PERIOD_LABEL[period] || period})` : base_label;
-            return { key, group: 'team_total', label, columnizable: 'grouped' };
+            // `tt` (M3 Task 6): the team-total side/team the collapsed key drops,
+            // so tip books can route the book to home vs away.
+            return {
+                key, group: 'team_total', label, columnizable: 'grouped',
+                period: period || null,
+                tt: { team: tt.team || null, side: tt.side || null },
+            };
         }
     }
 
@@ -264,7 +271,7 @@ export function canonicalMarket(row) {
             // NOTE: columnizable:'column' on a PERIOD-TAGGED variant (e.g. `O 2.5:1H`)
             // does NOT mean "promote as a MARKET_COLUMNS table column" -- it just marks
             // the family class. Task 3/4 decides which discovered keys become columns.
-            return { key, group: fam.group, label, columnizable: fam.columnizable };
+            return { key, group: fam.group, label, columnizable: fam.columnizable, period: period || null };
         }
     }
 
@@ -275,6 +282,7 @@ export function canonicalMarket(row) {
         group: 'other',
         label: `${_norm(row.type_name)} - ${_norm(row.name)}${hc ? ` (${Number(row.handicap)})` : ''}`,
         columnizable: 'filter-only',
+        period: null,
     };
 }
 

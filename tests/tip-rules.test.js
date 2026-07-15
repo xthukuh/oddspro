@@ -5,7 +5,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_TIP, teamOutcomeAggregates, pairedTeamOutcomeAggregates,
-    h2hOutcomeAggregates, tipEligibility, tipHit, bestTip,
+    h2hOutcomeAggregates, tipEligibility, tipHit, tipOutcome, tipHitSafe, bestTip,
+    bookIntegrity, selectFamilyBook, buildTipBooks,
 } from '../src/db/tip-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -18,6 +19,10 @@ const fx = (home_team_id, away_team_id, ft_home, ft_away, kickoff) =>
 const noTeam = { n: 0, winRate: null, drawRate: null, lossRate: null, overRates: null };
 const noH2h = { n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null };
 const marketOnly = { home: noTeam, away: noTeam, h2h: noH2h, apiPercents: null };
+
+// Builds a flat { 0.5: r, ..., 6.5: r } overRates-shaped object (also used
+// for scoredOverRates/concededOverRates, which share the OU_LINES key set).
+const O = r => ({ 0.5: r, 1.5: r, 2.5: r, 3.5: r, 4.5: r, 5.5: r, 6.5: r });
 
 // --- teamOutcomeAggregates ---
 
@@ -37,6 +42,22 @@ test('teamOutcomeAggregates computes W/D/L and per-line over rates', () => {
     assert.equal(out.overRates[2.5], Math.round(2 / 3 * 10000) / 10000);
     assert.equal(out.overRates[3.5], Math.round(1 / 3 * 10000) / 10000); // only the 4-goal game
     assert.equal(out.overRates[6.5], 0);
+});
+
+const HIST = [
+    // team 10 home: scored 3, conceded 1 (btts, odd total, over 2.5)
+    { home_team_id: 10, away_team_id: 30, ft_home: 3, ft_away: 1, kickoff: '2026-07-01T12:00:00Z' },
+    // team 10 away: scored 0, conceded 2 (no btts, even total)
+    { home_team_id: 40, away_team_id: 10, ft_home: 2, ft_away: 0, kickoff: '2026-07-03T12:00:00Z' },
+];
+test('teamOutcomeAggregates: btts/parity/per-side goal rates', () => {
+    const a = teamOutcomeAggregates(HIST, 10, 99, Date.parse('2026-07-10'), 5);
+    assert.equal(a.n, 2);
+    assert.equal(a.bttsRate, 0.5);                // 3-1 both scored; 2-0 not
+    assert.equal(a.oddRate, 0);                   // totals 4 and 2 - both even
+    assert.equal(a.scoredOverRates[0.5], 0.5);    // scored 3 (home) and 0 (away)
+    assert.equal(a.scoredOverRates[2.5], 0.5);
+    assert.equal(a.concededOverRates[1.5], 0.5);  // conceded 1 and 2
 });
 
 test('teamOutcomeAggregates respects the cutoff, window and empty history', () => {
@@ -92,6 +113,14 @@ test('h2hOutcomeAggregates orients rates to the analyzed home team across venues
     assert.equal(out.awayWinRate, 0.25);
 });
 
+test('h2hOutcomeAggregates gains bttsRate/oddRate', () => {
+    const h = h2hOutcomeAggregates([
+        { home_team_id: 10, away_team_id: 20, ft_home: 2, ft_away: 1, kickoff: '2026-07-01T12:00:00Z' },
+    ], 10, 20, Date.parse('2026-07-10'), 5);
+    assert.equal(h.bttsRate, 1);
+    assert.equal(h.oddRate, 1); // total 3
+});
+
 // --- tipHit ---
 
 test('tipHit settles every canonical market from the final score', () => {
@@ -109,6 +138,37 @@ test('tipHit settles every canonical market from the final score', () => {
     assert.equal(tipHit('U 3.5', 2, 1), true);
     assert.equal(tipHit('U 0.5', 0, 0), true);
     assert.throws(() => tipHit('BTTS', 1, 1), TypeError);
+});
+
+test('tipOutcome settles the new families', () => {
+    assert.equal(tipOutcome('GG', 2, 1), 'hit');
+    assert.equal(tipOutcome('GG', 2, 0), 'miss');
+    assert.equal(tipOutcome('NG', 0, 0), 'hit');
+    assert.equal(tipOutcome('DNB1', 2, 1), 'hit');
+    assert.equal(tipOutcome('DNB1', 1, 1), 'void');   // draw = push
+    assert.equal(tipOutcome('DNB2', 1, 1), 'void');
+    assert.equal(tipOutcome('DNB2', 0, 1), 'hit');
+    assert.equal(tipOutcome('ODD', 2, 1), 'hit');
+    assert.equal(tipOutcome('EVEN', 2, 1), 'miss');
+    assert.equal(tipOutcome('TT:H:O 1.5', 2, 0), 'hit');
+    assert.equal(tipOutcome('TT:H:O 1.5', 1, 3), 'miss');
+    assert.equal(tipOutcome('TT:A:U 2.5', 1, 3), 'miss');
+    assert.equal(tipOutcome('TT:A:U 2.5', 3, 1), 'hit');
+    // symmetric counterparts: home Under, away Over
+    assert.equal(tipOutcome('TT:H:U 1.5', 1, 3), 'hit');
+    assert.equal(tipOutcome('TT:A:O 2.5', 0, 3), 'hit');
+});
+
+test('tipOutcome matches legacy tipHit on canonical markets', () => {
+    for (const [m, fh, fa] of [['1', 2, 1], ['X', 1, 1], ['X2', 0, 1], ['O 2.5', 2, 1], ['U 4.5', 2, 1]]) {
+        assert.equal(tipOutcome(m, fh, fa) === 'hit', tipHit(m, fh, fa));
+    }
+});
+
+test('unknown market: tipOutcome throws, tipHitSafe returns null', () => {
+    assert.throws(() => tipOutcome('CS:2-1', 2, 1), TypeError);
+    assert.equal(tipHitSafe('CS:2-1', 2, 1), null);
+    assert.equal(tipHitSafe('DNB1', 1, 1), 'void');
 });
 
 // --- bestTip ---
@@ -399,4 +459,172 @@ test('bestTip yields to the runner-up market when the near-Under is suppressed',
     };
     assert.equal(bestTip(inputs, { minUnderLine: 3.5 }).market, 'U 3.5');
     assert.equal(bestTip(inputs).market, '12');
+});
+
+// --- bestTip new-family candidates (M3) ---
+
+test('bestTip considers BTTS and can pick GG', () => {
+    const agg = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.8), bttsRate: 0.9, oddRate: 0.5, scoredOverRates: O(0.8), concededOverRates: O(0.7) };
+    const tip = bestTip({ btts: { GG: 1.55, NG: 2.3 }, home: agg, away: agg, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0.5 });
+    assert.equal(tip.market, 'GG');
+    assert.ok(tip.stats_prob > 0.8);
+});
+
+test('bestTip DNB stats renormalize over non-draw outcomes', () => {
+    // statsProb['1'] blends home.winRate/away.lossRate/h2h -> with symmetric
+    // aggregates below, statsProb 1 = .6, 2 = .2 -> DNB1 stats = .6/.8 = .75
+    const home = { n: 6, winRate: 0.6, drawRate: 0.2, lossRate: 0.2, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
+    const away = { n: 6, winRate: 0.2, drawRate: 0.2, lossRate: 0.6, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
+    const tip = bestTip({ dnb: { DNB1: 1.5, DNB2: 2.6 }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
+    const dnb1 = [tip, ...(tip.runners_up ?? [])].find(c => c.market === 'DNB1');
+    assert.equal(dnb1.stats_prob, 0.75);
+});
+
+test('bestTip TT:H uses scored-vs-conceded blend', () => {
+    const home = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.9), concededOverRates: O(0.3) };
+    const away = { n: 6, winRate: 0.3, drawRate: 0.2, lossRate: 0.5, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.3), concededOverRates: O(0.8) };
+    const tip = bestTip({ tt: { H: { 1.5: { over: 1.7, under: 2.0 } } }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
+    assert.equal(tip.market, 'TT:H:O 1.5');
+    // stats = mean(home.scoredOverRates[1.5]=.9, away.concededOverRates[1.5]=.8)
+    assert.equal(tip.stats_prob, 0.85);
+});
+
+test('legacy byte-compat: canonical-only input reproduces the pre-M3 tip exactly', () => {
+    // Same input as "bestTip lists up to two runners-up..." above - exercises
+    // x12 + dc together with a market-only blend, giving a rich return with
+    // runners_up populated. Captured from the pre-M3 bestTip (before Task 5).
+    const out = bestTip({
+        ...marketOnly,
+        x12: { 1: 1.25, X: 6.0, 2: 9.0 },
+        dc: { '1X': 1.22, X2: 2.4, 12: 1.3 },
+        ou: {},
+    });
+    assert.deepEqual(out, {
+        market: '1X',
+        price: 1.22,
+        confidence: 0.8969,
+        market_prob: 0.8969,
+        stats_prob: null,
+        api_prob: null,
+        weights: { market: 1, stats: null, api: null },
+        samples: { home_n: 0, away_n: 0, h2h_n: 0 },
+        runners_up: [
+            {
+                market: '12',
+                price: 1.3,
+                confidence: 0.8454,
+                market_prob: 0.8454,
+                stats_prob: null,
+                api_prob: null,
+                weights: { market: 1, stats: null, api: null },
+            },
+            {
+                market: '1',
+                price: 1.25,
+                confidence: 0.7423,
+                market_prob: 0.7423,
+                stats_prob: null,
+                api_prob: null,
+                weights: { market: 1, stats: null, api: null },
+            },
+        ],
+    });
+});
+
+// --- bookIntegrity / selectFamilyBook ---
+
+test('bookIntegrity: overround window + completeness', () => {
+    assert.deepEqual(bookIntegrity([2.0, 3.6, 3.4]).ok, true);            // ~1.07 vig
+    assert.equal(bookIntegrity([2.6, 4.2, 4.0]).reason, 'overround_low');  // sum < 1 = palp/boost
+    assert.equal(bookIntegrity([1.5, 2.5, 2.5]).reason, 'overround_high'); // 1.47 margin-loaded
+    assert.equal(bookIntegrity([2.0, null, 3.4]).reason, 'incomplete');
+});
+test('selectFamilyBook: prefers betpawa, rejects divergent books', () => {
+    const keys = ['GG', 'NG'];
+    const ok = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 }, betika: { GG: 1.95, NG: 1.85 } }, keys);
+    assert.equal(ok.book.GG, 1.9);
+    // betika says GG 80%, betpawa says 50% -> divergence veto
+    const div = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 }, betika: { GG: 1.18, NG: 4.8 } }, keys);
+    assert.equal(div.book, null);
+    assert.equal(div.reason, 'book_divergence');
+    // single provider, sane book -> accepted with measured overround
+    const solo = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 } }, keys);
+    assert.ok(solo.overround > 1.0 && solo.book);
+});
+
+// --- buildTipBooks (M3 Task 6): one fixture's raw odds rows -> family books ---
+// Walks raw {provider,type_name,name,handicap,price} rows through canonicalMarket,
+// keeps FT-only books, groups per provider (lowest price), resolves team-total
+// sides, and runs the new families through selectFamilyBook (overrounds/rejects
+// audit). x12/dc/ou keep the legacy simple grouping (byte-compat: bestTip devigs
+// them internally with no overround band).
+
+test('buildTipBooks assembles canonical + new-family books from mixed providers', () => {
+    const rows = [
+        { provider: 'betpawa', type_name: '1X2 | Full Time', name: '1', price: 1.8 },
+        { provider: 'betpawa', type_name: '1X2 | Full Time', name: 'X', price: 3.5 },
+        { provider: 'betpawa', type_name: '1X2 | Full Time', name: '2', price: 4.2 },
+        // betika-only BTTS book (live spelling)
+        { provider: 'betika', type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'YES', price: 1.85 },
+        { provider: 'betika', type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'NO', price: 1.9 },
+    ];
+    const books = buildTipBooks(rows, { homeName: 'Arsenal', awayName: 'Chelsea' });
+    assert.ok(books.x12);                       // betpawa 1X2 present
+    assert.equal(books.x12['1'], 1.8);
+    assert.ok(books.btts);                       // betika GG/NG present -> both families
+    assert.equal(books.btts.GG, 1.85);
+    assert.ok(books.overrounds.btts > 1);        // accepted book -> overround recorded
+});
+
+test('buildTipBooks resolves team-total side by name and excludes unmatched teams', () => {
+    // 'FOO TOTAL' matches neither home nor away -> excluded, no crash
+    const unmatched = buildTipBooks([
+        { provider: 'betika', type_name: 'FOO TOTAL', name: 'OVER 1.5', handicap: 1.5, price: 1.7 },
+        { provider: 'betika', type_name: 'FOO TOTAL', name: 'UNDER 1.5', handicap: 1.5, price: 2.0 },
+    ], { homeName: 'Arsenal', awayName: 'Chelsea' });
+    assert.deepEqual(unmatched.tt, { H: {}, A: {} });
+    assert.equal(unmatched.overrounds.tt, undefined);
+    assert.equal(unmatched.rejects.tt, undefined);
+    // The same team-total, but the name IS the home side -> resolved into tt.H
+    const matched = buildTipBooks([
+        { provider: 'betika', type_name: 'ARSENAL TOTAL', name: 'OVER 1.5', handicap: 1.5, price: 1.7 },
+        { provider: 'betika', type_name: 'ARSENAL TOTAL', name: 'UNDER 1.5', handicap: 1.5, price: 2.0 },
+    ], { homeName: 'Arsenal', awayName: 'Chelsea' });
+    assert.ok(matched.tt.H[1.5]);
+    assert.equal(matched.tt.H[1.5].over, 1.7);
+    assert.deepEqual(matched.tt.A, {});
+});
+
+test('buildTipBooks keeps only full-time O/U lines (period-tagged excluded)', () => {
+    const rows = [
+        { provider: 'betpawa', type_name: 'Over/Under | Full Time', name: 'Over', handicap: 2.5, price: 1.9 },
+        { provider: 'betpawa', type_name: 'Over/Under | Full Time', name: 'Under', handicap: 2.5, price: 1.95 },
+        // 1st-half total -> period-tagged -> excluded from the FT O/U book
+        { provider: 'betika', type_name: '1ST HALF - TOTAL', name: 'OVER 1.5', handicap: 1.5, price: 1.8 },
+        { provider: 'betika', type_name: '1ST HALF - TOTAL', name: 'UNDER 1.5', handicap: 1.5, price: 1.9 },
+    ];
+    const books = buildTipBooks(rows, { homeName: 'A', awayName: 'B' });
+    assert.ok(books.ou[2.5]);
+    assert.equal(books.ou[1.5], undefined);   // period-tagged line never enters ou
+});
+
+test('buildTipBooks records a rejects reason for a palpable-error family book', () => {
+    // GG 2.6 / NG 4.8 -> overround ~0.59 < minOverround -> overround_low
+    const rows = [
+        { provider: 'betpawa', type_name: 'Both Teams To Score | Full Time', name: 'Yes', price: 2.6 },
+        { provider: 'betpawa', type_name: 'Both Teams To Score | Full Time', name: 'No', price: 4.8 },
+    ];
+    const books = buildTipBooks(rows, { homeName: 'A', awayName: 'B' });
+    assert.equal(books.btts, null);
+    assert.equal(books.rejects.btts, 'overround_low');
+});
+
+test('bestTip stamps book_overround from the family overrounds input (Task 5 gap)', () => {
+    const agg = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.8), bttsRate: 0.9, oddRate: 0.5, scoredOverRates: O(0.8), concededOverRates: O(0.7) };
+    const tip = bestTip({
+        btts: { GG: 1.55, NG: 2.3 }, home: agg, away: agg, h2h: { n: 0 }, apiPercents: null,
+        overrounds: { btts: 1.07 },
+    }, { minConfidence: 0.5 });
+    assert.equal(tip.market, 'GG');
+    assert.equal(tip.book_overround, 1.07);
 });

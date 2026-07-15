@@ -14,6 +14,8 @@ test('catalog excludes secrets/creds/build vars by construction', () => {
         assert.equal(keys.has(forbidden), false, `${forbidden} must NOT be editable`);
     }
     assert.equal(keys.has('SAFE_MAX_PRICE'), true);
+    // Every SAFE_* policy knob is admin-editable - the M3 maturity floor too.
+    assert.equal(keys.has('SAFE_MIN_MARKET_SETTLED'), true);
 });
 
 test('coerceValue by type (booleans never coerce "0" to true)', () => {
@@ -33,6 +35,10 @@ test('validateSetting enforces type + min/max and rejects unknown keys', () => {
     assert.equal(validateSetting('SAFE_MIN_PARTS', '5').ok, false);   // > max 3
     assert.equal(validateSetting('SAFE_MIN_PARTS', '2.5').ok, false); // not int
     assert.equal(validateSetting('SAFE_MIN_PARTS', '2').value, 2);
+    // M3 maturity floor: int >= 0, public + live like its SAFE_* siblings
+    assert.deepEqual(validateSetting('SAFE_MIN_MARKET_SETTLED', '30'), { ok: true, value: 30 });
+    assert.equal(validateSetting('SAFE_MIN_MARKET_SETTLED', '-1').ok, false); // < min 0
+    assert.equal(validateSetting('SAFE_MIN_MARKET_SETTLED', '2.5').ok, false); // not int
 });
 
 test('mergeOverrides: override wins, else config default; only catalog keys', () => {

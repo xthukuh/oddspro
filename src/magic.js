@@ -14,6 +14,7 @@ const safePolicy = () => ({
     maxPerDay: effective('SAFE_MAX_PER_DAY'),
     minSamples: effective('SAFE_MIN_SAMPLES'),   // sufficiency ("exclude risky") gate
     minH2H: effective('SAFE_MIN_H2H'),
+    minMarketSettled: effective('SAFE_MIN_MARKET_SETTLED'), // per-market maturity floor (spec §5)
 });
 
 // Magic-sort loader: replay the candidate tip-ranking strategies against

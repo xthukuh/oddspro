@@ -60,6 +60,33 @@ export function priceBand(price) {
     return '1.55+';
 }
 
+// Plain-language name for a canonical tip market key, shared verbatim by the
+// web (TipPopover/table labels) and any server-side text (M3 new-family
+// markets need a human name too, not just the raw key). Fallback is the raw
+// key itself - never throws, so an unrecognized/future key still renders.
+export function tipMarketLabel(market) {
+    const m = String(market);
+    switch (m) {
+        case '1': return 'Home win';
+        case 'X': return 'Draw';
+        case '2': return 'Away win';
+        case '1X': return 'Home or draw';
+        case 'X2': return 'Draw or away';
+        case '12': return 'Home or away';
+        case 'GG': return 'Both teams to score: Yes';
+        case 'NG': return 'Both teams to score: No';
+        case 'DNB1': return 'Home (draw no bet)';
+        case 'DNB2': return 'Away (draw no bet)';
+        case 'ODD': return 'Odd total goals';
+        case 'EVEN': return 'Even total goals';
+    }
+    let mm = /^([OU]) (\d+(?:\.\d+)?)$/.exec(m);
+    if (mm) return `${mm[1] === 'O' ? 'Over' : 'Under'} ${mm[2]} goals`;
+    mm = /^TT:([HA]):([OU]) (\d+(?:\.\d+)?)$/.exec(m);
+    if (mm) return `${mm[1] === 'H' ? 'Home' : 'Away'} team ${mm[2] === 'O' ? 'over' : 'under'} ${mm[3]} goals`;
+    return m;
+}
+
 const _tally = (buckets, label, hit) => {
     const b = buckets[label] ?? (buckets[label] = { n: 0, hits: 0 });
     b.n++;
@@ -88,6 +115,15 @@ export function computeCalibration(tips, shrinkK = 10) {
         if (/^[OU] /.test(String(t.market))) _tally(cal.lines, t.market, hit);
         _tally(cal.prices, priceBand(t.price), hit);
         _tally(cal.markets, String(t.market), hit);   // per-exact-market (safePrior)
+        // Market-level flat-stake ROI (staked/profit), beside the n/hits tally
+        // above, so the web can render "this market's live ROI" - only when a
+        // price is on record (mirrors perf-rules._stats' staked-only-when-priced
+        // rule). Rounded per-accumulation like every other _round() ledger sum.
+        const mb = cal.markets[String(t.market)];
+        if (t.price != null) {
+            mb.staked = (mb.staked ?? 0) + 1;
+            mb.profit = _round((mb.profit ?? 0) + (hit ? Number(t.price) - 1 : -1));
+        }
     }
     cal.global_rate = cal.settled ? _round(hits / cal.settled) : null;
     return cal;
@@ -145,22 +181,42 @@ export function legPicks(r, cal) {
     return picks;
 }
 
-// Warehouse out-of-sample precision anchors (scripts/backtest-sure-tips.js,
-// 15k+ fixtures). Used ONLY as the beta-shrink ANCHOR for the live per-market
-// hit rate - NEVER as the returned prior on their own. Stats-only precision is
-// price-blind and, for goal markets, anti-correlated with live ROI (the
-// adversarial review's central finding: an 87% "precise" Under is priced below
-// the 1.2 floor - the bettable slice has zero edge). So the live term must
+// Warehouse out-of-sample hit-rate anchors (scripts/backtest-sure-tips.js,
+// 28k+ finished fixtures). Used ONLY as the beta-shrink ANCHOR for the live
+// per-market hit rate - NEVER as the returned prior on their own. Stats-only
+// precision is price-blind and, for goal markets, anti-correlated with live ROI
+// (the adversarial review's central finding: an 87% "precise" Under is priced
+// below the 1.2 floor - the bettable slice has zero edge). So the live term must
 // dominate; the anchor only fills markets the live sample hasn't covered yet.
 // Markets absent here fall back to the live global rate, never a hardcoded
-// constant. Deliberately NO team-total / BTTS anchors - those markets are not
-// tipped (their warehouse precision is a sub-1.2 price mirage) and a primed
-// prior would mis-rank them if ever surfaced.
+// constant.
+//
+// The pre-M3 canonical anchors below are gated OOS precisions (measured when the
+// stats gate fires). The M3 new-family anchors are the more CONSERVATIVE
+// UNCONDITIONAL temporal-OOS hit-rate over the eligible tip population (no
+// support threshold - nothing to cherry-pick), so a newly-tippable market gets
+// its honest marginal prior rather than an inflated gated precision. That is the
+// safest choice for the surest-pick guarantee (a too-generous anchor pollutes
+// `sure`); the difference washes out fast because safePrior's k=20 lets the live
+// term dominate. BTTS/team-total anchors still look strong here (the Unders
+// especially) BY DESIGN - team-total Unders are frequent by nature; that is
+// exactly why the price-blind number must never be the live prior. See the
+// backtest's CALIBRATION CROSS-CHECK + gated grid for the full evidence.
 export const WAREHOUSE_WLO = {
     '1X': 0.807, 'X2': 0.669, '12': 0.777,
     'O 0.5': 0.90, 'O 1.5': 0.811, 'O 2.5': 0.683, 'O 3.5': 0.60,
     'U 3.5': 0.760, 'U 4.5': 0.868, 'U 5.5': 0.90, 'U 6.5': 0.94,
     '1': 0.58, '2': 0.50,
+    // M3 2026-07-16 warehouse OOS (11,372 eligible fixtures, newest-30% TEST =
+    // 3,412; DNB voids excluded). BTTS / draw-no-bet / odd-even:
+    'GG': 0.557, 'NG': 0.443, 'DNB1': 0.584, 'DNB2': 0.416, 'ODD': 0.488, 'EVEN': 0.512,
+    // Team totals (side-specific keys, only the lines the books actually offer -
+    // 0.5/1.5/2.5/3.5; 4.5+ coverage is negligible). Unders look strong; live-
+    // dominated by construction:
+    'TT:H:O 0.5': 0.781, 'TT:H:U 0.5': 0.219, 'TT:H:O 1.5': 0.472, 'TT:H:U 1.5': 0.528,
+    'TT:H:O 2.5': 0.244, 'TT:H:U 2.5': 0.756, 'TT:H:O 3.5': 0.106, 'TT:H:U 3.5': 0.894,
+    'TT:A:O 0.5': 0.707, 'TT:A:U 0.5': 0.293, 'TT:A:O 1.5': 0.391, 'TT:A:U 1.5': 0.609,
+    'TT:A:O 2.5': 0.174, 'TT:A:U 2.5': 0.826, 'TT:A:O 3.5': 0.071, 'TT:A:U 3.5': 0.929,
 };
 
 // Live-shrunk market-safety prior: the market's LIVE hit rate (cal.markets)
@@ -343,6 +399,13 @@ export const DEFAULT_SAFE = {
     minH2H: 0,            // min head-to-head meetings. PINNED off - minH2H>=3
                           // starves the pool (helps only result markets; re-test
                           // on double-chance-only via analyze-safe-tips.js).
+    minMarketSettled: 30, // maturity floor (spec §5): a market needs at least
+                          // this many settled live tips (cal.markets[market].n)
+                          // before it can win the per-day cap - protects the
+                          // pool from a thin/new market's noisy early rate.
+                          // Only enforced when a calibration is supplied to
+                          // safeQualifies/safeSelection; callers with no cal
+                          // (the web risk-gate badge) are unaffected.
 };
 
 // Three risk tiers (Safety Net Protocol). Only minAgreement / maxPrice /
@@ -374,11 +437,17 @@ export function hasSufficientStats(row, opts = DEFAULT_SAFE) {
 }
 
 // One tip's pass/fail against the safe gates. Vetoed, tipless, thin-breakdown
-// (no components recorded) and insufficient-sample rows always fail.
-export function safeQualifies(row, opts = DEFAULT_SAFE) {
+// (no components recorded) and insufficient-sample rows always fail. The
+// optional `cal` (a computeCalibration() result) additionally enforces the
+// market maturity floor (spec §5) - a market with too few settled live tips
+// can't yet win the cap. Callers that don't pass `cal` (the web risk-gate
+// badge) are unaffected, exactly as before this gate existed.
+export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
     const o = { ...DEFAULT_SAFE, ...opts };
     const tip = tipView(row);
     if (!tip || tip.vetoed) return false;
+    if ((o.minMarketSettled ?? 0) > 0 && cal
+        && (cal.markets?.[String(tip.market)]?.n ?? 0) < o.minMarketSettled) return false;
     if (_agreementParts(tip).length < o.minParts) return false;
     const agree = tipAgreement(tip);
     if (agree == null || agree < o.minAgreement) return false;
@@ -411,7 +480,7 @@ export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
         const key = r?.api_id ?? r; // ledger rows are already one per fixture
         if (seen.has(key)) continue;
         seen.add(key);
-        if (!safeQualifies(r, o)) continue;
+        if (!safeQualifies(r, o, cal)) continue;
         const day = _dayKey(r);
         let list = byDay.get(day);
         if (!list) byDay.set(day, list = []);

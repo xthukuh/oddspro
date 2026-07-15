@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { DEFAULT_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
+import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
@@ -41,10 +41,24 @@ const EnvSchema = z.object({
     HOTPICK_MIN_AVG_TOTAL: z.coerce.number().min(0).default(DEFAULT_THRESHOLDS.minAvgTotal),
     HOTPICK_MIN_IMPLIED_OVER: z.coerce.number().min(0).max(1).default(DEFAULT_THRESHOLDS.minImpliedOver),
     HOTPICK_H2H_MIN_OVER_RATE: z.coerce.number().min(0).max(1).default(DEFAULT_THRESHOLDS.h2hMinOverRate),
+    // O/U lines the hot-pick evaluator scores per fixture (M3, scoreOverLine).
+    // A line only actually fires hot when it ALSO has a LINE_THRESHOLDS entry
+    // (src/db/goals-rules.js - today only 2.5) - non-2.5 lines here are inert
+    // until Task 10's backtest tunes and adds their thresholds. Simple CSV ->
+    // number-array parse (mirrors the _uaList idiom in server.js).
+    HOTPICK_LINES: z.string().default('2.5').transform(v =>
+        [...new Set(v.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0))]
+    ).refine(a => a.length > 0, 'HOTPICK_LINES must list at least one O/U line')
+        .refine(a => a.some(l => l in LINE_THRESHOLDS), 'HOTPICK_LINES must include at least one line with a LINE_THRESHOLDS entry'),
     // "Tip" column: safest bettable outcome floors (see src/db/tip-rules.js)
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
     TIP_MIN_UNDER_LINE: z.coerce.number().min(0).default(DEFAULT_TIP.minUnderLine),
+    // Book-integrity guards (M3): family-book overround band + cross-provider
+    // devigged-probability divergence veto (see src/db/tip-rules.js)
+    TIP_MIN_OVERROUND: z.coerce.number().default(DEFAULT_TIP.minOverround),
+    TIP_MAX_OVERROUND: z.coerce.number().default(DEFAULT_TIP.maxOverround),
+    TIP_MAX_BOOK_DIVERGENCE: z.coerce.number().default(DEFAULT_TIP.maxBookDivergence),
     // AI adjudication is optional: no key = rules-only verdicts (fail-open).
     // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
     // 2026-07-04 - stronger reasoner + native Google Search grounding.
@@ -142,6 +156,10 @@ const EnvSchema = z.object({
     // Safe risk filter uses identical thresholds. 0 = that gate off.
     SAFE_MIN_SAMPLES: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minSamples),
     SAFE_MIN_H2H: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minH2H),
+    // Per-market maturity floor (spec §5): a market needs at least this many
+    // settled live tips (magic-sort calibration cal.markets[market].n) before
+    // it can win the Safe-only per-day cap. 0 disables the gate.
+    SAFE_MIN_MARKET_SETTLED: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minMarketSettled),
     // --- User accounts / auth (v1.1.0; src/auth-rules.js + src/auth.js) -------
     // Server-wide pepper mixed into every scrypt PIN hash. Optional but STRONGLY
     // recommended in production. WARNING: changing it invalidates every existing

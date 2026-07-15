@@ -23,6 +23,10 @@ export function marketGroup(market) {
     if (['1', 'X', '2'].includes(market)) return '1X2';
     if (['1X', 'X2', '12'].includes(market)) return 'double_chance';
     if (/^[OU] /.test(String(market))) return 'over_under';
+    if (['GG', 'NG'].includes(market)) return 'btts';
+    if (['DNB1', 'DNB2'].includes(market)) return 'dnb';
+    if (/^TT:/.test(String(market))) return 'team_total';
+    if (['ODD', 'EVEN'].includes(market)) return 'odd_even';
     return 'other';
 }
 
@@ -42,12 +46,15 @@ export function edgeOf(confidence, price) {
 }
 
 // Flat-stake stats over one bet list [{ price, outcome }]:
-// outcome 'hit'|'miss'|null(pending); profit/roi only over settled bets
-// carrying a price (1 unit staked each).
+// outcome 'hit'|'miss'|'void'|null(pending); profit/roi only over settled
+// bets carrying a price (1 unit staked each). 'void' (a DNB push) is the
+// ledger's stake-returned outcome: counted separately, excluded from
+// settled/staked/profit entirely (no win, no loss, nothing bet nets to zero).
 function _stats(bets) {
-    const s = { picks: bets.length, hits: 0, misses: 0, pending: 0 };
+    const s = { picks: bets.length, hits: 0, misses: 0, voids: 0, pending: 0 };
     let profit = 0, staked = 0, priceSum = 0;
     for (const b of bets) {
+        if (b.outcome === 'void') { s.voids++; continue; }
         if (b.outcome === 'hit') s.hits++;
         else if (b.outcome === 'miss') s.misses++;
         else { s.pending++; continue; }

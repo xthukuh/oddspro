@@ -27,6 +27,18 @@ test('marketGroup buckets canonical tip markets', () => {
     assert.equal(marketGroup('BTTS'), 'other');
 });
 
+test('marketGroup superset covers the M3 new-family markets (GG/NG, DNB, TT, ODD/EVEN)', () => {
+    assert.equal(marketGroup('GG'), 'btts');
+    assert.equal(marketGroup('NG'), 'btts');
+    assert.equal(marketGroup('DNB1'), 'dnb');
+    assert.equal(marketGroup('DNB2'), 'dnb');
+    assert.equal(marketGroup('TT:H:O 1.5'), 'team_total');
+    assert.equal(marketGroup('TT:A:U 2.5'), 'team_total');
+    assert.equal(marketGroup('ODD'), 'odd_even');
+    assert.equal(marketGroup('EVEN'), 'odd_even');
+    assert.equal(marketGroup('CS:2-1'), 'other'); // still unknown -> other
+});
+
 test('confidenceBand slices at the documented boundaries', () => {
     assert.equal(confidenceBand(0.5), '0.50-0.59');
     assert.equal(confidenceBand(0.6), '0.60-0.69');
@@ -63,6 +75,23 @@ test('summarizePerformance computes flat-stake ROI and hit-rate over settled tip
     assert.equal(all.roi, Math.round(0.5 / 3 * 10000) / 10000);
     assert.equal(all.avg_price, Math.round((2 + 1.5 + 3) / 3 * 10000) / 10000);
     assert.equal(all.break_even, Math.round(1 / all.avg_price * 10000) / 10000);
+});
+
+test('summarizePerformance treats a void tip outcome as stake-returned: no profit/stake effect, excluded from settled', () => {
+    const rows = [
+        tip({ tip_outcome: 'hit', tip_price: 2.0 }),    // +1.0
+        tip({ tip_outcome: 'void', tip_price: 1.8 }),   // DNB push - excluded
+        tip({ tip_outcome: 'miss', tip_price: 3.0 }),   // -1.0
+    ];
+    const all = summarizePerformance(rows, NOW).tips.windows.all;
+    assert.equal(all.picks, 3);
+    assert.equal(all.hits, 1);
+    assert.equal(all.misses, 1);
+    assert.equal(all.voids, 1);
+    assert.equal(all.pending, 0);
+    assert.equal(all.staked, 2);  // void never staked
+    assert.equal(all.profit, 0);  // +1.0 - 1.0, void contributes nothing
+    assert.equal(all.rate, 0.5);  // settled = hits+misses only, void excluded
 });
 
 test('summarizePerformance windows slice by kickoff', () => {

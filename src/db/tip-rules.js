@@ -1,8 +1,9 @@
 // Pure "best tip" deduction: the safest bettable outcome for one fixture
 // across the canonical markets (1X2, double chance, every O/U line), scored
 // by a blended confidence - vig-removed market probability corroborated by
-// rolling history rates and API-Football percentages. Zero project imports
-// (like goals-rules.js) so tests run without .env/DB.
+// rolling history rates and API-Football percentages. Imports ONLY M2's
+// canonicalMarket (itself a zero-dependency pure module - the magic-rules ->
+// perf-rules cross-pure precedent), so tests still run without .env/DB.
 //
 // A price floor keeps tips meaningful: near-certain markets priced at ~1.0x
 // (O 0.5 against two scoring sides) are excluded - what remains at high
@@ -11,6 +12,7 @@
 // Division of labor: callers filter fixtures to FINAL_STATUSES in SQL; the
 // aggregates enforce non-null FT scores and kickoff strictly before the
 // analyzed fixture's kickoff (the leak-free cutoff).
+import { canonicalMarket } from '../markets.js';
 
 export const DEFAULT_TIP = {
     teamWindow: 7,       // rolling last-N games per team (vs other opponents)
@@ -23,6 +25,14 @@ export const DEFAULT_TIP = {
                          // 78.1% break-even over the 2026-07-04 cohort)
     // Blend weights, renormalized over the components actually available
     weights: { market: 0.6, stats: 0.3, api: 0.1 },
+    // Bookmaker-trick guards (spec §4.2, M3): a family book's implied-
+    // probability sum must land in this band - below minOverround smells
+    // like a palpable error / boosted price, above maxOverround is margin
+    // loading so heavy the devigged number is meaningless.
+    minOverround: 1.01,
+    maxOverround: 1.30,
+    // Cross-provider devigged-probability divergence veto (any outcome)
+    maxBookDivergence: 0.15,
 };
 
 // League names whose history evidence is invalid for tipping: preseason
@@ -65,12 +75,26 @@ export function teamOutcomeAggregates(rows, teamId, opponentId, cutoff, window) 
         .filter(f => !_isPair(f, teamId, opponentId))
         .slice(0, window);
     const n = recent.length;
-    if (!n) return { n: 0, winRate: null, drawRate: null, lossRate: null, overRates: null };
+    if (!n) {
+        return {
+            n: 0, winRate: null, drawRate: null, lossRate: null, overRates: null,
+            bttsRate: null, oddRate: null, scoredOverRates: null, concededOverRates: null,
+        };
+    }
     let w = 0, d = 0;
+    let btts = 0, odd = 0;
+    const scoredOver = Object.fromEntries(OU_LINES.map(l => [l, 0]));
+    const concededOver = Object.fromEntries(OU_LINES.map(l => [l, 0]));
     for (const f of recent) {
         const [gf, ga] = f.home_team_id === teamId ? [f.ft_home, f.ft_away] : [f.ft_away, f.ft_home];
         if (gf > ga) w++;
         else if (gf === ga) d++;
+        if (f.ft_home > 0 && f.ft_away > 0) btts++;
+        if ((f.ft_home + f.ft_away) % 2 === 1) odd++;
+        for (const l of OU_LINES) {
+            if (gf > l) scoredOver[l]++;
+            if (ga > l) concededOver[l]++;
+        }
     }
     return {
         n,
@@ -78,6 +102,10 @@ export function teamOutcomeAggregates(rows, teamId, opponentId, cutoff, window) 
         drawRate: _round(d / n),
         lossRate: _round((n - w - d) / n),
         overRates: _overRates(recent),
+        bttsRate: _round(btts / n),
+        oddRate: _round(odd / n),
+        scoredOverRates: Object.fromEntries(OU_LINES.map(l => [l, _round(scoredOver[l] / n)])),
+        concededOverRates: Object.fromEntries(OU_LINES.map(l => [l, _round(concededOver[l] / n)])),
     };
 }
 
@@ -100,12 +128,20 @@ export function h2hOutcomeAggregates(rows, homeId, awayId, cutoff, window) {
         .filter(f => _isPair(f, homeId, awayId))
         .slice(0, window);
     const n = meetings.length;
-    if (!n) return { n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null };
+    if (!n) {
+        return {
+            n: 0, homeWinRate: null, drawRate: null, awayWinRate: null, overRates: null,
+            bttsRate: null, oddRate: null,
+        };
+    }
     let hw = 0, d = 0;
+    let btts = 0, odd = 0;
     for (const f of meetings) {
         const [gf, ga] = f.home_team_id === homeId ? [f.ft_home, f.ft_away] : [f.ft_away, f.ft_home];
         if (gf > ga) hw++;
         else if (gf === ga) d++;
+        if (f.ft_home > 0 && f.ft_away > 0) btts++;
+        if ((f.ft_home + f.ft_away) % 2 === 1) odd++;
     }
     return {
         n,
@@ -113,6 +149,8 @@ export function h2hOutcomeAggregates(rows, homeId, awayId, cutoff, window) {
         drawRate: _round(d / n),
         awayWinRate: _round((n - hw - d) / n),
         overRates: _overRates(meetings),
+        bttsRate: _round(btts / n),
+        oddRate: _round(odd / n),
     };
 }
 
@@ -123,6 +161,148 @@ function _devig(prices) {
     if (inv.some(v => v == null)) return null;
     const sum = inv.reduce((a, b) => a + b, 0);
     return inv.map(v => v / sum);
+}
+
+// Bookmaker-trick guards (spec §4.2). A family book must be complete and its
+// implied-probability sum inside a sane band: below 1.0 smells like a palpable
+// error / boosted price masquerading as a hidden gem; far above it is margin
+// loading so heavy the devigged number is meaningless.
+export function bookIntegrity(prices, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const inv = prices.map(p => (Number(p) > 1 ? 1 / Number(p) : null));
+    if (inv.some(v => v == null)) return { ok: false, overround: null, reason: 'incomplete' };
+    const overround = _round(inv.reduce((a, b) => a + b, 0));
+    if (overround < t.minOverround) return { ok: false, overround, reason: 'overround_low' };
+    if (overround > t.maxOverround) return { ok: false, overround, reason: 'overround_high' };
+    return { ok: true, overround, reason: null };
+}
+
+// Pick one provider's FULL family book (betpawa first, betika fallback -
+// mixing providers inside one group breaks the vig removal), guarded by
+// bookIntegrity and a cross-provider divergence veto: when both books are
+// complete but disagree beyond maxBookDivergence on any outcome's devigged
+// probability, one of them is likely a trap or error - no tip.
+export function selectFamilyBook(providers, keys, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const books = [];
+    for (const p of ['betpawa', 'betika']) {
+        const m = providers?.[p];
+        if (!m || !keys.every(k => Number(m[k]) > 1)) continue;
+        const prices = keys.map(k => m[k]);
+        const integ = bookIntegrity(prices, t);
+        books.push({ provider: p, book: Object.fromEntries(keys.map(k => [k, Number(m[k])])), ...integ, probs: _devig(prices) });
+    }
+    const sane = books.filter(b => b.ok);
+    if (!sane.length) return { book: null, overround: books[0]?.overround ?? null, reason: books[0]?.reason ?? 'incomplete' };
+    if (sane.length === 2) {
+        const gap = Math.max(...keys.map((k, i) => Math.abs(sane[0].probs[i] - sane[1].probs[i])));
+        if (gap > t.maxBookDivergence) return { book: null, overround: sane[0].overround, reason: 'book_divergence' };
+    }
+    return { book: sane[0].book, overround: sane[0].overround, reason: null };
+}
+
+// --- buildTipBooks (M3 Task 6): raw odds rows -> per-family tip books --------
+// One fixture's raw odds_markets rows -> the family books bestTip/tipEligibility
+// consume. Rows are canonicalized via M2's canonicalMarket and kept FULL-TIME
+// only (any period-tagged descriptor is dropped). x12/dc/ou reproduce the legacy
+// hotpicks _loadMarkets grouping EXACTLY (first provider carrying the full book,
+// lowest price per key, NO overround band) so canonical-only fixtures keep their
+// pre-M3 tips byte-for-byte - bestTip devigs those groups itself. The new
+// two-way families (BTTS/DNB/odd-even/team-totals) run through selectFamilyBook,
+// recording each accepted book's overround (`overrounds`) and each genuine
+// refusal's reason (`rejects`, audit) - an 'incomplete' book (family simply not
+// offered) is silently skipped. Team totals are routed to home/away from
+// canonicalMarket's `tt` (side directly, else EXACT normalized team-name match;
+// no fuzzy matching - an unresolved side is excluded).
+const _X12_KEYS = ['1', 'X', '2'];
+const _DC_KEYS = ['1X', 'X2', '12'];
+const _OU_KEY_RE = /^[OU] \d+\.5$/;
+const _SIMPLE_FT_KEYS = new Set(['1', 'X', '2', '1X', 'X2', '12', 'GG', 'NG', 'DNB1', 'DNB2', 'ODD', 'EVEN']);
+const _upper = s => String(s ?? '').trim().toUpperCase();
+
+// First provider (betpawa preferred) carrying the FULL key set, lowest price
+// per key already folded in. No overround band - byte-compatible with the
+// pre-M3 _loadMarkets grouping.
+function _simpleGroup(providers, keys) {
+    for (const p of ['betpawa', 'betika']) {
+        const m = providers[p];
+        if (m && keys.every(k => Number(m[k]) > 1)) {
+            return Object.fromEntries(keys.map(k => [k, Number(m[k])]));
+        }
+    }
+    return null;
+}
+
+export function buildTipBooks(oddsRows, { homeName, awayName } = {}, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const H = _upper(homeName), A = _upper(awayName);
+
+    // Per-provider bag of lowest canonical prices (FULL TIME only). Team-total
+    // rows are side-resolved into TT:<H|A>:<ouKey> book keys here so a two-way
+    // over/under book can be paired per side+line downstream.
+    const providers = {};
+    for (const r of oddsRows) {
+        const desc = canonicalMarket(r);
+        if (desc.period != null) continue;               // FT only
+        let bookKey = null;
+        if (_SIMPLE_FT_KEYS.has(desc.key) || _OU_KEY_RE.test(desc.key)) {
+            bookKey = desc.key;
+        } else if (desc.group === 'team_total') {
+            const side = desc.tt?.side === 'home' ? 'H'
+                : desc.tt?.side === 'away' ? 'A'
+                    : desc.tt?.team && _upper(desc.tt.team) === H ? 'H'
+                        : desc.tt?.team && _upper(desc.tt.team) === A ? 'A'
+                            : null;
+            const ouKey = desc.key.startsWith('TT:') ? desc.key.slice(3) : null; // 'O 2.5'
+            if (side && ouKey && _OU_KEY_RE.test(ouKey)) bookKey = `TT:${side}:${ouKey}`;
+        }
+        if (!bookKey) continue;                          // untippable / unresolved -> drop
+        const price = Number(r.price);                   // DECIMAL arrives as string
+        const bag = (providers[r.provider] ??= {});
+        if (bag[bookKey] == null || price < bag[bookKey]) bag[bookKey] = price; // lowest price
+    }
+
+    // Legacy canonical groups (byte-compat, no overround band).
+    const x12 = _simpleGroup(providers, _X12_KEYS);
+    const dc = _simpleGroup(providers, _DC_KEYS);
+    const ou = {};
+    for (const line of OU_LINES) {
+        const pair = _simpleGroup(providers, [`O ${line}`, `U ${line}`]);
+        if (pair) ou[line] = { over: pair[`O ${line}`], under: pair[`U ${line}`] };
+    }
+
+    // New two-way families via selectFamilyBook (integrity-screened).
+    const overrounds = {}, rejects = {};
+    const _family = (name, keys) => {
+        const sel = selectFamilyBook(providers, keys, t);
+        if (sel.book) { overrounds[name] = sel.overround; return sel.book; }
+        if (sel.reason && sel.reason !== 'incomplete') rejects[name] = sel.reason;
+        return null;
+    };
+    const btts = _family('btts', ['GG', 'NG']);
+    const dnb = _family('dnb', ['DNB1', 'DNB2']);
+    const oddEven = _family('oddEven', ['ODD', 'EVEN']);
+
+    // Team totals: one two-way book per resolved (side, line). bestTip stamps a
+    // single overrounds.tt on every TT candidate, so the first accepted book's
+    // overround represents the family (margin transparency, not per-line).
+    const tt = { H: {}, A: {} };
+    let ttReject = null;
+    for (const side of ['H', 'A']) {
+        for (const line of OU_LINES) {
+            const oKey = `TT:${side}:O ${line}`, uKey = `TT:${side}:U ${line}`;
+            const sel = selectFamilyBook(providers, [oKey, uKey], t);
+            if (sel.book) {
+                tt[side][line] = { over: sel.book[oKey], under: sel.book[uKey] };
+                if (overrounds.tt == null) overrounds.tt = sel.overround;
+            } else if (sel.reason && sel.reason !== 'incomplete') {
+                ttReject = ttReject || sel.reason;
+            }
+        }
+    }
+    if (overrounds.tt == null && ttReject) rejects.tt = ttReject;
+
+    return { x12, dc, ou, btts, dnb, oddEven, tt, overrounds, rejects };
 }
 
 // Mean of the non-null components, or null when none qualify
@@ -136,7 +316,8 @@ function _mean(components) {
 // renormalizes to market-only - and the market component is the bookmaker's
 // own devigged opinion, which cannot beat the vig by itself (the prime
 // false-positive source this gate exists to kill).
-//   x12/dc/ou: market groups as passed to bestTip (null / {} when absent)
+//   x12/dc/ou/btts/dnb/oddEven/tt: market groups as passed to bestTip (null /
+//              {} when absent) - ANY one of the seven being present suffices
 //   home/away: any aggregates carrying the qualifying sample size `n`
 //              (the writer reuses the hot-gate teamGoalsAggregates results)
 //   league: league name (optional) - friendly/youth/reserve competitions are
@@ -145,7 +326,7 @@ function _mean(components) {
 // Returns { eligible: true, reason: null } or { eligible: false, reason }
 // where reason is a short marker surfaced by the web UI (<= 64 chars), e.g.
 // 'insufficient_history: home 2/5' or 'no_markets'.
-export function tipEligibility({ x12, dc, ou, home, away, league }, opts = {}) {
+export function tipEligibility({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, league }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
     // Context invalidity trumps sample size: rolling form says nothing about
     // a preseason exhibition or a youth side's next lineup.
@@ -159,39 +340,79 @@ export function tipEligibility({ x12, dc, ou, home, away, league }, opts = {}) {
     if (home.n < t.minGames) thin.push(`home ${home.n}/${t.minGames}`);
     if (away.n < t.minGames) thin.push(`away ${away.n}/${t.minGames}`);
     if (thin.length) return { eligible: false, reason: `insufficient_history: ${thin.join(', ')}` };
-    if (!x12 && !dc && !Object.keys(ou ?? {}).length) return { eligible: false, reason: 'no_markets' };
+    const anyBook = x12 || dc || Object.keys(ou ?? {}).length
+        || btts || dnb || oddEven || Object.keys(tt?.H ?? {}).length || Object.keys(tt?.A ?? {}).length;
+    if (!anyBook) return { eligible: false, reason: 'no_markets' };
     return { eligible: true, reason: null };
 }
 
-// Did a settled fixture hit one canonical market? (tip settlement)
-export function tipHit(market, ftHome, ftAway) {
+const _TT_KEY = /^TT:(H|A):([OU]) (\d+\.5)$/;
+
+// Settle any tippable market from the final score: 'hit' | 'miss' | 'void'.
+// 'void' = stake returned (DNB push on a draw). Throws on unknown keys -
+// a persisted unknown tip_market is a bug and must be loud (server); browser
+// call sites use tipHitSafe below.
+export function tipOutcome(market, ftHome, ftAway) {
     const total = ftHome + ftAway;
+    const _b = v => (v ? 'hit' : 'miss');
     switch (market) {
-        case '1': return ftHome > ftAway;
-        case 'X': return ftHome === ftAway;
-        case '2': return ftHome < ftAway;
-        case '1X': return ftHome >= ftAway;
-        case 'X2': return ftHome <= ftAway;
-        case '12': return ftHome !== ftAway;
+        case '1': return _b(ftHome > ftAway);
+        case 'X': return _b(ftHome === ftAway);
+        case '2': return _b(ftHome < ftAway);
+        case '1X': return _b(ftHome >= ftAway);
+        case 'X2': return _b(ftHome <= ftAway);
+        case '12': return _b(ftHome !== ftAway);
+        case 'GG': return _b(ftHome > 0 && ftAway > 0);
+        case 'NG': return _b(!(ftHome > 0 && ftAway > 0));
+        case 'DNB1': return ftHome === ftAway ? 'void' : _b(ftHome > ftAway);
+        case 'DNB2': return ftHome === ftAway ? 'void' : _b(ftHome < ftAway);
+        case 'ODD': return _b(total % 2 === 1);
+        case 'EVEN': return _b(total % 2 === 0);
         default: {
-            const ou = /^([OU]) (\d\.5)$/.exec(market);
-            if (!ou) throw new TypeError(`Unknown tip market: ${market}`);
-            return ou[1] === 'O' ? total > Number(ou[2]) : total < Number(ou[2]);
+            const ou = /^([OU]) (\d+\.5)$/.exec(market);
+            if (ou) return _b(ou[1] === 'O' ? total > Number(ou[2]) : total < Number(ou[2]));
+            const tt = _TT_KEY.exec(market);
+            if (!tt) throw new TypeError(`Unknown tip market: ${market}`);
+            const goals = tt[1] === 'H' ? ftHome : ftAway;
+            return _b(tt[2] === 'O' ? goals > Number(tt[3]) : goals < Number(tt[3]));
         }
     }
+}
+
+// Legacy boolean contract (canonical call sites): hit-or-not. A DNB void is
+// NOT a hit. Still throws on unknown keys.
+export function tipHit(market, ftHome, ftAway) {
+    return tipOutcome(market, ftHome, ftAway) === 'hit';
+}
+
+// Never-throw variant for browser code paths (unknown/legacy keys -> null).
+export function tipHitSafe(market, ftHome, ftAway) {
+    try { return tipOutcome(market, ftHome, ftAway); } catch { return null; }
 }
 
 // Choose the safest bettable outcome for one fixture.
 //   x12: {'1','X','2'} -> price | null; dc: {'1X','X2','12'} -> price | null
 //   ou: { [line]: { over, under } } (only lines with a full pair)
+//   btts: {GG,NG} -> price | null; dnb: {DNB1,DNB2} -> price | null
+//   oddEven: {ODD,EVEN} -> price | null
+//   tt: { H: { [line]: {over,under} }, A: { [line]: {over,under} } }
+//       (team totals, FT only - one side's goals vs a line)
 //   home/away: teamOutcomeAggregates(); h2h: h2hOutcomeAggregates()
-//   apiPercents: { home, draw, away } fractions 0..1 | null
+//   apiPercents: { home, draw, away } fractions 0..1 | null (backs
+//       result/double-chance candidates only)
+//   overrounds: { [family]: number } | undefined - each new family's
+//       devigged-book overround (selectFamilyBook), surfaced back as
+//       book_overround on the winning pick + each runner-up (spec §4.2
+//       margin transparency). Books arrive ALREADY integrity-screened by
+//       the caller; bestTip itself does no book validation. The legacy
+//       x12/dc/ou candidates never carry an overround (byte-compat).
 // Returns { market, price, confidence, market_prob, stats_prob, api_prob,
-// weights, samples, runners_up } - weights are the renormalized blend weights
-// actually applied, samples the evidence sizes, runners_up the next two
-// candidates (justification breakdown persisted as fixture_predictions
-// .tip_breakdown) - or null when nothing clears the price/confidence floors.
-export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}) {
+// weights, samples, runners_up, book_overround? } - weights are the
+// renormalized blend weights actually applied, samples the evidence sizes,
+// runners_up the next two candidates (justification breakdown persisted as
+// fixture_predictions.tip_breakdown) - or null when nothing clears the
+// price/confidence floors.
+export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, apiPercents, overrounds }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
     const w = t.weights;
 
@@ -234,7 +455,7 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
         : null;
 
     const candidates = [];
-    const consider = (market, price, mkt, stats, apiP) => {
+    const consider = (market, price, mkt, stats, apiP, overround) => {
         if (mkt == null || !(Number(price) >= t.minPrice)) return;
         const parts = [[w.market, mkt], ...(stats != null ? [[w.stats, stats]] : []), ...(apiP != null ? [[w.api, apiP]] : [])];
         const weight = parts.reduce((sum, [wt]) => sum + wt, 0);
@@ -252,6 +473,11 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
                 stats: stats == null ? null : _round(w.stats / weight),
                 api: apiP == null ? null : _round(w.api / weight),
             },
+            // Family book overround (spec §4.2 margin transparency) - only
+            // stamped when the caller supplies one. The legacy x12/dc/ou
+            // blocks below never pass this arg, so their candidates carry
+            // no such key (byte-compat with the pre-M3 return shape).
+            ...(overround != null ? { overround } : {}),
         });
     };
 
@@ -273,12 +499,69 @@ export function bestTip({ x12, dc, ou, home, away, h2h, apiPercents }, opts = {}
         }
     }
 
+    // -- new-family candidates (M3): BTTS, draw-no-bet, odd/even, team totals --
+
+    if (btts) {
+        const probs = _devig([btts.GG, btts.NG]);
+        if (probs) {
+            const gg = _mean([hOk ? home.bttsRate : null, aOk ? away.bttsRate : null, hhOk ? h2h.bttsRate : null]);
+            consider('GG', btts.GG, probs[0], gg, null, overrounds?.btts);
+            consider('NG', btts.NG, probs[1], gg == null ? null : 1 - gg, null, overrounds?.btts);
+        }
+    }
+    if (dnb) {
+        const probs = _devig([dnb.DNB1, dnb.DNB2]);
+        if (probs) {
+            // Renormalized win-vs-win: a draw voids DNB, so the two win
+            // probabilities alone (not the draw-inclusive 1/2 shares) decide
+            // which side is favored - null when either side is unqualified.
+            const w1 = statsProb['1'], w2 = statsProb['2'];
+            const dnb1 = w1 != null && w2 != null && (w1 + w2) > 0 ? w1 / (w1 + w2) : null;
+            consider('DNB1', dnb.DNB1, probs[0], dnb1, null, overrounds?.dnb);
+            consider('DNB2', dnb.DNB2, probs[1], dnb1 == null ? null : 1 - dnb1, null, overrounds?.dnb);
+        }
+    }
+    if (oddEven) {
+        const probs = _devig([oddEven.ODD, oddEven.EVEN]);
+        if (probs) {
+            const odd = _mean([hOk ? home.oddRate : null, aOk ? away.oddRate : null, hhOk ? h2h.oddRate : null]);
+            consider('ODD', oddEven.ODD, probs[0], odd, null, overrounds?.oddEven);
+            consider('EVEN', oddEven.EVEN, probs[1], odd == null ? null : 1 - odd, null, overrounds?.oddEven);
+        }
+    }
+    for (const side of ['H', 'A']) {
+        for (const [line, pair] of Object.entries(tt?.[side] ?? {})) {
+            const probs = _devig([pair.over, pair.under]);
+            if (!probs) continue;
+            const scoredSide = side === 'H' ? home : away, otherSide = side === 'H' ? away : home;
+            const over = _mean([
+                (side === 'H' ? hOk : aOk) ? scoredSide.scoredOverRates?.[line] : null,
+                (side === 'H' ? aOk : hOk) ? otherSide.concededOverRates?.[line] : null,
+            ]);
+            consider(`TT:${side}:O ${line}`, pair.over, probs[0], over, null, overrounds?.tt);
+            // minUnderLine does NOT apply to TT Unders - it is a total-goals
+            // rule and team-total lines are 0.5-3.5 by nature; only the
+            // global minPrice floor (enforced inside consider) applies here.
+            consider(`TT:${side}:U ${line}`, pair.under, probs[1], over == null ? null : 1 - over, null, overrounds?.tt);
+        }
+    }
+
     if (!candidates.length) return null;
     candidates.sort((a, b) => b.confidence - a.confidence || b.price - a.price);
     if (candidates[0].confidence < t.minConfidence) return null;
+    // Surface the internal `overround` field as `book_overround` on the way
+    // out (spec §4.2 margin transparency). Candidates without one (every
+    // legacy x12/dc/ou pick, and any new-family pick when the caller didn't
+    // supply overrounds) pass through unchanged - the byte-compat gate for
+    // canonical-only callers turns on this being a no-op in that case.
+    const _surfaceOverround = c => {
+        if (c.overround == null) return c;
+        const { overround, ...rest } = c;
+        return { ...rest, book_overround: overround };
+    };
     return {
-        ...candidates[0],
+        ..._surfaceOverround(candidates[0]),
         samples: { home_n: home.n, away_n: away.n, h2h_n: h2h.n },
-        runners_up: candidates.slice(1, 3),
+        runners_up: candidates.slice(1, 3).map(_surfaceOverround),
     };
 }

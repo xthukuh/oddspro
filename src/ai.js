@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { config } from './config.js';
 import { parseAiReply } from './ai-parse.js';
+import { tipMarketLabel } from './db/magic-rules.js';
 
 // Optional Google Gemini adjudicators, both fail-open (absent key or any API
 // failure keeps the rule-based verdict - the features never depend on the AI
@@ -24,10 +25,16 @@ import { parseAiReply } from './ai-parse.js';
 // explicitly not a veto ground. Replies are structured (probability,
 // per-check findings, grounding citations) and persisted to the ai_review /
 // tip_ai_review JSON columns for the web popover.
+//
+// Prompt v3 (M3, tag suffix #p3): reviewTip's tip label now falls back to
+// the shared tipMarketLabel glossary (magic-rules) for M3's new-family
+// markets (BTTS/DNB/odd-even/team-totals), which the old fixture-aware
+// _tipLabel dictionary didn't cover - without this the reviewer saw a bare,
+// meaningless "DNB1 (DNB1)" for those tips instead of an actual description.
 
 // Bumping this re-adjudicates upcoming rows (verdict reuse is keyed on the
 // model tag), so material prompt changes take effect without manual resets.
-const PROMPT_VERSION = 2;
+const PROMPT_VERSION = 3;
 
 export function aiEnabled() {
     return Boolean(config.GEMINI_API_KEY);
@@ -141,7 +148,12 @@ export async function adjudicateHotPick({ fixture, kickoff, league, home, away, 
     return _adjudicate(prompt);
 }
 
-// Human meaning of a canonical tip market key, for the review prompt.
+// Human meaning of a canonical tip market key, for the review prompt. Result
+// markets get fixture-specific team-named phrasing; everything else
+// (including M3's new-family markets - BTTS/DNB/odd-even/team-totals, which
+// this dictionary has no team-aware phrasing for) falls back to the shared
+// plain-language glossary (tipMarketLabel, magic-rules) so `tip.market`
+// always renders beside an actual description, never the bare key twice.
 function _tipLabel(market, home, away) {
     const named = {
         1: `${home} to win`,
@@ -153,7 +165,8 @@ function _tipLabel(market, home, away) {
     };
     if (named[market]) return named[market];
     const ou = /^([OU]) (\d\.5)$/.exec(market);
-    return ou ? `${ou[1] === 'O' ? 'over' : 'under'} ${ou[2]} total goals` : market;
+    if (ou) return `${ou[1] === 'O' ? 'over' : 'under'} ${ou[2]} total goals`;
+    return tipMarketLabel(market);
 }
 
 // Independent second opinion on one high-confidence tip. The prompt gives

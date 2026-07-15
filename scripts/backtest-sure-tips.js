@@ -13,7 +13,7 @@
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { db, closeDb } from '../src/db/connection.js';
 import { FINAL_STATUSES } from '../src/apisports.js';
-import { h2hOutcomeAggregates } from '../src/db/tip-rules.js';
+import { h2hOutcomeAggregates, pairedTeamOutcomeAggregates, tipOutcome } from '../src/db/tip-rules.js';
 
 // Wilson score lower bound (95%) - the honest "at least this good" precision,
 // resists thin-cell overfitting. (Inlined; importing recon-warehouse.js would
@@ -235,9 +235,144 @@ try {
     console.log(`\n=== LEAGUE CONCENTRATION (AU 2.5 sup>=0.85 gate) ===`);
     console.log(`  ${leagues.length} distinct leagues, top league = ${(100 * topShare).toFixed(1)}% of picks (not one-league-driven if low)`);
 
+    // ========================================================================
+    // M3 (Task 10): NEW-FAMILY warehouse OOS anchors -> magic-rules WAREHOUSE_WLO
+    // ------------------------------------------------------------------------
+    // For each settled fixture, enumerate every candidate market's stats
+    // probability with the SAME tip-rules aggregates bestTip uses
+    // (pairedTeamOutcomeAggregates / h2hOutcomeAggregates - NOT the teamShape
+    // above, so the anchor reflects exactly what the live engine will produce),
+    // settle via tipOutcome, and report the temporal-OOS (newest 30% TEST)
+    // hit-rate per market key over the ELIGIBLE population (both paired sides
+    // >= minGames - exactly what tipEligibility admits). Voids (DNB draws) are
+    // excluded from denominators.
+    //
+    // ANCHOR RULE (deliberately conservative, non-shopped): the pasted anchor =
+    // the UNCONDITIONAL temporal-OOS hit-rate over eligible fixtures. No support
+    // threshold is applied, so there is nothing to cherry-pick, and new markets
+    // get their honest MARGINAL prior (not an inflated gated precision) - the
+    // safest choice for the surest-pick guarantee (a too-generous anchor would
+    // pollute `sure`). The gated grid below is printed for TRANSPARENCY only (to
+    // expose the price-blind "precision looks strong" trap the study warns of);
+    // it is NOT used for the anchor. safePrior shrinks the LIVE per-market rate
+    // toward this anchor with k=20, so the live term dominates and self-corrects
+    // as data grows - BTTS/team-total anchors are EXPECTED to look strong here.
+    // ========================================================================
+    const TW = 7, HW = 5, MIN_GAMES = 5, H2H_MIN = 3;         // == live tip config
+    const OU_ALL = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];       // tip-rules OU lines
+    const TT_LINES = [0.5, 1.5, 2.5, 3.5];                     // team-total lines the books actually offer
+    const _m = arr => { const v = arr.filter(x => x != null); return v.length ? v.reduce((a, b) => a + b, 0) / v.length : null; };
+
+    // Per-fixture stats probability for every candidate market, mirroring bestTip
+    // exactly (means over whichever of the two teams + H2H qualify).
+    function m3Probs(home, away, h2h) {
+        const hOk = home.n >= MIN_GAMES, aOk = away.n >= MIN_GAMES, hhOk = h2h.n >= H2H_MIN;
+        const p = {};
+        const s1 = _m([hOk ? home.winRate : null, aOk ? away.lossRate : null, hhOk ? h2h.homeWinRate : null]);
+        const sX = _m([hOk ? home.drawRate : null, aOk ? away.drawRate : null, hhOk ? h2h.drawRate : null]);
+        const s2 = _m([hOk ? home.lossRate : null, aOk ? away.winRate : null, hhOk ? h2h.awayWinRate : null]);
+        p['1'] = s1; p['X'] = sX; p['2'] = s2;
+        p['1X'] = s2 == null ? null : 1 - s2; p['X2'] = s1 == null ? null : 1 - s1; p['12'] = sX == null ? null : 1 - sX;
+        for (const L of OU_ALL) {
+            const o = _m([hOk ? home.overRates?.[L] : null, aOk ? away.overRates?.[L] : null, hhOk ? h2h.overRates?.[L] : null]);
+            p[`O ${L}`] = o; p[`U ${L}`] = o == null ? null : 1 - o;
+        }
+        const gg = _m([hOk ? home.bttsRate : null, aOk ? away.bttsRate : null, hhOk ? h2h.bttsRate : null]);
+        p['GG'] = gg; p['NG'] = gg == null ? null : 1 - gg;
+        const dnb1 = s1 != null && s2 != null && (s1 + s2) > 0 ? s1 / (s1 + s2) : null;
+        p['DNB1'] = dnb1; p['DNB2'] = dnb1 == null ? null : 1 - dnb1;
+        const odd = _m([hOk ? home.oddRate : null, aOk ? away.oddRate : null, hhOk ? h2h.oddRate : null]);
+        p['ODD'] = odd; p['EVEN'] = odd == null ? null : 1 - odd;
+        for (const L of TT_LINES) {
+            const hO = _m([hOk ? home.scoredOverRates?.[L] : null, aOk ? away.concededOverRates?.[L] : null]);
+            p[`TT:H:O ${L}`] = hO; p[`TT:H:U ${L}`] = hO == null ? null : 1 - hO;
+            const aO = _m([aOk ? away.scoredOverRates?.[L] : null, hOk ? home.concededOverRates?.[L] : null]);
+            p[`TT:A:O ${L}`] = aO; p[`TT:A:U ${L}`] = aO == null ? null : 1 - aO;
+        }
+        return p;
+    }
+
+    // fixtures is already kickoff-ordered, so rowsM3's array index IS temporal order.
+    const rowsM3 = [];
+    for (const f of fixtures) {
+        const cutoff = new Date(f.kickoff).getTime();
+        const { home, away } = pairedTeamOutcomeAggregates(
+            byTeam.get(f.home_team_id) ?? [], byTeam.get(f.away_team_id) ?? [],
+            f.home_team_id, f.away_team_id, cutoff, TW);
+        if (!(home.n >= MIN_GAMES && away.n >= MIN_GAMES)) continue;   // tipEligibility population
+        const h2h = h2hOutcomeAggregates(byTeam.get(f.home_team_id) ?? [], f.home_team_id, f.away_team_id, cutoff, HW);
+        rowsM3.push({ h: f.ft_home, a: f.ft_away, probs: m3Probs(home, away, h2h) });
+    }
+    const cutM3 = Math.floor(rowsM3.length * 0.7);
+    const trainM3 = rowsM3.slice(0, cutM3), testM3 = rowsM3.slice(cutM3);
+    console.log(`\n\n########################################################################`);
+    console.log(`M3 NEW-FAMILY ANCHORS: ${rowsM3.length} eligible fixtures (both sides >=${MIN_GAMES} games)`);
+    console.log(`  temporal split: train ${trainM3.length} (oldest 70%) | TEST ${testM3.length} (newest 30%)`);
+
+    // Unconditional hit-rate over a pool (voids excluded).
+    const rate = (market, pool) => {
+        let n = 0, h = 0, v = 0;
+        for (const r of pool) {
+            const res = tipOutcome(market, r.h, r.a);
+            if (res === 'void') { v++; continue; }
+            n++; if (res === 'hit') h++;
+        }
+        return { n, h, v, rate: n ? h / n : null };
+    };
+    // Gated hit-rate: only fixtures whose stats prob for `market` >= T (voids excluded).
+    const gated = (market, pool, T) => {
+        let n = 0, h = 0;
+        for (const r of pool) {
+            const s = r.probs[market];
+            if (s == null || s < T) continue;
+            const res = tipOutcome(market, r.h, r.a);
+            if (res === 'void') continue;
+            n++; if (res === 'hit') h++;
+        }
+        return { n, rate: n ? h / n : null };
+    };
+
+    const NEW_MARKETS = ['GG', 'NG', 'DNB1', 'DNB2', 'ODD', 'EVEN',
+        ...['H', 'A'].flatMap(s => TT_LINES.flatMap(L => [`TT:${s}:O ${L}`, `TT:${s}:U ${L}`]))];
+    const GATES = [0.55, 0.6, 0.65, 0.7, 0.75, 0.8];
+
+    // Calibration cross-check: do the pre-existing gated anchors reproduce off
+    // the SAME machinery? (Committed values were derived from teamShape, not
+    // tip-rules aggregates, so an approximate match is the most we expect - it
+    // is a sanity gate, not a proof.) Shows base rate, unconditional OOS, and
+    // the gated OOS ramp beside the committed anchor.
+    const COMMITTED = {
+        '1X': 0.807, 'X2': 0.669, '12': 0.777, '1': 0.58, '2': 0.50,
+        'O 0.5': 0.90, 'O 1.5': 0.811, 'O 2.5': 0.683, 'O 3.5': 0.60,
+        'U 3.5': 0.760, 'U 4.5': 0.868, 'U 5.5': 0.90, 'U 6.5': 0.94,
+    };
+    console.log('\n=== CALIBRATION CROSS-CHECK: committed anchors vs measured (eligible pop) ===');
+    console.log('  market   committed  baseAll   oosUncond   gatedOOS@[.55 .6 .65 .7 .75 .8]');
+    for (const m of Object.keys(COMMITTED)) {
+        const all = rate(m, rowsM3), oos = rate(m, testM3);
+        const g = GATES.map(T => gated(m, testM3, T).rate);
+        console.log(`  ${m.padEnd(7)} ${pct(COMMITTED[m]).padStart(6)}    ${pct(all.rate).padStart(6)}   ${pct(oos.rate).padStart(6)} (${oos.n})   ${g.map(x => pct(x).padStart(6)).join(' ')}`);
+    }
+
+    console.log('\n=== NEW-FAMILY OOS HIT-RATE (anchor = oosUncond; gated grid = transparency) ===');
+    console.log('  market        baseAll    ANCHOR(oosUncond)      gatedOOS@[.55 .6 .65 .7 .75 .8]');
+    const m3Anchors = {};
+    for (const m of NEW_MARKETS) {
+        const all = rate(m, rowsM3), oos = rate(m, testM3);
+        m3Anchors[m] = oos.rate == null ? null : Math.round(oos.rate * 1000) / 1000;
+        const g = GATES.map(T => { const r = gated(m, testM3, T); return r.n < 30 ? '   -  ' : pct(r.rate).padStart(6); });
+        console.log(`  ${m.padEnd(13)} ${pct(all.rate).padStart(6)}    ${pct(oos.rate).padStart(6)} (${String(oos.n).padStart(5)}${oos.v ? ', ' + oos.v + ' void' : ''})   ${g.join(' ')}`);
+    }
+
+    console.log('\n=== SUGGESTED WAREHOUSE_WLO ADDITIONS (M3, paste values) ===');
+    const _lit = m => `'${m}': ${m3Anchors[m] == null ? 'null' : m3Anchors[m].toFixed(3)}`;
+    console.log('  ' + ['GG', 'NG', 'DNB1', 'DNB2', 'ODD', 'EVEN'].map(_lit).join(', '));
+    for (const s of ['H', 'A']) console.log('  ' + TT_LINES.flatMap(L => [`TT:${s}:O ${L}`, `TT:${s}:U ${L}`]).map(_lit).join(', '));
+
     mkdirSync('tmp/sure-win', { recursive: true });
-    writeFileSync('tmp/sure-win/backtest.json', JSON.stringify({ pool: rowsF.length, results }, null, 0));
-    console.log('\nWrote tmp/sure-win/backtest.json (' + results.length + ' gate cells)');
+    writeFileSync('tmp/sure-win/backtest.json',
+        JSON.stringify({ pool: rowsF.length, results, m3: { eligible: rowsM3.length, test: testM3.length, anchors: m3Anchors } }, null, 0));
+    console.log('\nWrote tmp/sure-win/backtest.json (' + results.length + ' gate cells + M3 anchors)');
 } finally {
     await closeDb();
 }

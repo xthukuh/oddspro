@@ -105,6 +105,13 @@ The guard is data-driven (thresholds), so it self-adjusts as coverage grows.
   don't break.
 
 ### M3 — Predictions on new markets (gated, per-family, honest)
+
+> **SUPERSEDED (2026-07-15):** M3 is now specified by
+> `2026-07-15-m3-any-market-predictions-design.md`. The "backtest evidence bar
+> before a market may surface a tip" below is replaced by **tip-always + honest
+> measured hit-rate/EV labeling + a Safe-pool market-maturity floor** (user
+> decision 2026-07-14, confirmed 2026-07-15). The display-only family exclusions
+> and the "never throw on unknown markets" rule below still stand.
 - Extend `_loadMarkets` to shape new family inputs; add per-family **devig** +
   **`tipHit` settlement** rules (BTTS, team totals, DNB, HT/FT, Multigoals — the
   tractable families where our stats can produce an independent probability).
