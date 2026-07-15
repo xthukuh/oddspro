@@ -1,5 +1,5 @@
 import { useEffect } from 'react';
-import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconUser, IconUserPlus, IconLogout } from './icons.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconUser, IconUserPlus, IconLogout, IconShield } from './icons.jsx';
 import { Z } from '../zLayers.js';
 
 // Right-justified mobile overflow: the toolbar actions as a simple tap list
@@ -22,7 +22,7 @@ export function Row({ icon, label, onClick, disabled, active, trailing }) {
 
 export default function OverflowMenu({ refreshing, canRefresh, filterCount, magicActive,
     onRefresh, onMagic, onSlips, onFilters, onHelp, onSettings, onClose,
-    user, onSignIn, onSignUp, onProfile, onLogout }) {
+    user, onSignIn, onSignUp, onProfile, onLogout, onAdmin }) {
     useEffect(() => {
         const onKey = e => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', onKey);
@@ -51,6 +51,7 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
                             <div className="text-[13px] font-semibold text-label truncate">{user.name}</div>
                             <div className="text-xs text-label-2 truncate">{user.phone}</div>
                         </div>
+                        {user.role === 'admin' && <Row icon={<IconShield />} label="Admin" onClick={onAdmin} />}
                         <Row icon={<IconUser />} label="Edit profile" onClick={onProfile} />
                         <Row icon={<IconLogout />} label="Sign out" onClick={onLogout} />
                     </>

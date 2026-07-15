@@ -973,6 +973,7 @@ export default function App() {
                                 onSignIn={() => { session?.openAuth('signin'); setShowOverflow(false); }}
                                 onSignUp={() => { session?.openAuth('signup'); setShowOverflow(false); }}
                                 onProfile={() => { session?.openAuth('profile'); setShowOverflow(false); }}
+                                onAdmin={() => { session?.openAuth('admin'); setShowOverflow(false); }}
                                 onLogout={() => { session?.logout(); setShowOverflow(false); }}
                                 onClose={() => setShowOverflow(false)} />
                         )}

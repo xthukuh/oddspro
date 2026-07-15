@@ -494,6 +494,7 @@ app.get('/api/admin/lab/data', requireAdminRole, async (req, res, next) => {
             days: q.days ? Number(q.days) : null,
             sample: q.sample ? Number(q.sample) : undefined,
             minCount: q.min_count ? Number(q.min_count) : undefined,
+            topCategories: q.top_categories ? Number(q.top_categories) : undefined,
         }));
     } catch (e) {
         next(e);

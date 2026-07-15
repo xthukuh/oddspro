@@ -196,11 +196,11 @@ export async function getLabFeatures() {
 
 // Pre-binned lab aggregates: { x, y, color, outcome, cells, rows_used,
 // rows_skipped, rows_loaded, min_count }. filters: [{key, op, value}].
-export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount }) {
+export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount, topCategories }) {
     return _get('/api/admin/lab/data', {
         x, y, color, outcome,
         filters: filters?.length ? JSON.stringify(filters) : null,
-        days, sample, min_count: minCount,
+        days, sample, min_count: minCount, top_categories: topCategories,
     });
 }
 

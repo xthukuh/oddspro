@@ -85,7 +85,7 @@ export async function labRows({ days = null, sample = LAB_DEFAULTS.sample, needs
 // One lab request: load -> filter -> aggregate. Unknown feature/outcome keys
 // throw TypeError (validated BEFORE the query so a bad request never hits the
 // DB); the server's JSON error handler maps that to a 400.
-export async function labData({ x, y = null, color = null, outcome, filters = [], days = null, sample = undefined, minCount = undefined } = {}) {
+export async function labData({ x, y = null, color = null, outcome, filters = [], days = null, sample = undefined, minCount = undefined, topCategories = undefined } = {}) {
     for (const [name, key] of [['x', x], ['y', y], ['color', color]]) {
         if (key != null && !labFeature(key)) throw new TypeError(`Unknown lab feature for ${name}: ${key}`);
     }
@@ -99,6 +99,7 @@ export async function labData({ x, y = null, color = null, outcome, filters = []
     const agg = aggregateOutcomeRate(filtered, {
         xKey: x, yKey: y, colorKey: color, outcome,
         minCount: _clamp(minCount, 1, 1000, LAB_DEFAULTS.min_count),
+        topCategories: _clamp(topCategories, 2, 24, 12),
     });
     return {
         x: labFeature(x),

@@ -1,8 +1,14 @@
+import { lazy, Suspense } from 'react';
 import { useSession } from './SessionProvider.jsx';
 import SignInView from './SignInView.jsx';
 import SignUpView from './SignUpView.jsx';
 import VerifyPhoneView from './VerifyPhoneView.jsx';
 import ProfileView from './ProfileView.jsx';
+
+// Lazy: the admin panel pulls recharts (~heavy) - keep it out of the guest
+// bundle; vite splits the dynamic import into its own chunk fetched on first
+// open. Role-gated below (UX only - every admin API re-checks the session).
+const AdminPanel = lazy(() => import('../admin/AdminPanel.jsx'));
 
 // SOFT auth gate: the app always renders - guests browse exactly as before,
 // and the auth views are opaque overlays on top (so App keeps its state:
@@ -27,6 +33,11 @@ export default function AuthGate({ children }) {
             {!forced && s.view === 'signin' && <SignInView />}
             {!forced && s.view === 'signup' && <SignUpView />}
             {!forced && s.view === 'profile' && <ProfileView />}
+            {!forced && s.view === 'admin' && s.role === 'admin' && (
+                <Suspense fallback={<div className="fixed inset-0 z-[60] bg-app flex items-center justify-center text-label-2 text-sm">Loading admin…</div>}>
+                    <AdminPanel />
+                </Suspense>
+            )}
         </>
     );
 }

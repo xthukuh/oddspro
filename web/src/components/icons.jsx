@@ -57,6 +57,10 @@ export const IconLogout = (p) => (
 export const IconPhone = (p) => (
     <svg {...S} {...p}><rect x="6" y="2.5" width="8" height="15" rx="2" stroke="currentColor" strokeWidth="1.6"/><path d="M9 14.8h2" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round"/></svg>
 );
+// Shield-with-check for the admin panel row (Phase 6).
+export const IconShield = (p) => (
+    <svg {...S} {...p}><path d="M10 2.2 16.2 4.6v4.6c0 4-2.6 6.8-6.2 8.3-3.6-1.5-6.2-4.3-6.2-8.3V4.6L10 2.2z" stroke="currentColor" strokeWidth="1.6" strokeLinejoin="round"/><path d="m7.2 9.8 2 2 3.6-3.8" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"/></svg>
+);
 // Push-pin toggle for the "pin view" modal control (filled = pinned, so a
 // background click won't dismiss). Emoji 📌/📍 in the spec were only examples.
 export const IconPin = ({ filled, ...p }) => (

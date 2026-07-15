@@ -3,15 +3,16 @@ import { useSession } from '../auth/SessionProvider.jsx';
 import useOutsideDismiss from '../useOutsideDismiss.js';
 import { Z } from '../zLayers.js';
 import { Row } from './OverflowMenu.jsx';
-import { IconUser, IconUserPlus, IconLogout, IconPhone } from './icons.jsx';
+import { IconUser, IconUserPlus, IconLogout, IconPhone, IconShield } from './icons.jsx';
 
 // Desktop session control (right of the gear; the mobile overflow menu carries
 // the same rows for parity). Guest -> user-silhouette button with Sign in /
 // Create account; signed in -> initial-in-a-circle with an account header +
 // Edit profile / Sign out. Anchored dropdown in the OverflowMenu idiom:
 // absolute panel inside a relative wrapper, useOutsideDismiss (the nav's
-// backdrop-filter traps fixed backdrops) + Escape to close.
-// (Phase 6 adds an Admin row here for role==='admin' once AdminPanel exists.)
+// backdrop-filter traps fixed backdrops) + Escape to close. Admin sessions get
+// an Admin row opening the Phase 6 AdminPanel (role check is UX only - the
+// admin APIs re-verify the session server-side).
 export default function AvatarMenu({ btnCls, activeCls }) {
     const session = useSession();
     const [open, setOpen] = useState(false);
@@ -56,6 +57,9 @@ export default function AvatarMenu({ btnCls, activeCls }) {
                                 </div>
                             </div>
                             <div className="h-px bg-separator-2 my-1" />
+                            {user.role === 'admin' && (
+                                <Row icon={<IconShield />} label="Admin" onClick={() => go(() => openAuth('admin'))} />
+                            )}
                             <Row icon={<IconUser />} label="Edit profile" onClick={() => go(() => openAuth('profile'))} />
                             <Row icon={<IconLogout />} label="Sign out" onClick={() => go(() => logout())} />
                         </>

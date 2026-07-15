@@ -172,3 +172,15 @@ button, [role="button"], a, label, summary {
     font-size: 15px;
 }
 .op-phone .PhoneInputCountrySelectArrow { color: var(--label-2); opacity: 1; }
+
+/* Admin data-lab (admin/DataLab.jsx) recharts chrome: axis/grid/legend wear
+   the theme tokens. CSS wins over recharts' SVG presentation attributes, so
+   these stay theme-reactive; data marks keep their JS-resolved fills (SVG
+   attributes can't hold var()). Legend text needs !important - recharts
+   inlines the series color onto it, but text wears text tokens, never the
+   series color (the swatch carries identity). */
+.op-lab .recharts-cartesian-grid line { stroke: var(--separator-2); }
+.op-lab .recharts-cartesian-axis line,
+.op-lab .recharts-cartesian-axis path { stroke: var(--separator); }
+.op-lab .recharts-text { fill: var(--label-2); font-size: 11px; }
+.op-lab .recharts-legend-item-text { color: var(--label-2) !important; font-size: 12px; }
