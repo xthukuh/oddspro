@@ -173,4 +173,9 @@ test('isCleartextUrl flags non-loopback http:// (credential-in-cleartext guard)'
     assert.equal(isCleartextUrl('http://127.0.0.1:8080/proxy'), false);
     assert.equal(isCleartextUrl(''), false);
     assert.equal(isCleartextUrl(null), false);
+    // C4: bracketed IPv6 / userinfo hosts parse via WHATWG URL now
+    assert.equal(isCleartextUrl('http://[::1]:4002/v1/send-sms'), false);          // IPv6 loopback proxy
+    assert.equal(isCleartextUrl('http://user:pass@127.0.0.1:8080/proxy'), false);  // userinfo, loopback
+    assert.equal(isCleartextUrl('http://user:pass@sms.example.com/send'), true);   // userinfo, remote
+    assert.equal(isCleartextUrl('http://[2001:db8::1]/send'), true);               // IPv6 remote
 });

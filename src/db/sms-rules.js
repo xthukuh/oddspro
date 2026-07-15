@@ -157,6 +157,14 @@ export function classifyBongaStatus(status) {
 export function isCleartextUrl(url) {
     const s = String(url || '');
     if (!s.toLowerCase().startsWith('http://')) return false;
-    const host = s.slice(7).split(/[/:?#]/)[0].toLowerCase();
+    // WHATWG URL (a global - still zero-import) handles userinfo, ports and
+    // bracketed IPv6 hosts the old split() misparsed (C4: http://[::1]:.../ or
+    // http://user:pass@127.0.0.1/ fired the warning falsely).
+    let host;
+    try {
+        host = new URL(s).hostname.toLowerCase(); // IPv6 keeps its brackets: '[::1]'
+    } catch {
+        return true; // unparseable http:// - warn rather than stay silent
+    }
     return !['localhost', '127.0.0.1', '::1', '[::1]'].includes(host);
 }
