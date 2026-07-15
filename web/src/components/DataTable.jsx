@@ -12,8 +12,10 @@ import { orderRows } from '../ordering.js';
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 // Pure settler (zero-import) - grades a runner-up market from the final score
-// (the settle pass only stores the CHOSEN tip's outcome).
-import { tipHit } from '../../../src/db/tip-rules.js';
+// (the settle pass only stores the CHOSEN tip's outcome). tipHitSafe never
+// throws (unknown key -> null) and returns 'void' for a DNB push, so the
+// runner-up tick matches the chosen-tip pill's semantics.
+import { tipHitSafe } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
 import Tooltip from './Tooltip.jsx';
 import BulkActionsMenu from './BulkActionsMenu.jsx';
@@ -247,12 +249,15 @@ function _pctClass(conf) {
 
 // Settle any market for a final fixture from its canonical score. Runners-up
 // carry no stored outcome (only the chosen tip is graded), so we grade them
-// here; a non-final row (no score) returns null -> pending, no tick.
+// here; a non-final row (no score) returns null -> pending, no tick. Returns
+// 'hit'|'miss'|'void'|null - a DNB runner-up landing on a draw is a push
+// (↩ void via _tick), never a miss, and an unknown key renders no tick
+// instead of throwing in the browser.
 function _marketOutcome(row, market) {
     if (!row.score) return null;
     const [hs, as] = row.score.split('-').map(Number);
     if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
-    return tipHit(market, hs, as) ? 'hit' : 'miss';
+    return tipHitSafe(market, hs, as);
 }
 
 function _tick(outcome) {
