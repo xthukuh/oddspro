@@ -5,6 +5,12 @@ import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycl
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 
+// A committed-but-blank .env line (`KEY=`, the .env.example shape) reaches zod
+// as '' - treat that as unset for optional strings, else `.min(1).optional()`
+// throws a ZodError at import and kills every CLI over a blank line unrelated
+// to what's being run (M4).
+const optionalStr = inner => z.preprocess(v => (v === '' ? undefined : v), inner);
+
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
     DB_HOST: z.string().default('127.0.0.1'),
@@ -16,8 +22,8 @@ const EnvSchema = z.object({
     DB_COLLATION: z.string().default('utf8mb4_unicode_ci'),
     X_APISPORTS_URL: z.string().url().default('https://v3.football.api-sports.io'),
     X_APISPORTS_KEY: z.string().min(1, 'X_APISPORTS_KEY is required (see .env.example)'),
-    BETPAWA_BASE_URL: z.string().url().optional(),
-    BETIKA_BASE_URL: z.string().url().optional(),
+    BETPAWA_BASE_URL: optionalStr(z.string().url().optional()),
+    BETIKA_BASE_URL: optionalStr(z.string().url().optional()),
     APISPORTS_MIN_REMAINING: z.coerce.number().int().min(0).default(5),
     LINK_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.85),
     // Rolling windows for the pre-match goals aggregates (fixture_prematch)
@@ -38,7 +44,7 @@ const EnvSchema = z.object({
     // AI adjudication is optional: no key = rules-only verdicts (fail-open).
     // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
     // 2026-07-04 - stronger reasoner + native Google Search grounding.
-    GEMINI_API_KEY: z.string().min(1).optional(),
+    GEMINI_API_KEY: optionalStr(z.string().min(1).optional()),
     GEMINI_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta'),
     HOTPICK_AI_MODEL: z.string().default('gemini-2.5-flash'),
     // Web-grounded AI: attach Gemini's google_search tool for BOTH
@@ -55,12 +61,12 @@ const EnvSchema = z.object({
     API_HOST: z.string().default('127.0.0.1'),
     // Optional: require `Authorization: Bearer <token>` on /api/* (server.js).
     // Unset = today's behavior (same-origin X-Requested-With check only).
-    API_TOKEN: z.string().min(1).optional(),
+    API_TOKEN: optionalStr(z.string().min(1).optional()),
     // Optional: admin secret guarding the traffic dashboard (GET /admin +
     // GET /api/visits/summary). Kept SEPARATE from API_TOKEN so a public SPA
     // (API_TOKEN unset, /api open) can still lock the admin views. Falls back to
     // API_TOKEN when unset; admin is disabled (404) if neither is set.
-    ADMIN_TOKEN: z.string().min(1).optional(),
+    ADMIN_TOKEN: optionalStr(z.string().min(1).optional()),
     // knex pool sizing (knexfile.js). Defaults preserve the existing hardcoded
     // 0/10. The cron pipeline and the always-on server are separate processes
     // with separate pools - shared hosting connection caps may need this lower.
@@ -76,7 +82,7 @@ const EnvSchema = z.object({
     // together: HUMAN_POW_ENABLED here AND VITE_HUMAN_POW at web build time.
     HUMAN_POW_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
     HUMAN_POW_BITS: z.coerce.number().int().min(1).max(28).default(18),   // difficulty (~2^bits hashes, <1s in-browser)
-    HUMAN_TOKEN_SECRET: z.string().min(1).optional(),                     // HMAC key; set for a stable check-once across restarts
+    HUMAN_TOKEN_SECRET: optionalStr(z.string().min(1).optional()),        // HMAC key; set for a stable check-once across restarts
     HUMAN_TOKEN_TTL_DAYS: z.coerce.number().min(0.01).default(7),         // check-once lifetime (~1 week per the user's ask)
     HUMAN_CHALLENGE_TTL_MINUTES: z.coerce.number().min(1).default(10),
     // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
@@ -140,11 +146,15 @@ const EnvSchema = z.object({
     // PIN hash (a deliberate global reset lever) - Phase 3's auth service warns
     // loudly at boot when it's unset. Read directly from process.env by the users
     // migration too, so set it BEFORE `npm run migrate` seeds the admin.
-    PIN_PEPPER: z.string().optional(),
+    PIN_PEPPER: optionalStr(z.string().min(1).optional()), // '' = unset, so the boot warning stays honest
     // First-login bootstrap PIN for the seeded default admin (users migration).
     // Hashed at migrate time; the admin is flagged must_change_pin, so it can
     // only be used once to log in and immediately set a real PIN.
-    ADMIN_SEED_PIN: z.string().default('0000'),
+    // Constrained to the loginSchema PIN shape (^\d{4}$): a 6-digit seed would
+    // hash fine but could never pass login validation, bricking the seeded
+    // admin behind a forward-only migration (M5). knexfile imports this config,
+    // so `npm run migrate` fail-fasts here BEFORE the seed hashes a bad PIN.
+    ADMIN_SEED_PIN: z.string().regex(/^\d{4}$/, 'ADMIN_SEED_PIN must be exactly 4 digits (login requires a 4-digit PIN)').default('0000'),
     // Master switch for the whole user-accounts feature (routes/middleware).
     AUTH_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
     // Opaque DB session lifetime; PIN lockout policy (src/auth-rules.js).
@@ -165,9 +175,9 @@ const EnvSchema = z.object({
     BONGA_API_URL_SEND: z.string().default('http://167.172.14.50:4002/v1/send-sms'),
     BONGA_API_URL_BALANCE: z.string().default('https://app.bongasms.co.ke/api/check-credits'),
     BONGA_API_URL_DELIVERY: z.string().default('https://app.bongasms.co.ke/api/fetch-delivery'),
-    BONGA_API_CLIENT_ID: z.string().min(1).optional(),
-    BONGA_API_KEY: z.string().min(1).optional(),
-    BONGA_API_SECRET: z.string().min(1).optional(),
+    BONGA_API_CLIENT_ID: optionalStr(z.string().min(1).optional()),
+    BONGA_API_KEY: optionalStr(z.string().min(1).optional()),
+    BONGA_API_SECRET: optionalStr(z.string().min(1).optional()),
     BONGA_SERVICE_ID: z.coerce.number().int().default(1),
     // OTP policy (src/db/sms-rules.js): 6-digit codes, 10-min TTL, 5 verify
     // attempts, resend backoff 60·n up to 5 resends.
