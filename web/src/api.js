@@ -164,6 +164,20 @@ export async function updateProfile(data) {
     return _send('/api/auth/profile', data, 'PUT');
 }
 
+// --- Cross-device prefs sync (v1.1.0 Phase 7) --------------------------------
+
+// The signed-in user's synced prefs blob -> { data, version, updated_at }
+// (version 0 + data null = no server copy yet; see auth/prefsSync.js).
+export async function getPrefs() {
+    return _get('/api/prefs');
+}
+
+// LWW write -> { version, updated_at } (409 ApiError body carries
+// { conflict: true, server } for the client-side reconcile).
+export async function putPrefs(data, version) {
+    return _send('/api/prefs', { data, version }, 'PUT');
+}
+
 // --- Dynamic settings + admin lab (v1.1.0 Phase 6) ---------------------------
 
 // Public effective subset (client-safe operational knobs) - no auth needed.

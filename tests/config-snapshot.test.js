@@ -5,6 +5,7 @@ import {
     parseEnvelope,
     migrateEnvelope,
     isSecret,
+    isTransient,
     SNAPSHOT_FORMAT,
     SNAPSHOT_VERSION,
 } from '../web/src/configSnapshot.js';
@@ -68,6 +69,13 @@ test('parseEnvelope rejects a missing/invalid data payload', () => {
 test('migrateEnvelope is identity for the current version', () => {
     const env = buildEnvelope({ 'oddspro.a': '1' });
     assert.deepEqual(migrateEnvelope(env), env);
+});
+
+test('isTransient excludes per-date selections and the prefs-sync cursor', () => {
+    assert.equal(isTransient('oddspro.select.d.2026-07-15'), true); // per-date row selection
+    assert.equal(isTransient('oddspro.prefs.sync'), true);          // device sync cursor (Phase 7)
+    assert.equal(isTransient('oddspro.theme'), false);
+    assert.equal(isTransient('oddspro.selection'), false);          // prefix must match fully
 });
 
 test('isSecret excludes the per-device credentials, nothing else', () => {

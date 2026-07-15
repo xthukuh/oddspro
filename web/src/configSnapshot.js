@@ -13,7 +13,10 @@ export const SNAPSHOT_VERSION = 1;
 const PREFIX = 'oddspro.';
 // Transient, per-date row selections (oddspro.select.d.<date>) are data, not
 // config - they'd bloat the snapshot and mean nothing on another day/instance.
-const isTransient = key => key.startsWith('oddspro.select.d.');
+// The prefs-sync cursor (oddspro.prefs.sync, v1.1.0 Phase 7) is likewise this
+// device's own sync clock: exporting it is noise, importing another device's
+// would corrupt sync state. Exported for the offline exclusion tests.
+export const isTransient = key => key.startsWith('oddspro.select.d.') || key === 'oddspro.prefs.sync';
 // Per-device credentials (the session + human-verification tokens) are
 // secrets, not preferences: they must never leave the device in an export,
 // and an import must neither install another device's tokens nor wipe this
@@ -71,7 +74,7 @@ export function applyConfig(data) {
         if (k.startsWith(PREFIX) && !isSecret(k)) localStorage.removeItem(k);
     }
     for (const [k, v] of Object.entries(data)) {
-        if (!isSecret(k)) localStorage.setItem(k, String(v));
+        if (!isSecret(k) && !isTransient(k)) localStorage.setItem(k, String(v));
     }
 }
 
