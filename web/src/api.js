@@ -164,6 +164,46 @@ export async function updateProfile(data) {
     return _send('/api/auth/profile', data, 'PUT');
 }
 
+// --- Dynamic settings + admin lab (v1.1.0 Phase 6) ---------------------------
+
+// Public effective subset (client-safe operational knobs) - no auth needed.
+export async function getSettings() {
+    return _get('/api/settings');
+}
+
+// Full admin catalog: [{key, group, type, public, live, min, max, enum,
+// default, override, effective}] - admin-role session (or ADMIN_TOKEN bearer).
+export async function getAdminSettings() {
+    const { settings } = await _get('/api/admin/settings');
+    return settings;
+}
+
+// Batch override write (all-or-nothing server-side) ->
+// { ok, results: [{key, effective, restart_required}], restart_required: [keys] }
+export async function putAdminSettings(overrides) {
+    return _send('/api/admin/settings', { overrides }, 'PUT');
+}
+
+// Reset one override to its config default -> { ok, key, effective, restart_required }
+export async function deleteAdminSetting(key) {
+    return _send(`/api/admin/settings/${encodeURIComponent(key)}`, {}, 'DELETE');
+}
+
+// Data-viz lab catalogs: { features, outcomes, defaults } (admin session only).
+export async function getLabFeatures() {
+    return _get('/api/admin/lab/features');
+}
+
+// Pre-binned lab aggregates: { x, y, color, outcome, cells, rows_used,
+// rows_skipped, rows_loaded, min_count }. filters: [{key, op, value}].
+export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount }) {
+    return _get('/api/admin/lab/data', {
+        x, y, color, outcome,
+        filters: filters?.length ? JSON.stringify(filters) : null,
+        days, sample, min_count: minCount,
+    });
+}
+
 // Proof-of-work human gate (opt-in; only reachable when the server has
 // HUMAN_POW_ENABLED). fetchChallenge -> solve in the browser -> submitHuman
 // mints the check-once token. See web/src/HumanGate.jsx + src/human-pow.js.
