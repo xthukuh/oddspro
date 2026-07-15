@@ -23,6 +23,14 @@ export const DEFAULT_TIP = {
                          // 78.1% break-even over the 2026-07-04 cohort)
     // Blend weights, renormalized over the components actually available
     weights: { market: 0.6, stats: 0.3, api: 0.1 },
+    // Bookmaker-trick guards (spec §4.2, M3): a family book's implied-
+    // probability sum must land in this band - below minOverround smells
+    // like a palpable error / boosted price, above maxOverround is margin
+    // loading so heavy the devigged number is meaningless.
+    minOverround: 1.01,
+    maxOverround: 1.30,
+    // Cross-provider devigged-probability divergence veto (any outcome)
+    maxBookDivergence: 0.15,
 };
 
 // League names whose history evidence is invalid for tipping: preseason
@@ -151,6 +159,44 @@ function _devig(prices) {
     if (inv.some(v => v == null)) return null;
     const sum = inv.reduce((a, b) => a + b, 0);
     return inv.map(v => v / sum);
+}
+
+// Bookmaker-trick guards (spec §4.2). A family book must be complete and its
+// implied-probability sum inside a sane band: below 1.0 smells like a palpable
+// error / boosted price masquerading as a hidden gem; far above it is margin
+// loading so heavy the devigged number is meaningless.
+export function bookIntegrity(prices, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const inv = prices.map(p => (Number(p) > 1 ? 1 / Number(p) : null));
+    if (inv.some(v => v == null)) return { ok: false, overround: null, reason: 'incomplete' };
+    const overround = _round(inv.reduce((a, b) => a + b, 0));
+    if (overround < t.minOverround) return { ok: false, overround, reason: 'overround_low' };
+    if (overround > t.maxOverround) return { ok: false, overround, reason: 'overround_high' };
+    return { ok: true, overround, reason: null };
+}
+
+// Pick one provider's FULL family book (betpawa first, betika fallback -
+// mixing providers inside one group breaks the vig removal), guarded by
+// bookIntegrity and a cross-provider divergence veto: when both books are
+// complete but disagree beyond maxBookDivergence on any outcome's devigged
+// probability, one of them is likely a trap or error - no tip.
+export function selectFamilyBook(providers, keys, opts = {}) {
+    const t = { ...DEFAULT_TIP, ...opts };
+    const books = [];
+    for (const p of ['betpawa', 'betika']) {
+        const m = providers?.[p];
+        if (!m || !keys.every(k => Number(m[k]) > 1)) continue;
+        const prices = keys.map(k => m[k]);
+        const integ = bookIntegrity(prices, t);
+        books.push({ provider: p, book: Object.fromEntries(keys.map(k => [k, Number(m[k])])), ...integ, probs: _devig(prices) });
+    }
+    const sane = books.filter(b => b.ok);
+    if (!sane.length) return { book: null, overround: books[0]?.overround ?? null, reason: books[0]?.reason ?? 'incomplete' };
+    if (sane.length === 2) {
+        const gap = Math.max(...keys.map((k, i) => Math.abs(sane[0].probs[i] - sane[1].probs[i])));
+        if (gap > t.maxBookDivergence) return { book: null, overround: sane[0].overround, reason: 'book_divergence' };
+    }
+    return { book: sane[0].book, overround: sane[0].overround, reason: null };
 }
 
 // Mean of the non-null components, or null when none qualify

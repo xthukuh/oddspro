@@ -45,6 +45,11 @@ const EnvSchema = z.object({
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
     TIP_MIN_UNDER_LINE: z.coerce.number().min(0).default(DEFAULT_TIP.minUnderLine),
+    // Book-integrity guards (M3): family-book overround band + cross-provider
+    // devigged-probability divergence veto (see src/db/tip-rules.js)
+    TIP_MIN_OVERROUND: z.coerce.number().default(DEFAULT_TIP.minOverround),
+    TIP_MAX_OVERROUND: z.coerce.number().default(DEFAULT_TIP.maxOverround),
+    TIP_MAX_BOOK_DIVERGENCE: z.coerce.number().default(DEFAULT_TIP.maxBookDivergence),
     // AI adjudication is optional: no key = rules-only verdicts (fail-open).
     // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
     // 2026-07-04 - stronger reasoner + native Google Search grounding.

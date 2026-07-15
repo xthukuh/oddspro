@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     DEFAULT_TIP, teamOutcomeAggregates, pairedTeamOutcomeAggregates,
     h2hOutcomeAggregates, tipEligibility, tipHit, tipOutcome, tipHitSafe, bestTip,
+    bookIntegrity, selectFamilyBook,
 } from '../src/db/tip-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -451,4 +452,25 @@ test('bestTip yields to the runner-up market when the near-Under is suppressed',
     };
     assert.equal(bestTip(inputs, { minUnderLine: 3.5 }).market, 'U 3.5');
     assert.equal(bestTip(inputs).market, '12');
+});
+
+// --- bookIntegrity / selectFamilyBook ---
+
+test('bookIntegrity: overround window + completeness', () => {
+    assert.deepEqual(bookIntegrity([2.0, 3.6, 3.4]).ok, true);            // ~1.07 vig
+    assert.equal(bookIntegrity([2.6, 4.2, 4.0]).reason, 'overround_low');  // sum < 1 = palp/boost
+    assert.equal(bookIntegrity([1.5, 2.5, 2.5]).reason, 'overround_high'); // 1.47 margin-loaded
+    assert.equal(bookIntegrity([2.0, null, 3.4]).reason, 'incomplete');
+});
+test('selectFamilyBook: prefers betpawa, rejects divergent books', () => {
+    const keys = ['GG', 'NG'];
+    const ok = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 }, betika: { GG: 1.95, NG: 1.85 } }, keys);
+    assert.equal(ok.book.GG, 1.9);
+    // betika says GG 80%, betpawa says 50% -> divergence veto
+    const div = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 }, betika: { GG: 1.18, NG: 4.8 } }, keys);
+    assert.equal(div.book, null);
+    assert.equal(div.reason, 'book_divergence');
+    // single provider, sane book -> accepted with measured overround
+    const solo = selectFamilyBook({ betpawa: { GG: 1.9, NG: 1.9 } }, keys);
+    assert.ok(solo.overround > 1.0 && solo.book);
 });
