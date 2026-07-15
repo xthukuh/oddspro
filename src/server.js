@@ -24,6 +24,8 @@ import {
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema, mustChangePinBlocks,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
+import { validatePrefsPut } from './db/prefs-rules.js';
+import { getUserPrefs, saveUserPrefs } from './prefs.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
 import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
@@ -291,6 +293,36 @@ if (config.AUTH_ENABLED) {
             const data = profileSchema.parse(req.body);
             res.json({ ok: true, user: await updateProfile(req.user, data) });
         } catch (e) { authErr(e, res, next); }
+    });
+
+    // ------------------------------------------------------------------------
+    // Cross-device prefs sync (Phase 7). One blob per user; LWW protocol in
+    // src/db/prefs-rules.js, conditional write in src/prefs.js. requireAuth
+    // (not requireVerified) - prefs are harmless and syncing shouldn't wait
+    // on the phone gate. No-row GET answers version 0 so the client's
+    // reconcile() sees "no server copy yet" and pushes local (first login).
+    app.get('/api/prefs', requireAuth, async (req, res, next) => {
+        try {
+            const row = await getUserPrefs(req.user.id);
+            res.json(row ?? { data: null, version: 0, updated_at: null });
+        } catch (e) { next(e); }
+    });
+
+    // PUT { data, version } -> { version, updated_at } | 409 { conflict, server }.
+    // The body is sanitized server-side too (device keys / foreign keys never
+    // persist, whatever a client claims); a stale-version write loses and gets
+    // the winning row back to reconcile against.
+    app.put('/api/prefs', requireAuth, express.json({ limit: '64kb' }), async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const v = validatePrefsPut(req.body);
+            if (!v.ok) return res.status(400).json({ error: v.error });
+            const out = await saveUserPrefs(req.user.id, v.data, v.version);
+            if (out.conflict) {
+                return res.status(409).json({ error: 'A newer version exists.', conflict: true, server: out.conflict });
+            }
+            res.json({ version: out.version, updated_at: out.updated_at, dropped: v.dropped });
+        } catch (e) { next(e); }
     });
 }
 
