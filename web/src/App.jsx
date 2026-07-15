@@ -16,6 +16,8 @@ import HelpModal from './components/HelpModal.jsx';
 import Logo from './components/Logo.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import OverflowMenu from './components/OverflowMenu.jsx';
+import AvatarMenu from './components/AvatarMenu.jsx';
+import { useSession } from './auth/SessionProvider.jsx';
 import SettingsModal from './components/SettingsModal.jsx';
 import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
@@ -223,6 +225,7 @@ const _dateFromUrl = () => {
 };
 
 export default function App() {
+    const session = useSession(); // null-safe: App renders identically for guests
     const [catalog, setCatalog] = useState(null);
     const [marketKeys, setMarketKeys] = useState(() => _load(LS_MARKETS));
     const [statKeys, setStatKeys] = useState(() => _load(LS_STATS));
@@ -951,6 +954,7 @@ export default function App() {
                         <div className="w-px h-5 bg-separator mx-1.5" />
                         <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
                         <button onClick={() => setShowSettings(true)} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
+                        <AvatarMenu btnCls={navBtn} activeCls={navBtnActive} />
                     </div>
                     <div ref={overflowWrapRef} className="relative sm:hidden">
                         <button onClick={() => setShowOverflow(v => !v)} aria-label="More actions" title="More"
@@ -965,6 +969,11 @@ export default function App() {
                                 onFilters={() => { setShowFilters(v => !v); setShowOverflow(false); }}
                                 onHelp={() => { setShowHelp(true); setShowOverflow(false); }}
                                 onSettings={() => { setShowSettings(true); setShowOverflow(false); }}
+                                user={session?.user}
+                                onSignIn={() => { session?.openAuth('signin'); setShowOverflow(false); }}
+                                onSignUp={() => { session?.openAuth('signup'); setShowOverflow(false); }}
+                                onProfile={() => { session?.openAuth('profile'); setShowOverflow(false); }}
+                                onLogout={() => { session?.logout(); setShowOverflow(false); }}
                                 onClose={() => setShowOverflow(false)} />
                         )}
                     </div>
