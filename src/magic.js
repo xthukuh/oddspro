@@ -40,11 +40,14 @@ export async function settledTipRows() {
         );
 }
 
-// Uncached compute over the settled-tip ledger.
+// Uncached compute over the settled-tip ledger. Deliberately does NOT carry
+// the safe policy - that is attached fresh per response (magicSortCached) so
+// a live admin SAFE_* edit reaches browsers immediately instead of hiding in
+// the per-day cache until the next day / ?refresh=1 (M6).
 export async function magicSortSummary() {
     const rows = await settledTipRows();
     // tipView (magic-rules) coerces DECIMAL strings and parses breakdown JSON
-    return { generated_at: new Date().toISOString(), safe: safePolicy(), ...simulateStrategies(rows) };
+    return { generated_at: new Date().toISOString(), ...simulateStrategies(rows) };
 }
 
 // Per-day in-memory cache: the settled ledger only grows when the hotpicks
@@ -62,5 +65,7 @@ export async function magicSortCached(refresh = false) {
             throw e;
         });
     }
-    return _cache.promise;
+    // safe policy late-read PER RESPONSE, never cached (M6): the browser's 🛡
+    // toggle must see an admin SAFE_* edit on its next fetch.
+    return { ...(await _cache.promise), safe: safePolicy() };
 }
