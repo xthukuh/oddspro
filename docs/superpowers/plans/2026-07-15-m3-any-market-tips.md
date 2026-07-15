@@ -46,7 +46,7 @@
 **Interfaces:**
 - Produces: `fixture_predictions.tip_market VARCHAR(32)`, `tip_outcome ENUM('hit','miss','void')`. Later tasks persist keys like `TT:H:O 1.5` and outcome `'void'`.
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 ```js
 // Widen the tip vocabulary for M3 any-market tips (spec 2026-07-15):
@@ -63,17 +63,17 @@ export async function down(knex) {
 }
 ```
 
-- [ ] **Step 2: Run the migration**
+- [x] **Step 2: Run the migration**
 
 Run: `npm run migrate`
 Expected: `Batch 12 run: 1 migrations` (batch number may differ if the local DB drifted — what matters is this single file applying cleanly).
 
-- [ ] **Step 3: Verify columns**
+- [x] **Step 3: Verify columns**
 
 Run: `node -e "import('./src/db/connection.js').then(async ({db}) => { const [r] = await db.raw('SHOW COLUMNS FROM fixture_predictions LIKE \'tip_%\''); console.log(r.map(c => c.Field + ' ' + c.Type).join('\n')); await db.destroy(); })"`
 Expected: `tip_market varchar(32)` and `tip_outcome enum('hit','miss','void')`.
 
-- [ ] **Step 4: Run suite, commit**
+- [x] **Step 4: Run suite, commit**
 
 Run: `npm test` → 478 pass. Then:
 ```bash
@@ -93,7 +93,7 @@ git commit -m "feat(db): widen tip_market to 32 chars + void tip outcome (M3)"
 - Produces: `tipOutcome(market, ftHome, ftAway) → 'hit'|'miss'|'void'` (throws TypeError on unknown), `tipHit(market, fh, fa) → boolean` (unchanged contract: `tipOutcome(...) === 'hit'`, still throws), `tipHitSafe(market, fh, fa) → 'hit'|'miss'|'void'|null` (never throws — browser call sites).
 - New settleable keys: `GG`, `NG`, `DNB1`, `DNB2`, `ODD`, `EVEN`, `TT:H:O <line>`, `TT:H:U <line>`, `TT:A:O <line>`, `TT:A:U <line>`.
 
-- [ ] **Step 1: Write failing tests** (append to `tests/tip-rules.test.js`)
+- [x] **Step 1: Write failing tests** (append to `tests/tip-rules.test.js`)
 
 ```js
 import { tipOutcome, tipHitSafe } from '../src/db/tip-rules.js';
@@ -125,12 +125,12 @@ test('unknown market: tipOutcome throws, tipHitSafe returns null', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `node --test tests/tip-rules.test.js`
 Expected: FAIL — `tipOutcome` is not exported.
 
-- [ ] **Step 3: Implement** — replace the body of `tipHit` with delegation:
+- [x] **Step 3: Implement** — replace the body of `tipHit` with delegation:
 
 ```js
 const _TT_KEY = /^TT:(H|A):([OU]) (\d+\.5)$/;
@@ -178,9 +178,9 @@ export function tipHitSafe(market, ftHome, ftAway) {
 }
 ```
 
-- [ ] **Step 4: Run tests** — `node --test tests/tip-rules.test.js` PASS, then `npm test` all green.
+- [x] **Step 4: Run tests** — `node --test tests/tip-rules.test.js` PASS, then `npm test` all green.
 
-- [ ] **Step 5: Commit** — `git add -A && git commit -m "feat(tips): tipOutcome settlement API with void + new-family settles (M3)"`
+- [x] **Step 5: Commit** — `git add -A && git commit -m "feat(tips): tipOutcome settlement API with void + new-family settles (M3)"`
 
 ---
 
@@ -193,7 +193,7 @@ export function tipHitSafe(market, ftHome, ftAway) {
 **Interfaces:**
 - Produces (added fields, existing fields untouched): `teamOutcomeAggregates(...)` gains `bttsRate`, `oddRate`, `scoredOverRates {line: rate}`, `concededOverRates {line: rate}` (team's own goals > line / goals conceded > line, over `OU_LINES`). `h2hOutcomeAggregates(...)` gains `bttsRate` and `oddRate` only (per-side H2H rates are YAGNI — Task 5's TT stats blend uses team aggregates alone). Empty-sample returns carry `null` for all new fields.
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```js
 const HIST = [
@@ -220,9 +220,9 @@ test('h2hOutcomeAggregates gains bttsRate/oddRate', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure** — `node --test tests/tip-rules.test.js` FAIL (`bttsRate` undefined).
+- [x] **Step 2: Run to verify failure** — `node --test tests/tip-rules.test.js` FAIL (`bttsRate` undefined).
 
-- [ ] **Step 3: Implement** — inside the existing `for (const f of recent)` loop of `teamOutcomeAggregates`, accumulate alongside `w`/`d`:
+- [x] **Step 3: Implement** — inside the existing `for (const f of recent)` loop of `teamOutcomeAggregates`, accumulate alongside `w`/`d`:
 
 ```js
     let btts = 0, odd = 0;
@@ -242,9 +242,9 @@ test('h2hOutcomeAggregates gains bttsRate/oddRate', () => {
 ```
 and extend the return with `bttsRate: _round(btts / n)`, `oddRate: _round(odd / n)`, `scoredOverRates: Object.fromEntries(OU_LINES.map(l => [l, _round(scoredOver[l] / n)]))`, `concededOverRates: (same for concededOver)`. Empty return (`:68`) gains the four fields as `null`. Mirror in `h2hOutcomeAggregates` (btts/odd identical; the per-side rates use the home perspective `[gf, ga]` already computed there → `homeScoredOverRates` from gf, `awayScoredOverRates` from ga). `pairedTeamOutcomeAggregates` needs no change (it re-calls the extended function).
 
-- [ ] **Step 4: Run tests** — targeted then `npm test`, all green (existing asserts untouched — additive fields only).
+- [x] **Step 4: Run tests** — targeted then `npm test`, all green (existing asserts untouched — additive fields only).
 
-- [ ] **Step 5: Commit** — `git commit -am "feat(tips): btts/parity/per-side goal aggregates (M3)"`
+- [x] **Step 5: Commit** — `git commit -am "feat(tips): btts/parity/per-side goal aggregates (M3)"`
 
 ---
 
@@ -260,7 +260,7 @@ and extend the return with `bttsRate: _round(btts / n)`, `oddRate: _round(odd / 
 - `selectFamilyBook(providers, keys, opts) → { book: {key: price}|null, overround: number|null, reason: string|null }` — `providers` is `{ betpawa?: {key:price}, betika?: {key:price} }`; preference order betpawa→betika (today's `_group` rule at `hotpicks.js:60-68`); when BOTH providers carry the full group and their devigged probabilities diverge by more than `maxBookDivergence` on any outcome, returns `{ book: null, reason: 'book_divergence' }`.
 - Config: `TIP_MIN_OVERROUND` / `TIP_MAX_OVERROUND` / `TIP_MAX_BOOK_DIVERGENCE` (zod `z.coerce.number()` with the defaults above, placed beside `TIP_MIN_PRICE` at `src/config.js:45`).
 
-- [ ] **Step 1: Write failing tests**
+- [x] **Step 1: Write failing tests**
 
 ```js
 import { bookIntegrity, selectFamilyBook } from '../src/db/tip-rules.js';
@@ -285,9 +285,9 @@ test('selectFamilyBook: prefers betpawa, rejects divergent books', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify failure.**
+- [x] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```js
 // Bookmaker-trick guards (spec §4.2). A family book must be complete and its
@@ -330,9 +330,9 @@ export function selectFamilyBook(providers, keys, opts = {}) {
 ```
 Add the three `DEFAULT_TIP` keys, the three zod config entries (mirroring the `TIP_MIN_PRICE` idiom at `src/config.js:45`), and the three `.env.example` lines (commented, with defaults).
 
-- [ ] **Step 4: Run tests, all green.** Note: existing `_devig` is reused — do not duplicate it.
+- [x] **Step 4: Run tests, all green.** Note: existing `_devig` is reused — do not duplicate it.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat(tips): book-integrity guards - overround window + divergence veto (M3)"`
+- [x] **Step 5: Commit** — `git commit -am "feat(tips): book-integrity guards - overround window + divergence veto (M3)"`
 
 ---
 
@@ -348,7 +348,7 @@ Add the three `DEFAULT_TIP` keys, the three zod config entries (mirroring the `T
 - `tipEligibility` `no_markets` check extended: eligible when ANY of `x12/dc/ou/btts/dnb/oddEven/tt` is present/non-empty.
 - New-family candidate rules: **BTTS** stats = `_mean([home.bttsRate, away.bttsRate, h2h.bttsRate])` (each behind its existing sample gate: `hOk`/`aOk`/`hhOk`), `NG` stats = `1 - bttsStats`; **DNB** market prob = devig of the 2-price book, stats = `statsProb['1'] / (statsProb['1'] + statsProb['2'])` for `DNB1` (renormalized win-vs-win, null when either side null), mirror for `DNB2`; **Odd/Even** stats = `_mean([home.oddRate, away.oddRate, h2h.oddRate])`, `EVEN = 1 - odd`; **team totals** (FT only): for `TT:H:O <line>` stats = `_mean([hOk ? home.scoredOverRates[line] : null, aOk ? away.concededOverRates[line] : null])`, Under = `1 - over-stats`; `minUnderLine` does NOT apply to TT Unders (it is a total-goals rule; TT lines are 0.5–3.5 by nature) but the global `minPrice` floor applies everywhere. API percents back result/DC only (unchanged).
 
-- [ ] **Step 1: Write failing tests** — three focused cases:
+- [x] **Step 1: Write failing tests** — three focused cases:
 
 ```js
 test('bestTip considers BTTS and can pick GG', () => {
@@ -380,9 +380,9 @@ test('legacy byte-compat: canonical-only input reproduces the pre-M3 tip exactly
 ```
 (Write the three sketched bodies out fully — helper `O(r)` builds `{0.5:r,...,6.5:r}` overRates.)
 
-- [ ] **Step 2: Run to verify failure.**
+- [x] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement.** Realization note (spec §4.1): the spec's `TIP_FAMILIES` registry is realized as per-family candidate blocks inside `bestTip` plus the `tipOutcome` settle switch — the three legacy families share devig context (DC derives from the 1X2 book; API percents span result+DC), which a literal object-table would have to thread awkwardly. Per-family logic still lives in exactly one place each and is independently tested; a future family is one new block + one settle case. Restructure the candidate enumeration (keep `consider()` verbatim, add an `overround` pass-through param stamped onto each candidate):
+- [x] **Step 3: Implement.** Realization note (spec §4.1): the spec's `TIP_FAMILIES` registry is realized as per-family candidate blocks inside `bestTip` plus the `tipOutcome` settle switch — the three legacy families share devig context (DC derives from the 1X2 book; API percents span result+DC), which a literal object-table would have to thread awkwardly. Per-family logic still lives in exactly one place each and is independently tested; a future family is one new block + one settle case. Restructure the candidate enumeration (keep `consider()` verbatim, add an `overround` pass-through param stamped onto each candidate):
 
 ```js
     // -- existing x12/dc/ou blocks stay EXACTLY as today (byte-compat) --
@@ -435,9 +435,9 @@ Stamp overrounds: `consider` gains a final optional `overround` arg pushed as `o
 ```
 (destructure the new names in both function signatures).
 
-- [ ] **Step 4: Run tests** — targeted + `npm test`. The byte-compat deepEqual is the gate: if it fails, the canonical path changed — fix before proceeding.
+- [x] **Step 4: Run tests** — targeted + `npm test`. The byte-compat deepEqual is the gate: if it fails, the canonical path changed — fix before proceeding.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat(tips): bestTip candidates across btts/dnb/team-total/odd-even (M3)"`
+- [x] **Step 5: Commit** — `git commit -am "feat(tips): bestTip candidates across btts/dnb/team-total/odd-even (M3)"`
 
 ---
 
@@ -453,11 +453,11 @@ Stamp overrounds: `consider` gains a final optional `overround` arg pushed as `o
 - `_loadMarkets(fixtureIds, namesById)` now returns `Map(fixture_id → buildTipBooks(...) result)`; `updateHotPicks` passes `new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]))`.
 - `settleHotPicks` tip loop switches `tipHit` → `tipOutcome` with three buckets (`hit`/`miss`/`void`).
 
-- [ ] **Step 1: Failing tests.** In `tests/markets.test.js`: `canonicalMarket` on a Betika `'ARSENAL TOTAL'` O/U row returns `tt.team === 'ARSENAL'` and `period === null`; on a BetPawa 1st-half BTTS spelling returns `period === '1H'`. In `tests/tip-rules.test.js`: `buildTipBooks` with (a) a full betpawa 1X2 + a Betika-only GG/NG book → both families present; (b) a `'FOO TOTAL'` row that matches neither team name → `tt` empty + no crash; (c) a period-tagged O/U row → excluded from `ou`; (d) a palp-priced BTTS book → `rejects.btts === 'overround_low'`.
+- [x] **Step 1: Failing tests.** In `tests/markets.test.js`: `canonicalMarket` on a Betika `'ARSENAL TOTAL'` O/U row returns `tt.team === 'ARSENAL'` and `period === null`; on a BetPawa 1st-half BTTS spelling returns `period === '1H'`. In `tests/tip-rules.test.js`: `buildTipBooks` with (a) a full betpawa 1X2 + a Betika-only GG/NG book → both families present; (b) a `'FOO TOTAL'` row that matches neither team name → `tt` empty + no crash; (c) a period-tagged O/U row → excluded from `ou`; (d) a palp-priced BTTS book → `rejects.btts === 'overround_low'`.
 
-- [ ] **Step 2: Run to verify failure.**
+- [x] **Step 2: Run to verify failure.**
 
-- [ ] **Step 3: Implement.** `markets.js`: in the team-total branch return `{ key, group, label, columnizable, period: period || null, tt: { team: tt.team || null, side: tt.side || null } }`; in the other two return sites add `period: period || null` (fixed families) / `period: null` (combo, raw). `tip-rules.buildTipBooks`: walk rows → `canonicalMarket`; keep keys in `{'1','X','2','1X','X2','12','GG','NG','DNB1','DNB2','ODD','EVEN'}` or O/U (`/^[OU] \d+\.5$/`) or team-total (side-resolved, line via the O/U key inside `TT:<ouKey>`); bucket per provider (lowest price per key, as `hotpicks.js:56-58`); assemble family groups via `selectFamilyBook` per family (O/U and TT per line — each line is its own two-way book). `hotpicks.js`: `_loadMarkets` slims to the SQL + per-fixture row grouping and delegates to `buildTipBooks`; the fixture loop destructures the new groups and passes them to `tipEligibility`/`bestTip` (both spread `...groups` already — verify the spread still carries `x12/dc/ou` for `scoreOver25`'s `groups.ou[2.5]` use at `:195`); pass `overrounds` through. `settleHotPicks`:
+- [x] **Step 3: Implement.** `markets.js`: in the team-total branch return `{ key, group, label, columnizable, period: period || null, tt: { team: tt.team || null, side: tt.side || null } }`; in the other two return sites add `period: period || null` (fixed families) / `period: null` (combo, raw). `tip-rules.buildTipBooks`: walk rows → `canonicalMarket`; keep keys in `{'1','X','2','1X','X2','12','GG','NG','DNB1','DNB2','ODD','EVEN'}` or O/U (`/^[OU] \d+\.5$/`) or team-total (side-resolved, line via the O/U key inside `TT:<ouKey>`); bucket per provider (lowest price per key, as `hotpicks.js:56-58`); assemble family groups via `selectFamilyBook` per family (O/U and TT per line — each line is its own two-way book). `hotpicks.js`: `_loadMarkets` slims to the SQL + per-fixture row grouping and delegates to `buildTipBooks`; the fixture loop destructures the new groups and passes them to `tipEligibility`/`bestTip` (both spread `...groups` already — verify the spread still carries `x12/dc/ou` for `scoreOver25`'s `groups.ou[2.5]` use at `:195`); pass `overrounds` through. `settleHotPicks`:
 
 ```js
     const buckets = { hit: [], miss: [], void: [] };
@@ -468,9 +468,9 @@ Stamp overrounds: `consider` gains a final optional `overround` arg pushed as `o
     for (const [outcome, ids] of Object.entries(buckets)) { /* same chunked update */ }
 ```
 
-- [ ] **Step 4: Run `npm test`** — green. Also run a REAL smoke: `node src/index.js hotpicks` against the local DB; expect a normal summary line, zero throws, and (likely) some new-family tips on rich BetPawa dates.
+- [x] **Step 4: Run `npm test`** — green. Also run a REAL smoke: `node src/index.js hotpicks` against the local DB; expect a normal summary line, zero throws, and (likely) some new-family tips on rich BetPawa dates.
 
-- [ ] **Step 5: Commit** — `git commit -am "feat(tips): canonical-market tip books w/ TT side resolution + void settle (M3)"`
+- [x] **Step 5: Commit** — `git commit -am "feat(tips): canonical-market tip books w/ TT side resolution + void settle (M3)"`
 
 ---
 
@@ -488,9 +488,9 @@ Stamp overrounds: `consider` gains a final optional `overround` arg pushed as `o
 - Config: `HOTPICK_LINES` (CSV, default `'2.5'`) parsed via the existing `parseFilterList` idiom or a simple split — the hotpicks loop evaluates each configured line that has both a full O/U pair and a `LINE_THRESHOLDS` entry; the row keeps the 2.5 evaluation as its ledger baseline unless a different line fires hot with a higher score, in which case `market`,`over_price`,`under_price`,`implied_over`,`hot`,`score`,`signals` come from that line.
 - Settle SQL becomes line-aware: `p.outcome = IF(total > CAST(SUBSTRING(p.market, 3) AS DECIMAL(4,2)), 'hit', 'miss')` (`'O 2.5'` → `SUBSTRING(...,3)='2.5'`; `total > 2.5` ≡ today's `>= 3`).
 
-- [ ] **Step 1: Failing tests** — `scoreOverLine(inputs, 1.5, {...})` gates on `overRates[1.5]`; `scoreOver25` output `deepEqual` to a pre-refactor captured result for a fixed input; `apiPredictionSignal({under_over:'+1.5'}, 1.5) === 'support'` while `apiPredictionSignal({under_over:'+1.5'}, 2.5) === null`.
-- [ ] **Step 2: Verify failure.**
-- [ ] **Step 3: Implement.** Core shape (signal keys byte-identical to today's `scoreOver25` — only the rate lookups move to the line):
+- [x] **Step 1: Failing tests** — `scoreOverLine(inputs, 1.5, {...})` gates on `overRates[1.5]`; `scoreOver25` output `deepEqual` to a pre-refactor captured result for a fixed input; `apiPredictionSignal({under_over:'+1.5'}, 1.5) === 'support'` while `apiPredictionSignal({under_over:'+1.5'}, 2.5) === null`.
+- [x] **Step 2: Verify failure.**
+- [x] **Step 3: Implement.** Core shape (signal keys byte-identical to today's `scoreOver25` — only the rate lookups move to the line):
 
 ```js
 export const LINE_THRESHOLDS = { 2.5: DEFAULT_THRESHOLDS }; // other lines: Task 10 backtest only
@@ -510,8 +510,8 @@ export function scoreOver25(inputs, opts = {}) {
 }
 ```
 `teamGoalsAggregates`/`h2hGoalsAggregates` gain `overRates` via the same per-line loop as Task 3 (`f.ft_home + f.ft_away > l`); the legacy `overRate` field stays (`>= 3` ≡ `> 2.5`). `apiPredictionSignal(pred, line = 2.5)`: replace the literal `2.5`s at `goals-rules.js:127-128` with `line`. Hotpicks loop: for each `config.HOTPICK_LINES` line with a full pair AND a `LINE_THRESHOLDS` entry, run `scoreOverLine`; baseline row stays the 2.5 evaluation; a non-2.5 line replaces the hot columns only when it fires hot with a higher score.
-- [ ] **Step 4: `npm test` green + rerun `node src/index.js hotpicks` smoke.**
-- [ ] **Step 5: Commit** — `git commit -am "feat(hotpicks): line-parameterized scoreOverLine + line-aware settle (M3)"`
+- [x] **Step 4: `npm test` green + rerun `node src/index.js hotpicks` smoke.**
+- [x] **Step 5: Commit** — `git commit -am "feat(hotpicks): line-parameterized scoreOverLine + line-aware settle (M3)"`
 
 ---
 
@@ -530,9 +530,9 @@ export function scoreOver25(inputs, opts = {}) {
 - `src/magic.js`: the `safe` policy object gains `minMarketSettled` from new env `SAFE_MIN_MARKET_SETTLED` (default 30, zod beside the other `SAFE_*`).
 - `WAREHOUSE_WLO`: update the "deliberately no BTTS/TT anchors" comment to reference Task 10 (anchors now REQUIRED before those markets tip — spec §5) — values land in Task 10.
 
-- [ ] **Step 1: Failing tests** — `marketGroup('GG')==='btts'`, `marketGroup('TT:A:U 2.5')==='team_total'`; `_stats` sees `{outcome:'void', price:1.8}` → `voids:1, settled unchanged, profit 0`; `computeCalibration` markets bucket carries `profit/staked`; `safeQualifies(qualifyingRow, DEFAULT_SAFE, calWithThinMarket)` → false while the same row with a 40-settle market → true; `tipMarketLabel('TT:H:O 1.5') === 'Home team over 1.5 goals'`.
-- [ ] **Step 2: Verify failure.**
-- [ ] **Step 3: Implement.** Key diffs:
+- [x] **Step 1: Failing tests** — `marketGroup('GG')==='btts'`, `marketGroup('TT:A:U 2.5')==='team_total'`; `_stats` sees `{outcome:'void', price:1.8}` → `voids:1, settled unchanged, profit 0`; `computeCalibration` markets bucket carries `profit/staked`; `safeQualifies(qualifyingRow, DEFAULT_SAFE, calWithThinMarket)` → false while the same row with a 40-settle market → true; `tipMarketLabel('TT:H:O 1.5') === 'Home team over 1.5 goals'`.
+- [x] **Step 2: Verify failure.**
+- [x] **Step 3: Implement.** Key diffs:
 
 ```js
 // perf-rules.js - marketGroup superset (existing branches byte-identical)
@@ -566,7 +566,7 @@ export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
 // safeSelection: safeQualifies(r, o) -> safeQualifies(r, o, cal)
 ```
 `tipMarketLabel` per the Interfaces mapping (a small switch + two regexes; fallback = the raw key).
-- [ ] **Step 5: Commit** — `git commit -am "feat(measure): void-aware ledger, market ROI calibration, safe maturity floor, tip labels (M3)"`
+- [x] **Step 5: Commit** — `git commit -am "feat(measure): void-aware ledger, market ROI calibration, safe maturity floor, tip labels (M3)"`
 
 ---
 
@@ -579,15 +579,15 @@ export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
 **Interfaces:**
 - Consumes: `tipHitSafe`/`tipOutcome` (Task 2), `tipMarketLabel` + `cal.markets[key]` `{n,hits,profit,staked}` (Task 8).
 
-- [ ] **Step 1: Failing tests** — `tests/tip-filter.test.js`: `parseTipFilter('TT:H:O 1.5')` returns `{index:1, outcome:null, value:'TT:H:O 1.5'}`?? **No** — hand-trace `TIP_PREFIX` first: `[HM]?` CAN match the leading `T`? It cannot (`T`∉`[HM]`), so the regex fails at the anchor and the value parses plain — write the test asserting exactly that (plus `HTFT:1-x` and a CSV `in` list containing `TT:H:O 1.5`) so the collision stays impossible by test. `tests/filter-values.test.js`: `applyOutcomeToggles` with a `tip_outcome:'void'` row — Hide hits and Hide miss both keep it; No-miss does not blacklist its market.
-- [ ] **Step 2: Verify** (these may PASS immediately — that is the point: they pin the behavior; if one fails, fix the regex/toggle accordingly).
-- [ ] **Step 3: Implement the real changes:**
+- [x] **Step 1: Failing tests** — `tests/tip-filter.test.js`: `parseTipFilter('TT:H:O 1.5')` returns `{index:1, outcome:null, value:'TT:H:O 1.5'}`?? **No** — hand-trace `TIP_PREFIX` first: `[HM]?` CAN match the leading `T`? It cannot (`T`∉`[HM]`), so the regex fails at the anchor and the value parses plain — write the test asserting exactly that (plus `HTFT:1-x` and a CSV `in` list containing `TT:H:O 1.5`) so the collision stays impossible by test. `tests/filter-values.test.js`: `applyOutcomeToggles` with a `tip_outcome:'void'` row — Hide hits and Hide miss both keep it; No-miss does not blacklist its market.
+- [x] **Step 2: Verify** (these may PASS immediately — that is the point: they pin the behavior; if one fails, fix the regex/toggle accordingly).
+- [x] **Step 3: Implement the real changes:**
   - `App.jsx:182`: `const out = tipHitSafe(market, hs, as); if (out === 'hit') bucket.hits += 1; if (out !== 'hit' && out !== 'miss') { bucket.settled -= 1; }` — restructure so a runner-up only enters `settled` when out is hit/miss (import `tipHitSafe` instead of `tipHit`). Chosen-tip counting at `:172` already excludes voids (checks hit/miss literally) — leave it.
   - `DataTable.jsx`: tip outcome `'void'` renders a neutral grey pill/`↩` marker (reuse the muted token, e.g. `text-(--label-tertiary)`), tooltip "Void - stake returned (draw no bet push)".
   - `TipPopover.jsx`: replace the local `MARKET_LABEL` usage with `tipMarketLabel` (import from magic-rules like the other shared imports) and add the always-visible honesty line ABOVE the gated internals: from the magic payload's `cal.markets[tip_market]` — `n>=10`: "Tips on this market have hit {rate}% of {n} settled picks{roi != null ? ' (ROI {roi}%)' : ''}"; `0<n<10`: "New market - only {n} settled tips so far"; `n===0`: "New market - no settled tips yet". Thread `cal` from where the popover is rendered (DataTable receives the magic payload for ✨ scoring — verify the prop path at implementation time and pass `cal` down; if DataTable lacks it, lift from `App.jsx`'s magic-sort fetch state).
   - `src/ai.js`: the tip-review prompt includes `tipMarketLabel(tip.market)` beside the raw key, and the prompt-version suffix in `aiModelTag()` bumps (`#p2` → `#p3` or current+1) so cached verdicts re-adjudicate under the new prompt.
-- [ ] **Step 4: `npm test` green; `npm run build:web` clean.**
-- [ ] **Step 5: Commit** — `git commit -am "feat(web): void pill, per-market honesty label, safe tip settle; ai prompt labels (M3)"`
+- [x] **Step 4: `npm test` green; `npm run build:web` clean.**
+- [x] **Step 5: Commit** — `git commit -am "feat(web): void pill, per-market honesty label, safe tip settle; ai prompt labels (M3)"`
 
 ---
 
@@ -600,11 +600,11 @@ export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
 - Consumes: `tipOutcome` (settles every new family offline from warehouse FT scores), `scoreOverLine`.
 - Produces: `WAREHOUSE_WLO` entries for `GG,NG,DNB1,DNB2,ODD,EVEN` and the TT keys actually offered by the books; `LINE_THRESHOLDS` entries ONLY for lines whose tuned gates clear the precision bar.
 
-- [ ] **Step 1:** Extend `backtest-sure-tips.js`: for each settled warehouse fixture, enumerate the new-family stats probabilities (same aggregates the engine uses) and settle via `tipOutcome`; report temporal-OOS hit-rate per market key (same split idiom the script already uses). Voids excluded from denominators.
-- [ ] **Step 2:** Run `node scripts/backtest-sure-tips.js`; paste the OOS rates into `WAREHOUSE_WLO` with a dated comment (e.g. `// M3 2026-07-15 warehouse OOS`). Sanity: BTTS/TT anchors are EXPECTED to look strong stats-only — the comment at `magic-rules.js:148-158` explains why the live term must dominate; keep that framing.
-- [ ] **Step 3:** Extend `backtest-hotpicks.js` with `--line <L>` (default sweep `1.5,2.5,3.5`): replay each line's gates over the warehouse, print precision/recall per threshold grid. Add a `LINE_THRESHOLDS` entry ONLY for lines beating the current 2.5 bar (~73% stats-only precision) — if none do, ship `HOTPICK_LINES=2.5` unchanged and record the numbers in the plan-tick commit message (an honest "no expansion" is a valid outcome).
-- [ ] **Step 4:** `npm test` green (anchors change no logic; `safePrior` tests that pin specific anchor VALUES, if any, get updated literals).
-- [ ] **Step 5: Commit** — `git commit -am "feat(backtest): new-family warehouse anchors + hot-line sweep (M3)"`
+- [x] **Step 1:** Extend `backtest-sure-tips.js`: for each settled warehouse fixture, enumerate the new-family stats probabilities (same aggregates the engine uses) and settle via `tipOutcome`; report temporal-OOS hit-rate per market key (same split idiom the script already uses). Voids excluded from denominators.
+- [x] **Step 2:** Run `node scripts/backtest-sure-tips.js`; paste the OOS rates into `WAREHOUSE_WLO` with a dated comment (e.g. `// M3 2026-07-15 warehouse OOS`). Sanity: BTTS/TT anchors are EXPECTED to look strong stats-only — the comment at `magic-rules.js:148-158` explains why the live term must dominate; keep that framing.
+- [x] **Step 3:** Extend `backtest-hotpicks.js` with `--line <L>` (default sweep `1.5,2.5,3.5`): replay each line's gates over the warehouse, print precision/recall per threshold grid. Add a `LINE_THRESHOLDS` entry ONLY for lines beating the current 2.5 bar (~73% stats-only precision) — if none do, ship `HOTPICK_LINES=2.5` unchanged and record the numbers in the plan-tick commit message (an honest "no expansion" is a valid outcome).
+- [x] **Step 4:** `npm test` green (anchors change no logic; `safePrior` tests that pin specific anchor VALUES, if any, get updated literals).
+- [x] **Step 5: Commit** — `git commit -am "feat(backtest): new-family warehouse anchors + hot-line sweep (M3)"`
 
 ---
 
@@ -613,10 +613,10 @@ export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
 **Files:**
 - Modify: `CLAUDE.md` (architecture bullets for tip-rules/goals-rules/magic-rules/hotpicks + the `npm test` blurb), `implementation-plan.md` (M3 entry), `docs/superpowers/plans/2026-07-15-m3-any-market-tips.md` (checkboxes), `.env.example` (final knob audit)
 
-- [ ] **Step 1: Full suite + build** — `npm test` (target: 478 + ~35 new, all green), `npm run build:web`.
-- [ ] **Step 2: Live smoke on the local DB** — stop any running `serve` (single-writer rule), then `node src/index.js hotpicks`; verify: new-family tips appear on a rich BetPawa date (`SELECT tip_market, COUNT(*) FROM fixture_predictions WHERE tip_market NOT REGEXP '^(1|X|2|1X|X2|12|[OU] )' GROUP BY 1`), no key exceeds 32 chars, settle pass clean. Then `npm run serve` + browser (dev :5173 or built dist): tip cells render new markets with labels, popover shows the honesty line (signed-out AND signed-in), void styling visible on a DNB draw (seed one via a test row if none exists yet — and delete it after), Safe-only pool contains NO new-family tips (maturity floor), zero console errors, dark + mobile spot-check. Kill orphans, re-probe :3001 (memory: `taskkill //T`).
-- [ ] **Step 3: Docs** — CLAUDE.md: tip-rules bullet gains the registry/void/book-integrity/maturity-floor summary; goals-rules bullet gains `scoreOverLine`/`LINE_THRESHOLDS`; magic-rules bullet gains `tipMarketLabel`/market-ROI cal/`SAFE_MIN_MARKET_SETTLED`; commands blurb notes the new env knobs. `implementation-plan.md`: one M3 progress line.
-- [ ] **Step 4: Tick every checkbox here, commit** — `git commit -am "docs: M3 shipped - architecture notes + plan tick"`. Merge to `main` stays USER-GATED (ask, as always).
+- [x] **Step 1: Full suite + build** — `npm test` (target: 478 + ~35 new, all green), `npm run build:web`.
+- [x] **Step 2: Live smoke on the local DB** — stop any running `serve` (single-writer rule), then `node src/index.js hotpicks`; verify: new-family tips appear on a rich BetPawa date (`SELECT tip_market, COUNT(*) FROM fixture_predictions WHERE tip_market NOT REGEXP '^(1|X|2|1X|X2|12|[OU] )' GROUP BY 1`), no key exceeds 32 chars, settle pass clean. Then `npm run serve` + browser (dev :5173 or built dist): tip cells render new markets with labels, popover shows the honesty line (signed-out AND signed-in), void styling visible on a DNB draw (seed one via a test row if none exists yet — and delete it after), Safe-only pool contains NO new-family tips (maturity floor), zero console errors, dark + mobile spot-check. Kill orphans, re-probe :3001 (memory: `taskkill //T`).
+- [x] **Step 3: Docs** — CLAUDE.md: tip-rules bullet gains the registry/void/book-integrity/maturity-floor summary; goals-rules bullet gains `scoreOverLine`/`LINE_THRESHOLDS`; magic-rules bullet gains `tipMarketLabel`/market-ROI cal/`SAFE_MIN_MARKET_SETTLED`; commands blurb notes the new env knobs. `implementation-plan.md`: one M3 progress line.
+- [x] **Step 4: Tick every checkbox here, commit** — `git commit -am "docs: M3 shipped - architecture notes + plan tick"`. Merge to `main` stays USER-GATED (ask, as always).
 
 ---
 
