@@ -23,6 +23,27 @@
    anomalies and make them conspicuous (display-layer flag, like 🔥 hot picks).
 6. Custom filters (already shipped) remain the manual pattern-catching surface;
    this milestone automates the retrospection.
+7. **Contrarian / fade-the-consensus thesis (user, 2026-07-16):** in the user's
+   experience, Gemini research tends to agree with bookmakers + public analysis
+   and fails a majority of the time; the majority-favored tip often lands the
+   OPPOSITE outcome. The user does not rule out books shading or influencing
+   outcomes when public money concentrates ("the house always wins" bias) and
+   wants that used AGAINST them: identify consensus-trap configurations and
+   mitigate/fade them. Evidence artifact: a real winning multi curated from a
+   custom Safe-only filter of 2026-07-10 games
+   (`docs/visuals/betika-won-slip-2026-07-10.png`, local file). The user has
+   applied this strategy and won — this thesis is the founding vision of the
+   project.
+   *Testability note:* causation (outcome influence) is unprovable from our
+   data, but the measurable claim doesn't need it — "public/AI-consensus
+   alignment is an anti-signal" is directly minable: condition settled-tip hit
+   rates on AI-verdict agreement (persisted in `tip_ai_review`/`ai_review`
+   since phase 13), on favorite-status/price shortness, and on
+   market-vs-stats agreement (`tipAgreement` parts). Prior support already in
+   the ledger: v1 adjudicator contradiction-vetoes measured NET-NEGATIVE
+   (why prompts were de-anchored in v2) — i.e. the market-agreeing AI was
+   wrong often enough to cost money. Pre-register the split, then let the
+   replay decide.
 
 ## Raw material that ALREADY exists (no new collection needed)
 
@@ -57,6 +78,26 @@
   already proven anti-correlated with live ROI once.
 - **AI adjudication stays veto/flag-only** (never promotes), per the existing
   hot-picks/tips design.
+
+## North star (user, 2026-07-16 — verbatim intent)
+
+The main goal of improving the tip prediction algorithm and pipeline is
+**bookmaker-trick immunity**: books sometimes employ clever tricks like unfair
+odds allocation to throw off automated systems and inexperienced gamblers.
+Gemini AI at our disposal should be a harnessable superpower for accurately
+spotting free (easy) wins. **System objective met when:** an unbreakable
+multi-bet selection filter of sure-bets — over 99% hit probability (or other
+reasonable threshold) — at a ≥ 2.5x combined multi-bet multiplier.
+
+*Honest-measurement note beside the north star:* 99% survival at 2.5x implies
+≈ +147% EV per slip; the warehouse's measured reality so far is ≈ −3% flat-stake
+EV (no +EV market survived the fair re-tests). So the objective is directional:
+maximize the (slip-survival × multiplier) frontier and track it honestly —
+current best Safe-pool leg rate 88.9% (sure ranker). M3's book-integrity guards
+(overround window 1.01–1.30, cross-book divergence veto 0.15) are the first
+purpose-built bookmaker-trick defenses; the golden-opportunity spotter (above)
+is the "free wins" lens; Gemini adjudication stays veto/flag-only until a
+promotion path earns its way in via replay evidence.
 
 ## Suggested M4 shape (to be refined in brainstorm)
 
