@@ -25,6 +25,7 @@ import {
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
 import { validatePrefsPut } from './db/prefs-rules.js';
+import { accessFromUser, guestDateAllowed } from './db/access-rules.js';
 import { getUserPrefs, saveUserPrefs } from './prefs.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
 import { labData, LAB_DEFAULTS } from './lab.js';
@@ -177,11 +178,14 @@ function authGuard({ role, verified } = {}) {
 const requireAuth = authGuard();
 const requireAdminRole = authGuard({ role: 'admin' });
 const requireVerified = authGuard({ verified: true });
-// eslint-disable-next-line no-unused-vars
 async function optionalAuth(req, res, next) {
     try {
-        const ctx = await resolveSession(bearerToken(req));
-        if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+        // Feature off = no session lookup at all (an API_TOKEN bearer would
+        // miss the sessions table on every request for nothing).
+        if (config.AUTH_ENABLED) {
+            const ctx = await resolveSession(bearerToken(req));
+            if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+        }
         next();
     } catch (e) { next(e); }
 }
@@ -358,13 +362,30 @@ app.get('/api/columns', async (req, res, next) => {
 
 // GET /api/records?date=YYYY-MM-DD&page=&per_page=&sort=[{key,dir}]&filters=[{key,op,value}]
 // date defaults to today; pass date=all for every date.
-app.get('/api/records', async (req, res, next) => {
+//
+// Guest-vs-normal gating (Phase 8, server authoritative - pure rules in
+// src/db/access-rules.js): with AUTH_ENABLED, a request without a valid
+// session is a guest - future dates 403, the all-dates view stops at today,
+// and rows lose the internal reasoning (tip_breakdown / AI reasons / exact
+// confidence). Machine bearers (API_TOKEN/ADMIN_TOKEN) stay full-access like
+// AUTH_ENABLED=0 installs: access=null = the legacy behavior, untouched.
+app.get('/api/records', optionalAuth, async (req, res, next) => {
     try {
         const { date, page, per_page, sort, filters, completed, providers } = req.query;
         // Normalize the date for the cache key so absent/'today'/'now' hit the
         // same slot as the explicit YYYY-MM-DD the web client sends.
         const day = date === 'all' ? 'all' : _dtime(date || new Date()).slice(0, 10);
-        const key = queryCacheKey('/api/records', { ...req.query, date: day });
+        const access = config.AUTH_ENABLED && !bearerMatches(req.get('authorization'), MACHINE_BEARERS)
+            ? accessFromUser(req.user)
+            : null;
+        if (access && !access.canFuture && !guestDateAllowed(day, _dtime(new Date()).slice(0, 10))) {
+            return res.status(403).json({ error: 'Sign in to see upcoming games.', auth_required: true });
+        }
+        // The response memo key MUST carry the access tier - a guest
+        // (redacted, date-clamped) body and a full one can never share a
+        // slot, or one tier would be served the other's cached payload.
+        const tier = access && !access.fullDetail ? 'guest' : 'full';
+        const key = queryCacheKey('/api/records', { ...req.query, date: day, tier });
         await apiCache.send(req, res, key, () => queryRecords({
             date: date === 'all' ? null : (date || new Date()),
             page,
@@ -373,6 +394,7 @@ app.get('/api/records', async (req, res, next) => {
             filters: _json(filters, []),
             completed: completed !== '0', // ?completed=0 hides concluded games
             providers: providers ? String(providers).split(',').filter(Boolean) : null,
+            access,
         }));
     } catch (e) {
         next(e);
