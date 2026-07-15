@@ -12,7 +12,7 @@
 
 import { sortValue } from './sortValues.js';
 import { parseFilterList } from '../../src/db/filter-csv.js';
-import { tipHit } from '../../src/db/tip-rules.js';
+import { tipHitSafe } from '../../src/db/tip-rules.js';
 
 // Raw (displayed) value for text ops: the underlying field text, so e.g.
 // `home_form like WWW` matches the letters, not the derived points. The tip
@@ -54,19 +54,18 @@ export function tipCandidateMarket(row, index) {
     return Array.isArray(up) ? (up[index - 2]?.market ?? null) : null;
 }
 
-// Grade the Nth candidate hit/miss from the fixture's final score (via tipHit,
-// exactly as the tip cell settles runners-up). null when pending (no final
-// score), the candidate is absent, or the market is unknown.
+// Grade the Nth candidate hit/miss from the fixture's final score (via
+// tipHitSafe, exactly as the tip cell settles runners-up). null when pending
+// (no final score), the candidate is absent, the market is unknown, OR the
+// settle is a 'void' push (DNB draw - neither hit nor miss, so an H:/M:
+// outcome filter must not match it; the tip cell already renders it as ↩).
 export function tipCandidateOutcome(row, index) {
     const market = tipCandidateMarket(row, index);
     if (market == null || !row?.score) return null;
     const [hs, as] = String(row.score).split('-').map(Number);
     if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
-    try {
-        return tipHit(market, hs, as) ? 'hit' : 'miss';
-    } catch {
-        return null;
-    }
+    const outcome = tipHitSafe(market, hs, as);
+    return outcome === 'hit' || outcome === 'miss' ? outcome : null;
 }
 
 // Three-way comparison (-1/0/1), null when either side is missing/unparsable:

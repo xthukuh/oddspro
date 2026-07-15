@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSlips, estimateLegProb, legPicks, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
-import { tipHit } from '../../../src/db/tip-rules.js';
+import { tipHitSafe } from '../../../src/db/tip-rules.js';
 import { orderRows } from '../ordering.js';
 import NumberInput from './NumberInput.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
@@ -33,12 +33,16 @@ const _shortDate = iso => (iso ? new Date(`${iso}T12:00:00`).toLocaleDateString(
 
 // Grade a market from a fixture's final score (R26d): only the CHOSEN tip
 // stores an outcome, so a switched-to runner-up is settled here. null = pending
-// (no final score) - no tick.
+// (no final score, unknown market) OR a 'void' push (DNB draw - neither hit
+// nor miss) - no tick either way, and slipOutcome already treats a null
+// outcome as an unsettled (open) leg, so a void runner-up can't wrongly break
+// or complete a slip.
 function _gradeMarket(score, market) {
     if (!score) return null;
     const [hs, as] = String(score).split('-').map(Number);
     if (!Number.isFinite(hs) || !Number.isFinite(as)) return null;
-    return tipHit(market, hs, as) ? 'hit' : 'miss';
+    const outcome = tipHitSafe(market, hs, as);
+    return outcome === 'hit' || outcome === 'miss' ? outcome : null;
 }
 
 // Stored slips + limits survive reloads AND date changes, so one multi-bet slip

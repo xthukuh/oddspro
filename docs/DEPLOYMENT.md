@@ -109,6 +109,8 @@ For any future change:
 
 **Migrations (no SSH):** the initial phpMyAdmin import already carries the schema, so first boot applies **zero** migrations. When you add a new migration later, apply it without SSH by either (a) setting `MIGRATE_ON_BOOT=1` in `.env` and **Restart**ing the app — the server runs `knex migrate:latest` on boot and only serves once the schema is current (fail-fast on error; the cleanest no-SSH option, new in v1.0.1), (b) running `npm run migrate` from the Setup Node.js App UI's script runner if your cPanel version exposes one, or (c) translating the migration and running its SQL in phpMyAdmin **plus inserting its bookkeeping row** so a future `npm run migrate` doesn't try to re-apply it. Migrations are forward-only — always test locally (`npm run migrate` against a scratch DB) before deploying. (With `MIGRATE_ON_BOOT=1` you can leave it on permanently: an already-current schema is a no-op.)
 
+⚠ **M3 ordering (batch 12, `20260715000001_tip_market_v2`):** widens `tip_market` to `VARCHAR(32)` and `tip_outcome` to `ENUM('hit','miss','void')`. This migration **MUST apply before the M3 code's first write** — `MIGRATE_ON_BOOT=1` already guarantees that ordering (schema-then-listen). A code-first deploy (new app code against the old schema) would silently truncate long team-total keys (`'TT:H:O 1.5'`) to the old `VARCHAR(8)` and reject/coerce a `'void'` DNB-push outcome against the old two-value enum.
+
 For the v1.0.1 migration specifically, option (b) is:
 ```sql
 ALTER TABLE fixtures ADD COLUMN elapsed SMALLINT UNSIGNED NULL;

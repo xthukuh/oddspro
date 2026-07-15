@@ -154,6 +154,9 @@ test('tipOutcome settles the new families', () => {
     assert.equal(tipOutcome('TT:H:O 1.5', 1, 3), 'miss');
     assert.equal(tipOutcome('TT:A:U 2.5', 1, 3), 'miss');
     assert.equal(tipOutcome('TT:A:U 2.5', 3, 1), 'hit');
+    // symmetric counterparts: home Under, away Over
+    assert.equal(tipOutcome('TT:H:U 1.5', 1, 3), 'hit');
+    assert.equal(tipOutcome('TT:A:O 2.5', 0, 3), 'hit');
 });
 
 test('tipOutcome matches legacy tipHit on canonical markets', () => {

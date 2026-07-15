@@ -168,6 +168,21 @@ test('evalCondition tip: an absent Nth candidate is a non-match', () => {
     assert.equal(evalCondition({ tip_market: 'O 2.5' }, { key: 'tip', op: 'like', value: '2:x' }, COLS), false);
 });
 
+// --- M3: a 'void' settle (DNB push) is neither a hit nor a miss ---------
+// tipCandidateOutcome now grades via tipHitSafe, so a DNB draw ('void') maps
+// to null - it must not satisfy either outcome gate, matching the tip cell's
+// ↩ (void) display instead of falling through to the 'miss' filter.
+test('tipCandidateOutcome: a void settle (DNB push) is neither hit nor miss -> null', () => {
+    const r = tipRow({ tip_market: 'DNB1', score: '1-1' });
+    assert.equal(tipCandidateOutcome(r, 1), null);
+});
+
+test('evalCondition tip: a void candidate does not match an M: (miss) tip filter', () => {
+    const r = tipRow({ tip_market: 'DNB1', score: '1-1' });
+    assert.equal(evalCondition(r, { key: 'tip', op: 'like', value: 'M:' }, COLS), false);
+    assert.equal(evalCondition(r, { key: 'tip', op: 'like', value: 'H:' }, COLS), false);
+});
+
 // --- tip_confidence field: the chosen tip's win % on a 0-100 integer scale ---
 const CONF_COLS = [{ key: 'tip_confidence', group: 'base' }];
 
