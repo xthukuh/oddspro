@@ -54,7 +54,11 @@ async function _loadMarkets(fixtureIds, namesById) {
     }
     const books = new Map();
     for (const [fixture_id, fixtureRows] of byFixture) {
-        books.set(fixture_id, buildTipBooks(fixtureRows, namesById?.get(fixture_id) ?? {}));
+        books.set(fixture_id, buildTipBooks(fixtureRows, namesById?.get(fixture_id) ?? {}, {
+            minOverround: config.TIP_MIN_OVERROUND,
+            maxOverround: config.TIP_MAX_OVERROUND,
+            maxBookDivergence: config.TIP_MAX_BOOK_DIVERGENCE,
+        }));
     }
     return books;
 }
