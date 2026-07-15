@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_TIP, teamOutcomeAggregates, pairedTeamOutcomeAggregates,
-    h2hOutcomeAggregates, tipEligibility, tipHit, bestTip,
+    h2hOutcomeAggregates, tipEligibility, tipHit, tipOutcome, tipHitSafe, bestTip,
 } from '../src/db/tip-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -109,6 +109,34 @@ test('tipHit settles every canonical market from the final score', () => {
     assert.equal(tipHit('U 3.5', 2, 1), true);
     assert.equal(tipHit('U 0.5', 0, 0), true);
     assert.throws(() => tipHit('BTTS', 1, 1), TypeError);
+});
+
+test('tipOutcome settles the new families', () => {
+    assert.equal(tipOutcome('GG', 2, 1), 'hit');
+    assert.equal(tipOutcome('GG', 2, 0), 'miss');
+    assert.equal(tipOutcome('NG', 0, 0), 'hit');
+    assert.equal(tipOutcome('DNB1', 2, 1), 'hit');
+    assert.equal(tipOutcome('DNB1', 1, 1), 'void');   // draw = push
+    assert.equal(tipOutcome('DNB2', 1, 1), 'void');
+    assert.equal(tipOutcome('DNB2', 0, 1), 'hit');
+    assert.equal(tipOutcome('ODD', 2, 1), 'hit');
+    assert.equal(tipOutcome('EVEN', 2, 1), 'miss');
+    assert.equal(tipOutcome('TT:H:O 1.5', 2, 0), 'hit');
+    assert.equal(tipOutcome('TT:H:O 1.5', 1, 3), 'miss');
+    assert.equal(tipOutcome('TT:A:U 2.5', 1, 3), 'miss');
+    assert.equal(tipOutcome('TT:A:U 2.5', 3, 1), 'hit');
+});
+
+test('tipOutcome matches legacy tipHit on canonical markets', () => {
+    for (const [m, fh, fa] of [['1', 2, 1], ['X', 1, 1], ['X2', 0, 1], ['O 2.5', 2, 1], ['U 4.5', 2, 1]]) {
+        assert.equal(tipOutcome(m, fh, fa) === 'hit', tipHit(m, fh, fa));
+    }
+});
+
+test('unknown market: tipOutcome throws, tipHitSafe returns null', () => {
+    assert.throws(() => tipOutcome('CS:2-1', 2, 1), TypeError);
+    assert.equal(tipHitSafe('CS:2-1', 2, 1), null);
+    assert.equal(tipHitSafe('DNB1', 1, 1), 'void');
 });
 
 // --- bestTip ---

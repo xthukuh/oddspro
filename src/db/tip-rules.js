@@ -163,22 +163,48 @@ export function tipEligibility({ x12, dc, ou, home, away, league }, opts = {}) {
     return { eligible: true, reason: null };
 }
 
-// Did a settled fixture hit one canonical market? (tip settlement)
-export function tipHit(market, ftHome, ftAway) {
+const _TT_KEY = /^TT:(H|A):([OU]) (\d+\.5)$/;
+
+// Settle any tippable market from the final score: 'hit' | 'miss' | 'void'.
+// 'void' = stake returned (DNB push on a draw). Throws on unknown keys -
+// a persisted unknown tip_market is a bug and must be loud (server); browser
+// call sites use tipHitSafe below.
+export function tipOutcome(market, ftHome, ftAway) {
     const total = ftHome + ftAway;
+    const _b = v => (v ? 'hit' : 'miss');
     switch (market) {
-        case '1': return ftHome > ftAway;
-        case 'X': return ftHome === ftAway;
-        case '2': return ftHome < ftAway;
-        case '1X': return ftHome >= ftAway;
-        case 'X2': return ftHome <= ftAway;
-        case '12': return ftHome !== ftAway;
+        case '1': return _b(ftHome > ftAway);
+        case 'X': return _b(ftHome === ftAway);
+        case '2': return _b(ftHome < ftAway);
+        case '1X': return _b(ftHome >= ftAway);
+        case 'X2': return _b(ftHome <= ftAway);
+        case '12': return _b(ftHome !== ftAway);
+        case 'GG': return _b(ftHome > 0 && ftAway > 0);
+        case 'NG': return _b(!(ftHome > 0 && ftAway > 0));
+        case 'DNB1': return ftHome === ftAway ? 'void' : _b(ftHome > ftAway);
+        case 'DNB2': return ftHome === ftAway ? 'void' : _b(ftHome < ftAway);
+        case 'ODD': return _b(total % 2 === 1);
+        case 'EVEN': return _b(total % 2 === 0);
         default: {
-            const ou = /^([OU]) (\d\.5)$/.exec(market);
-            if (!ou) throw new TypeError(`Unknown tip market: ${market}`);
-            return ou[1] === 'O' ? total > Number(ou[2]) : total < Number(ou[2]);
+            const ou = /^([OU]) (\d+\.5)$/.exec(market);
+            if (ou) return _b(ou[1] === 'O' ? total > Number(ou[2]) : total < Number(ou[2]));
+            const tt = _TT_KEY.exec(market);
+            if (!tt) throw new TypeError(`Unknown tip market: ${market}`);
+            const goals = tt[1] === 'H' ? ftHome : ftAway;
+            return _b(tt[2] === 'O' ? goals > Number(tt[3]) : goals < Number(tt[3]));
         }
     }
+}
+
+// Legacy boolean contract (canonical call sites): hit-or-not. A DNB void is
+// NOT a hit. Still throws on unknown keys.
+export function tipHit(market, ftHome, ftAway) {
+    return tipOutcome(market, ftHome, ftAway) === 'hit';
+}
+
+// Never-throw variant for browser code paths (unknown/legacy keys -> null).
+export function tipHitSafe(market, ftHome, ftAway) {
+    try { return tipOutcome(market, ftHome, ftAway); } catch { return null; }
 }
 
 // Choose the safest bettable outcome for one fixture.
