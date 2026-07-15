@@ -1,7 +1,8 @@
 import { db } from './db/connection.js';
 import { config } from './config.js';
 import {
-    SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, mergeOverrides, publicSubset,
+    SETTINGS_CATALOG, catalogEntry, coerceValue, validateSettings, mergeOverrides, publicSubset,
+    isMissingTableError,
 } from './db/settings-rules.js';
 
 // Dynamic settings service: admin-editable overrides for a curated set of
@@ -12,18 +13,38 @@ import {
 // on every write) lets hot paths (safePolicy, the auto-refresh tick) read the
 // effective value WITHOUT awaiting a query.
 
-let _cache = null; // Map<key,string> | null until first load
+let _cache = null; // Map<key,string> | null until first successful load
+let _retryTimer = null;
+const RETRY_MS = 30_000;
 
 // Load overrides from the DB into the sync cache. Called at server boot and
-// after every write. Safe to call before the table exists (returns empty).
+// after every write. A missing table (pre-migration) is a legitimately empty
+// set; any OTHER failure keeps the previous cache (or null -> env defaults)
+// and retries - faking an empty Map would silently revert every stored
+// override to env defaults for the whole process life, with no log (M1).
+// Never rejects.
 export async function loadOverrides() {
     try {
         const rows = await db('settings').select('key', 'value');
         _cache = new Map(rows.map(r => [r.key, r.value]));
-    } catch {
-        _cache = new Map(); // pre-migration / DB hiccup: fall back to config defaults
+        if (_retryTimer) { clearTimeout(_retryTimer); _retryTimer = null; }
+    } catch (e) {
+        if (isMissingTableError(e)) {
+            _cache = new Map();
+        } else {
+            console.error(`[settings] override load failed (${e.message || e}) - `
+                + `${_cache ? 'keeping previous overrides' : 'serving env defaults'}, retrying in ${RETRY_MS / 1000}s`);
+            _scheduleRetry();
+        }
     }
     return _cache;
+}
+
+// One pending retry at a time; unref'd so it never holds the process open.
+function _scheduleRetry() {
+    if (_retryTimer) return;
+    _retryTimer = setTimeout(() => { _retryTimer = null; loadOverrides(); }, RETRY_MS);
+    _retryTimer.unref?.();
 }
 
 function overridesObj() {
@@ -63,17 +84,22 @@ export function adminSettings() {
     }));
 }
 
-// Set/replace one override. Validates against the catalog, upserts, reloads the
-// cache. Returns { effective, restart_required }. Throws an error with .status
-// 400 on an invalid value.
-export async function setOverride(key, rawValue, userId = null) {
-    const v = validateSetting(key, rawValue);
-    if (!v.ok) { const err = new Error(v.error); err.status = 400; throw err; }
-    await db('settings')
-        .insert({ key, value: String(rawValue), updated_by: userId })
-        .onConflict('key').merge({ value: String(rawValue), updated_by: userId });
+// Batch write: validate EVERY key first, then apply inside one transaction,
+// reload once. A bad key in the batch must not leave earlier keys already
+// persisted+live while the response reads as a rejection (M7). Throws an
+// error with .status 400 carrying every validation message.
+export async function setOverrides(entries, userId = null) {
+    const batch = validateSettings(entries);
+    if (!batch.ok) { const err = new Error(batch.errors.join('; ')); err.status = 400; throw err; }
+    await db.transaction(async trx => {
+        for (const [key, value] of entries) {
+            await trx('settings')
+                .insert({ key, value: String(value), updated_by: userId })
+                .onConflict('key').merge({ value: String(value), updated_by: userId });
+        }
+    });
     await loadOverrides();
-    return { key, effective: effective(key), restart_required: !catalogEntry(key).live };
+    return entries.map(([key]) => ({ key, effective: effective(key), restart_required: !catalogEntry(key).live }));
 }
 
 export async function resetOverride(key) {

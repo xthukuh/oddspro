@@ -3,7 +3,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, mergeOverrides, publicSubset,
+    SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, validateSettings,
+    mergeOverrides, publicSubset, isMissingTableError,
 } from '../src/db/settings-rules.js';
 
 test('catalog excludes secrets/creds/build vars by construction', () => {
@@ -53,6 +54,35 @@ test('publicSubset keeps only public keys', () => {
     assert.equal('SAFE_MAX_PRICE' in pub, true);           // public
     assert.equal('REFRESH_COOLDOWN_MINUTES' in pub, false); // not public
     assert.equal('SMS_ENABLED' in pub, false);              // not public
+});
+
+// M7: batch validation - ALL keys validate before ANY write (all-or-nothing).
+test('validateSettings validates every entry up front', () => {
+    const ok = validateSettings([['SAFE_MAX_PRICE', '1.8'], ['SAFE_MIN_PARTS', '2']]);
+    assert.equal(ok.ok, true);
+    assert.deepEqual(ok.values, [
+        { key: 'SAFE_MAX_PRICE', value: 1.8 },
+        { key: 'SAFE_MIN_PARTS', value: 2 },
+    ]);
+    // One bad key fails the WHOLE batch and reports every error, not just the first.
+    const bad = validateSettings([['SAFE_MAX_PRICE', '1.8'], ['NOPE', '1'], ['SAFE_MIN_PARTS', '9']]);
+    assert.equal(bad.ok, false);
+    assert.equal(bad.errors.length, 2);
+    assert.match(bad.errors[0], /NOPE/);
+    assert.match(bad.errors[1], /SAFE_MIN_PARTS/);
+    // Empty batch is a validation error, not a silent no-op success.
+    assert.equal(validateSettings([]).ok, false);
+});
+
+// M1: the boot override-load must tell "table not migrated yet" (legitimately
+// empty) apart from a transient DB failure (keep cache, retry).
+test('isMissingTableError matches only the MySQL missing-table error', () => {
+    assert.equal(isMissingTableError({ code: 'ER_NO_SUCH_TABLE', errno: 1146 }), true);
+    assert.equal(isMissingTableError({ errno: 1146 }), true);
+    assert.equal(isMissingTableError({ code: 'ECONNREFUSED' }), false);
+    assert.equal(isMissingTableError({ code: 'ER_LOCK_DEADLOCK', errno: 1213 }), false);
+    assert.equal(isMissingTableError(new Error('boom')), false);
+    assert.equal(isMissingTableError(null), false);
 });
 
 test('catalogEntry carries the live flag (restart vs live)', () => {

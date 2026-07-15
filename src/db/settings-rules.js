@@ -71,6 +71,31 @@ export function validateSetting(key, raw, catalog = SETTINGS_CATALOG) {
     return { ok: true, value };
 }
 
+// Batch-validate [key, raw] entries - ALL must pass before ANY is applied
+// (all-or-nothing, M7). Collects every error so the admin fixes the batch in
+// one round-trip instead of discovering failures one 400 at a time.
+export function validateSettings(entries, catalog = SETTINGS_CATALOG) {
+    if (!Array.isArray(entries) || !entries.length) {
+        return { ok: false, errors: ['No settings provided'] };
+    }
+    const values = [];
+    const errors = [];
+    for (const [key, raw] of entries) {
+        const v = validateSetting(key, raw, catalog);
+        if (v.ok) values.push({ key, value: v.value });
+        else errors.push(v.error);
+    }
+    return errors.length ? { ok: false, errors } : { ok: true, values };
+}
+
+// MySQL "table doesn't exist" (ER_NO_SUCH_TABLE / 1146): the one load error
+// that legitimately means "no overrides yet" (pre-migration boot). Anything
+// else is a transient failure the loader must NOT paper over with an empty
+// override set (M1).
+export function isMissingTableError(e) {
+    return e?.code === 'ER_NO_SUCH_TABLE' || e?.errno === 1146;
+}
+
 // Merge coerced overrides over the config defaults for every catalog key.
 export function mergeOverrides(defaults, overrides, catalog = SETTINGS_CATALOG) {
     const out = {};

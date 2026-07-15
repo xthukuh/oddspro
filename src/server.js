@@ -24,7 +24,7 @@ import {
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema, mustChangePinBlocks,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
-import { loadOverrides, effective, publicSettings, adminSettings, setOverride, resetOverride } from './settings.js';
+import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -410,6 +410,8 @@ app.get('/api/settings', (req, res) => res.json(publicSettings()));
 app.get('/api/admin/settings', requireAdminDual, (req, res) => res.json({ settings: adminSettings() }));
 
 // PUT /api/admin/settings - set one override {key,value} (or {overrides:{...}}).
+// All-or-nothing: every key validates BEFORE any write (M7), so a bad key in a
+// batch can't leave earlier keys persisted+live behind a 400 response.
 app.put('/api/admin/settings', requireAdminDual, express.json({ limit: '8kb' }), async (req, res, next) => {
     if (!csrfOk(req, res)) return;
     try {
@@ -417,8 +419,7 @@ app.put('/api/admin/settings', requireAdminDual, express.json({ limit: '8kb' }),
         const entries = req.body?.overrides && typeof req.body.overrides === 'object'
             ? Object.entries(req.body.overrides)
             : [[req.body?.key, req.body?.value]];
-        const results = [];
-        for (const [key, value] of entries) results.push(await setOverride(key, value, userId));
+        const results = await setOverrides(entries, userId);
         res.json({ ok: true, results, restart_required: results.filter(r => r.restart_required).map(r => r.key) });
     } catch (e) {
         if (e?.status === 400) return res.status(400).json({ error: e.message });
