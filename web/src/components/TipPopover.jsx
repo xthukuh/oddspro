@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react';
 import { safeQualifies } from '../../../src/db/magic-rules.js';
-import { SHOW_DETAILS } from '../details.js';
+import { useShowDetails } from '../details.js';
 import { Z } from '../zLayers.js';
 
 // Tip popover: a lean bet-decision card - the pick, its odds, a confidence
@@ -140,6 +140,8 @@ function Blend({ name, prob, weight, note }) {
 }
 
 export default function TipPopover({ row, x, y, catalog, onClose }) {
+    // Session-aware: build flag AND signed-in (guests get redacted rows anyway)
+    const showDetails = useShowDetails();
     useEffect(() => {
         const key = e => {
             if (e.key === 'Escape') onClose();
@@ -220,7 +222,7 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
                     )}
 
                     {/* ── Premium / internal reasoning (SHOW_DETAILS gated) ── */}
-                    {SHOW_DETAILS && b && (
+                    {showDetails && b && (
                         <Section title="Why this tip">
                             <div className="mb-1 text-label">
                                 Blended from three independent signals:
@@ -241,7 +243,7 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
                 <div className="mt-1 text-label-2">{skipLabel(row.tip_skip_reason) ?? 'No tip for this fixture.'}</div>
             )}
 
-            {SHOW_DETAILS && signals.length > 0 && (
+            {showDetails && signals.length > 0 && (
                 <Section title={`Will both teams score freely? (over 2.5 checks)${row.hot ? ' - 🔥 hot pick' : ''}`}>
                     <div className="mb-1 text-label-2">
                         Every check must pass (needed value in grey) for the 🔥 over-2.5 flag:
@@ -258,7 +260,7 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
                 </Section>
             )}
 
-            {SHOW_DETAILS && (row.tip_ai_verdict || row.hot_reason) && (
+            {showDetails && (row.tip_ai_verdict || row.hot_reason) && (
                 <Section title="AI double-check">
                     {row.tip_ai_verdict && (
                         <div className={vetoed ? 'text-miss' : 'text-label'}>

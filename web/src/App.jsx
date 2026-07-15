@@ -23,7 +23,7 @@ import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
 import ViewPills from './components/ViewPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
-import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconMenu, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';
+import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconMenu, IconChevronLeft, IconChevronRight, IconChevronDown, IconUser } from './components/icons.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
 const LS_MARKETS = 'oddspro.cols.markets';
@@ -262,6 +262,9 @@ export default function App() {
     const [filters, setFilters] = useState([]);
     const [result, setResult] = useState(null);
     const [error, setError] = useState(null);
+    // Guest asked for a future date (server 403 auth_required, Phase 8) -
+    // renders the "Sign in to see upcoming games" panel instead of the table.
+    const [signInNeeded, setSignInNeeded] = useState(false);
     const [loading, setLoading] = useState(false);
     // Heavy client re-orders (magic sort, bulk filter apply on a big day) run as
     // a React transition so the UI never freezes and input spam is coalesced.
@@ -502,7 +505,10 @@ export default function App() {
         // otherwise refetch every render) - safe precisely because an unchanged
         // query leaves any in-flight fetch valid. A zero-record result never
         // mutates these inputs, so it can never re-trigger the effect.
-        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}`;
+        // The session token is part of the query identity (Phase 8): the same
+        // date returns a different tier (guest redacted vs full) depending on
+        // the bearer, so login/logout/session-expiry must refetch.
+        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}|${session?.token ?? ''}`;
         if (lastQueryRef.current === queryKey) return;
         lastQueryRef.current = queryKey;
         const current = () => lastQueryRef.current === queryKey;
@@ -510,10 +516,16 @@ export default function App() {
         // loading dim - the table just updates in place.
         if (!silentRef.current) setLoading(true);
         fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
-            .then(res => { if (current()) { setResult(res); setError(null); } })
-            .catch(e => { if (current()) setError(String(e.message ?? e)); })
+            .then(res => { if (current()) { setResult(res); setError(null); setSignInNeeded(false); } })
+            .catch(e => {
+                if (!current()) return;
+                // Guest hit the future-date ceiling: swap the table for the
+                // sign-in panel, not the transient error banner.
+                if (e?.status === 403 && e?.body?.auth_required) { setResult(null); setSignInNeeded(true); }
+                else setError(String(e.message ?? e));
+            })
             .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
-    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length]);
+    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).
     // A new error resets the timer; clearing on unmount avoids a stray setState.
@@ -883,9 +895,15 @@ export default function App() {
     const TODAY = _today();
     const DAY_MS = 86400000;
     const MIN_DATE = '2026-07-05';
-    const MAX_DATE = new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
-    const PREV_DATE = new Date(new Date(date).setHours(13) - DAY_MS).toISOString().substring(0,10);
-    const NEXT_DATE = new Date(new Date(date).setHours(13) + DAY_MS).toISOString().substring(0,10);
+    // Guests browse up to today only (Phase 8) - the server enforces the same
+    // ceiling (403 on future dates), this clamp is just the honest UI. Only
+    // once session hydration settled: a stored sign-in must not flash a
+    // clamped calendar at mount.
+    const guestClamp = !!session?.isGuest && session?.status === 'ready';
+    const MAX_DATE = guestClamp ? TODAY : new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
+    // date can be '' (All dates) - anchor the chevrons on today then.
+    const PREV_DATE = new Date(new Date(date || TODAY).setHours(13) - DAY_MS).toISOString().substring(0,10);
+    const NEXT_DATE = new Date(new Date(date || TODAY).setHours(13) + DAY_MS).toISOString().substring(0,10);
 
     const navBtn = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-label hover:bg-accent-soft disabled:opacity-40 disabled:hover:bg-transparent';
     const navBtnActive = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-accent bg-accent-soft';
@@ -913,7 +931,8 @@ export default function App() {
                         <IconChevronDown className="text-accent" />
                     </button>
                     <button onClick={() => changeDate(NEXT_DATE)} disabled={date >= MAX_DATE}
-                        title={`Next (${NEXT_DATE})`} aria-label="Next day" className={navBtn}>
+                        title={guestClamp && date >= MAX_DATE ? 'Sign in to see upcoming games' : `Next (${NEXT_DATE})`}
+                        aria-label="Next day" className={navBtn}>
                         <IconChevronRight />
                     </button>
                     {showCal && (
@@ -1006,6 +1025,27 @@ export default function App() {
                     onHideSelected={saveHideSelected} onHideUnselected={saveKeepSelected} onRiskGate={saveRiskGate}
                     onOpenFilters={() => setShowFilters(true)} onClearFilters={() => applyFilters([])}
                 />
+                {signInNeeded ? (
+                    /* Guest asked for a future date: the server answered 403
+                       auth_required (Phase 8). A calm sign-in invitation in
+                       place of the table - signing in refetches by itself
+                       (the session token is part of the fetch query key). */
+                    <div className="flex-1 min-h-0 flex flex-col items-center justify-center gap-2 text-center px-6">
+                        <IconUser className="w-9 h-9 text-label-3" />
+                        <div className="text-[17px] font-semibold text-label">Sign in to see upcoming games</div>
+                        <div className="text-[13px] text-label-2 max-w-sm">
+                            Games after today - with their odds and tips - are for signed-in members.
+                        </div>
+                        <button onClick={() => session?.openAuth('signin')}
+                            className="cursor-pointer mt-2 h-10 px-5 rounded-[10px] bg-accent text-white text-[15px] font-semibold hover:opacity-90">
+                            Sign in
+                        </button>
+                        <button onClick={() => changeDate(TODAY)}
+                            className="cursor-pointer text-[13px] text-accent hover:underline">
+                            Back to today
+                        </button>
+                    </div>
+                ) : (
                 <DataTable
                     catalog={catalog}
                     rows={rows}
@@ -1026,6 +1066,7 @@ export default function App() {
                     onClearFilters={() => applyFilters([])}
                     scrollKey={`${date || 'all'}|${serverFiltersKey}|${showCompleted}`}
                 />
+                )}
             </main>
 
             {/* Status bar: a normal flex child of the app shell (no longer fixed).
