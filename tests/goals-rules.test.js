@@ -4,8 +4,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    DEFAULT_THRESHOLDS, impliedProbability, teamGoalsAggregates, pairedTeamGoalsAggregates,
-    h2hGoalsAggregates, apiPredictionSignal, scoreOver25,
+    DEFAULT_THRESHOLDS, LINE_THRESHOLDS, impliedProbability, teamGoalsAggregates, pairedTeamGoalsAggregates,
+    h2hGoalsAggregates, apiPredictionSignal, scoreOver25, scoreOverLine,
 } from '../src/db/goals-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -82,6 +82,21 @@ test('teamGoalsAggregates window keeps only the newest games; empty -> nulls', (
     assert.equal(empty.n, 0);
     assert.equal(empty.avgTotal, null);
     assert.equal(empty.overRate, null);
+    assert.equal(empty.overRates, null);
+});
+
+test('teamGoalsAggregates gains overRates per O/U line; legacy overRate stays the 2.5 value', () => {
+    const rows = [
+        fx(1, 3, 2, 1, '2026-06-01 15:00:00'), // 3 goals
+        fx(4, 1, 0, 4, '2026-05-01 15:00:00'), // 4 goals
+        fx(1, 5, 1, 1, '2026-04-01 15:00:00'), // 2 goals
+    ];
+    const out = teamGoalsAggregates(rows, 1, 2, CUTOFF, 5);
+    assert.equal(out.overRates[0.5], 1);                              // all 3 games > 0.5
+    assert.equal(out.overRates[2.5], Math.round(2 / 3 * 1000) / 1000); // 3 and 4 goal games > 2.5
+    assert.equal(out.overRates[2.5], out.overRate);                   // byte-compat: legacy field = the 2.5 rate
+    assert.equal(out.overRates[3.5], Math.round(1 / 3 * 1000) / 1000); // only the 4-goal game > 3.5
+    assert.equal(out.overRates[6.5], 0);
 });
 
 // --- h2hGoalsAggregates ---
@@ -101,6 +116,20 @@ test('h2hGoalsAggregates covers pair meetings only, windowed, either venue', () 
     const empty = h2hGoalsAggregates([], 1, 2, CUTOFF, 5);
     assert.equal(empty.n, 0);
     assert.equal(empty.overRate, null);
+    assert.equal(empty.overRates, null);
+});
+
+test('h2hGoalsAggregates gains overRates per O/U line; legacy overRate stays the 2.5 value', () => {
+    const rows = [
+        fx(1, 2, 2, 1, '2026-06-01 15:00:00'), // 3 goals: over 2.5
+        fx(2, 1, 0, 1, '2026-05-01 15:00:00'), // 1 goal: under 2.5
+        fx(1, 2, 2, 2, '2026-03-01 15:00:00'), // 4 goals: over 2.5
+    ];
+    const out = h2hGoalsAggregates(rows, 1, 2, CUTOFF, 5);
+    assert.equal(out.overRates[0.5], 1);                              // all 3 meetings > 0.5
+    assert.equal(out.overRates[2.5], Math.round(2 / 3 * 1000) / 1000);
+    assert.equal(out.overRates[2.5], out.overRate);                   // byte-compat: legacy field = the 2.5 rate
+    assert.equal(out.overRates[3.5], Math.round(1 / 3 * 1000) / 1000); // only the 4-goal meeting > 3.5
 });
 
 // --- apiPredictionSignal ---
@@ -121,6 +150,83 @@ test('apiPredictionSignal falls back to the advice text, else neutral', () => {
     assert.equal(apiPredictionSignal({}), null);
     assert.equal(apiPredictionSignal(null), null);
     assert.equal(apiPredictionSignal(undefined), null);
+});
+
+test('apiPredictionSignal accepts a custom line parameter (default stays 2.5)', () => {
+    // +1.5 says little about over 2.5 (default line) -> neutral
+    assert.equal(apiPredictionSignal({ under_over: '+1.5' }), null);
+    assert.equal(apiPredictionSignal({ under_over: '+1.5' }, 2.5), null);
+    // ... but fully supports over 1.5 when evaluated at that line
+    assert.equal(apiPredictionSignal({ under_over: '+1.5' }, 1.5), 'support');
+    // -1.5 contradicts over 1.5 (denies it outright) but not over 2.5
+    assert.equal(apiPredictionSignal({ under_over: '-1.5' }, 1.5), 'contradict');
+    assert.equal(apiPredictionSignal({ under_over: '-1.5' }, 2.5), 'contradict');
+});
+
+// --- LINE_THRESHOLDS ---
+
+test('LINE_THRESHOLDS only has a 2.5 entry - a line without one can never fire hot', () => {
+    assert.deepEqual(LINE_THRESHOLDS, { 2.5: DEFAULT_THRESHOLDS });
+});
+
+// --- scoreOverLine ---
+
+test('scoreOverLine reads the requested line\'s overRates, not the legacy 2.5 overRate', () => {
+    // Legacy overRate (2.5) says cold; overRates[1.5] says hot - the SAME
+    // objects must gate differently depending on which line is requested.
+    const team = { n: 5, avgTotal: 3.4, overRate: 0.2, overRates: { 1.5: 0.9, 2.5: 0.2 } };
+    const h2h = { n: 0, overRate: null, overRates: null };
+    const inputs = { home: team, away: team, h2h, market: { impliedOver: 0.6 }, api: null };
+
+    const at15 = scoreOverLine(inputs, 1.5);
+    assert.equal(at15.hot, true);
+    assert.equal(at15.signals.find(s => s.key === 'home_over_rate').value, 0.9);
+    assert.equal(at15.signals.find(s => s.key === 'away_over_rate').value, 0.9);
+
+    const at25 = scoreOverLine(inputs, 2.5);
+    assert.equal(at25.hot, false);
+    assert.equal(at25.signals.find(s => s.key === 'home_over_rate').value, 0.2);
+});
+
+test('scoreOverLine falls back to the legacy overRate only at line 2.5 when overRates is absent', () => {
+    const team = { n: 5, avgTotal: 3.4, overRate: 0.8 }; // no overRates key at all
+    const h2h = { n: 0, overRate: null };
+    const out = scoreOverLine({ home: team, away: team, h2h, market: { impliedOver: 0.6 }, api: null }, 2.5);
+    assert.equal(out.signals.find(s => s.key === 'home_over_rate').value, 0.8);
+    // At a non-2.5 line with no overRates present, there is nothing to read -> gate fails safe
+    const at15 = scoreOverLine({ home: team, away: team, h2h, market: { impliedOver: 0.6 }, api: null }, 1.5);
+    assert.equal(at15.signals.find(s => s.key === 'home_over_rate').value, null);
+    assert.equal(at15.hot, false);
+});
+
+test('scoreOver25 is scoreOverLine(inputs, 2.5, opts) - output is byte-identical to the pre-refactor baseline (pin)', () => {
+    const baselineInput = {
+        home: { n: 6, gfAvg: 1.8, gaAvg: 1.1, avgTotal: 3.3, overRate: 0.667, bttsRate: 0.5 },
+        away: { n: 7, gfAvg: 2.1, gaAvg: 1.4, avgTotal: 3.6, overRate: 0.714, bttsRate: 0.571 },
+        h2h: { n: 4, overRate: 0.75, avgTotal: 3.25 },
+        market: { impliedOver: 0.58 },
+        api: 'support',
+    };
+    // Captured from the pre-refactor scoreOver25 (tmp/capture-baseline.mjs) -
+    // must stay byte-identical after the scoreOverLine refactor.
+    const expected = {
+        hot: true,
+        score: 0.719,
+        signals: [
+            { key: 'home_sample', value: 6, threshold: 5, pass: true },
+            { key: 'away_sample', value: 7, threshold: 5, pass: true },
+            { key: 'home_avg_total', value: 3.3, threshold: 3.2, pass: true },
+            { key: 'home_over_rate', value: 0.667, threshold: 0.6, pass: true },
+            { key: 'away_avg_total', value: 3.6, threshold: 3.2, pass: true },
+            { key: 'away_over_rate', value: 0.714, threshold: 0.6, pass: true },
+            { key: 'market_implied_over', value: 0.58, threshold: 0.52, pass: true },
+            { key: 'h2h_over_rate', value: 0.75, threshold: 0.4, pass: true },
+            { key: 'api_prediction', value: 'support', threshold: 'not contradict', pass: true },
+        ],
+        api_supports: true,
+    };
+    assert.deepEqual(scoreOver25(baselineInput), expected);
+    assert.deepEqual(scoreOver25(baselineInput), scoreOverLine(baselineInput, 2.5));
 });
 
 // --- scoreOver25 ---

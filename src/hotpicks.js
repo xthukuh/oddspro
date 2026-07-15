@@ -3,7 +3,7 @@ import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import {
     pairedTeamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
-    apiPredictionSignal, scoreOver25,
+    apiPredictionSignal, scoreOverLine, LINE_THRESHOLDS,
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
@@ -68,10 +68,19 @@ async function _loadMarkets(fixtureIds, namesById) {
 // external fetches, no AI), so the auto-refresh light pass can call it standalone.
 export async function settleHotPicks() {
     const finalsIn = FINAL_STATUSES.map(() => '?').join(',');
+    // Line-aware (M3): p.market is 'O <line>' (e.g. 'O 2.5', 'O 1.5');
+    // SUBSTRING(p.market, 3) strips the 'O ' prefix to the line text, cast
+    // to a comparable decimal. total > 2.5 === today's total >= 3 for the
+    // legacy 2.5-only ledger (integer goals), so this is a no-op for every
+    // row written before HOTPICK_LINES ever offered a non-2.5 line. Only
+    // touches p.outcome IS NULL rows - settled rows are never revisited.
     const [settledRes] = await db.raw(
         `UPDATE fixture_predictions p JOIN fixtures f ON f.id = p.fixture_id
          SET p.result_goals = COALESCE(f.ft_home, f.goals_home) + COALESCE(f.ft_away, f.goals_away),
-             p.outcome = IF(COALESCE(f.ft_home, f.goals_home) + COALESCE(f.ft_away, f.goals_away) >= 3, 'hit', 'miss')
+             p.outcome = IF(
+                 COALESCE(f.ft_home, f.goals_home) + COALESCE(f.ft_away, f.goals_away)
+                     > CAST(SUBSTRING(p.market, 3) AS DECIMAL(4,2)),
+                 'hit', 'miss')
          WHERE p.outcome IS NULL AND f.status IN (${finalsIn})
            AND COALESCE(f.ft_home, f.goals_home) IS NOT NULL
            AND COALESCE(f.ft_away, f.goals_away) IS NOT NULL`,
@@ -176,21 +185,38 @@ export async function updateHotPicks() {
         const awayRows = fixturesByTeam.get(f.away_team_id) ?? [];
         const groups = markets.get(f.id)
             ?? { x12: null, dc: null, ou: {}, btts: null, dnb: null, oddEven: null, tt: { H: {}, A: {} }, overrounds: {}, rejects: {} };
-        const p = groups.ou[2.5] ?? null;
-        const market = p ? { ...p, impliedOver: impliedProbability(p.over, p.under) } : null;
         const apiPred = apiPreds.get(f.id);
-        const api = apiPredictionSignal(apiPred);
         // Fairness pairing: both teams judged over the SAME window, capped
         // at the smaller side's qualifying count (see goals-rules).
         const pair = pairedTeamGoalsAggregates(homeRows, awayRows,
             f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow);
-        const inputs = {
-            home: pair.home,
-            away: pair.away,
-            h2h: h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
-            market, api,
-        };
-        const out = scoreOver25(inputs, thresholds);
+        const h2h = h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW);
+
+        // Over/under hot-pick evaluation (M3, scoreOverLine): the row's
+        // ledger baseline is ALWAYS the 2.5 evaluation, exactly as before M3
+        // (byte-compat with today's behavior at default config). Every OTHER
+        // configured line (HOTPICK_LINES) with both a full O/U pair AND a
+        // LINE_THRESHOLDS entry (a line without one can never fire hot) is
+        // also scored; it replaces the row's hot columns only when it fires
+        // hot with a STRICTLY higher score than the current best.
+        const baseP = groups.ou[2.5] ?? null;
+        const baseMarket = baseP ? { ...baseP, impliedOver: impliedProbability(baseP.over, baseP.under) } : null;
+        const baseApi = apiPredictionSignal(apiPred);
+        const baseOut = scoreOverLine({ home: pair.home, away: pair.away, h2h, market: baseMarket, api: baseApi }, 2.5, thresholds);
+        let best = { line: 2.5, p: baseP, market: baseMarket, api: baseApi, out: baseOut };
+        for (const line of config.HOTPICK_LINES) {
+            if (line === 2.5 || !(line in LINE_THRESHOLDS)) continue;
+            const lp = groups.ou[line] ?? null;
+            if (!lp) continue; // no full O/U pair at this line - nothing to evaluate
+            const lMarket = { ...lp, impliedOver: impliedProbability(lp.over, lp.under) };
+            const lApi = apiPredictionSignal(apiPred, line);
+            const lOut = scoreOverLine({ home: pair.home, away: pair.away, h2h, market: lMarket, api: lApi }, line, thresholds);
+            if (lOut.hot && lOut.score > best.out.score) {
+                best = { line, p: lp, market: lMarket, api: lApi, out: lOut };
+            }
+        }
+        const inputs = { home: pair.home, away: pair.away, h2h, market: best.market, api: best.api };
+        const out = best.out;
 
         // Safest bettable outcome across every canonical market (the "Tip"
         // column) - independent of the hot verdict, same leak-free windows.
@@ -228,13 +254,13 @@ export async function updateHotPicks() {
         }
         const row = {
             fixture_id: f.id,
-            market: 'O 2.5',
+            market: `O ${best.line}`,
             hot: out.hot,
             score: out.score,
             signals: JSON.stringify(out.signals),
-            over_price: p?.over ?? null,
-            under_price: p?.under ?? null,
-            implied_over: market?.impliedOver ?? null,
+            over_price: best.p?.over ?? null,
+            under_price: best.p?.under ?? null,
+            implied_over: best.market?.impliedOver ?? null,
             api_advice_supports: out.api_supports,
             ai_verdict: null,
             ai_reason: null,
