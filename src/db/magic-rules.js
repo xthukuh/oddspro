@@ -60,6 +60,33 @@ export function priceBand(price) {
     return '1.55+';
 }
 
+// Plain-language name for a canonical tip market key, shared verbatim by the
+// web (TipPopover/table labels) and any server-side text (M3 new-family
+// markets need a human name too, not just the raw key). Fallback is the raw
+// key itself - never throws, so an unrecognized/future key still renders.
+export function tipMarketLabel(market) {
+    const m = String(market);
+    switch (m) {
+        case '1': return 'Home win';
+        case 'X': return 'Draw';
+        case '2': return 'Away win';
+        case '1X': return 'Home or draw';
+        case 'X2': return 'Draw or away';
+        case '12': return 'Home or away';
+        case 'GG': return 'Both teams to score: Yes';
+        case 'NG': return 'Both teams to score: No';
+        case 'DNB1': return 'Home (draw no bet)';
+        case 'DNB2': return 'Away (draw no bet)';
+        case 'ODD': return 'Odd total goals';
+        case 'EVEN': return 'Even total goals';
+    }
+    let mm = /^([OU]) (\d+(?:\.\d+)?)$/.exec(m);
+    if (mm) return `${mm[1] === 'O' ? 'Over' : 'Under'} ${mm[2]} goals`;
+    mm = /^TT:([HA]):([OU]) (\d+(?:\.\d+)?)$/.exec(m);
+    if (mm) return `${mm[1] === 'H' ? 'Home' : 'Away'} team ${mm[2] === 'O' ? 'over' : 'under'} ${mm[3]} goals`;
+    return m;
+}
+
 const _tally = (buckets, label, hit) => {
     const b = buckets[label] ?? (buckets[label] = { n: 0, hits: 0 });
     b.n++;
@@ -88,6 +115,15 @@ export function computeCalibration(tips, shrinkK = 10) {
         if (/^[OU] /.test(String(t.market))) _tally(cal.lines, t.market, hit);
         _tally(cal.prices, priceBand(t.price), hit);
         _tally(cal.markets, String(t.market), hit);   // per-exact-market (safePrior)
+        // Market-level flat-stake ROI (staked/profit), beside the n/hits tally
+        // above, so the web can render "this market's live ROI" - only when a
+        // price is on record (mirrors perf-rules._stats' staked-only-when-priced
+        // rule). Rounded per-accumulation like every other _round() ledger sum.
+        const mb = cal.markets[String(t.market)];
+        if (t.price != null) {
+            mb.staked = (mb.staked ?? 0) + 1;
+            mb.profit = _round((mb.profit ?? 0) + (hit ? Number(t.price) - 1 : -1));
+        }
     }
     cal.global_rate = cal.settled ? _round(hits / cal.settled) : null;
     return cal;
@@ -153,9 +189,11 @@ export function legPicks(r, cal) {
 // the 1.2 floor - the bettable slice has zero edge). So the live term must
 // dominate; the anchor only fills markets the live sample hasn't covered yet.
 // Markets absent here fall back to the live global rate, never a hardcoded
-// constant. Deliberately NO team-total / BTTS anchors - those markets are not
-// tipped (their warehouse precision is a sub-1.2 price mirage) and a primed
-// prior would mis-rank them if ever surfaced.
+// constant. Deliberately NO team-total / BTTS anchors YET - Task 10 (spec §5)
+// makes those markets tippable and REQUIRES a warehouse anchor to exist
+// before a market may surface a tip at all (the honest-EV-label gate); this
+// module stays the single home for WAREHOUSE_WLO, but the anchor VALUES land
+// in Task 10, not here - do not invent them ahead of that backtest.
 export const WAREHOUSE_WLO = {
     '1X': 0.807, 'X2': 0.669, '12': 0.777,
     'O 0.5': 0.90, 'O 1.5': 0.811, 'O 2.5': 0.683, 'O 3.5': 0.60,
@@ -343,6 +381,13 @@ export const DEFAULT_SAFE = {
     minH2H: 0,            // min head-to-head meetings. PINNED off - minH2H>=3
                           // starves the pool (helps only result markets; re-test
                           // on double-chance-only via analyze-safe-tips.js).
+    minMarketSettled: 30, // maturity floor (spec §5): a market needs at least
+                          // this many settled live tips (cal.markets[market].n)
+                          // before it can win the per-day cap - protects the
+                          // pool from a thin/new market's noisy early rate.
+                          // Only enforced when a calibration is supplied to
+                          // safeQualifies/safeSelection; callers with no cal
+                          // (the web risk-gate badge) are unaffected.
 };
 
 // Three risk tiers (Safety Net Protocol). Only minAgreement / maxPrice /
@@ -374,11 +419,17 @@ export function hasSufficientStats(row, opts = DEFAULT_SAFE) {
 }
 
 // One tip's pass/fail against the safe gates. Vetoed, tipless, thin-breakdown
-// (no components recorded) and insufficient-sample rows always fail.
-export function safeQualifies(row, opts = DEFAULT_SAFE) {
+// (no components recorded) and insufficient-sample rows always fail. The
+// optional `cal` (a computeCalibration() result) additionally enforces the
+// market maturity floor (spec §5) - a market with too few settled live tips
+// can't yet win the cap. Callers that don't pass `cal` (the web risk-gate
+// badge) are unaffected, exactly as before this gate existed.
+export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
     const o = { ...DEFAULT_SAFE, ...opts };
     const tip = tipView(row);
     if (!tip || tip.vetoed) return false;
+    if ((o.minMarketSettled ?? 0) > 0 && cal
+        && (cal.markets?.[String(tip.market)]?.n ?? 0) < o.minMarketSettled) return false;
     if (_agreementParts(tip).length < o.minParts) return false;
     const agree = tipAgreement(tip);
     if (agree == null || agree < o.minAgreement) return false;
@@ -411,7 +462,7 @@ export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
         const key = r?.api_id ?? r; // ledger rows are already one per fixture
         if (seen.has(key)) continue;
         seen.add(key);
-        if (!safeQualifies(r, o)) continue;
+        if (!safeQualifies(r, o, cal)) continue;
         const day = _dayKey(r);
         let list = byDay.get(day);
         if (!list) byDay.set(day, list = []);

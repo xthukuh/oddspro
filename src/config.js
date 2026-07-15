@@ -156,6 +156,10 @@ const EnvSchema = z.object({
     // Safe risk filter uses identical thresholds. 0 = that gate off.
     SAFE_MIN_SAMPLES: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minSamples),
     SAFE_MIN_H2H: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minH2H),
+    // Per-market maturity floor (spec §5): a market needs at least this many
+    // settled live tips (magic-sort calibration cal.markets[market].n) before
+    // it can win the Safe-only per-day cap. 0 disables the gate.
+    SAFE_MIN_MARKET_SETTLED: z.coerce.number().int().min(0).default(DEFAULT_SAFE.minMarketSettled),
     // --- User accounts / auth (v1.1.0; src/auth-rules.js + src/auth.js) -------
     // Server-wide pepper mixed into every scrypt PIN hash. Optional but STRONGLY
     // recommended in production. WARNING: changing it invalidates every existing

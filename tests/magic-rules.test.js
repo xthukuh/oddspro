@@ -7,7 +7,7 @@ import {
     tipView, priceBand, computeCalibration, shrunkRate, estimateLegProb, legPicks,
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
     buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
-    safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats,
+    safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats, tipMarketLabel,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -128,9 +128,30 @@ test('computeCalibration tallies bands, groups, cells, lines and prices', () => 
     assert.deepEqual(cal.cells['0.60-0.69|over_under'], { n: 2, hits: 2 });
     assert.deepEqual(cal.lines['O 2.5'], { n: 2, hits: 2 });
     assert.deepEqual(cal.prices['1.35-1.54'], { n: 2, hits: 2 });
-    assert.deepEqual(cal.markets['1X'], { n: 2, hits: 1 });      // per-exact-market
-    assert.deepEqual(cal.markets['O 2.5'], { n: 2, hits: 2 });
+    // per-exact-market, now also carrying staked/profit for ROI (both rows
+    // priced): 1X hit@1.3 (+0.3) then miss@1.3 (-1) -> -0.7; O 2.5 two hits@1.4 -> +0.8
+    assert.deepEqual(cal.markets['1X'], { n: 2, hits: 1, staked: 2, profit: -0.7 });
+    assert.deepEqual(cal.markets['O 2.5'], { n: 2, hits: 2, staked: 2, profit: 0.8 });
     assert.equal(cal.shrink_k, 10);
+});
+
+test('computeCalibration markets bucket omits staked/profit when no settled row in the market carried a price', () => {
+    const cal = computeCalibration([tv({ market: 'X2', price: null, outcome: 'hit' })]);
+    assert.deepEqual(cal.markets['X2'], { n: 1, hits: 1 }); // no priced rows -> no staked/profit fields
+});
+
+test('computeCalibration skips void outcomes entirely - no rate-bucket or market-ROI effect', () => {
+    const base = [
+        tv({ confidence: 0.85, market: '1X', outcome: 'hit' }),
+        tv({ confidence: 0.85, market: '1X', outcome: 'miss' }),
+    ];
+    const withoutVoid = computeCalibration(base);
+    const withVoid = computeCalibration([
+        ...base,
+        tv({ confidence: 0.6, market: 'O 2.5', outcome: 'void', price: 1.8 }),
+    ]);
+    assert.deepEqual(withVoid, withoutVoid); // the void row is fully inert
+    assert.equal(withVoid.markets['O 2.5'], undefined);
 });
 
 test('shrunkRate pulls thin buckets toward the global rate', () => {
@@ -316,6 +337,17 @@ test('safeQualifies rejects each gate violation individually', () => {
     assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } }), { minParts: 3 }), false);
 });
 
+test('safeQualifies enforces a per-market maturity floor when a calibration is supplied (spec §5)', () => {
+    const thinCal = { markets: { '1X': { n: 10, hits: 8 } } };
+    const matureCal = { markets: { '1X': { n: 40, hits: 30 } } };
+    assert.equal(safeQualifies(safe(), DEFAULT_SAFE, thinCal), false);   // 10 < minMarketSettled 30
+    assert.equal(safeQualifies(safe(), DEFAULT_SAFE, matureCal), true);  // 40 >= 30
+    // No cal supplied (the web risk-gate badge caller) -> unaffected, today's behavior.
+    assert.equal(safeQualifies(safe()), true);
+    // Floor explicitly disabled -> unaffected even with a thin market.
+    assert.equal(safeQualifies(safe(), { minMarketSettled: 0 }, thinCal), true);
+});
+
 test('safeQualifies normalizes DECIMAL strings and JSON-string breakdowns', () => {
     assert.equal(safeQualifies(safe({
         tip_price: '1.25', tip_confidence: '0.7500',
@@ -373,6 +405,37 @@ test('safeSelection groups start_time by the EAT day, not the UTC date', () => {
     ];
     const picks = safeSelection(rows, null, { maxPerDay: 1 });
     assert.equal(picks.length, 1); // same EAT day -> one group, cap holds
+});
+
+test('safeSelection passes its calibration through to the maturity floor', () => {
+    const rows = [safe({ api_id: 1 }), safe({ api_id: 2 })]; // both tip_market '1X'
+    const thinCal = { markets: { '1X': { n: 5, hits: 4 } } };
+    const matureCal = { markets: { '1X': { n: 40, hits: 30 } } };
+    assert.deepEqual(safeSelection(rows, thinCal), []);
+    assert.deepEqual(safeSelection(rows, matureCal).map(r => r.api_id), [1, 2]);
+});
+
+// --- tipMarketLabel (plain-language market names) ---
+
+test('tipMarketLabel translates canonical + M3 new-family markets into plain language', () => {
+    assert.equal(tipMarketLabel('1'), 'Home win');
+    assert.equal(tipMarketLabel('X'), 'Draw');
+    assert.equal(tipMarketLabel('2'), 'Away win');
+    assert.equal(tipMarketLabel('1X'), 'Home or draw');
+    assert.equal(tipMarketLabel('X2'), 'Draw or away');
+    assert.equal(tipMarketLabel('12'), 'Home or away');
+    assert.equal(tipMarketLabel('O 2.5'), 'Over 2.5 goals');
+    assert.equal(tipMarketLabel('U 4.5'), 'Under 4.5 goals');
+    assert.equal(tipMarketLabel('GG'), 'Both teams to score: Yes');
+    assert.equal(tipMarketLabel('NG'), 'Both teams to score: No');
+    assert.equal(tipMarketLabel('DNB1'), 'Home (draw no bet)');
+    assert.equal(tipMarketLabel('DNB2'), 'Away (draw no bet)');
+    assert.equal(tipMarketLabel('ODD'), 'Odd total goals');
+    assert.equal(tipMarketLabel('EVEN'), 'Even total goals');
+    assert.equal(tipMarketLabel('TT:H:O 1.5'), 'Home team over 1.5 goals');
+    assert.equal(tipMarketLabel('TT:A:U 2.5'), 'Away team under 2.5 goals');
+    assert.equal(tipMarketLabel('CS:2-1'), 'CS:2-1');       // fallback = raw key
+    assert.equal(tipMarketLabel('raw:foo:bar'), 'raw:foo:bar'); // fallback = raw key
 });
 
 // --- slip math ---
