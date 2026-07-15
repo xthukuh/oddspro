@@ -163,15 +163,31 @@ function throwOtpRejected(gate) {
 // Send the OTP SMS and fold the provider verdict into the caller's response.
 // A Bonga app-error (bad key / no credits) resolves { ok:false } - it never
 // throws - so it must be surfaced as sent:false, or the user is told "code
-// sent" for an SMS that never left the provider (M3). Network failures still
-// throw out of sendSms (after retries) and stay the caller's problem.
+// sent" for an SMS that never left the provider (M3). E2 bounds how long the
+// HTTP response waits for that verdict: sendSms's transport retries can take
+// ~a minute on a network black-hole, so past SMS_RESPONSE_WAIT_MS the caller
+// answers optimistically ({ sent:true, pending:true }) and the send finishes
+// in the background, logging a late failure. Fast verdicts (the normal case,
+// including every provider app-error) still surface as before - and network
+// errors now fold into sent:false instead of throwing, so a dead provider is
+// a resend prompt for the user, not a 500.
+const SMS_RESPONSE_WAIT_MS = 8_000;
 async function sendOtpSms(phone, code, extra) {
-    const sms = await sendSms({ to: phone, text: otpMessage(code) });
-    if (sms.ok === false) {
-        console.error(`[auth] OTP SMS to ${phone} failed: ${[sms.status, sms.message ?? 'provider error'].filter(x => x != null).join(' ')}`);
+    const fail = detail => {
+        console.error(`[auth] OTP SMS to ${phone} failed: ${detail}`);
         return { sent: false, error: 'send_failed', ...extra };
-    }
-    return { sent: true, ...extra };
+    };
+    const send = sendSms({ to: phone, text: otpMessage(code) }).then(
+        sms => (sms.ok === false
+            ? fail([sms.status, sms.message ?? 'provider error'].filter(x => x != null).join(' '))
+            : { sent: true, ...extra }),
+        e => fail(e?.message ?? e),
+    );
+    const capped = await Promise.race([send, new Promise(resolve => {
+        const t = setTimeout(() => resolve(null), SMS_RESPONSE_WAIT_MS);
+        t.unref?.(); // the cap alone must not hold the process open
+    })]);
+    return capped ?? { sent: true, pending: true, ...extra };
 }
 
 // Generate + send a fresh code for a phone (signup + change-phone). Rotates the
