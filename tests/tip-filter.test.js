@@ -65,6 +65,40 @@ test('parseTipFilter: an empty value after a prefix (has-candidate / outcome-onl
     assert.deepEqual(parseTipFilter('M2:'), { index: 2, outcome: 'miss', value: '' });
 });
 
+// --- M3: TIP_PREFIX must never collide with a new-family market key --------
+// M3 introduced market keys that start with a letter and contain a colon
+// mid-string, e.g. the team-total key 'TT:H:O 1.5' or a hypothetical HT/FT
+// combo 'HTFT:1-x'. TIP_PREFIX = /^([HM]?)(\d?):(.*)$/i only recognizes a
+// LEADING single 'H'/'M' or a single digit immediately followed by ':' - so
+// the mandatory ':' must land at string index 0 or 1:
+//   'TT:H:O 1.5' - first char 'T' is not in [HM] and not a digit, so the
+//                  anchored ':' never lines up (fails at index 0) - plain.
+//   'HTFT:1-x'   - first char 'H' DOES match [HM], but the very next char
+//                  ('T') is neither a digit nor ':', so the match still
+//                  fails overall (with or without consuming the 'H') - plain.
+// Both parse as an unprefixed, untouched value - the R26b prefix grammar
+// stays impossible to trigger by accident from a real market key.
+test('parseTipFilter: M3 market keys starting with T/H never collide with the H/M prefix grammar', () => {
+    assert.deepEqual(parseTipFilter('TT:H:O 1.5'), { index: 1, outcome: null, value: 'TT:H:O 1.5' });
+    assert.deepEqual(parseTipFilter('HTFT:1-x'), { index: 1, outcome: null, value: 'HTFT:1-x' });
+});
+
+test('parseTipFilter: a CSV in-list value containing a market-like key stays one plain value', () => {
+    // parseTipFilter inspects the WHOLE raw filter value - splitting into CSV
+    // items happens downstream (parseFilterList/matchValueOp) - so a list
+    // whose first item merely CONTAINS a colon later in the string must not
+    // be sliced into an index/outcome prefix + the rest.
+    assert.deepEqual(
+        parseTipFilter('TT:H:O 1.5,O 2.5'),
+        { index: 1, outcome: null, value: 'TT:H:O 1.5,O 2.5' });
+});
+
+test('evalCondition tip: an in-list containing an M3 team-total key matches without misparsing as a prefix', () => {
+    const r = tipRow({ tip_market: 'TT:H:O 1.5' });
+    assert.equal(evalCondition(r, { key: 'tip', op: 'in', value: 'TT:H:O 1.5,O 2.5' }, COLS), true);
+    assert.equal(evalCondition(r, { key: 'tip', op: 'in', value: 'O 2.5' }, COLS), false);
+});
+
 // --- tipCandidateMarket -------------------------------------------------
 test('tipCandidateMarket: index 1 is the chosen tip, 2/3 are the runners-up', () => {
     const r = tipRow();

@@ -1,5 +1,5 @@
 import { useEffect, useMemo } from 'react';
-import { safeQualifies } from '../../../src/db/magic-rules.js';
+import { safeQualifies, tipMarketLabel } from '../../../src/db/magic-rules.js';
 import { useShowDetails } from '../details.js';
 import { Z } from '../zLayers.js';
 
@@ -26,19 +26,36 @@ const _strength = v => (v == null ? null
     : v >= 0.6 ? 'fair'
     : 'weak');
 
-const MARKET_LABEL = {
-    1: 'Home win', X: 'Draw', 2: 'Away win',
-    '1X': 'Home win or draw', X2: 'Draw or away win', 12: 'Home or away win',
-};
+// Per-market honesty line (M3): ALWAYS visible, never gated behind
+// SHOW_DETAILS - this is the one thing every viewer (including guests) is
+// entitled to know: how has THIS market actually performed live, not just
+// this fixture's confidence score. `cal` is the magic-sort payload's
+// calibration object (`GET /api/magic-sort` .calibration), whose
+// cal.markets[market] = { n, hits, profit?, staked? } (magic-rules
+// computeCalibration). Returns null while cal hasn't loaded yet (silence
+// beats a misleading "no data" flash before the real numbers arrive).
+function _honestyLine(market, cal) {
+    if (!market || !cal) return null;
+    const mkt = cal.markets?.[market];
+    const n = mkt?.n ?? 0;
+    if (n === 0) return 'New market - no settled tips yet';
+    if (n < 10) return `New market - only ${n} settled tips so far`;
+    const rate = Math.round((mkt.hits / n) * 100);
+    const roi = mkt.staked ? Math.round((mkt.profit / mkt.staked) * 100) : null;
+    return `Tips on this market have hit ${rate}% of ${n} settled picks${roi != null ? ` (ROI ${roi}%)` : ''}`;
+}
+
 // `marketMap` (optional key->catalog-entry Map, built from the market catalog)
-// lets an unrecognized market (BTTS/DNB/team-totals/combos/...) prefer its
-// catalog `label` over the bare key - still falls back to the raw market key
-// when no catalog entry exists (unchanged prior behavior).
+// lets an unrecognized market (combo/raw/CS/...) prefer its catalog `label`
+// over the bare key - still falls back to the raw market key when no catalog
+// entry exists (unchanged prior behavior). The plain-language glossary itself
+// is now the shared tipMarketLabel (magic-rules) - one source of truth with
+// the server, covering every canonical AND M3 new-family market (BTTS/DNB/
+// odd-even/team-totals), not just the pre-M3 1X2/DC/O-U subset.
 function _label(market, marketMap) {
-    if (MARKET_LABEL[market]) return MARKET_LABEL[market];
-    const m = /^([OU]) (\d+(?:\.\d+)?)$/.exec(market ?? '');
-    if (m) return `${m[1] === 'O' ? 'Over' : 'Under'} ${m[2]} total goals`;
-    return marketMap?.get(market)?.label ?? market;
+    if (market == null) return market;
+    const label = tipMarketLabel(market);
+    return label !== String(market) ? label : (marketMap?.get(market)?.label ?? market);
 }
 
 // Layman labels for the over-2.5 gate-audit signal keys (goals-rules.js);
@@ -139,7 +156,7 @@ function Blend({ name, prob, weight, note }) {
     );
 }
 
-export default function TipPopover({ row, x, y, catalog, onClose }) {
+export default function TipPopover({ row, x, y, catalog, cal, onClose }) {
     // Session-aware: build flag AND signed-in (guests get redacted rows anyway)
     const showDetails = useShowDetails();
     useEffect(() => {
@@ -159,6 +176,7 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
     const b = row.tip_breakdown;
     const vetoed = row.tip_ai_verdict === 'veto';
     const signals = Array.isArray(row.hot_signals) ? row.hot_signals : [];
+    const honesty = _honestyLine(row.tip_market, cal);
     // Clamp near the click but inside the viewport
     const style = {
         top: Math.max(8, Math.min(y + 8, window.innerHeight - 400)),
@@ -190,6 +208,9 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
                         <span className="text-label-2"> - {_label(row.tip_market, marketMap)}</span>
                         {row.tip_outcome === 'hit' && <span className="text-hit font-bold"> ✓ hit</span>}
                         {row.tip_outcome === 'miss' && <span className="text-miss font-bold"> ✗ miss</span>}
+                        {row.tip_outcome === 'void' && (
+                            <span className="text-label-3 font-bold" title="Void - stake returned (draw no bet push)"> ↩ void</span>
+                        )}
                     </div>
                     {/* Confidence rating (the verdict; HOW it's derived stays hidden) */}
                     {row.tip_confidence != null && (
@@ -220,6 +241,11 @@ export default function TipPopover({ row, x, y, catalog, onClose }) {
                             ))}
                         </Section>
                     )}
+
+                    {/* Per-market honesty line: ALWAYS visible (never gated behind
+                        SHOW_DETAILS) - how this market has actually performed live,
+                        for every viewer including guests. */}
+                    {honesty && <div className="mt-2 text-label-2">{honesty}</div>}
 
                     {/* ── Premium / internal reasoning (SHOW_DETAILS gated) ── */}
                     {showDetails && b && (

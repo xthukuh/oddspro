@@ -258,6 +258,12 @@ function _marketOutcome(row, market) {
 function _tick(outcome) {
     if (outcome === 'hit') return <span className="text-hit font-bold"> ✓</span>;
     if (outcome === 'miss') return <span className="text-miss font-bold"> ✗</span>;
+    // M3: a draw-no-bet push (DNB1/DNB2 on a draw) is neither a win nor a loss
+    // - the stake is simply returned. Neutral muted marker, own tooltip (wins
+    // over any ancestor title on direct hover).
+    if (outcome === 'void') {
+        return <span className="text-label-3 font-bold" title="Void - stake returned (draw no bet push)"> ↩</span>;
+    }
     return null;
 }
 
@@ -671,7 +677,7 @@ export default function DataTable({
 
     return (
         <>
-        {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} catalog={catalog} onClose={() => setTipPop(null)} />}
+        {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} catalog={catalog} cal={cal} onClose={() => setTipPop(null)} />}
         <div className="relative flex-1 min-h-0 flex flex-col">
         {/* Non-silent load: blur the stale table + float a spinner over it
             (silent background reloads pass loading=false, so they never dim). */}

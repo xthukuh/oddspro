@@ -6,7 +6,7 @@ import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection } from '../../src/db/magic-rules.js';
-import { tipHit } from '../../src/db/tip-rules.js';
+import { tipHitSafe } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
@@ -158,7 +158,10 @@ function _hitRates(rows) {
     const hot = { hits: 0, settled: 0 }, tips = { hits: 0, settled: 0 };
     // Runner-up scoreboards (R26c): "what if we'd bet the 2nd / 3rd pick".
     // Only the chosen tip stores an outcome, so the runners-up are graded from
-    // the final score via tipHit - settled iff the fixture has a final score.
+    // the final score via tipHitSafe (never throws on an unrecognized market
+    // key - settled iff the graded outcome is hit/miss; a 'void' (DNB push) or
+    // an unknown key never counts toward settled, exactly like the chosen-tip
+    // count above already excludes them).
     const up2 = { hits: 0, settled: 0 }, up3 = { hits: 0, settled: 0 };
     for (const r of rows) {
         if (seen.has(r.api_id)) continue;
@@ -179,7 +182,9 @@ function _hitRates(rows) {
                     const market = ups[i]?.market;
                     if (!market) continue;
                     bucket.settled += 1;
-                    if (tipHit(market, hs, as)) bucket.hits += 1;
+                    const out = tipHitSafe(market, hs, as);
+                    if (out === 'hit') bucket.hits += 1;
+                    if (out !== 'hit' && out !== 'miss') bucket.settled -= 1;
                 }
             }
         }

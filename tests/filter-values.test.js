@@ -348,6 +348,38 @@ test('noMiss keeps clean-market rows (+upcoming), drops failed markets and tiple
         applyOutcomeToggles(rows, { noMiss: true }).map(r => r.api_id), [3, 4, 5]);
 });
 
+// --- M3: 'void' outcome semantics (DNB push - stake returned) -------------
+// tip_outcome can now settle to 'void' (tipOutcome/tipHitSafe, src/db/
+// tip-rules.js) on a DNB1/DNB2 tip that lands on a draw. A void is neither a
+// hit nor a miss, so it must survive both Hide toggles (hideHits/hideMiss
+// only test for the literal 'hit'/'miss' strings) and must never blacklist
+// its own market under No-miss (the `failed` set is built from 'miss' rows
+// only). These pin the CURRENT (already-correct) behavior of
+// applyOutcomeToggles - no source change was needed to satisfy them.
+test('applyOutcomeToggles: a void outcome is neither a hit nor a miss - both Hide toggles keep it', () => {
+    const rows = [
+        tipRow({ api_id: 1, tip_market: 'DNB1', tip_outcome: 'void' }),
+        tipRow({ api_id: 2, tip_market: 'O 2.5', tip_outcome: 'hit' }),
+        tipRow({ api_id: 3, tip_market: '1X', tip_outcome: 'miss' }),
+    ];
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideHits: true }).map(r => r.api_id), [1, 3]);
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideMiss: true }).map(r => r.api_id), [1, 2]);
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { hideHits: true, hideMiss: true }).map(r => r.api_id), [1]);
+});
+
+test('applyOutcomeToggles: No-miss does not blacklist a market off a void outcome', () => {
+    const rows = [
+        tipRow({ api_id: 1, tip_market: 'DNB1', tip_outcome: 'void' }),
+        tipRow({ api_id: 2, tip_market: 'DNB1', tip_outcome: 'hit' }),  // same market, stays clean
+        tipRow({ api_id: 3, tip_market: '1X', tip_outcome: 'miss' }),   // different market, fails
+    ];
+    assert.deepEqual(
+        applyOutcomeToggles(rows, { noMiss: true }).map(r => r.api_id), [1, 2]);
+});
+
 // One-of-each collapses to one row per fixture, choosing the highest-priority
 // provider present; games only a lower-priority provider has still survive.
 const provRow = (api_id, provider, extra = {}) => ({ api_id, provider, ...extra });
