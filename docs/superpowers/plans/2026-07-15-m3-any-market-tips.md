@@ -218,6 +218,7 @@ test('h2hOutcomeAggregates gains bttsRate/oddRate', () => {
     assert.equal(h.bttsRate, 1);
     assert.equal(h.oddRate, 1); // total 3
 });
+```
 
 - [ ] **Step 2: Run to verify failure** — `node --test tests/tip-rules.test.js` FAIL (`bttsRate` undefined).
 
