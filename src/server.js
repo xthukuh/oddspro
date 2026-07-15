@@ -214,7 +214,16 @@ if (config.AUTH_ENABLED) {
             const data = signupSchema.parse(req.body);
             const user = await createUser(data);
             const token = await mintSession(user, { userAgent: req.get('user-agent'), ip });
-            const otp = await issueOtp(user, {});
+            // The account + session already exist - an OTP/SMS failure must not
+            // 500 the signup (the retry would 409 "already registered"). Answer
+            // 201 with otp.sent:false; the verify screen offers resend (M2).
+            let otp;
+            try {
+                otp = await issueOtp(user, {});
+            } catch (e) {
+                console.error(`[auth] signup OTP send failed for user ${user.id}: ${e.message || e}`);
+                otp = { sent: false, error: 'send_failed' };
+            }
             res.status(201).json({ token, user: publicUser(user), otp });
         } catch (e) { authErr(e, res, next); }
     });

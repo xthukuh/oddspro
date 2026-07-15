@@ -160,6 +160,20 @@ function throwOtpRejected(gate) {
         { retry_after_seconds: gate.retryAfterSeconds, reason: gate.reason });
 }
 
+// Send the OTP SMS and fold the provider verdict into the caller's response.
+// A Bonga app-error (bad key / no credits) resolves { ok:false } - it never
+// throws - so it must be surfaced as sent:false, or the user is told "code
+// sent" for an SMS that never left the provider (M3). Network failures still
+// throw out of sendSms (after retries) and stay the caller's problem.
+async function sendOtpSms(phone, code, extra) {
+    const sms = await sendSms({ to: phone, text: otpMessage(code) });
+    if (sms.ok === false) {
+        console.error(`[auth] OTP SMS to ${phone} failed: ${[sms.status, sms.message ?? 'provider error'].filter(x => x != null).join(' ')}`);
+        return { sent: false, error: 'send_failed', ...extra };
+    }
+    return { sent: true, ...extra };
+}
+
 // Generate + send a fresh code for a phone (signup + change-phone). Rotates the
 // single active row for (user, purpose). Economy: a still-valid code for the
 // SAME phone that's still within its resend cooldown is a rapid duplicate - we
@@ -192,8 +206,9 @@ export async function issueOtp(user, { purpose = 'phone_verify', phone } = {}) {
             resend_count: 0, last_sent_at: db.fn.now(),
         });
     }
-    await sendSms({ to: phone, text: otpMessage(code) });
-    return { sent: true, retry_after_seconds: resendCooldownSeconds(resendCount, config.OTP_RESEND_BASE_SECONDS) };
+    return sendOtpSms(phone, code, {
+        retry_after_seconds: resendCooldownSeconds(resendCount, config.OTP_RESEND_BASE_SECONDS),
+    });
 }
 
 // Cooldown-gated resend (the verify-page button). Rotates the code (we don't
@@ -218,8 +233,10 @@ export async function resendOtp(user, { purpose = 'phone_verify' } = {}) {
         code_hash: hashOtpCode(code, PEPPER()), expires_at: new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES)),
         attempts: 0, resend_count: newCount, last_sent_at: db.fn.now(),
     });
-    await sendSms({ to: user.phone, text: otpMessage(code) });
-    return { sent: true, resend_count: newCount, retry_after_seconds: resendCooldownSeconds(newCount, config.OTP_RESEND_BASE_SECONDS) };
+    return sendOtpSms(user.phone, code, {
+        resend_count: newCount,
+        retry_after_seconds: resendCooldownSeconds(newCount, config.OTP_RESEND_BASE_SECONDS),
+    });
 }
 
 // Verify a code and mark the phone verified. Consumes the code (single-use).
