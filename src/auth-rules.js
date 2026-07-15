@@ -8,7 +8,8 @@
 // OTP-code hashing, PIN-lockout + OTP-attempt math, and the request schemas.
 import crypto from 'node:crypto';
 import { z } from 'zod';
-import { isValidE164 } from './db/sms-rules.js'; // pure, offline - no coupling to config/DB
+import { isValidE164, _ms } from './db/sms-rules.js'; // pure, offline - no coupling to config/DB
+import { sha256Hex } from './human-pow.js'; // pure crypto sibling (C1: one sha256 helper)
 
 // scrypt cost parameters. BAKED into every hash string (scrypt$N$r$p$salt$dk),
 // so they can be raised later WITHOUT a migration - verifyPin reads them back
@@ -112,19 +113,17 @@ export function newSessionToken(randomBytes = crypto.randomBytes) {
     return { token, tokenHash: hashToken(token) };
 }
 export function hashToken(token) {
-    return crypto.createHash('sha256').update(String(token)).digest('hex');
+    return sha256Hex(token);
 }
 
 // --- OTP code hashing -------------------------------------------------------
 // Short-lived numeric codes: a peppered sha256 is enough (the TTL + attempt cap
 // are the real protections, not hash cost). Never store the plaintext code.
 export function hashOtpCode(code, pepper = '') {
-    return crypto.createHash('sha256').update(String(code) + String(pepper)).digest('hex');
+    return sha256Hex(String(code) + String(pepper));
 }
 
 // --- PIN lockout math (pure) ------------------------------------------------
-const _ms = v => (v instanceof Date ? v.getTime() : (typeof v === 'number' ? v : Date.parse(v)));
-
 // After a wrong PIN: increment attempts, and lock once at/over the max.
 export function registerFailedAttempt(attempts, nowMs, { max = 5, lockoutMs = 15 * 60_000 } = {}) {
     const next = (attempts || 0) + 1;

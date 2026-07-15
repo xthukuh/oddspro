@@ -31,7 +31,8 @@ export function generateOtp(len, randomInt) {
 }
 
 // DB datetimes come back as Date (mysql2); normalize Date | number | ISO -> ms.
-const _ms = v => (v instanceof Date ? v.getTime() : (typeof v === 'number' ? v : Date.parse(v)));
+// Exported for the auth lockout math (auth-rules.js) - one copy (C1).
+export const _ms = v => (v instanceof Date ? v.getTime() : (typeof v === 'number' ? v : Date.parse(v)));
 
 // Expiry timestamp (ms) for a code issued at nowMs.
 export function otpExpiry(nowMs, ttlMinutes) {

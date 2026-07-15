@@ -85,6 +85,16 @@ app.use((req, res, next) => {
 // per-path allow-list (H2). bearerMatches skips unset entries.
 const MACHINE_BEARERS = [config.API_TOKEN, config.ADMIN_TOKEN];
 
+// Same-origin CSRF guard shared by every state-changing route: custom headers
+// force a CORS preflight cross-origin, which this server never approves - only
+// same-origin callers can set X-Requested-With. Answers the 403 itself; callers
+// bail on false. (C1: one copy - human gate, auth/admin routes, refresh.)
+const csrfOk = (req, res) => {
+    if (req.get('x-requested-with')) return true;
+    res.status(403).json({ error: 'Missing X-Requested-With header.' });
+    return false;
+};
+
 // Optional bearer-token guard: X-Requested-With (below) only stops a plain
 // cross-origin form/navigation - once this server is on a public domain,
 // anyone who finds the URL could POST /api/refresh directly (triggers live
@@ -121,7 +131,7 @@ if (config.HUMAN_POW_ENABLED) {
     });
     // Verify a solved challenge -> mint the check-once human token.
     app.post('/api/human', express.json({ limit: '2kb' }), (req, res) => {
-        if (!req.get('x-requested-with')) return res.status(403).json({ error: 'Missing X-Requested-With header.' });
+        if (!csrfOk(req, res)) return;
         const v = verifyChallenge(HUMAN_SECRET, req.body || {});
         if (!v.ok) return res.status(400).json({ error: 'Human verification failed - please retry.', reason: v.reason });
         res.json({ token: signHumanToken(HUMAN_SECRET, { ttlMs: TOKEN_TTL }), ttl_days: config.HUMAN_TOKEN_TTL_DAYS });
@@ -207,11 +217,6 @@ function authErr(e, res, next) {
     if (e?.name === 'ZodError') return res.status(400).json({ error: e.issues?.[0]?.message || 'Invalid input' });
     next(e);
 }
-const csrfOk = (req, res) => {
-    if (req.get('x-requested-with')) return true;
-    res.status(403).json({ error: 'Missing X-Requested-With header.' });
-    return false;
-};
 const authJson = express.json({ limit: '4kb' });
 
 if (config.AUTH_ENABLED) {
@@ -451,10 +456,15 @@ app.get('/api/visits/daily-unique', async (req, res, next) => {
 // Authorization header - never a query string (which leaks into logs, browser
 // history and Referer). 404 when no admin secret is configured (feature off).
 const adminSecret = () => config.ADMIN_TOKEN || config.API_TOKEN || null;
-function requireAdmin(req, res, next) {
+// One admin-bearer check shared by requireAdmin and requireAdminDual (C1) -
+// false when no admin secret is configured (a blank secret never matches).
+const adminBearerOk = req => {
     const secret = adminSecret();
-    if (!secret) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
-    if (bearerMatches(req.get('authorization'), [secret])) return next();
+    return Boolean(secret && bearerMatches(req.get('authorization'), [secret]));
+};
+function requireAdmin(req, res, next) {
+    if (!adminSecret()) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
+    if (adminBearerOk(req)) return next();
     return res.status(401).json({ error: 'Unauthorized' });
 }
 
@@ -472,8 +482,7 @@ app.get('/api/visits/summary', requireAdmin, async (req, res, next) => {
 // a transitional dual-auth. The public subset (SAFE_* etc.) is open like
 // /api/magic-sort already is.
 async function requireAdminDual(req, res, next) {
-    const secret = adminSecret();
-    if (secret && bearerMatches(req.get('authorization'), [secret])) return next();
+    if (adminBearerOk(req)) return next();
     try {
         const ctx = await resolveSession(bearerToken(req));
         if (ctx && ctx.user.role === 'admin') {
@@ -574,11 +583,7 @@ const refreshCooldown = new Map();
 // was successfully refreshed within REFRESH_CACHE_MINUTES (no re-run), 429
 // while that date is on manual cooldown (carries retry_after_seconds).
 app.post('/api/refresh', (req, res) => {
-    // CSRF guard: custom headers force a CORS preflight cross-origin, which
-    // this server never approves - only same-origin callers can set this.
-    if (!req.get('x-requested-with')) {
-        return res.status(403).json({ error: 'Missing X-Requested-With header.' });
-    }
+    if (!csrfOk(req, res)) return;
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
         return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
@@ -622,9 +627,7 @@ app.post('/api/refresh', (req, res) => {
 // (F3). Same CSRF guard as the trigger. 202 with the job state when a cancel
 // was requested, 409 when nothing is running to cancel.
 app.post('/api/refresh/cancel', (req, res) => {
-    if (!req.get('x-requested-with')) {
-        return res.status(403).json({ error: 'Missing X-Requested-With header.' });
-    }
+    if (!csrfOk(req, res)) return;
     if (!requestCancel()) return res.status(409).json({ error: 'No refresh is running.' });
     res.status(202).json(refreshStatus());
 });

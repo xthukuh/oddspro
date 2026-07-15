@@ -9,6 +9,7 @@ import {
 import {
     generateOtp, otpExpiry, isOtpExpired, canResend, resendCooldownSeconds, otpIssueDecision,
 } from './db/sms-rules.js';
+import { normalizeIp } from './db/visit-rules.js'; // sessions.ip must store the same format visits.ip does
 import { sendSms } from './sms/index.js';
 
 // Auth service: thin knex orchestration over the pure rules (auth-rules.js) and
@@ -111,10 +112,13 @@ export async function authenticate({ phone, pin }) {
 export async function mintSession(user, { userAgent = null, ip = null } = {}) {
     const { token, tokenHash } = newSessionToken();
     const expiresAt = new Date(Date.now() + config.SESSION_TTL_DAYS * 86_400_000);
+    // normalizeIp (visit-rules, C1): strip ::ffff: prefixes / :port the same way
+    // the visits log does, so the two tables agree on a client's IP format.
+    const normIp = normalizeIp(ip);
     await withRetry(() => db('sessions').insert({
         user_id: user.id, token_hash: tokenHash, expires_at: expiresAt, last_seen_at: db.fn.now(),
         user_agent: userAgent ? String(userAgent).slice(0, 512) : null,
-        ip: ip ? String(ip).slice(0, 45) : null,
+        ip: normIp ? String(normIp).slice(0, 45) : null,
     }), { isRetryable: isRetryableDbError });
     return token;
 }

@@ -11,6 +11,10 @@ import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import modu
 // to what's being run (M4).
 const optionalStr = inner => z.preprocess(v => (v === '' ? undefined : v), inner);
 
+// Boolean env flags parsed explicitly (z.coerce.boolean would treat "0"/"false"
+// as true). One helper for every on/off knob (C1); default is '0' or '1'.
+const boolStr = dflt => z.string().default(dflt).transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase()));
+
 // Environment schema - external data validated with zod (names match .env)
 const EnvSchema = z.object({
     DB_HOST: z.string().default('127.0.0.1'),
@@ -49,8 +53,7 @@ const EnvSchema = z.object({
     HOTPICK_AI_MODEL: z.string().default('gemini-2.5-flash'),
     // Web-grounded AI: attach Gemini's google_search tool for BOTH
     // adjudicators. Opt-in - grounded requests bill extra per call.
-    // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
-    HOTPICK_AI_WEB: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    HOTPICK_AI_WEB: boolStr('0'),
     // Tip AI review: only tips at/above this confidence, best-first, at most
     // this many fresh verdicts per run (cached verdicts don't count).
     TIP_AI_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.75),
@@ -80,7 +83,7 @@ const EnvSchema = z.object({
     // --- SPA bot-protection (opt-in; src/server.js + web/src/HumanGate.jsx) ---
     // Stateless proof-of-work "verify you're human" gate. Enable on BOTH sides
     // together: HUMAN_POW_ENABLED here AND VITE_HUMAN_POW at web build time.
-    HUMAN_POW_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    HUMAN_POW_ENABLED: boolStr('0'),
     HUMAN_POW_BITS: z.coerce.number().int().min(1).max(28).default(18),   // difficulty (~2^bits hashes, <1s in-browser)
     HUMAN_TOKEN_SECRET: optionalStr(z.string().min(1).optional()),        // HMAC key; set for a stable check-once across restarts
     HUMAN_TOKEN_TTL_DAYS: z.coerce.number().min(0.01).default(7),         // check-once lifetime (~1 week per the user's ask)
@@ -88,12 +91,11 @@ const EnvSchema = z.object({
     // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
     // Blocks AI scrapers / aggressive crawlers / raw HTTP clients; general search
     // engines are intentionally left alone (landing-page SEO).
-    BOT_UA_FILTER_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    BOT_UA_FILTER_ENABLED: boolStr('0'),
     BOT_UA_EXTRA: z.string().default(''),   // comma-separated extra UA substrings to block
     BOT_UA_ALLOW: z.string().default(''),   // comma-separated UA substrings to exempt
     // Verbose per-step timing logs (src/pipeline.js) via src/utils.js#debugLog.
-    // z.coerce.boolean would treat "0"/"false" as true; parse explicitly.
-    DEBUG: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    DEBUG: boolStr('0'),
     // POST /api/refresh per-date cooldown (server.js): blocks re-triggering
     // the SAME date again until this many minutes after its last run finished
     // (success or failure). 0 = disabled (today's behavior).
@@ -102,13 +104,13 @@ const EnvSchema = z.object({
     // `npm run serve`): light pass (scores/outcomes + today's odds + link)
     // every AUTO_LIGHT_MINUTES, full pipeline (runStartPipeline) once daily
     // at AUTO_FULL_AT (EAT wall-clock, matching the warehouse convention).
-    AUTO_REFRESH_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    AUTO_REFRESH_ENABLED: boolStr('1'),
     AUTO_LIGHT_MINUTES: z.coerce.number().int().min(0).default(10), // 0 = light mode off
     AUTO_FULL_AT: z.string().default('06:00'),                      // ''/off = full mode off
     AUTO_FULL_DAYS: z.coerce.number().int().min(0).default(5),      // days ahead for the daily sweep
     // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
     // has no log rotation and tight disk quotas).
-    AUTO_LOG: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    AUTO_LOG: boolStr('1'),
     AUTO_LOG_MAX_KB: z.coerce.number().int().min(16).default(256),
     // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
     // date was successfully refreshed - any mode - within this window. 0 = off.
@@ -120,7 +122,7 @@ const EnvSchema = z.object({
     // = visitor IPs go to a third party - point GEO_API_BATCH_URL at a keyed
     // HTTPS or self-hosted resolver to change that). Runs only when there are
     // public IPs to resolve, so a localhost-only dev box makes no external calls.
-    GEO_RESOLVE_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    GEO_RESOLVE_ENABLED: boolStr('1'),
     GEO_INTERVAL_MINUTES: z.coerce.number().int().min(1).default(10),  // sweep cadence
     GEO_BATCH_LIMIT: z.coerce.number().int().min(1).max(100).default(100), // IPs resolved per sweep (ip-api batch cap = 100)
     GEO_API_BATCH_URL: z.string().default('http://ip-api.com/batch'),
@@ -156,7 +158,7 @@ const EnvSchema = z.object({
     // so `npm run migrate` fail-fasts here BEFORE the seed hashes a bad PIN.
     ADMIN_SEED_PIN: z.string().regex(/^\d{4}$/, 'ADMIN_SEED_PIN must be exactly 4 digits (login requires a 4-digit PIN)').default('0000'),
     // Master switch for the whole user-accounts feature (routes/middleware).
-    AUTH_ENABLED: z.string().default('1').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    AUTH_ENABLED: boolStr('1'),
     // Opaque DB session lifetime; PIN lockout policy (src/auth-rules.js).
     SESSION_TTL_DAYS: z.coerce.number().min(0.01).default(30),
     PIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),   // wrong PINs before lockout
@@ -165,8 +167,7 @@ const EnvSchema = z.object({
     // SMS is used only for phone-verification OTPs. OFF by default: with
     // SMS_ENABLED off no network call is made and the OTP is logged to the
     // server console, so signup/verify works in dev without a provider account.
-    // z.coerce.boolean would treat "0" as true; parse explicitly.
-    SMS_ENABLED: z.string().default('0').transform(v => ['1', 'true', 'yes'].includes(v.toLowerCase())),
+    SMS_ENABLED: boolStr('0'),
     SMS_DEFAULT_REGION: z.string().default('KE'),   // ISO region for phone parsing (web input)
     // Bonga SMS (https://app.bongasms.co.ke). The send host is plain HTTP, so
     // its URL is z.string() (NOT .url() https). Creds are optional at parse time
