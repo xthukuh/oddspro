@@ -22,7 +22,7 @@ export function Row({ icon, label, onClick, disabled, active, trailing }) {
 
 export default function OverflowMenu({ refreshing, canRefresh, filterCount, magicActive,
     onRefresh, onMagic, onSlips, onFilters, onHelp, onSettings, onClose,
-    user, onSignIn, onSignUp, onProfile, onLogout, onAdmin }) {
+    user, onSignIn, onSignUp, onProfile, onLogout, onAdmin, onSyncPrefs }) {
     useEffect(() => {
         const onKey = e => { if (e.key === 'Escape') onClose(); };
         window.addEventListener('keydown', onKey);
@@ -53,6 +53,7 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
                         </div>
                         {user.role === 'admin' && <Row icon={<IconShield />} label="Admin" onClick={onAdmin} />}
                         <Row icon={<IconUser />} label="Edit profile" onClick={onProfile} />
+                        <Row icon={<IconRefresh />} label="Sync settings" onClick={onSyncPrefs} />
                         <Row icon={<IconLogout />} label="Sign out" onClick={onLogout} />
                     </>
                 ) : (

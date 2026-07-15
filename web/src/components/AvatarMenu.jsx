@@ -3,7 +3,7 @@ import { useSession } from '../auth/SessionProvider.jsx';
 import useOutsideDismiss from '../useOutsideDismiss.js';
 import { Z } from '../zLayers.js';
 import { Row } from './OverflowMenu.jsx';
-import { IconUser, IconUserPlus, IconLogout, IconPhone, IconShield } from './icons.jsx';
+import { IconUser, IconUserPlus, IconLogout, IconPhone, IconShield, IconRefresh, IconSpinner } from './icons.jsx';
 
 // Desktop session control (right of the gear; the mobile overflow menu carries
 // the same rows for parity). Guest -> user-silhouette button with Sign in /
@@ -16,6 +16,7 @@ import { IconUser, IconUserPlus, IconLogout, IconPhone, IconShield } from './ico
 export default function AvatarMenu({ btnCls, activeCls }) {
     const session = useSession();
     const [open, setOpen] = useState(false);
+    const [sync, setSync] = useState(null); // null | 'busy' | 'ok' | 'error'
     const wrapRef = useRef(null);
     useOutsideDismiss(wrapRef, open, () => setOpen(false));
     useEffect(() => {
@@ -26,9 +27,22 @@ export default function AvatarMenu({ btnCls, activeCls }) {
     }, [open]);
 
     if (!session) return null;
-    const { user, isGuest, openAuth, logout } = session;
+    const { user, isGuest, openAuth, logout, syncPrefs } = session;
     const initial = (user?.name ?? '').trim().charAt(0).toUpperCase() || '?';
     const go = fn => { setOpen(false); fn(); };
+
+    // Manual prefs sync (Phase 7). The menu stays open to show the outcome
+    // (a real pull reloads the page anyway), then closes itself.
+    const doSync = async () => {
+        if (sync === 'busy') return;
+        setSync('busy');
+        const r = await syncPrefs();
+        setSync(r.action === 'error' ? 'error' : 'ok');
+        setTimeout(() => { setSync(null); setOpen(false); }, 1200);
+    };
+    const syncLabel = sync === 'busy' ? 'Syncing…'
+        : sync === 'ok' ? 'Synced'
+            : sync === 'error' ? 'Sync failed - try again' : 'Sync settings';
 
     return (
         <div ref={wrapRef} className="relative">
@@ -61,6 +75,9 @@ export default function AvatarMenu({ btnCls, activeCls }) {
                                 <Row icon={<IconShield />} label="Admin" onClick={() => go(() => openAuth('admin'))} />
                             )}
                             <Row icon={<IconUser />} label="Edit profile" onClick={() => go(() => openAuth('profile'))} />
+                            <Row icon={sync === 'busy' ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" /> : <IconRefresh />}
+                                label={syncLabel} onClick={doSync} disabled={sync === 'busy'}
+                                active={sync === 'ok'} />
                             <Row icon={<IconLogout />} label="Sign out" onClick={() => go(() => logout())} />
                         </>
                     )}
