@@ -25,6 +25,8 @@ import {
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
+import { labData, LAB_DEFAULTS } from './lab.js';
+import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
 import { queryCacheKey } from './db/cache-rules.js';
 import { _dtime } from './utils.js';
@@ -171,7 +173,7 @@ function authGuard({ role, verified } = {}) {
     };
 }
 const requireAuth = authGuard();
-const requireAdminRole = authGuard({ role: 'admin' }); // eslint-disable-line no-unused-vars
+const requireAdminRole = authGuard({ role: 'admin' });
 const requireVerified = authGuard({ verified: true });
 // eslint-disable-next-line no-unused-vars
 async function optionalAuth(req, res, next) {
@@ -463,6 +465,37 @@ app.delete('/api/admin/settings/:key', requireAdminDual, async (req, res, next) 
         res.json({ ok: true, ...(await resetOverride(req.params.key)) });
     } catch (e) {
         if (e?.status === 400) return res.status(400).json({ error: e.message });
+        next(e);
+    }
+});
+
+// Data-viz lab (v1.1.0 Phase 6, admin SESSION only - the SPA admin panel; no
+// machine-bearer path, unlike the transitional requireAdminDual above). Raw
+// rows never leave the server: /data returns small pre-binned aggregates with
+// a minCount guardrail (src/lab.js + pure src/db/lab-rules.js).
+
+// GET /api/admin/lab/features - the fixed feature/outcome catalogs + defaults.
+app.get('/api/admin/lab/features', requireAdminRole, (req, res) => {
+    res.json({ features: LAB_FEATURES, outcomes: LAB_OUTCOMES, defaults: LAB_DEFAULTS });
+});
+
+// GET /api/admin/lab/data?x=&outcome=[&y=&color=&filters=&days=&sample=&min_count=]
+// filters is a JSON [{key,op,value}] over feature keys. Unknown keys/ops throw
+// TypeError -> the JSON error handler's 400.
+app.get('/api/admin/lab/data', requireAdminRole, async (req, res, next) => {
+    try {
+        const q = req.query;
+        res.json(await labData({
+            x: q.x != null ? String(q.x) : null,
+            y: q.y ? String(q.y) : null,
+            color: q.color ? String(q.color) : null,
+            outcome: q.outcome != null ? String(q.outcome) : null,
+            filters: _json(q.filters, []),
+            days: q.days ? Number(q.days) : null,
+            sample: q.sample ? Number(q.sample) : undefined,
+            minCount: q.min_count ? Number(q.min_count) : undefined,
+        }));
+    } catch (e) {
         next(e);
     }
 });
