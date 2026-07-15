@@ -66,6 +66,18 @@ test('verifyPin returns false on malformed input', () => {
     assert.equal(verifyPin('1234', 'bcrypt$1$2$3$4$5', { scrypt: fakeScrypt }), false);
 });
 
+// M8: corrupt scrypt cost params make node's scryptSync THROW - the contract is
+// "return false on any malformed input", so login must 401, never 500. Real
+// scrypt here (no injection): the throw is the very behavior under test.
+test('verifyPin returns false (never throws) on corrupt scrypt params', () => {
+    const salt = Buffer.from('saltsaltsaltsalt').toString('base64');
+    const dk = Buffer.from('0123456789abcdef0123456789abcdef').toString('base64');
+    assert.equal(verifyPin('1234', `scrypt$abc$8$1$${salt}$${dk}`), false);        // non-numeric N
+    assert.equal(verifyPin('1234', `scrypt$0$0$0$${salt}$${dk}`), false);          // zero params
+    assert.equal(verifyPin('1234', `scrypt$1000$8$1$${salt}$${dk}`), false);       // N not a power of 2
+    assert.equal(verifyPin('1234', `scrypt$1073741824$8$1$${salt}$${dk}`), false); // blows past maxmem
+});
+
 // Real node:crypto scrypt end-to-end (no injection) - proves the default path.
 test('real scrypt hashes and verifies', () => {
     const h = hashPin('4821', { pepper: 'p' });

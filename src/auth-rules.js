@@ -44,9 +44,16 @@ export function verifyPin(pin, encoded, { pepper = '', scrypt = crypto.scryptSyn
     const salt = Buffer.from(saltB64, 'base64');
     const expected = Buffer.from(dkB64, 'base64');
     if (!salt.length || !expected.length) return false;
-    const dk = Buffer.from(scrypt(String(pin) + pepper, salt, expected.length, {
-        N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT_MAXMEM,
-    }));
+    // A corrupted stored hash (non-numeric / invalid cost params) makes scrypt
+    // throw - that's still "malformed input", so it must be false, not a 500.
+    let dk;
+    try {
+        dk = Buffer.from(scrypt(String(pin) + pepper, salt, expected.length, {
+            N: Number(N), r: Number(r), p: Number(p), maxmem: SCRYPT_MAXMEM,
+        }));
+    } catch {
+        return false;
+    }
     return dk.length === expected.length && crypto.timingSafeEqual(dk, expected);
 }
 
