@@ -1,6 +1,7 @@
 import { db } from './connection.js';
 import { diffOddsRows } from './odds-diff.js';
 import { withRetry } from './retry-rules.js';
+import { oddsRefreshDue } from './odds-refresh-rules.js';
 
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
@@ -66,6 +67,41 @@ export async function completedMatchIds(provider, from_start_time = null) {
         .whereNotNull('completed_at');
     if (from_start_time) query.where('start_time', '>=', from_start_time);
     return new Set((await query).map(r => Number(r.provider_match_id)));
+}
+
+// Exclude set for the LIGHT pass's odds scrape: completed matches (as above)
+// UNION games whose odds are still fresh under the kickoff-proximity decay
+// tiers (odds-refresh-rules). Skipping is display-safe - a skipped game is
+// absent from saveMatches' input, so its last-seen prices and is_stale flags
+// stay untouched; the first tier (maxAge 0) guarantees near-kickoff games
+// refresh every pass so stale detection stays current.
+// start_time is a naive EAT wall-clock DATETIME and updated_at a TIMESTAMP
+// rendered in the pinned +03:00 session - both are projected WITH the offset
+// baked in so Date.parse yields true instants on any host (TZ-decode hazard,
+// see ai-rules.js#KICKOFF_SQL_EXPR).
+export async function oddsExcludeIds(provider, from_start_time = null, { tiers = null, nowMs = Date.now() } = {}) {
+    if (!Array.isArray(tiers) || !tiers.length) {
+        const ids = await completedMatchIds(provider, from_start_time);
+        return { ids, completed: ids.size, backoff: 0 };
+    }
+    const query = db('matches')
+        .select('provider_match_id', 'completed_at',
+            db.raw("DATE_FORMAT(start_time, '%Y-%m-%dT%H:%i:%s+03:00') as start_iso"),
+            db.raw("DATE_FORMAT(updated_at, '%Y-%m-%dT%H:%i:%s+03:00') as updated_iso"))
+        .where('provider', provider);
+    if (from_start_time) query.where('start_time', '>=', from_start_time);
+    const ids = new Set();
+    let completed = 0, backoff = 0;
+    for (const r of await query) {
+        if (r.completed_at != null) {
+            ids.add(Number(r.provider_match_id));
+            completed++;
+        } else if (!oddsRefreshDue(nowMs, Date.parse(r.start_iso), Date.parse(r.updated_iso), tiers)) {
+            ids.add(Number(r.provider_match_id));
+            backoff++;
+        }
+    }
+    return { ids, completed, backoff };
 }
 
 // Persist fetched provider games: upsert `matches` by (provider, provider_match_id),

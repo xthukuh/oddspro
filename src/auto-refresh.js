@@ -4,13 +4,15 @@ import { runStartPipeline } from './pipeline.js';
 import { settleApisportsResults } from './apisports.js';
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
-import { saveMatches, completedMatchIds } from './db/store.js';
+import { saveMatches, oddsExcludeIds } from './db/store.js';
+import { db } from './db/connection.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
 import { purgeExpiredAuth } from './auth.js';
 import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
+import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
-import { _date, _dtime } from './utils.js';
+import { _date, _dtime, debugLog } from './utils.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
 // warehouse near real time without external cron - a cheap LIGHT pass every
@@ -50,6 +52,11 @@ let lastSuccess = null; // { at, mode, dates }
 // map: auto runs must never stamp the cooldown, or a 10-minute light cadence
 // would keep today permanently on manual cooldown.
 const lastFresh = new Map();
+
+// When the light pass last actually SCRAPED odds (idle skips don't stamp) -
+// feeds lightPassIdle's bounded-discovery cadence. In-memory: a restart
+// simply runs the next pass (fail-open).
+let lastOddsScrapeMs = null;
 
 export function lastFreshAt(date) {
     return lastFresh.get(date) ?? null;
@@ -143,15 +150,41 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     summary.refreshed = r.refreshed;
     summary.settled = r.settled;
 
-    for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
-        _step(`${provider} odds`);
-        const exclude = await completedMatchIds(provider, `${today} 00:00:00`);
-        const c = await saveMatches(await fetcher(today, exclude));
-        summary[provider] = { saved: c.inserted + c.updated, skipped: c.skipped, markets: c.markets };
-    }
+    // Kickoff-proximity backoff + idle awareness (odds-refresh-rules), knobs
+    // late-read per pass. The idle lookahead is clamped to the first tier
+    // boundary so an idle skip can never starve the near-kickoff
+    // always-refresh guarantee that keeps is_stale detection current.
+    const nowMs = Date.now();
+    const tiers = parseOddsTiers(effective('ODDS_REFRESH_TIERS'));
+    const lookKnob = Number(effective('AUTO_IDLE_LOOKAHEAD_MINUTES'));
+    const firstTier = tiers?.[0]?.upToMin ?? 0;
+    const todayMatches = (await db('matches')
+        .where('start_time', '>=', `${today} 00:00:00`)
+        .where('start_time', '<=', `${today} 23:59:59`)
+        .select('completed_at',
+            db.raw("DATE_FORMAT(start_time, '%Y-%m-%dT%H:%i:%s+03:00') as start_iso")))
+        .map(x => ({ startMs: Date.parse(x.start_iso), completed: x.completed_at != null }));
+    const idle = lightPassIdle(nowMs, todayMatches, {
+        lookaheadMin: lookKnob > 0 && Number.isFinite(firstTier) ? Math.max(lookKnob, firstTier) : lookKnob,
+        idleEveryMin: Number(effective('AUTO_IDLE_EVERY_MINUTES')),
+        lastOddsPassMs: lastOddsScrapeMs,
+    });
+    summary.odds_pass = idle.reason;
+    if (idle.skip) {
+        _step('odds skipped (idle - nothing in-play, next kickoff far)');
+    } else {
+        lastOddsScrapeMs = nowMs;
+        for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
+            _step(`${provider} odds`);
+            const ex = await oddsExcludeIds(provider, `${today} 00:00:00`, { tiers, nowMs: Date.now() });
+            const c = await saveMatches(await fetcher(today, ex.ids));
+            summary[provider] = { saved: c.inserted + c.updated, skipped: c.skipped, markets: c.markets, backoff_skipped: ex.backoff };
+            debugLog(`[light] ${provider}: excluded ${ex.completed} completed + ${ex.backoff} fresh-under-backoff`);
+        }
 
-    _step('link');
-    await linkMatches();
+        _step('link');
+        await linkMatches();
+    }
 
     _step('settle picks');
     const s = await settleHotPicks();
