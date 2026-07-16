@@ -29,6 +29,19 @@ const _facts = facts => (facts
     ? ['Verified context (from an earlier grounded research pass):', JSON.stringify(facts)]
     : []);
 
+// BLIND-SAFE facts: `extra` is free-form text filled by the grounded research
+// model (FactsPayload.extra) - unvetted, and the exact kind of field that can
+// carry a price or a bookmaker name ("bookmakers price the home win near
+// 1.40"). The blind prompt may only see the TYPED fact sections; dropping
+// `extra` here (by construction, not by caller discipline) is what keeps the
+// blind-vs-anchored measurement valid. The anchored prompt keeps using
+// `_facts` unchanged - it is supposed to see everything.
+const _factsBlind = facts => {
+    if (!facts) return [];
+    const { extra, ...safe } = facts;
+    return ['Verified context (from an earlier grounded research pass):', JSON.stringify(safe)];
+};
+
 // BLIND: no odds, no price, no tip, no bookmaker - by construction. The moment
 // a prompt mentions those, the model anchors, which is the exact bias being
 // measured. tests/ai-rules.test.js asserts this directly.
@@ -43,7 +56,7 @@ export function buildBlindPrompt({ fixture, kickoff, league, home, away, h2h, fa
         _team('Home', home),
         _team('Away', away),
         `Head-to-head: ${h2h?.n ? `last ${h2h.n} meetings - avg total goals ${h2h.avgTotal}` : 'no prior meetings known'}`,
-        ..._facts(facts),
+        ..._factsBlind(facts),
         '',
         'Estimate P for EVERY outcome below. 1 = home win, X = draw, 2 = away win,',
         '"O 2.5"/"U 2.5" = over/under 2.5 total goals, GG/NG = both teams score yes/no.',
@@ -83,8 +96,11 @@ export function buildAnchoredPrompt({ fixture, kickoff, league, tip, home, away,
 
 // Models reply in percentages despite a 0..1 contract; rescale 65 -> 0.65
 // rather than discard an otherwise good answer. Mirrors src/ai-parse.js#_prob
-// (duplicated deliberately: ai-parse.js is not a pure rules module and this
-// one may not import from it).
+// (duplicated deliberately, NOT because purity forbids the import - zod-only
+// pure modules importing from other zod-only pure modules is sanctioned
+// precedent, e.g. tip-rules.js -> markets.js#canonicalMarket. The real
+// reasons: ai-parse.js does not export its `_prob`, the two schemas serve
+// independent contracts free to diverge over time, and it is ~6 lines).
 const _prob = z.preprocess(v => {
     if (v == null) return null;
     const n = Number(v);
@@ -158,6 +174,9 @@ export const AnchoredPayload = z.object({
 
 // Renormalize each family to sum 1. The model's raw numbers routinely do not.
 // An absent or all-zero family stays null - we do NOT invent a uniform prior.
+// No rounding here: this is data, not display - a 4dp round can make a
+// 3-way family (0.3333 x3 = 0.9999) fail its own "sums to 1" contract.
+// Round at the point of display, never in the stored/measured value.
 export function normalizeProbabilities(probs) {
     const out = { ...probs };
     for (const family of FAMILIES) {
@@ -166,7 +185,11 @@ export function normalizeProbabilities(probs) {
         const sum = present.reduce((a, k) => a + Number(out[k]), 0);
         for (const k of family) {
             if (out[k] == null) continue;
-            out[k] = sum > 0 ? Math.round((Number(out[k]) / sum) * 10000) / 10000 : null;
+            // A non-finite member (e.g. NaN slipping in from an upstream parse)
+            // must resolve to null like any other missing value, never write
+            // NaN back - `present` already excludes it from the sum.
+            if (!Number.isFinite(Number(out[k]))) { out[k] = null; continue; }
+            out[k] = sum > 0 ? Number(out[k]) / sum : null;
         }
     }
     return out;
@@ -189,8 +212,17 @@ export function resolveTask(task, cfg) {
     }
     if (task === 'blind') {
         // Non-Google by requirement: reasoner independence is the property the
-        // consensus signal rests on.
-        return { provider: 'openrouter', model: cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL, grounded: false };
+        // consensus signal rests on - two Google models is Gemini agreeing with
+        // itself. Enforced HERE, not just documented, because AI_BLIND_MODEL is
+        // free-form env config and a valid OpenRouter slug
+        // (`google/gemini-2.5-pro`) would otherwise silently defeat it.
+        const model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL;
+        if (model && /gemini|google|gemma/i.test(model)) {
+            throw new Error(`AI_BLIND_MODEL "${model}" is a Google model - the blind reasoner must be `
+                + 'non-Google so it is an independent check on the (Google) anchored/facts reasoner, '
+                + 'not the same model agreeing with itself.');
+        }
+        return { provider: 'openrouter', model, grounded: false };
     }
     if (task === 'anchored') {
         return { provider: 'gemini', model: cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL, grounded };

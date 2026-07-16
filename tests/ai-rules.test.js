@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     FACT_SCHEMA_VER, BLIND_MARKETS, buildBlindPrompt, buildAnchoredPrompt,
-    FactsPayload, BlindPayload, normalizeProbabilities, enrichModelTag, resolveTask,
+    FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag, resolveTask,
 } from '../src/db/ai-rules.js';
 
 const FIXTURE = {
@@ -26,7 +26,17 @@ test('buildBlindPrompt leaks no odds, no price and no tip', () => {
 
 test('buildBlindPrompt asks for exactly the fixed market set', () => {
     const p = buildBlindPrompt(FIXTURE);
-    for (const m of BLIND_MARKETS) assert.ok(p.includes(m), `blind prompt must ask about ${m}`);
+    const outcomesLine = p.split('\n').find(line => line.startsWith('Outcomes: '));
+    assert.ok(outcomesLine, 'prompt must have an "Outcomes: " line');
+    const listed = outcomesLine.slice('Outcomes: '.length).split(', ');
+    assert.deepEqual(listed, BLIND_MARKETS);
+});
+
+test('buildBlindPrompt never leaks facts.extra (free-form text can carry odds)', () => {
+    const p = buildBlindPrompt({ ...FIXTURE, facts: { extra: { note: 'bookmaker price 1.40 on the home win' } } });
+    for (const banned of ['odds', 'price', 'bookmaker', 'tip', 'break-even', 'vig', '1.40']) {
+        assert.ok(!p.toLowerCase().includes(banned), `blind prompt must not leak "${banned}" via facts.extra`);
+    }
 });
 
 test('buildAnchoredPrompt DOES carry the tip and price (that is the point)', () => {
@@ -47,6 +57,18 @@ test('normalizeProbabilities leaves a family alone when it is absent or all-zero
     assert.deepEqual(out, { 1: null, X: null, 2: null });
 });
 
+test('normalizeProbabilities sums to 1 within 1e-9 even when equal shares do not round exactly', () => {
+    const out = normalizeProbabilities({ 1: 1, X: 1, 2: 1 });
+    assert.ok(Math.abs(out['1'] + out['X'] + out['2'] - 1) < 1e-9);
+});
+
+test('normalizeProbabilities writes null (not NaN) back for a non-finite member', () => {
+    const out = normalizeProbabilities({ 1: 0.5, X: NaN, 2: 0.3 });
+    assert.equal(out['X'], null);
+    assert.ok(Number.isFinite(out['1']));
+    assert.ok(Number.isFinite(out['2']));
+});
+
 test('FactsPayload distinguishes absent evidence from "no problem found"', () => {
     const parsed = FactsPayload.parse({});
     assert.equal(parsed.availability.home_out_count, null); // absent, NOT 0
@@ -56,6 +78,24 @@ test('FactsPayload distinguishes absent evidence from "no problem found"', () =>
 test('FactsPayload tolerates unknown extra keys (the escape hatch)', () => {
     const parsed = FactsPayload.parse({ extra: { weather: 'storm' } });
     assert.deepEqual(parsed.extra, { weather: 'storm' });
+});
+
+test('FactsPayload defaults a BOOLEAN fact field to null, never false (absent != no)', () => {
+    const parsed = FactsPayload.parse({});
+    assert.equal(parsed.availability.top_scorer_out, null);
+    assert.notEqual(parsed.availability.top_scorer_out, false);
+});
+
+test('AnchoredPayload parses a real reply and defaults sensibly', () => {
+    const parsed = AnchoredPayload.parse({ probability: 62, consensus: 'lean_on', reason: 'home form' });
+    assert.equal(parsed.probability, 0.62);
+    assert.equal(parsed.consensus, 'lean_on');
+    assert.equal(parsed.reason, 'home form');
+
+    const empty = AnchoredPayload.parse({});
+    assert.equal(empty.probability, null);
+    assert.equal(empty.consensus, null);
+    assert.equal(empty.reason, '');
 });
 
 test('BlindPayload rejects a probability outside 0..1 but rescales percentages', () => {
@@ -91,4 +131,9 @@ test('resolveTask honours per-task model overrides', () => {
 
 test('resolveTask throws on an unknown task (a typo must be loud)', () => {
     assert.throws(() => resolveTask('nonsense', {}), /unknown ai task/i);
+});
+
+test('resolveTask refuses a Google model for the blind task (reasoner independence is required, not advisory)', () => {
+    const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', AI_BLIND_MODEL: 'google/gemini-2.5-pro' };
+    assert.throws(() => resolveTask('blind', cfg), /non-google|google/i);
 });
