@@ -82,8 +82,8 @@ import { _date, _dtime } from './utils.js';
         const c = await updateHotPicks();
         console.debug(`[+] hotpicks: ${c.settled} settled (${c.tips_settled} tips), ${c.written} evaluated, ${c.hot} hot, `
             + `${c.tips} tips, ${c.tips_skipped} skipped ineligible `
-            + `(AI hot: ${c.ai.confirmed}/${c.ai.vetoed}/${c.ai.errors} confirmed/vetoed/errors; `
-            + `AI tips: ${c.tip_ai.confirmed}/${c.tip_ai.vetoed}/${c.tip_ai.errors}).`);
+            + `(AI reviews pending: ${c.pending_reviews.hot} hot, ${c.pending_reviews.tips} tips - `
+            + `run \`node src/index.js aireview\` or let the serve worker drain them).`);
         return;
     }
 

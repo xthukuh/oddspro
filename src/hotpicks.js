@@ -7,30 +7,36 @@ import {
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
-import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai/index.js';
-import { _batch, _progress } from './utils.js';
+import { aiEnabled, aiModelTag } from './ai/index.js';
+import { canReuseHotVerdict, hotReviewPending, tipReviewPending } from './db/adjudicate-rules.js';
+import { effective } from './settings.js';
+import { debugLog } from './utils.js';
 
 // Over 2.5 hot picks ledger (fixture_predictions): every upcoming correlated
 // fixture with a pre-match snapshot gets an evaluated row (signals kept for
-// calibration); `hot` marks full rule concurrence, optionally adjudicated by
-// the Gemini AI (env-gated, fail-open). Rows are upserted on every run
-// while the fixture is upcoming; the `kickoff > NOW()` selection IS the
+// calibration); `hot` marks full rule concurrence. Rows are upserted on every
+// run while the fixture is upcoming; the `kickoff > NOW()` selection IS the
 // freeze - past fixtures are never selected again, so the pick that stood at
 // kickoff stands forever. Settlement (result_goals/outcome) is owned by the
 // settle pass here and excluded from the compute upsert's merge list.
+//
+// AI adjudication lives in the background AI-review worker (src/ai-worker.js;
+// `node src/index.js aireview` drains it manually). The sweep bills nothing:
+// it only counts pending reviews and re-applies a still-reusable stored VETO
+// (read-only - the AI can veto, never promote).
 
-// Everything the compute pass owns (settle owns result_goals/outcome and
-// tip_outcome)
+// Everything the compute pass owns. Settle owns result_goals/outcome and
+// tip_outcome; the AI-review worker owns the 8 verdict columns (ai_verdict/
+// ai_reason/ai_model/ai_review + the tip_ai_* mirrors) - excluding them here
+// is what makes sweep and worker unable to clobber each other, and it also
+// fixes the old bug where beyond-cap candidates had their stored verdicts
+// NULLed on every sweep.
 const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
-    'api_advice_supports', 'ai_verdict', 'ai_reason', 'ai_model', 'ai_review',
+    'api_advice_supports',
     'tip_market', 'tip_price', 'tip_confidence', 'tip_breakdown', 'tip_skip_reason',
-    'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'tip_ai_review', 'computed_at',
+    'computed_at',
 ];
-
-// JSON column value from either a fresh verdict (object) or a reused DB row
-// (mysql2 returns JSON columns as strings).
-const _jsonCol = v => v == null ? null : (typeof v === 'string' ? v : JSON.stringify(v));
 
 // Per-fixture tip books: pull this fixture set's non-stale odds rows, group
 // them per fixture, and delegate the family-book assembly to buildTipBooks
@@ -142,8 +148,10 @@ export async function loadTeamHistory(teamIds) {
 
 // Settle + (re)compute hot picks for all upcoming correlated fixtures.
 export async function updateHotPicks() {
+    const t0 = Date.now();
     // Settle first: canonical final scores decide hit/miss exactly once.
     const { settled, tips_settled } = await settleHotPicks();
+    const tSettle = Date.now();
 
     // The pre-match snapshot EXISTS guard also guarantees the history
     // backfill ran for these fixtures (pipeline order), so the rolling
@@ -161,7 +169,7 @@ export async function updateHotPicks() {
     if (!targets.length) {
         return {
             settled, tips_settled, fixtures: 0, written: 0, hot: 0, tips: 0, tips_skipped: 0,
-            ai: { confirmed: 0, vetoed: 0, errors: 0 }, tip_ai: { confirmed: 0, vetoed: 0, errors: 0 },
+            pending_reviews: { hot: 0, tips: 0 },
         };
     }
 
@@ -175,11 +183,13 @@ export async function updateHotPicks() {
     const markets = await _loadMarkets(fixtureIds, namesById);
     const apiPreds = new Map((await db('fixture_api_predictions').whereIn('fixture_id', fixtureIds))
         .map(p => [p.fixture_id, p]));
-    // Existing rows: reuse AI verdicts when the evaluation is unchanged
+    // Existing verdict rows (worker-owned columns, read-only here): re-apply
+    // a still-reusable stored VETO and count what the worker has pending.
     const existing = new Map((await db('fixture_predictions').whereIn('fixture_id', fixtureIds)
-        .select('fixture_id', 'score', 'ai_verdict', 'ai_reason', 'ai_model', 'ai_review',
-            'tip_market', 'tip_price', 'tip_ai_verdict', 'tip_ai_reason', 'tip_ai_model', 'tip_ai_review'))
+        .select('fixture_id', 'ai_verdict', 'ai_model', 'ai_review',
+            'tip_ai_verdict', 'tip_ai_model', 'tip_ai_review'))
         .map(p => [p.fixture_id, p]));
+    const tLoad = Date.now();
 
     const thresholds = {
         teamWindow: config.HOTPICK_TEAM_WINDOW,
@@ -190,7 +200,7 @@ export async function updateHotPicks() {
         h2hMinOverRate: config.HOTPICK_H2H_MIN_OVER_RATE,
     };
 
-    const rows = [], candidates = [], tipCandidates = [];
+    const rows = [];
     for (const f of targets) {
         const cutoff = new Date(f.kickoff).getTime();
         const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
@@ -227,7 +237,6 @@ export async function updateHotPicks() {
                 best = { line, p: lp, market: lMarket, api: lApi, out: lOut };
             }
         }
-        const inputs = { home: pair.home, away: pair.away, h2h, market: best.market, api: best.api };
         const out = best.out;
 
         // Safest bettable outcome across every canonical market (the "Tip"
@@ -274,10 +283,6 @@ export async function updateHotPicks() {
             under_price: best.p?.under ?? null,
             implied_over: best.market?.impliedOver ?? null,
             api_advice_supports: out.api_supports,
-            ai_verdict: null,
-            ai_reason: null,
-            ai_model: null,
-            ai_review: null,
             tip_market: tip?.market ?? null,
             tip_price: tip?.price ?? null,
             tip_confidence: tip?.confidence ?? null,
@@ -285,105 +290,47 @@ export async function updateHotPicks() {
             // 'no_pick' = eligible but nothing cleared the price/confidence
             // floors - distinguishable from "not enough data" in the UI
             tip_skip_reason: (elig.eligible ? (tip ? null : 'no_pick') : elig.reason)?.substring(0, 64) ?? null,
-            tip_ai_verdict: null,
-            tip_ai_reason: null,
-            tip_ai_model: null,
-            tip_ai_review: null,
             computed_at: db.fn.now(),
         };
-        rows.push(row);
-        if (out.hot) candidates.push({ f, row, inputs });
-        if (tip) tipCandidates.push({ f, row, tip });
-    }
-
-    // AI adjudication - only rule-passing candidates, optional and fail-open.
-    const ai = { confirmed: 0, vetoed: 0, errors: 0 };
-    if (aiEnabled() && candidates.length) {
-        const tick = _progress('Hot picks - AI adjudication');
-        await _batch(candidates, async (c, i, len) => {
-            const prev = existing.get(c.f.id);
-            // Same evaluation AND same model/grounding as the last billed
-            // call: reuse the verdict (model switches re-adjudicate)
-            const unchanged = prev && ['confirm', 'veto'].includes(prev.ai_verdict)
-                && Number(prev.score) === c.row.score
-                && prev.ai_model === aiModelTag();
-            let verdict;
-            if (unchanged) {
-                verdict = { verdict: prev.ai_verdict, reason: prev.ai_reason, model: prev.ai_model, review: prev.ai_review };
-            } else {
-                try {
-                    verdict = await adjudicateHotPick({
-                        fixture: `${c.f.home_name} - ${c.f.away_name}`,
-                        kickoff: c.f.kickoff,
-                        league: c.f.league,
-                        ...c.inputs,
-                    });
-                } catch (e) {
-                    console.warn(`[!] AI adjudication failed for fixture ${c.f.id} (rule verdict kept): ${e?.message ?? e}`);
-                    verdict = { verdict: 'error', reason: null, model: aiModelTag(), review: null };
-                }
-            }
-            c.row.ai_verdict = verdict.verdict;
-            c.row.ai_reason = verdict.reason;
-            c.row.ai_model = verdict.model;
-            c.row.ai_review = _jsonCol(verdict.review);
-            if (verdict.verdict === 'veto') c.row.hot = false; // AI can veto, never promote
-            ai[{ confirm: 'confirmed', veto: 'vetoed', error: 'errors' }[verdict.verdict]]++;
-            tick(len);
-        }, 1);
-    }
-
-    // Tip AI review - top-confidence tips only, best first, capped per run.
-    // Same fail-open + verdict-reuse idiom as the hot adjudication; a veto
-    // FLAGS the tip (greyed in the UI) but never clears it - the outcome
-    // still settles, so the report can prove what the vetoes were worth.
-    const tipAi = { confirmed: 0, vetoed: 0, errors: 0 };
-    if (aiEnabled() && tipCandidates.length && config.TIP_AI_DAILY_CAP > 0) {
-        const shortlist = tipCandidates
-            .filter(c => c.tip.confidence >= config.TIP_AI_MIN_CONFIDENCE)
-            .sort((a, b) => b.tip.confidence - a.tip.confidence)
-            .slice(0, config.TIP_AI_DAILY_CAP);
-        if (shortlist.length) {
-            const tick = _progress('Hot picks - tip AI review');
-            await _batch(shortlist, async (c, i, len) => {
-                const prev = existing.get(c.f.id);
-                // Same tip AND same model/grounding as the last billed call:
-                // reuse the verdict (model switches re-adjudicate)
-                const unchanged = prev && ['confirm', 'veto'].includes(prev.tip_ai_verdict)
-                    && prev.tip_market === c.row.tip_market
-                    && Number(prev.tip_price) === c.row.tip_price
-                    && prev.tip_ai_model === aiModelTag();
-                let verdict;
-                if (unchanged) {
-                    verdict = { verdict: prev.tip_ai_verdict, reason: prev.tip_ai_reason, model: prev.tip_ai_model, review: prev.tip_ai_review };
-                } else {
-                    try {
-                        verdict = await reviewTip({
-                            fixture: `${c.f.home_name} - ${c.f.away_name}`,
-                            kickoff: c.f.kickoff,
-                            league: c.f.league,
-                            tip: c.tip,
-                        });
-                    } catch (e) {
-                        console.warn(`[!] Tip AI review failed for fixture ${c.f.id} (tip kept): ${e?.message ?? e}`);
-                        verdict = { verdict: 'error', reason: null, model: aiModelTag(), review: null };
-                    }
-                }
-                c.row.tip_ai_verdict = verdict.verdict;
-                c.row.tip_ai_reason = verdict.reason;
-                c.row.tip_ai_model = verdict.model;
-                c.row.tip_ai_review = _jsonCol(verdict.review);
-                tipAi[{ confirm: 'confirmed', veto: 'vetoed', error: 'errors' }[verdict.verdict]]++;
-                tick(len);
-            }, 1);
+        // Read-only veto re-apply: a stored AI veto that is still reusable
+        // for THIS evaluation (same judged score + model tag) keeps standing
+        // without a call - the AI can veto, never promote. A stale or legacy
+        // veto does not demote; the worker re-adjudicates it anyway.
+        if (row.hot && canReuseHotVerdict(existing.get(f.id), row.score, aiModelTag())
+            && existing.get(f.id).ai_verdict === 'veto') {
+            row.hot = false;
         }
+        rows.push(row);
     }
+    const tCompute = Date.now();
 
     // Single-statement upsert per chunk: no delete+insert, no deadlock exposure
     for (let i = 0; i < rows.length; i += 200) {
         await db('fixture_predictions').insert(rows.slice(i, i + 200))
             .onConflict('fixture_id').merge(PICK_COLUMNS);
     }
+    const tUpsert = Date.now();
+
+    // What the AI-review worker has left to do for these rows - counted with
+    // the SAME pure predicates the worker's queue uses, so the number shown
+    // can never drift from the work actually pending. No AI key = the worker
+    // is a no-op, so nothing is "pending".
+    const pending_reviews = { hot: 0, tips: 0 };
+    if (aiEnabled()) {
+        const tag = aiModelTag();
+        const tol = Number(effective('TIP_AI_REUSE_PRICE_TOL'));
+        for (const row of rows) {
+            const merged = { ...existing.get(row.fixture_id), ...row };
+            if (hotReviewPending(merged, tag)) pending_reviews.hot++;
+            if (tipReviewPending(merged, tag, { minConfidence: config.TIP_AI_MIN_CONFIDENCE, priceTol: tol })) {
+                pending_reviews.tips++;
+            }
+        }
+    }
+    debugLog(`hotpicks: settle ${tSettle - t0}ms, load ${tLoad - tSettle}ms, `
+        + `compute ${tCompute - tLoad}ms, upsert ${tUpsert - tCompute}ms `
+        + `(${rows.length} rows; pending reviews hot=${pending_reviews.hot} tips=${pending_reviews.tips})`);
+
     return {
         settled, tips_settled,
         fixtures: targets.length,
@@ -391,8 +338,7 @@ export async function updateHotPicks() {
         hot: rows.filter(r => r.hot).length,
         tips: rows.filter(r => r.tip_market != null).length,
         tips_skipped: rows.filter(r => r.tip_skip_reason != null && r.tip_skip_reason !== 'no_pick').length,
-        ai,
-        tip_ai: tipAi,
+        pending_reviews,
     };
 }
 
@@ -434,6 +380,27 @@ export async function hotpicksSummary() {
         .orderBy('f.kickoff')
         .select('p.fixture_id', 'f.kickoff', 'p.score', 'p.ai_verdict', 'p.ai_reason',
             db.raw("CONCAT(th.name, ' - ', ta.name) as fixture"));
+    // AI-review worker backlog, counted with the worker's own predicates
+    // (adjudicate-rules) so the visible pending state can never drift from
+    // the queue. One light query over upcoming reviewable rows.
+    const pending_reviews = { hot: 0, tips: 0 };
+    if (aiEnabled()) {
+        const tag = aiModelTag();
+        const tol = Number(effective('TIP_AI_REUSE_PRICE_TOL'));
+        const reviewable = await db('fixture_predictions as p')
+            .join('fixtures as f', 'f.id', 'p.fixture_id')
+            .where('f.kickoff', '>', db.raw('NOW()'))
+            .where(q => q.where('p.hot', 1).orWhereNotNull('p.tip_market'))
+            .select('p.hot', 'p.score', 'p.ai_verdict', 'p.ai_model', 'p.ai_review',
+                'p.tip_market', 'p.tip_price', 'p.tip_confidence',
+                'p.tip_ai_verdict', 'p.tip_ai_model', 'p.tip_ai_review');
+        for (const r of reviewable) {
+            if (hotReviewPending(r, tag)) pending_reviews.hot++;
+            if (tipReviewPending(r, tag, { minConfidence: config.TIP_AI_MIN_CONFIDENCE, priceTol: tol })) {
+                pending_reviews.tips++;
+            }
+        }
+    }
     return {
         windows: {
             '7d': _window(agg.hits_7d, agg.misses_7d),
@@ -441,6 +408,7 @@ export async function hotpicksSummary() {
             all: _window(agg.hits_all, agg.misses_all),
         },
         pending: Number(agg.pending),
+        pending_reviews,
         upcoming: upcoming.map(u => ({ ...u, score: u.score == null ? null : Number(u.score) })),
     };
 }
