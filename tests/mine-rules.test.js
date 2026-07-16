@@ -7,6 +7,8 @@ import {
     temporalSplit, benjaminiHochberg, dayClusteredBootstrap,
     configSignature, runnerUpMarkets, hasStraddle, cascadeLadder, LADDER_LINES,
     blendParts, missProfile, consensusProxies,
+    CLASSES, MIN_TRAIN, MIN_TEST, BETTABLE_FLOOR,
+    flatEv, hitRate, classifyPattern, evaluatePattern,
 } from '../src/db/mine-rules.js';
 
 // Real breakdown captured from the warehouse on 2026-07-16 (tmp/m42-probe2.mjs)
@@ -226,4 +228,128 @@ test('consensusProxies carries the AI verdict through for the (underpowered) len
 test('consensusProxies is total on junk', () => {
     assert.equal(consensusProxies(null), null);
     assert.equal(consensusProxies({ market: null }), null);
+});
+
+test('the class vocabulary is closed and exactly the five spec words', () => {
+    assert.deepEqual(CLASSES, ['edge', 'booster', 'refuted', 'underpowered', 'unbettable']);
+});
+
+test('flatEv stakes 1 unit per settled pick', () => {
+    // 2 hits at 2.0 (+1 each) and 2 misses (-1 each) => 0
+    assert.equal(flatEv([
+        { hit: 1, price: 2 }, { hit: 1, price: 2 }, { hit: 0, price: 2 }, { hit: 0, price: 2 },
+    ]), 0);
+    // 1 hit at 1.5 (+0.5), 1 miss (-1) => -0.25 per unit
+    assert.equal(flatEv([{ hit: 1, price: 1.5 }, { hit: 0, price: 1.5 }]), -0.25);
+    assert.equal(flatEv([]), null);
+    assert.equal(flatEv([{ hit: 1, price: null }]), null);
+});
+
+test('hitRate is a plain proportion', () => {
+    assert.equal(hitRate([{ hit: 1 }, { hit: 0 }, { hit: 1 }, { hit: 1 }]), 0.75);
+    assert.equal(hitRate([]), null);
+});
+
+// THE honesty invariant. A pattern can beat the base rate handily and still
+// lose money at the price it is actually offered at. That is a booster - it
+// buys slip survival, not profit - and it must NEVER be labelled an edge.
+test('classifyPattern: beats base but loses money => booster, never edge', () => {
+    const k = classifyPattern({
+        nTrain: 500, nTest: 200, trainPrecision: 0.80, testPrecision: 0.79,
+        liftLo: 0.05, medPrice: 1.45, flatEv: -0.03,
+    });
+    assert.equal(k, 'booster');
+});
+
+test('classifyPattern: beats base AND makes money => edge', () => {
+    const k = classifyPattern({
+        nTrain: 500, nTest: 200, trainPrecision: 0.80, testPrecision: 0.79,
+        liftLo: 0.05, medPrice: 1.45, flatEv: 0.04,
+    });
+    assert.equal(k, 'edge');
+});
+
+// The precursor mine's most important lesson: AU 2.5 hit 87% OOS and was
+// worthless because it prices at ~1.1. That is NOT "refuted" - the lift is
+// real - it is unbettable, and collapsing the two loses the lesson.
+test('classifyPattern: real lift below the 1.20 floor => unbettable, not refuted', () => {
+    const k = classifyPattern({
+        nTrain: 500, nTest: 200, trainPrecision: 0.88, testPrecision: 0.87,
+        liftLo: 0.04, medPrice: 1.12, flatEv: -0.04,
+    });
+    assert.equal(k, 'unbettable');
+});
+
+test('classifyPattern: lift CI touching zero => refuted', () => {
+    const k = classifyPattern({
+        nTrain: 500, nTest: 200, trainPrecision: 0.72, testPrecision: 0.71,
+        liftLo: -0.01, medPrice: 1.45, flatEv: 0.02,
+    });
+    assert.equal(k, 'refuted');
+});
+
+test('classifyPattern: failing the OOS stability rule => refuted', () => {
+    // test precision collapses >5pp below train => overfit
+    const k = classifyPattern({
+        nTrain: 500, nTest: 200, trainPrecision: 0.85, testPrecision: 0.70,
+        liftLo: 0.05, medPrice: 1.45, flatEv: 0.02,
+    });
+    assert.equal(k, 'refuted');
+});
+
+test('classifyPattern: below the volume floor => underpowered, and it WINS over every other class', () => {
+    // even a spectacular-looking result is underpowered if the n is not there
+    const k = classifyPattern({
+        nTrain: 10, nTest: 5, trainPrecision: 0.95, testPrecision: 0.95,
+        liftLo: 0.30, medPrice: 2.0, flatEv: 0.50,
+    });
+    assert.equal(k, 'underpowered');
+    assert.equal(MIN_TRAIN, 100);
+    assert.equal(MIN_TEST, 40);
+    assert.equal(BETTABLE_FLOOR, 1.20);
+});
+
+test('evaluatePattern reports precision AND flatEv together, with a day-clustered lift CI', () => {
+    const days = Array.from({ length: 20 }, (_, i) => `2026-07-${String(i + 1).padStart(2, '0')}`);
+    // pattern rows: 80% hit at price 1.45; base rows: 60% hit
+    const rows = days.flatMap(day => Array.from({ length: 30 }, (_, i) => ({
+        day, hit: i < 24 ? 1 : 0, price: 1.45,
+    })));
+    const baseRows = days.flatMap(day => Array.from({ length: 30 }, (_, i) => ({
+        day, hit: i < 18 ? 1 : 0, price: 1.45,
+    })));
+    const { train, test: te } = temporalSplit(days, 0.7);
+    const r = evaluatePattern({ name: 'synthetic', rows, baseRows, trainDays: train, testDays: te, draws: 200, seed: 3 });
+
+    assert.equal(r.name, 'synthetic');
+    assert.equal(r.n, 600);
+    assert.ok(Math.abs(r.precision - 0.8) < 1e-9);
+    assert.ok(Math.abs(r.base - 0.6) < 1e-9);
+    assert.ok(Math.abs(r.lift - 0.2) < 1e-9);
+    // 0.8 * 1.45 - 1 = +0.16
+    assert.ok(Math.abs(r.flatEv - 0.16) < 1e-9);
+    assert.equal(r.medPrice, 1.45);
+    assert.ok(r.liftLo > 0, 'a real 20pp lift must have a CI clear of zero');
+    assert.equal(r.klass, 'edge');
+    assert.ok(CLASSES.includes(r.klass));
+});
+
+test('evaluatePattern degrades to underpowered rather than throwing on a tiny population', () => {
+    const r = evaluatePattern({
+        name: 'tiny',
+        rows: [{ day: '2026-07-01', hit: 1, price: 1.5 }],
+        baseRows: [{ day: '2026-07-01', hit: 0, price: 1.5 }],
+        trainDays: ['2026-07-01'], testDays: [], draws: 20, seed: 1,
+    });
+    assert.equal(r.klass, 'underpowered');
+    assert.equal(r.n, 1);
+});
+
+test('evaluatePattern is total on an empty population', () => {
+    const r = evaluatePattern({
+        name: 'empty', rows: [], baseRows: [], trainDays: [], testDays: [], draws: 10, seed: 1,
+    });
+    assert.equal(r.n, 0);
+    assert.equal(r.klass, 'underpowered');
+    assert.equal(r.precision, null);
 });

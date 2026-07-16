@@ -220,3 +220,133 @@ export function consensusProxies(view) {
         parts: blendParts(view),
     };
 }
+
+// ---------------------------------------------------------------------------
+// Evaluation: the honesty contract, in code.
+// ---------------------------------------------------------------------------
+
+// Closed vocabulary (spec S5). Never add a sixth without a spec change.
+//   edge         survives every control AND flat EV > 0 at real prices.
+//                None has ever been found in this warehouse.
+//   booster      survives every control, lift CI clear of zero, EV <= 0.
+//                Buys slip survival, not profit. Most findings land here.
+//   refuted      adequately powered; lift CI includes zero, or fails OOS.
+//   underpowered below the volume floor. NOT evidence of absence.
+//   unbettable   real lift, but the price lives below the 1.20 floor, so it
+//                cannot be acted on. Distinct from refuted ON PURPOSE: the
+//                precursor mine's AU 2.5 hit 87% OOS and was worthless
+//                because it prices at ~1.1. Collapsing this into "refuted"
+//                would lose the single most important lesson we have.
+export const CLASSES = ['edge', 'booster', 'refuted', 'underpowered', 'unbettable'];
+
+export const MIN_TRAIN = 100;
+export const MIN_TEST = 40;
+export const BETTABLE_FLOOR = 1.20;
+const OOS_TOLERANCE = 0.05; // test precision may sit at most 5pp below train
+
+// Flat-stake EV: exactly 1 unit on every settled pick, won at (price - 1) or
+// lost entirely. The only profit measure this project trusts, because it is
+// the one the bettor actually experiences.
+export function flatEv(rows) {
+    if (!rows?.length) return null;
+    let acc = 0;
+    for (const r of rows) {
+        const p = _num(r?.price);
+        if (p == null) return null;
+        acc += r.hit ? p - 1 : -1;
+    }
+    return acc / rows.length;
+}
+
+export function hitRate(rows) {
+    if (!rows?.length) return null;
+    return rows.reduce((s, r) => s + (r.hit ? 1 : 0), 0) / rows.length;
+}
+
+const _median = xs => {
+    if (!xs.length) return null;
+    const s = [...xs].sort((a, b) => a - b);
+    const m = Math.floor(s.length / 2);
+    return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
+};
+
+// Order matters and encodes the project's hard-won priorities:
+//   1. Power first - an unpowered result is not a result, however pretty.
+//   2. OOS stability - an overfit pattern is refuted no matter its EV.
+//   3. Lift CI clear of zero - else it is noise around the base rate.
+//   4. Price floor - real lift you cannot bet is unbettable, not an edge.
+//   5. Only then may EV decide edge vs booster.
+export function classifyPattern({ nTrain, nTest, testPrecision, trainPrecision, liftLo, medPrice, flatEv: ev }) {
+    if ((nTrain ?? 0) < MIN_TRAIN || (nTest ?? 0) < MIN_TEST) return 'underpowered';
+    if (testPrecision == null || trainPrecision == null) return 'underpowered';
+    if (testPrecision < trainPrecision - OOS_TOLERANCE) return 'refuted';
+    if (liftLo == null || liftLo <= 0) return 'refuted';
+    if (medPrice == null || medPrice < BETTABLE_FLOOR) return 'unbettable';
+    if (ev == null) return 'refuted';
+    return ev > 0 ? 'edge' : 'booster';
+}
+
+// Evaluate one pre-registered pattern end to end. Returns precision AND
+// flatEv together, always - a caller cannot obtain the flattering number
+// without the honest one.
+export function evaluatePattern({ name, rows, baseRows, trainDays, testDays, seed = 42, draws = 1000 }) {
+    const all = Array.isArray(rows) ? rows : [];
+    const base = Array.isArray(baseRows) ? baseRows : [];
+    const trainSet = new Set(trainDays ?? []);
+    const testSet = new Set(testDays ?? []);
+    const inTrain = all.filter(r => trainSet.has(r.day));
+    const inTest = all.filter(r => testSet.has(r.day));
+
+    const precision = hitRate(all);
+    const baseRate = hitRate(base);
+    const lift = precision != null && baseRate != null ? precision - baseRate : null;
+
+    // Day-clustered CI on the LIFT, not on precision: "better than the base
+    // rate" is the claim, so the base rate must be resampled on the same days.
+    const byDayBase = new Map();
+    for (const r of base) {
+        if (!byDayBase.has(r.day)) byDayBase.set(r.day, []);
+        byDayBase.get(r.day).push(r);
+    }
+    const liftStat = sample => {
+        const p = hitRate(sample);
+        if (p == null) return null;
+        const b = hitRate(sample.flatMap(r => byDayBase.get(r.day) ?? []));
+        return b == null ? null : p - b;
+    };
+    const ci = dayClusteredBootstrap(all, liftStat, { draws, seed });
+
+    const ev = flatEv(all);
+    const medPrice = _median(all.map(r => _num(r?.price)).filter(v => v != null));
+
+    // One-sided bootstrap p: how often does the resampled lift fail to be
+    // positive? Fed to benjaminiHochberg by the caller.
+    let neg = 0; let tot = 0;
+    const rand = _rng(seed + 1);
+    const days = [...new Set(all.map(r => r.day))];
+    const byDay = new Map(days.map(d => [d, all.filter(r => r.day === d)]));
+    for (let i = 0; i < draws && days.length; i++) {
+        const sample = [];
+        for (let k = 0; k < days.length; k++) sample.push(...byDay.get(days[Math.floor(rand() * days.length)]));
+        const l = liftStat(sample);
+        if (l != null) { tot++; if (l <= 0) neg++; }
+    }
+    const p = tot ? (neg + 1) / (tot + 1) : 1;
+
+    const trainPrecision = hitRate(inTrain);
+    const testPrecision = hitRate(inTest);
+    const klass = classifyPattern({
+        nTrain: inTrain.length, nTest: inTest.length,
+        testPrecision, trainPrecision, liftLo: ci.lo, medPrice, flatEv: ev,
+    });
+
+    return {
+        name, n: all.length, nTrain: inTrain.length, nTest: inTest.length,
+        precision, trainPrecision, testPrecision,
+        base: baseRate, lift, liftLo: ci.lo, liftHi: ci.hi, p,
+        medPrice, flatEv: ev, klass,
+        note: klass === 'underpowered'
+            ? `underpowered (train ${inTrain.length}/${MIN_TRAIN}, test ${inTest.length}/${MIN_TEST})`
+            : null,
+    };
+}
