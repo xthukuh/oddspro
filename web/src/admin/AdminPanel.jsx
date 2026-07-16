@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useSession } from '../auth/SessionProvider.jsx';
-import { OP_MARK } from '../HumanGate.jsx';
+import { OP_MARK } from '../components/Logo.jsx';
 import { Z } from '../zLayers.js';
 import SettingsEditor from './SettingsEditor.jsx';
 import DataLab from './DataLab.jsx';

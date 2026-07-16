@@ -94,14 +94,10 @@ const EnvSchema = z.object({
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.
     // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
     MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
-    // --- SPA bot-protection (opt-in; src/server.js + web/src/HumanGate.jsx) ---
-    // Stateless proof-of-work "verify you're human" gate. Enable on BOTH sides
-    // together: HUMAN_POW_ENABLED here AND VITE_HUMAN_POW at web build time.
-    HUMAN_POW_ENABLED: boolStr('0'),
-    HUMAN_POW_BITS: z.coerce.number().int().min(1).max(28).default(18),   // difficulty (~2^bits hashes, <1s in-browser)
-    HUMAN_TOKEN_SECRET: optionalStr(z.string().min(1).optional()),        // HMAC key; set for a stable check-once across restarts
-    HUMAN_TOKEN_TTL_DAYS: z.coerce.number().min(0.01).default(7),         // check-once lifetime (~1 week per the user's ask)
-    HUMAN_CHALLENGE_TTL_MINUTES: z.coerce.number().min(1).default(10),
+    // --- SPA bot-protection (opt-in) ---
+    // NOTE: the proof-of-work human gate (HUMAN_POW_*) was removed 2026-07-16 -
+    // deprecated as irrelevant at this stage. Any leftover HUMAN_* entries in a
+    // .env are simply ignored (this schema is not strict), so no deploy breaks.
     // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
     // Blocks AI scrapers / aggressive crawlers / raw HTTP clients; general search
     // engines are intentionally left alone (landing-page SEO).

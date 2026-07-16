@@ -1,5 +1,4 @@
 // Typed wrappers over the oddspro API (:3001, proxied via vite in dev).
-import { getHumanToken } from './humanToken.js';
 import { getSessionToken } from './auth/sessionToken.js';
 
 // Baked in at build time from VITE_API_TOKEN (set it in .env to match the
@@ -20,16 +19,13 @@ export class ApiError extends Error {
 }
 
 // Auth headers: one Authorization bearer - the user's session token when
-// signed in, else the optional build-time API_TOKEN - plus the check-once
-// human-verification token (X-Human-Token) once the PoW gate has passed. All
-// no-op when unset - a server that isn't enforcing simply ignores them.
+// signed in, else the optional build-time API_TOKEN. No-op when unset - a
+// server that isn't enforcing simply ignores it.
 function _authHeaders() {
     const h = {};
     const session = getSessionToken();
     if (session) h.Authorization = `Bearer ${session}`;
     else if (API_TOKEN) h.Authorization = `Bearer ${API_TOKEN}`;
-    const human = getHumanToken();
-    if (human) h['X-Human-Token'] = human;
     return h;
 }
 
@@ -218,20 +214,6 @@ export async function getLabData({ x, y, color, outcome, filters, days, sample, 
     });
 }
 
-// Proof-of-work human gate (opt-in; only reachable when the server has
-// HUMAN_POW_ENABLED). fetchChallenge -> solve in the browser -> submitHuman
-// mints the check-once token. See web/src/HumanGate.jsx + src/human-pow.js.
-export async function fetchChallenge() {
-    return _get('/api/challenge');
-}
-
-export async function submitHuman(solution) {
-    const res = await fetch('/api/human', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Requested-With': 'fetch' },
-        body: JSON.stringify(solution),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
-    return body; // { token, ttl_days }
-}
+// NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
+// 2026-07-16 along with the rest of that feature - deprecated as irrelevant at
+// this stage.

@@ -1,10 +1,10 @@
-import { OP_MARK } from '../HumanGate.jsx';
+import { OP_MARK } from '../components/Logo.jsx';
 import { Z } from '../zLayers.js';
 
 // Full-screen scaffold for the auth views (sign in / sign up / verify /
 // profile) - the codebase is router-free, so these render as opaque overlays
 // ON TOP of the app (children stay mounted underneath, preserving table state)
-// the same visual language as HumanGate: brand mark, centered card, token
+// A brand mark, centered card, token
 // palette. Shared control classes live here so the four views can't drift.
 export default function AuthShell({ title, subtitle, children, footer }) {
     return (

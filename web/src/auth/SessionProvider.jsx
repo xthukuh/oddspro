@@ -8,7 +8,7 @@ import { syncOnLogin, pushPrefs, syncNow, clearCursor, startAutoSync } from './p
 // mount, and exposes the auth actions the views/menus call. Also owns which
 // auth view is open (`view`: null | 'signin' | 'signup' | 'profile') - the
 // codebase is router-free, so AuthGate renders these as conditional
-// full-screen views the same way HumanGate wraps the app.
+// full-screen views by wrapping the app.
 //
 // Guests are first-class: no token -> user:null, isGuest:true, and the app
 // renders exactly as before. The server stays authoritative for everything

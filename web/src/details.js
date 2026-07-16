@@ -4,7 +4,7 @@ import { useSession } from './auth/SessionProvider.jsx';
 // the TipPopover blend/weights/gate-audit/AI breakdown and the Magic-sort
 // sheet's methodology (explainer prose + per-strategy backtest numbers).
 //
-// Baked in at BUILD time from VITE_SHOW_DETAILS (root .env, like VITE_HUMAN_POW).
+// Baked in at BUILD time from VITE_SHOW_DETAILS (root .env, like the other VITE_* vars).
 // DEFAULT ON - production hides the methodology (our edge) with
 // VITE_SHOW_DETAILS=0; signed-in accounts are the "per-user" unlock.
 export const showDetails = v => v !== '0' && v !== 'false';

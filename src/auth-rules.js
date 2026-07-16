@@ -1,5 +1,5 @@
 // Pure auth crypto + rules (node:crypto + zod, offline-testable). Lives at the
-// src/ root next to human-pow.js - the convention for crypto-bearing pure
+// src/ root next to crypto-utils.js - the convention for crypto-bearing pure
 // modules (the zero-import src/db/*-rules.js files are for zod-only math; this
 // one needs node:crypto). Shared by the users migration (seeded-admin PIN), the
 // auth service (src/auth.js), and its offline tests. No config/DB imports.
@@ -9,7 +9,7 @@
 import crypto from 'node:crypto';
 import { z } from 'zod';
 import { isValidE164, _ms } from './db/sms-rules.js'; // pure, offline - no coupling to config/DB
-import { sha256Hex } from './human-pow.js'; // pure crypto sibling (C1: one sha256 helper)
+import { sha256Hex } from './crypto-utils.js'; // pure crypto sibling (C1: one sha256 helper)
 
 // scrypt cost parameters. BAKED into every hash string (scrypt$N$r$p$salt$dk),
 // so they can be raised later WITHOUT a migration - verifyPin reads them back

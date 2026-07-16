@@ -1,7 +1,6 @@
 import express from 'express';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
-import crypto from 'node:crypto';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
@@ -10,7 +9,7 @@ import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
-import { issueChallenge, verifyChallenge, signHumanToken, verifyHumanToken, bearerMatches } from './human-pow.js';
+import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
@@ -89,7 +88,7 @@ const MACHINE_BEARERS = [config.API_TOKEN, config.ADMIN_TOKEN];
 // Same-origin CSRF guard shared by every state-changing route: custom headers
 // force a CORS preflight cross-origin, which this server never approves - only
 // same-origin callers can set X-Requested-With. Answers the 403 itself; callers
-// bail on false. (C1: one copy - human gate, auth/admin routes, refresh.)
+// bail on false. (C1: one copy - auth/admin routes, refresh.)
 const csrfOk = (req, res) => {
     if (req.get('x-requested-with')) return true;
     res.status(403).json({ error: 'Missing X-Requested-With header.' });
@@ -108,54 +107,16 @@ if (config.API_TOKEN) {
     });
 }
 
-// SPA bot-protection: stateless proof-of-work human gate (opt-in,
-// HUMAN_POW_ENABLED). The browser solves a PoW challenge from /api/challenge and
-// posts it to /api/human, which mints a short-lived (check-once) token; every
-// other /api/* route then requires that token. A valid API_TOKEN bearer bypasses
-// the gate (trusted machine clients). Registered BEFORE the data routes so it
-// intercepts them; the two gate endpoints are registered first so they stay
-// open. All crypto + verification is pure (src/human-pow.js, offline-tested).
-if (config.HUMAN_POW_ENABLED) {
-    // A stable secret keeps the check-once token valid across restarts; the
-    // ephemeral fallback still works but re-challenges users after a restart.
-    const HUMAN_SECRET = config.HUMAN_TOKEN_SECRET || crypto.randomBytes(32).toString('hex');
-    if (!config.HUMAN_TOKEN_SECRET) {
-        console.warn('[human] HUMAN_POW_ENABLED but HUMAN_TOKEN_SECRET unset - using an ephemeral per-boot secret (tokens reset on restart). Set HUMAN_TOKEN_SECRET for a stable check-once.');
-    }
-    const CHALLENGE_TTL = config.HUMAN_CHALLENGE_TTL_MINUTES * 60_000;
-    const TOKEN_TTL = config.HUMAN_TOKEN_TTL_DAYS * 86_400_000;
-
-    // Issue a PoW challenge (public, cheap, stateless - the HMAC signature is
-    // the only "storage").
-    app.get('/api/challenge', (req, res) => {
-        res.json(issueChallenge(HUMAN_SECRET, { bits: config.HUMAN_POW_BITS, ttlMs: CHALLENGE_TTL }));
-    });
-    // Verify a solved challenge -> mint the check-once human token.
-    app.post('/api/human', express.json({ limit: '2kb' }), (req, res) => {
-        if (!csrfOk(req, res)) return;
-        const v = verifyChallenge(HUMAN_SECRET, req.body || {});
-        if (!v.ok) return res.status(400).json({ error: 'Human verification failed - please retry.', reason: v.reason });
-        res.json({ token: signHumanToken(HUMAN_SECRET, { ttlMs: TOKEN_TTL }), ttl_days: config.HUMAN_TOKEN_TTL_DAYS });
-    });
-    // Gate every other /api/* route on a valid human token (or a recognized
-    // machine bearer - API_TOKEN and ADMIN_TOKEN clients authenticate at their
-    // routes, so the gate must not 401 them first; H2). The two endpoints above
-    // are registered first, so they're already handled before this runs; the
-    // path check is belt-and-suspenders.
-    app.use('/api', (req, res, next) => {
-        if (req.path === '/challenge' || req.path === '/human') return next();
-        if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return next();
-        if (verifyHumanToken(HUMAN_SECRET, req.get('x-human-token')).ok) return next();
-        res.status(401).json({ error: 'Human verification required.', human_required: true });
-    });
-}
+// NOTE: the stateless proof-of-work human gate (/api/challenge, /api/human,
+// HUMAN_POW_*) was removed 2026-07-16 - deprecated as irrelevant at this stage.
+// It was opt-in and off by default, so removal is a no-op for every deployment.
+// The bot-UA blocklist above + the AI robots.txt below are a SEPARATE feature
+// and remain in force.
 
 // ============================================================================
 // User accounts + sessions (v1.1.0). Opaque hashed DB sessions carried as
 // `Authorization: Bearer`; role-aware guards; per-route JSON + the same
-// X-Requested-With CSRF guard as /api/refresh. Registered AFTER the human-pow
-// gate, so when that gate is on a bot must still solve it to reach signup
-// (which mints sessions and can spend SMS credits). Logic lives in src/auth.js /
+// X-Requested-With CSRF guard as /api/refresh. Logic lives in src/auth.js /
 // src/auth-rules.js / src/authlimit-rules.js.
 // ============================================================================
 const bearerToken = req => {

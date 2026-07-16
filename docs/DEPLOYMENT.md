@@ -26,10 +26,10 @@ Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — on
 - **UI**: the footer is now a bottom-sticky status bar (record count, day hit-rates, last-refresh time).
 - **Deadlock-resilient refreshes + the "only one `serve`" rule.** Manual/auto refreshes now retry transient InnoDB deadlocks / lock-wait timeouts (`src/db/retry-rules.js`, wrapping the fixtures/teams/leagues + per-match odds writers) and surface a friendly "please try again" instead of a raw SQL error banner. **Run exactly ONE `serve` process.** The deadlocks come from a *second* concurrent writer on the same rows — a stray `serve`, a manual CLI sweep, or a backup cron overlapping the in-process scheduler; the retry self-heals a rare race, but two always-on writers will fight (see §7, connection-pool + Passenger notes).
 - **Boot-time migrations (opt-in, `MIGRATE_ON_BOOT`).** The server can self-apply `knex migrate:latest` on startup — set `MIGRATE_ON_BOOT=1` and a Restart runs any pending migrations (fail-fast: it won't serve on a migration error). This is the no-SSH-friendly alternative to the phpMyAdmin SQL recipe in §5. Off by default (local/dev restarts never migrate).
-- **Bot protection (opt-in).** A proof-of-work "verify you're human" gate before the SPA loads + a check-once ~1-week token the API requires, plus a known-bot user-agent blocklist and an AI-crawler `robots.txt`. Off by default. **See the new §8 for the full config** (server `.env` + one web build flag).
+- **Bot protection (opt-in).** A known-bot user-agent blocklist and an AI-crawler `robots.txt`. Off by default. **See the new §8 for the full config.** (The proof-of-work human gate that also shipped in v1.0.1 was **removed 2026-07-16** — see §8.1.)
 - **Client-side kickoff link-disable.** A match's bookmaker link auto-disables once its kickoff passes on the viewer's clock (many books drop the pre-match link at kickoff). Presentation-only; no config.
 - **Prediction methodology hidden in the UI** (guarded for a future premium tier): the tip popover shows a lean bet-decision card with the blend/weights/gate internals behind a `SHOW_INTERNALS=false` code flag. **NOTE for the premium phase:** the raw `tip_breakdown` / `hot_signals` / AI-review fields are STILL in the `/api/records` payload (visible in devtools) — gate them server-side when premium lands for true secrecy.
-- New `.env` knobs (all optional, sane defaults): `AUTO_REFRESH_ENABLED`, `AUTO_LIGHT_MINUTES`, `AUTO_FULL_AT`, `AUTO_FULL_DAYS`, `AUTO_LOG`, `AUTO_LOG_MAX_KB`, `REFRESH_CACHE_MINUTES`; `MIGRATE_ON_BOOT`; bot-protection `HUMAN_POW_ENABLED`, `HUMAN_POW_BITS`, `HUMAN_TOKEN_SECRET`, `HUMAN_TOKEN_TTL_DAYS`, `HUMAN_CHALLENGE_TTL_MINUTES`, `BOT_UA_FILTER_ENABLED`, `BOT_UA_EXTRA`, `BOT_UA_ALLOW`; web build flag `VITE_HUMAN_POW`.
+- New `.env` knobs (all optional, sane defaults): `AUTO_REFRESH_ENABLED`, `AUTO_LIGHT_MINUTES`, `AUTO_FULL_AT`, `AUTO_FULL_DAYS`, `AUTO_LOG`, `AUTO_LOG_MAX_KB`, `REFRESH_CACHE_MINUTES`; `MIGRATE_ON_BOOT`; bot-protection `BOT_UA_FILTER_ENABLED`, `BOT_UA_EXTRA`, `BOT_UA_ALLOW`. (The `HUMAN_*` / `VITE_HUMAN_POW` knobs were removed 2026-07-16 — §8.1.)
 
 ## 1. Overview
 
@@ -141,33 +141,18 @@ This manual flow is deliberately dependency-free. If the host later gains SSH (o
 
 ## 8. Bot protection (opt-in, new in v1.0.1)
 
-Two independent layers keep bots and AI scrapers off the public site. Both are **OFF by default** — local dev and an un-gated deploy behave exactly as before. Enable them for production via the server `.env` plus (for the human gate) one web build flag. No third-party service, account, or API keys.
+A user-agent blocklist plus an AI `robots.txt` keep bots and AI scrapers off the public site. **OFF by default** — local dev and an un-gated deploy behave exactly as before. Enable it for production via the server `.env`. No third-party service, account, or API keys.
 
-### 8.1 Proof-of-work "verify you're human" gate
+### 8.1 Proof-of-work "verify you're human" gate — REMOVED 2026-07-16
 
-Before the SPA renders, the browser solves a small computational puzzle (hashcash-style). The server verifies it and issues a **check-once token** (default ~1 week) that every `/api/*` route then requires — so a bot that skips the gate and calls the API directly gets `401`. The challenge and the token are both HMAC-signed by the server, so it stores **no** per-challenge state.
+This gate (`HUMAN_POW_ENABLED`, `VITE_HUMAN_POW`, `HUMAN_TOKEN_SECRET`, `HUMAN_POW_BITS`, `HUMAN_TOKEN_TTL_DAYS`, `HUMAN_CHALLENGE_TTL_MINUTES`, the `/api/challenge` + `/api/human` routes, and the SPA `HumanGate`) was **deprecated and removed** as irrelevant at this stage.
 
-**Enable it on BOTH sides (they must match):**
+**What this means for a deploy:**
 
-1. **Server `.env`** (in the Application Root):
-   - `HUMAN_POW_ENABLED=1`
-   - `HUMAN_TOKEN_SECRET=<a long random string>` — the HMAC key. **Set a stable value** so the check-once token survives restarts/deploys; if left unset the server uses an ephemeral per-boot secret (works, but every visitor re-verifies after each restart). Generate one with:
-     ```sh
-     node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-     ```
-   - Optional tuning: `HUMAN_POW_BITS` (difficulty, default `18` ≈ under a second in-browser — raise for more attacker cost, lower for less friction), `HUMAN_TOKEN_TTL_DAYS` (check-once lifetime, default `7`), `HUMAN_CHALLENGE_TTL_MINUTES` (default `10`).
-2. **Web build** — compile the gate into the bundle by building with the flag set:
-   ```sh
-   VITE_HUMAN_POW=1 npm run build:web
-   ```
-   (or add `VITE_HUMAN_POW=1` to your local `.env` before building, alongside the other `VITE_*` vars). Then `npm run package:deploy` and upload the web zip as usual.
-
-**Why both — this is the #1 deploy gotcha.** `HUMAN_POW_ENABLED` (server) and `VITE_HUMAN_POW` (web build) are **one switch in two places**; they must match. `VITE_HUMAN_POW` is baked into the bundle at **build time**, so flipping the server flag without **rebuilding and redeploying `web/dist`** silently breaks the site:
-
-- **Server ON + build OFF** → the un-gated SPA never mints a token, so **every `/api/*` call returns `401 {human_required:true}`** and the whole dashboard looks dead. (This is the failure that shipped once — the server `.env` had `HUMAN_POW_ENABLED=1` while the deployed build lacked `VITE_HUMAN_POW`.) Fix: rebuild the web with `VITE_HUMAN_POW=1`, or turn the server flag off — then redeploy `web/dist`.
-- **Server OFF + build ON** → harmless: the gate probes `/api/challenge`, sees it absent, and **passes through** (no lockout on a mismatch).
-
-Use `.env.production.example` as a paired template so both flags travel together. A trusted machine client can bypass the gate entirely with a valid `API_TOKEN` bearer (§7).
+- **Drop every `HUMAN_*` / `VITE_HUMAN_POW` line** from a real `.env` / `.env.production`. They are now ignored (the config schema strips unknown keys), so a leftover line is harmless — but it is dead weight and misleading.
+- The gate was opt-in and off by default, so removal is a **no-op for behaviour**.
+- **The "#1 deploy gotcha" is gone with it** — there is no longer a switch that has to be kept equal across the server `.env` and the web build, and no way to ship a site where every `/api/*` call returns `401 {human_required:true}`.
+- The UA blocklist + `robots.txt` below are a **separate feature and remain in force**. `API_TOKEN` (§7) is unaffected.
 
 ### 8.2 Bot user-agent blocklist + AI `robots.txt`
 
