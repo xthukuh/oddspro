@@ -65,12 +65,20 @@ export function extractJson(text) {
     return JSON.parse(m[0]);
 }
 
+// Text-level verdict decode: raw reply text -> fenced-JSON verdict (T3
+// split). Provider-agnostic - callers that already hold reply text (the
+// AI-review worker via the retried complete(), later the harness) decode
+// here without pretending their reply came in a Gemini envelope. Throws on
+// anything unusable; callers fail open.
+export function parseVerdict(text) {
+    return Verdict.parse(extractJson(text));
+}
+
 // Decode one adjudicator reply: envelope -> reply text -> fenced-JSON verdict
 // + grounding citations. Throws on anything unusable; callers fail open
 // (record 'error', keep the rule verdict).
 // Returns { verdict, probability, checks, reason, sources: [{ title, uri }] }.
 export function parseAiReply(data) {
     const { text, sources } = extractGeminiText(data);
-    const verdict = Verdict.parse(extractJson(text));
-    return { ...verdict, sources };
+    return { ...parseVerdict(text), sources };
 }

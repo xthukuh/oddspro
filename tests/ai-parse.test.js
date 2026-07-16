@@ -3,7 +3,7 @@
 // normalization and grounding-citation collection. Pure module - no .env.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAiReply } from '../src/ai-parse.js';
+import { parseAiReply, parseVerdict } from '../src/ai-parse.js';
 
 // Minimal envelope factory: reply text (+ optional grounding chunks)
 const envelope = (text, grounding) => ({
@@ -75,4 +75,30 @@ test('parseAiReply throws on unusable replies (callers fail open)', () => {
     assert.throws(() => parseAiReply({ candidates: [] }));
     // Safety-blocked candidate arrives without content at all
     assert.throws(() => parseAiReply({ candidates: [{}] }), /no JSON object/);
+});
+
+// parseVerdict: the text-level half of parseAiReply (T3 split) - takes the
+// raw reply TEXT, not the Gemini envelope, so provider-agnostic callers
+// (the AI-review worker via complete(), later the harness) can decode a
+// verdict without pretending their reply came from Gemini.
+test('parseVerdict decodes a verdict from raw reply text', () => {
+    const out = parseVerdict(JSON.stringify({
+        verdict: 'confirm', probability: 72, reason: 'Solid form both sides.',
+    }));
+    assert.equal(out.verdict, 'confirm');
+    assert.equal(out.probability, 0.72, 'percent replies normalize to 0..1');
+    assert.equal(out.reason, 'Solid form both sides.');
+    assert.equal('sources' in out, false, 'text-level: sources belong to the envelope layer');
+});
+
+test('parseVerdict throws on junk and on out-of-vocabulary verdicts', () => {
+    assert.throws(() => parseVerdict('no json here at all'));
+    assert.throws(() => parseVerdict('{"verdict":"maybe"}'));
+});
+
+test('parseAiReply still composes envelope + verdict identically after the split', () => {
+    const out = parseAiReply(envelope('```json\n{"verdict":"veto","reason":"r"}\n```',
+        [{ web: { uri: 'https://x', title: 't' } }]));
+    assert.equal(out.verdict, 'veto');
+    assert.deepEqual(out.sources, [{ title: 't', uri: 'https://x' }]);
 });
