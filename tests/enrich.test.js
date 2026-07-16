@@ -12,8 +12,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import knex from 'knex';
-import { buildTargetsQuery } from '../src/enrich.js';
-import { KICKOFF_SQL_EXPR, CORRELATION_GUARDS } from '../src/db/ai-rules.js';
+import { buildTargetsQuery, effectiveAiConfig, assertAiProvidersConfigured } from '../src/enrich.js';
+import { KICKOFF_SQL_EXPR, CORRELATION_GUARDS, resolveTask } from '../src/db/ai-rules.js';
+import { config } from '../src/config.js';
 
 test('buildTargetsQuery projects the offset-qualified KICKOFF_SQL_EXPR, not a bare kickoff column (TZ HAZARD BINDING)', () => {
     const kx = knex({ client: 'mysql2' }); // disconnected builder - no queries run
@@ -48,4 +49,62 @@ test('buildTargetsQuery applies both CORRELATION_GUARDS (CAP-WASTE, SQL-side bin
     for (const guard of CORRELATION_GUARDS) {
         assert.ok(sql.includes(guard), `expected the compiled SQL to include guard: ${guard}\ngot:\n${sql}`);
     }
+});
+
+// --- Finding 1 (FINAL REVIEW): the rolling-stats aggregates are keyed on
+// team id, not name - buildTargetsQuery must select both, or _buildStats
+// (src/enrich.js) has no way to look a fixture's teams up in the bulk
+// history map loadTeamHistory (src/hotpicks.js) returns.
+test('buildTargetsQuery selects home_team_id/away_team_id (Finding 1: the rolling-stats loader needs them)', () => {
+    const kx = knex({ client: 'mysql2' });
+    const sql = buildTargetsQuery(kx).toSQL().sql;
+    assert.ok(sql.includes('`f`.`home_team_id`'), `expected home_team_id to be selected, got:\n${sql}`);
+    assert.ok(sql.includes('`f`.`away_team_id`'), `expected away_team_id to be selected, got:\n${sql}`);
+});
+
+// --- Finding 3 (FINAL REVIEW): dead settings control ------------------------
+// OPENROUTER_MODEL/AI_BLIND_MODEL/AI_ANCHORED_MODEL are catalog live:true
+// entries, but resolveTask/callModel used to always read the raw immutable
+// `config` object - an admin override was a PERMANENT no-op. effectiveAiConfig
+// is the fix: it must actually layer whatever its overrides source returns on
+// top of config, and resolveTask must pick that up. `overridesFn` is injected
+// (mirrors buildTargetsQuery's `knex` DI) so this is assertable fully offline,
+// without touching settings.js's real DB-backed cache.
+test('effectiveAiConfig layers an injected override over config defaults, and resolveTask honours it (Finding 3, dead-control fix)', () => {
+    const cfg = effectiveAiConfig(() => ({ OPENROUTER_MODEL: 'openai/gpt-9-override' }));
+    assert.equal(cfg.OPENROUTER_MODEL, 'openai/gpt-9-override');
+    assert.equal(resolveTask('blind', cfg).model, 'openai/gpt-9-override');
+    // every non-overridden key still falls back to the real config default
+    assert.equal(cfg.AI_ENRICH_CAP, config.AI_ENRICH_CAP);
+});
+
+test('effectiveAiConfig defaults to settings.effectiveConfig() (offline-safe: no cache loaded -> config defaults)', () => {
+    const cfg = effectiveAiConfig();
+    assert.equal(cfg.OPENROUTER_MODEL, config.OPENROUTER_MODEL);
+    assert.equal(cfg.AI_ENRICH_CAP, config.AI_ENRICH_CAP);
+});
+
+// --- Finding 4 (FINAL REVIEW): no API-key preflight -------------------------
+// With one provider's key missing, every fixture used to bill the grounded
+// Gemini facts call then throw on the blind call - anchored-with-no-blind on
+// EVERY fixture, at full Gemini cost. assertAiProvidersConfigured is the
+// fail-fast fix; it takes already-resolved booleans (never reaches into
+// config/.env itself) so the assertion is testable without this machine's
+// real GEMINI_API_KEY/OPENROUTER_API_KEY influencing the result.
+test('assertAiProvidersConfigured throws naming GEMINI_API_KEY when the grounded provider is unconfigured', () => {
+    assert.throws(
+        () => assertAiProvidersConfigured({ geminiEnabled: false, openrouterEnabled: true }),
+        /GEMINI_API_KEY/,
+    );
+});
+
+test('assertAiProvidersConfigured throws naming OPENROUTER_API_KEY when the blind provider is unconfigured', () => {
+    assert.throws(
+        () => assertAiProvidersConfigured({ geminiEnabled: true, openrouterEnabled: false }),
+        /OPENROUTER_API_KEY/,
+    );
+});
+
+test('assertAiProvidersConfigured passes silently when both providers are configured', () => {
+    assert.doesNotThrow(() => assertAiProvidersConfigured({ geminiEnabled: true, openrouterEnabled: true }));
 });

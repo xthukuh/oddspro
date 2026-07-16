@@ -9,7 +9,12 @@ import { z } from 'zod';
 // Collection only: nothing here feeds bestTip, confidence or any ranking.
 
 // Bump to re-enrich upcoming fixtures (reuse is keyed on the model tag).
-export const PROMPT_VERSION = 1;
+// v2 (M4.1 final review, finding 1): the prompt materially changed - real
+// rolling-stats aggregates now feed `_team`/the h2h line instead of the
+// hardcoded { n:0, avgTotal:null, ... } placeholder, so the 5 rows already
+// banked under #e1 must re-fire rather than be silently mistaken for
+// "already enriched with real stats".
+export const PROMPT_VERSION = 2;
 
 // Bump when the fact payload gains a field. schema_ver + a JSON payload is the
 // deliberate answer to "leave room for anything we may need later": a new fact
@@ -22,8 +27,17 @@ export const FACT_SCHEMA_VER = 1;
 export const BLIND_MARKETS = Object.freeze(['1', 'X', '2', 'O 2.5', 'U 2.5', 'GG', 'NG']);
 const FAMILIES = [['1', 'X', '2'], ['O 2.5', 'U 2.5'], ['GG', 'NG']];
 
-const _team = (label, t) => `${label}: last ${t.n} games - avg total goals ${t.avgTotal},`
-    + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`;
+// Finding 1 (M4.1 final review): a genuinely sample-less side (t.n === 0 -
+// e.g. a newly-promoted team, or a fixture whose history backfill has not
+// yet run for that team) must OMIT its stats line entirely rather than
+// render literal `null`s ("avg total goals null, scored null/game...") -
+// absent evidence must read as absent, not as a fabricated zero-ish fact.
+// Returns null (filtered out by the two prompt builders below), never a
+// string carrying `null`.
+const _team = (label, t) => (t && t.n
+    ? `${label}: last ${t.n} games - avg total goals ${t.avgTotal},`
+        + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`
+    : null);
 
 // Any leaked price/betting mention, wherever a grounded model might have
 // written free text. `extra` (FactsPayload.extra) is the obvious channel,
@@ -92,7 +106,7 @@ export function buildBlindPrompt({ fixture, kickoff, league, home, away, h2h, fa
         '{"probabilities":{"1":0.0-1.0,"X":0.0-1.0,"2":0.0-1.0,"O 2.5":0.0-1.0,',
         ' "U 2.5":0.0-1.0,"GG":0.0-1.0,"NG":0.0-1.0},',
         ' "reason":"one short sentence naming the decisive factor"}',
-    ].join('\n');
+    ].filter(line => line !== null).join('\n'); // drop an omitted (sample-less) _team line, never a blank ''
 }
 
 // ANCHORED: sees the SAME screened facts as blind (via `_promptFacts` - see
@@ -119,7 +133,7 @@ export function buildAnchoredPrompt({ fixture, kickoff, league, tip, home, away,
         'Reply with ONLY a JSON object, no other text:',
         '{"probability":0.0-1.0,"consensus":"heavy_on"|"lean_on"|"neutral"|"lean_against"|"heavy_against",',
         ' "reason":"one short sentence naming the decisive factor"}',
-    ].join('\n');
+    ].filter(line => line !== null).join('\n'); // drop an omitted (sample-less) _team line, never a blank ''
 }
 
 // Models reply in percentages despite a 0..1 contract; rescale 65 -> 0.65

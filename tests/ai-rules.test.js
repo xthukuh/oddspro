@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    FACT_SCHEMA_VER, BLIND_MARKETS, buildBlindPrompt, buildAnchoredPrompt,
+    FACT_SCHEMA_VER, PROMPT_VERSION, BLIND_MARKETS, buildBlindPrompt, buildAnchoredPrompt,
     FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag, resolveTask,
 } from '../src/db/ai-rules.js';
 
@@ -30,6 +30,40 @@ test('buildBlindPrompt asks for exactly the fixed market set', () => {
     assert.ok(outcomesLine, 'prompt must have an "Outcomes: " line');
     const listed = outcomesLine.slice('Outcomes: '.length).split(', ');
     assert.deepEqual(listed, BLIND_MARKETS);
+});
+
+// --- Finding 1 (M4.1 final review): real rolling stats, defensively wired --
+// A genuinely sample-less side (n:0, everything else null - exactly what
+// teamGoalsAggregates/h2hGoalsAggregates return for a team/pair with no
+// qualifying history) must OMIT its stats line entirely, never render the
+// literal word "null" (the pre-fix hardcoded placeholder's failure mode:
+// "Home: last 0 games - avg total goals null, scored null/game...").
+
+const ZERO_SAMPLE_TEAM = { n: 0, avgTotal: null, gfAvg: null, gaAvg: null, bttsRate: null };
+
+test('buildBlindPrompt omits a zero-sample team stats line entirely (no null-rendering)', () => {
+    const p = buildBlindPrompt({ ...FIXTURE, home: ZERO_SAMPLE_TEAM });
+    assert.ok(!p.includes('Home:'), 'a zero-sample Home line must be omitted entirely, not rendered with nulls');
+    assert.ok(!/\bnull\b/.test(p), 'prompt must never render the literal word "null"');
+    assert.ok(p.includes('Away:'), 'a populated Away line must still render');
+});
+
+test('buildAnchoredPrompt omits a zero-sample team stats line entirely (no null-rendering)', () => {
+    const p = buildAnchoredPrompt({ ...FIXTURE, tip: { market: '1X', price: 1.4 }, away: ZERO_SAMPLE_TEAM });
+    assert.ok(!p.includes('Away:'), 'a zero-sample Away line must be omitted entirely, not rendered with nulls');
+    assert.ok(!/\bnull\b/.test(p), 'prompt must never render the literal word "null"');
+    assert.ok(p.includes('Home:'), 'a populated Home line must still render');
+});
+
+test('buildBlindPrompt omits BOTH team lines and keeps a friendly H2H line when nothing has a sample', () => {
+    const p = buildBlindPrompt({ ...FIXTURE, home: ZERO_SAMPLE_TEAM, away: ZERO_SAMPLE_TEAM, h2h: { n: 0, avgTotal: null } });
+    assert.ok(!p.includes('Home:') && !p.includes('Away:'));
+    assert.ok(p.includes('no prior meetings known'), 'H2H already substitutes friendly text for a zero sample');
+    assert.ok(!/\bnull\b/.test(p));
+    // the rest of the prompt must be unaffected by the omission (no stray
+    // blank-line collapse, no truncation)
+    assert.ok(p.includes('Arsenal - Chelsea'));
+    assert.ok(p.includes('Outcomes:'));
 });
 
 test('buildBlindPrompt never leaks facts.extra (free-form text can carry odds)', () => {
@@ -175,6 +209,14 @@ test('AnchoredPayload parses a real reply and defaults sensibly', () => {
 test('BlindPayload rejects a probability outside 0..1 but rescales percentages', () => {
     assert.equal(BlindPayload.parse({ probabilities: { 1: 65 } }).probabilities['1'], 0.65);
     assert.throws(() => BlindPayload.parse({ probabilities: { 1: -1 } }));
+});
+
+// Finding 1: the prompt materially changed (real rolling stats replace the
+// hardcoded null placeholder) - PROMPT_VERSION must have moved past the
+// value the 5 already-banked rows were stamped with, so they re-fire rather
+// than being trusted as "already enriched with real stats".
+test('PROMPT_VERSION was bumped past the pre-fix value (Finding 1 forces a re-enrich)', () => {
+    assert.equal(PROMPT_VERSION, 2);
 });
 
 test('enrichModelTag encodes model + grounding + prompt version', () => {

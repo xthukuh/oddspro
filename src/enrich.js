@@ -1,9 +1,11 @@
 import { db } from './db/connection.js';
 import { config } from './config.js';
-import { effective } from './settings.js';
-import { callModel } from './ai/index.js';
+import { effective, effectiveConfig } from './settings.js';
+import { callModel, getProvider } from './ai/index.js';
 import { extractJson } from './ai-parse.js';
 import { _batch } from './utils.js';
+import { pairedTeamGoalsAggregates, h2hGoalsAggregates } from './db/goals-rules.js';
+import { loadTeamHistory } from './hotpicks.js';
 import {
     selectEnrichable, capFixtures, buildBlindPrompt, buildAnchoredPrompt,
     FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities,
@@ -71,7 +73,13 @@ export function buildTargetsQuery(knex) {
         .where('f.kickoff', '>', knex.raw('NOW()'))
         .whereRaw(CORRELATION_GUARDS[0])
         .whereRaw(CORRELATION_GUARDS[1])
+        // 'f.home_team_id'/'f.away_team_id' (FINAL REVIEW finding 1): the
+        // rolling-stats aggregates (_buildStats below, via loadTeamHistory +
+        // pairedTeamGoalsAggregates/h2hGoalsAggregates) are keyed on team id,
+        // not name - without these two columns _buildStats would have no way
+        // to look a fixture's teams up in the bulk history map.
         .select('f.id', knex.raw(`${KICKOFF_SQL_EXPR} as kickoff`), 'l.name as league',
+            'f.home_team_id', 'f.away_team_id',
             'th.name as home_name', 'ta.name as away_name',
             'fp.tip_market', 'fp.tip_price');
     // No .orderBy here (review finding 5) - selectEnrichable() (pure,
@@ -137,35 +145,62 @@ async function _upsert(row) {
 // version OR tip re-enriches automatically, and a steady-state rerun
 // re-bills nothing. Same idiom as the adjudicator's verdict reuse. The
 // freshness decision itself is pure (ai-rules.js#insightIsFresh, tested).
-function _alreadyFresh(kind, f, tags) {
-    const { provider, model, grounded } = resolveTask(kind === 'blind' ? 'blind' : 'anchored', config);
+function _alreadyFresh(kind, f, tags, cfg) {
+    const { provider, model, grounded } = resolveTask(kind === 'blind' ? 'blind' : 'anchored', cfg);
     const stored = tags.get(`${f.id}:${kind}:${provider}`);
     return insightIsFresh(kind, enrichModelTag({ model, grounded }), stored, { market: f.tip_market, price: f.tip_price });
 }
 
+// FINAL REVIEW finding 1 (THE USER HAS RULED - spec §3.1 governs): both
+// reasoners must see "teams, date, our rolling stats" - this was a hardcoded
+// { n:0, avgTotal:null, ... } placeholder before, which made ai-rules.js's
+// _team render literal "null"s. Reuses the EXACT warehouse machinery
+// src/hotpicks.js already computes hot picks from - loadTeamHistory (shared
+// export, src/hotpicks.js) + pairedTeamGoalsAggregates/h2hGoalsAggregates
+// (src/db/goals-rules.js, the SAME fairness-paired windows hotpicks.js
+// itself uses) - never a second, drifting definition of "recent form".
+// `fixturesByTeam` is loaded ONCE per enrichFixtures() run, scoped to only
+// the CAPPED targets (a fixture we will never call AI on costs a history
+// query for nothing).
+//
+// The returned shape feeds BOTH buildBlindPrompt and buildAnchoredPrompt via
+// `{ ...stats, facts }` / `{ ...stats, facts, tip }` (see _enrichOne below) -
+// the projection is IDENTICAL for both by construction (one function, one
+// call site per fixture), which is what keeps `anchored - blind` a clean
+// paired measurement. A genuinely sample-less side/H2H is NOT special-cased
+// here - teamGoalsAggregates/h2hGoalsAggregates already return { n: 0, ... }
+// for that case, and ai-rules.js's _team/buildBlindPrompt/buildAnchoredPrompt
+// (pure, zod-only) are what OMIT that line rather than render `null`.
+function _buildStats(f, fixturesByTeam, cfg) {
+    const cutoff = new Date(f.kickoff).getTime();
+    const homeRows = fixturesByTeam.get(f.home_team_id) ?? [];
+    const awayRows = fixturesByTeam.get(f.away_team_id) ?? [];
+    const pair = pairedTeamGoalsAggregates(
+        homeRows, awayRows, f.home_team_id, f.away_team_id, cutoff, cfg.HOTPICK_TEAM_WINDOW,
+    );
+    const h2h = h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, cfg.PREMATCH_H2H_WINDOW);
+    return {
+        fixture: `${f.home_name} - ${f.away_name}`,
+        kickoff: f.kickoff, league: f.league,
+        home: pair.home, away: pair.away, h2h,
+    };
+}
+
 // One fixture's full 3-call set. Returns { written, errors }.
-async function _enrichOne(f, tags) {
+async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     // Nothing to do -> spend NOTHING. Without this the grounded facts call (the
     // most expensive of the three) would re-bill on every sweep even when both
     // reasoners are already fresh.
-    const needBlind = !_alreadyFresh('blind', f, tags);
-    const needAnchored = f.tip_market != null && !_alreadyFresh('anchored', f, tags);
+    const needBlind = !_alreadyFresh('blind', f, tags, cfg);
+    const needAnchored = f.tip_market != null && !_alreadyFresh('anchored', f, tags, cfg);
     if (!needBlind && !needAnchored) return { written: 0, errors: 0 };
 
-    const stats = {
-        fixture: `${f.home_name} - ${f.away_name}`,
-        kickoff: f.kickoff, league: f.league,
-        // Rolling aggregates are not required for v1 collection; the grounded
-        // pass researches context, which is what the warehouse cannot see.
-        home: { n: 0, avgTotal: null, gfAvg: null, gaAvg: null, bttsRate: null },
-        away: { n: 0, avgTotal: null, gfAvg: null, gaAvg: null, bttsRate: null },
-        h2h: { n: 0, avgTotal: null },
-    };
+    const stats = _buildStats(f, fixturesByTeam, cfg);
     let written = 0, errors = 0, facts = null, sources = null;
 
     // 1. FACTS (grounded, once).
     try {
-        const r = await callModel({ task: 'facts', prompt: _factsPrompt(stats) });
+        const r = await callModel({ task: 'facts', prompt: _factsPrompt(stats), cfg });
         facts = FactsPayload.parse(extractJson(r.text));
         sources = r.sources ?? null;
     } catch (e) {
@@ -178,7 +213,7 @@ async function _enrichOne(f, tags) {
     // would skip the anchored call below and leave the pair half-measured.
     if (needBlind) {
         try {
-            const r = await callModel({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }) });
+            const r = await callModel({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }), cfg });
             const p = BlindPayload.parse(extractJson(r.text));
             await _upsert({
                 fixture_id: f.id, kind: 'blind', provider: r.provider,
@@ -201,6 +236,7 @@ async function _enrichOne(f, tags) {
             const r = await callModel({
                 task: 'anchored',
                 prompt: buildAnchoredPrompt({ ...stats, facts, tip }),
+                cfg,
             });
             const p = AnchoredPayload.parse(extractJson(r.text));
             await _upsert({
@@ -250,26 +286,87 @@ function _factsPrompt({ fixture, kickoff, league }) {
     ].join('\n');
 }
 
+// FINAL REVIEW finding 3 (dead settings control): OPENROUTER_MODEL /
+// AI_BLIND_MODEL / AI_ANCHORED_MODEL are SETTINGS_CATALOG entries flagged
+// live:true, but resolveTask/callModel used to always read the raw immutable
+// `config` object - src/settings.js's admin-override cache was NEVER
+// consulted, so an admin edit to any of the three was a PERMANENT no-op (not
+// even a restart applied it: config.js reads process.env once at import and
+// never again). This builds the cfg object resolveTask/callModel actually
+// use: config defaults with every catalog override layered on top, via the
+// SAME mergeOverrides() settings.effectiveConfig() already uses for every
+// other admin-editable knob (SAFE_*, refresh cadences, ...) - one definition
+// of "effective", not two.
+//
+// `overridesFn` is injected (same DI idiom as buildTargetsQuery's `knex`
+// param above) so the wiring itself - "does the built cfg actually reflect
+// an override" - is assertable OFFLINE without priming settings.js's real
+// DB-backed cache (calling the real effectiveConfig() is ALSO offline-safe
+// when the cache is unloaded - it just returns catalog defaults - but a test
+// should not depend on that module's private state to prove this).
+export function effectiveAiConfig(overridesFn = effectiveConfig) {
+    return { ...config, ...overridesFn() };
+}
+
+// FINAL REVIEW finding 4 (no API-key preflight): with AI_ENRICH_ENABLED on
+// and one provider's key missing, every fixture used to bill the (expensive)
+// grounded Gemini facts call and then throw on the blind call - producing
+// anchored-with-no-blind on EVERY fixture (the mirror of the unpaired state
+// AI_ENRICH_CAP exists to prevent) at full Gemini cost, silently, for the
+// whole run. Extracted so the assertion is testable OFFLINE via booleans the
+// caller already resolved (getProvider(name).enabled()), rather than this
+// function reaching into config/.env itself - a test can simulate "key
+// missing" without touching this machine's real .env at all.
+export function assertAiProvidersConfigured({ geminiEnabled, openrouterEnabled }) {
+    if (!geminiEnabled) {
+        throw new Error('AI_ENRICH_ENABLED is on but GEMINI_API_KEY is unset - the facts/anchored calls need it.');
+    }
+    if (!openrouterEnabled) {
+        throw new Error('AI_ENRICH_ENABLED is on but OPENROUTER_API_KEY is unset - the blind reasoner needs it.');
+    }
+}
+
 export async function enrichFixtures() {
     if (!effective('AI_ENRICH_ENABLED')) {
         console.debug('[enrich] AI_ENRICH_ENABLED off - nothing to do.');
         return { fixtures: 0, written: 0, errors: 0, skipped: 0 };
     }
-    // Review finding 4: resolveTask('blind', ...) THROWS on a misconfigured
-    // Google blind model (reasoner independence is a hard requirement - see
-    // ai-rules.js#resolveTask). That is a deterministic misconfiguration, so
-    // failing fast is correct - but _alreadyFresh called it from INSIDE each
-    // _batch worker with no surrounding try/catch, so the first fixture
-    // processed would throw mid-sweep and abort the whole run via _batch's
-    // reject path. Validate once, here, before any fixture is touched or any
-    // call is made, so a bad config fails loudly and immediately instead of
-    // N-times-over from wherever _batch happened to schedule it first.
-    resolveTask('blind', config);
+    // Built ONCE per run: a stable snapshot for the whole sweep, not a value
+    // that could drift mid-run under a concurrent admin edit.
+    const cfg = effectiveAiConfig();
+
+    // Review finding 4 (Task 6 fix pass): resolveTask('blind', ...) THROWS on
+    // a misconfigured Google blind model (reasoner independence is a hard
+    // requirement - see ai-rules.js#resolveTask). That is a deterministic
+    // misconfiguration, so failing fast is correct - but _alreadyFresh called
+    // it from INSIDE each _batch worker with no surrounding try/catch, so the
+    // first fixture processed would throw mid-sweep and abort the whole run
+    // via _batch's reject path. Validate once, here, before any fixture is
+    // touched or any call is made, so a bad config fails loudly and
+    // immediately instead of N-times-over from wherever _batch happened to
+    // schedule it first.
+    resolveTask('blind', cfg);
+
+    // FINAL REVIEW finding 4: an unset provider key is ALSO a deterministic
+    // misconfiguration that must be caught HERE, before a single call is
+    // billed - see assertAiProvidersConfigured's own comment.
+    assertAiProvidersConfigured({
+        geminiEnabled: getProvider('gemini').enabled(),
+        openrouterEnabled: getProvider('openrouter').enabled(),
+    });
+
     const all = await _loadTargets();
     // Pure guard, belt AND braces with the SQL filter above.
     const upcoming = selectEnrichable(all);
     const targets = capFixtures(upcoming, Number(effective('AI_ENRICH_CAP')));
     const tags = await _existingTags(targets.map(f => f.id));
+
+    // FINAL REVIEW finding 1: rolling stats loaded ONCE, scoped to exactly the
+    // capped targets (a fixture we will never call AI on costs a history
+    // query for nothing) - see loadTeamHistory (src/hotpicks.js) +
+    // _buildStats above.
+    const teamIds = [...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))];
+    const fixturesByTeam = await loadTeamHistory(teamIds);
 
     let written = 0, errors = 0;
     // Bounded concurrency: these are NETWORK calls, so the _batch(..., 1) rule
@@ -277,7 +374,7 @@ export async function enrichFixtures() {
     // _batch(list, each, parallel) - verified signature in src/utils.js:51.
     const results = await _batch(
         targets,
-        f => _enrichOne(f, tags),
+        f => _enrichOne(f, tags, fixturesByTeam, cfg),
         Number(effective('AI_ENRICH_CONCURRENCY')),
     );
     for (const r of results) { written += r?.written ?? 0; errors += r?.errors ?? 0; }

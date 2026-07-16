@@ -113,6 +113,33 @@ export async function settleHotPicks() {
     return { settled, tips_settled };
 }
 
+// Bulk history loader: every FINAL fixture involving any of `teamIds`,
+// grouped per team (a team's own list carries games from EITHER side it
+// played, same bulk load shape as prematch.js). Status filtered in SQL; the
+// pure aggregates (goals-rules.js) enforce scores + kickoff cutoff per row.
+// Exported and shared with src/enrich.js's AI-enrichment rolling-stats
+// projection (M4.1 final review finding 1) - the "recent form" a fixture
+// carries must come from ONE warehouse machinery, never a second, drifting
+// definition duplicated between hot-pick evaluation and the AI prompts.
+export async function loadTeamHistory(teamIds) {
+    if (!teamIds.length) return new Map();
+    const history = await db('fixtures')
+        .whereIn('status', FINAL_STATUSES)
+        .where(q => q.whereIn('home_team_id', teamIds).orWhereIn('away_team_id', teamIds))
+        .select('home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff');
+    const targetTeams = new Set(teamIds);
+    const fixturesByTeam = new Map();
+    for (const f of history) {
+        for (const team of [f.home_team_id, f.away_team_id]) {
+            if (!targetTeams.has(team)) continue;
+            let list = fixturesByTeam.get(team);
+            if (!list) fixturesByTeam.set(team, list = []);
+            list.push(f);
+        }
+    }
+    return fixturesByTeam;
+}
+
 // Settle + (re)compute hot picks for all upcoming correlated fixtures.
 export async function updateHotPicks() {
     // Settle first: canonical final scores decide hit/miss exactly once.
@@ -141,23 +168,8 @@ export async function updateHotPicks() {
     const fixtureIds = targets.map(f => f.id);
     const teamIds = [...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))];
 
-    // Finished fixtures involving any target team, grouped per team (same
-    // bulk load as prematch.js). Status filtered in SQL; the calc enforces
-    // scores + kickoff cutoff per row.
-    const history = await db('fixtures')
-        .whereIn('status', FINAL_STATUSES)
-        .where(q => q.whereIn('home_team_id', teamIds).orWhereIn('away_team_id', teamIds))
-        .select('home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff');
-    const targetTeams = new Set(teamIds);
-    const fixturesByTeam = new Map();
-    for (const f of history) {
-        for (const team of [f.home_team_id, f.away_team_id]) {
-            if (!targetTeams.has(team)) continue;
-            let list = fixturesByTeam.get(team);
-            if (!list) fixturesByTeam.set(team, list = []);
-            list.push(f);
-        }
-    }
+    // Finished fixtures involving any target team, grouped per team.
+    const fixturesByTeam = await loadTeamHistory(teamIds);
 
     const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
     const markets = await _loadMarkets(fixtureIds, namesById);

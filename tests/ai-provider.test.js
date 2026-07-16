@@ -13,6 +13,20 @@ test('getProvider returns a provider exposing complete()', () => {
     }
 });
 
+// Finding 4 (M4.1 final review): openrouter.enabled() had zero callers before
+// this fix (dead code) and gemini.js had no symmetric check a caller could
+// route through by the same name. Both providers must now share ONE seam
+// interface (complete + enabled) so src/enrich.js's preflight can call
+// getProvider(name).enabled() uniformly. Only asserts the SHAPE (function
+// present), never the returned boolean - that depends on this machine's real
+// .env and must stay untested here (offline, deterministic regardless of
+// GEMINI_API_KEY/OPENROUTER_API_KEY actually being set).
+test('getProvider exposes enabled() on every provider (seam interface parity)', () => {
+    for (const name of ['gemini', 'openrouter']) {
+        assert.equal(typeof getProvider(name).enabled, 'function');
+    }
+});
+
 test('getProvider throws on an unknown provider (a typo must be loud)', () => {
     assert.throws(() => getProvider('nope'), /unknown ai provider/i);
 });

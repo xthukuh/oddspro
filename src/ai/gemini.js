@@ -42,6 +42,15 @@ export function aiEnabled() {
     return Boolean(config.GEMINI_API_KEY);
 }
 
+// Alias matching the provider-seam interface openrouter.js already exposes
+// (M4.1 final review finding 4: `openrouter.enabled()` had zero callers -
+// dead code, and there was no symmetric Gemini check a caller COULD route
+// through). src/enrich.js's preflight calls getProvider(name).enabled() for
+// BOTH providers uniformly instead of reaching into each module's own
+// differently-named check; aiEnabled() itself stays as the name every
+// existing hotpicks.js/ai/index.js call site already expects.
+export const enabled = aiEnabled;
+
 // Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
 // switching model, grounding or prompt version re-adjudicates automatically.
 export function aiModelTag() {
