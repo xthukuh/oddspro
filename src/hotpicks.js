@@ -7,7 +7,7 @@ import {
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
-import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai.js';
+import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai/index.js';
 import { _batch, _progress } from './utils.js';
 
 // Over 2.5 hot picks ledger (fixture_predictions): every upcoming correlated
