@@ -275,3 +275,21 @@ export function resolveTask(task, cfg) {
     }
     throw new Error(`unknown ai task: ${task}`);
 }
+
+// THE invariant that protects everything: an AI call must never touch a
+// past-kickoff fixture. A grounded call on a played match retrieves the final
+// score - leakage that RESEMBLES brilliance, and fails silently. This is the
+// same freeze idiom as fixture_prematch / tips / hot picks, kept pure so it is
+// asserted by a test rather than trusted as a convention.
+// Strictly greater-than: a fixture kicking off exactly now is NOT upcoming.
+export function selectEnrichable(rows, now = Date.now()) {
+    return rows
+        .filter(r => new Date(r.kickoff).getTime() > now)
+        .sort((a, b) => new Date(a.kickoff) - new Date(b.kickoff)); // soonest first
+}
+
+// Bound FIXTURES per run, not calls: one fixture always gets its full 3-call
+// set or none. A blind with no anchored is useless for the paired measurement.
+export function capFixtures(rows, cap) {
+    return cap > 0 ? rows.slice(0, cap) : [];
+}
