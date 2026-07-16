@@ -1,5 +1,31 @@
 # Emergence Patterns — Strategic Enhancement (M4 candidate backlog)
 
+> **SUPERSEDED IN PART (2026-07-16).** This doc's "Phase A" was already built
+> and run on 2026-07-14 as `docs/precursor-patterns.md` (203 candidates,
+> 16,518 leak-free fixtures, temporal OOS + day-clustered bootstrap + BH-FDR;
+> 149 Tier-A survivors, **zero bettable +EV edges**). This backlog was written
+> two days later without accounting for it.
+>
+> - Scope + triage: `docs/superpowers/specs/2026-07-16-m4.2-pattern-mining-design.md`
+> - Results: `docs/emergence-patterns-findings.md`
+> - Harness: `scripts/mine-patterns.js` (+ pure `src/db/mine-rules.js`)
+>
+> **M4.2 outcome:** of the 8 pre-registered hypotheses, 2 were adequately
+> powered and **both are REFUTED** (PR-2c confidence-gap; PR-4b the low-spread
+> "consensus trap" — the founding thesis's sharpest form, +0.7pp
+> [−5.4, +3.6] at n=335). The other 6 are underpowered. **Zero edges, zero
+> boosters.** The mine's most valuable output was a flaw in the ledger, not a
+> signal in it: `TIP_MIN_PRICE` moved 1.20 → 1.35 on 2026-07-10, partitioning
+> the data on the OOS boundary and making every price-correlated test measure
+> the config change instead of the hypothesis.
+>
+> **H5 (golden-opportunity longshot spotter) is REFUTED and will not be built**
+> — the ≥10x band went 2-for-153 (≈ −79% EV): favourite-longshot bias, and two
+> positives cannot fit a discriminator. It *corroborates* the contrarian thesis
+> rather than refuting it. See the findings doc.
+>
+> Do not re-mine what `precursor-patterns.md` already settled.
+
 > Captured 2026-07-16 from user notes (mid-M3). Status: BACKLOG — needs its own
 > brainstorm → spec → plan cycle after M3 merges. Nothing here is committed scope.
 
