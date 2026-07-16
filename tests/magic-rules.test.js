@@ -325,6 +325,9 @@ test('a vetoed tip scores and ranks exactly like a confirmed one (veto is not ac
         // scoreTip(row, cal, strategyId) as originally drafted in the brief.
         assert.equal(scoreTip(vetoed, s.id, cal), scoreTip(confirmed, s.id, cal),
             `strategy ${s.id} must ignore the AI veto`);
+        // Pin the value, not just the equality - both sides null would also
+        // satisfy the assertion above.
+        assert.notEqual(scoreTip(confirmed, s.id, cal), null, `strategy ${s.id} must score the confirmed tip`);
     }
 });
 
@@ -339,17 +342,16 @@ test('safeQualifies ignores the AI veto', () => {
     };
     const cal = computeCalibration([]);
     const opts = { ...DEFAULT_SAFE, minMarketSettled: 0 };
+    // Pin the value, not just the equality - both sides false would also
+    // satisfy an equality-only assertion.
+    assert.equal(safeQualifies(row, opts, cal), true);
     assert.equal(safeQualifies(row, opts, cal), safeQualifies({ ...row, tip_ai_verdict: 'confirm' }, opts, cal));
 });
 
-test('_tipFields still reports the veto (ledger + popover keep reading it)', () => {
-    // magicSortRows real signature is (rows, strategyId, cal), not
-    // (rows, cal, strategyId) as originally drafted in the brief.
-    const rows = magicSortRows([{
-        api_id: 1, tip_market: '1X', tip_price: 1.4,
-        tip_confidence: 0.8, tip_ai_verdict: 'veto',
-    }], 'sure', computeCalibration([]));
-    assert.equal(rows.length, 1); // it ranks, it does not sink out
+test('tipView still reports the veto verdict, but scoreTip no longer sinks it', () => {
+    const r = { api_id: 1, tip_market: '1X', tip_price: 1.4, tip_confidence: 0.8, tip_ai_verdict: 'veto' };
+    assert.equal(tipView(r).vetoed, true);                              // still recorded
+    assert.notEqual(scoreTip(r, 'sure', computeCalibration([])), null); // but not sunk
 });
 
 // --- safe selection (Safety Net Protocol gates + per-day cap) ---

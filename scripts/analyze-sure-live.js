@@ -61,12 +61,15 @@ try {
         'safePrior x conf': t => prior(t.market) * (t.confidence ?? 0),
         'suff? prior x agree': t => (suffOk(t) ? 1 : 0.85) * prior(t.market) * (tipAgreement(t) ?? t.confidence ?? 0),
     };
-    console.log('\n=== RANKING BAKE-OFF (per-day, non-vetoed) - top-of-table quality ===');
+    console.log('\n=== RANKING BAKE-OFF (per-day, veto not filtered - matches production) - top-of-table quality ===');
     console.log('  scorer                       top1     top3      streak(avg/best)');
     for (const [name, score] of Object.entries(SCORERS)) {
         let t1h = 0, t1n = 0, t3h = 0, t3n = 0, sSum = 0, sBest = 0, sDays = 0;
         for (const tips of byDay.values()) {
-            const pool = tips.filter(t => !t.vetoed).sort((a, b) => score(b) - score(a)
+            // The AI veto is not acted on in production (M4.1 spec 3.8 - no
+            // measured discrimination), so the pool here must not filter it
+            // either, or this bake-off would rank a pool production never sees.
+            const pool = [...tips].sort((a, b) => score(b) - score(a)
                 || (b.confidence ?? 0) - (a.confidence ?? 0) || (a.price ?? 0) - (b.price ?? 0));
             if (!pool.length) continue;
             if (pool[0].outcome === 'hit') t1h++; t1n++;
