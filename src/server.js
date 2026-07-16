@@ -330,6 +330,30 @@ app.get('/api/columns', async (req, res, next) => {
     }
 });
 
+// A5 pre-warm: the column catalog is identical for every user but costs ~2s
+// cold (market discovery over odds_markets), and the memo invalidates on
+// every data_version bump - without this, that recompute lands on the first
+// user after each refresh. A 30s tick keeps the slot warm (the freshness
+// contract makes same-version-within-TTL warms free); app-update busting is
+// inherent (in-process memo dies on the deploy restart, ETags hash the
+// body). Per-DATE payloads (/api/records) deliberately stay demand-computed:
+// availability varies by date and tier, so those entries are keyed per
+// (date, tier, version) and warming every combination would be waste.
+let catalogWarmTimer = null;
+function startCatalogWarm() {
+    if (catalogWarmTimer) return;
+    const warm = () => apiCache.warm('/api/columns', () => columnCatalog())
+        .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
+    catalogWarmTimer = setInterval(warm, 30_000);
+    catalogWarmTimer.unref?.();
+    warm(); // boot: pay the cold compute now, not on the first user request
+}
+function stopCatalogWarm() {
+    if (!catalogWarmTimer) return;
+    clearInterval(catalogWarmTimer);
+    catalogWarmTimer = null;
+}
+
 // GET /api/records?date=YYYY-MM-DD&page=&per_page=&sort=[{key,dir}]&filters=[{key,op,value}]
 // date defaults to today; pass date=all for every date.
 //
@@ -668,6 +692,7 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
+            startCatalogWarm();
             startHaltWatch(() => shutdown('halt-file'));
         });
     } catch (err) {
@@ -690,6 +715,7 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
+    stopCatalogWarm();
     stopHaltWatch();
     requestCancel(); // no-op when nothing is running
     const finish = () => {
