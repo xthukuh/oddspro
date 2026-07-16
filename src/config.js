@@ -4,6 +4,7 @@ import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS } from './db/goals-rules.js'; // ze
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
+import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
 
 // A committed-but-blank .env line (`KEY=`, the .env.example shape) reaches zod
 // as '' - treat that as unset for optional strings, else `.min(1).optional()`
@@ -69,9 +70,17 @@ const EnvSchema = z.object({
     // adjudicators. Opt-in - grounded requests bill extra per call.
     HOTPICK_AI_WEB: boolStr('0'),
     // Tip AI review: only tips at/above this confidence, best-first, at most
-    // this many fresh verdicts per run (cached verdicts don't count).
+    // this many fresh (billed) verdicts per EAT day - enforced by the
+    // background AI-review worker (src/ai-worker.js); cached verdicts and
+    // tolerance-reused ones never consume budget.
     TIP_AI_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.75),
     TIP_AI_DAILY_CAP: z.coerce.number().int().min(0).default(20),
+    // AI-review worker concurrency (network calls only - the DB-writers
+    // concurrency-1 rule does not apply; mirrors AI_ENRICH_CONCURRENCY).
+    HOTPICK_AI_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
+    // Reuse a stored tip verdict while the price drifted no more than this
+    // relative fraction from the price it judged (0 = exact match only).
+    TIP_AI_REUSE_PRICE_TOL: z.coerce.number().min(0).max(0.5).default(0),
     // --- M4.1 AI enrichment (collection only - nothing feeds ranking) ---
     // Keys are secrets: .env ONLY, never the settings catalog.
     OPENROUTER_API_KEY: optionalStr(z.string().min(1).optional()),
@@ -133,6 +142,16 @@ const EnvSchema = z.object({
     AUTO_LIGHT_MINUTES: z.coerce.number().int().min(0).default(10), // 0 = light mode off
     AUTO_FULL_AT: z.string().default('06:00'),                      // ''/off = full mode off
     AUTO_FULL_DAYS: z.coerce.number().int().min(0).default(5),      // days ahead for the daily sweep
+    // Kickoff-proximity decaying backoff for per-game odds DETAIL fetches
+    // (light pass only; full sweep + manual refresh bypass). CSV
+    // `upToMin:maxAgeMin` tiers, `*` catch-all; 'off'/invalid = never skip.
+    ODDS_REFRESH_TIERS: z.string().default(DEFAULT_ODDS_TIERS),
+    // Idle-aware light pass: skip the odds+link scrape when nothing is
+    // in-play and the next kickoff is further out than the lookahead
+    // (0 = feature off); during idle still run every EVERY minutes so newly
+    // published games are discovered (0 = don't force-run while idle).
+    AUTO_IDLE_LOOKAHEAD_MINUTES: z.coerce.number().int().min(0).default(120),
+    AUTO_IDLE_EVERY_MINUTES: z.coerce.number().int().min(0).default(60),
     // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
     // has no log rotation and tight disk quotas).
     AUTO_LOG: boolStr('1'),

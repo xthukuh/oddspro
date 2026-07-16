@@ -7,7 +7,8 @@ import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
-import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
+import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
+import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { bearerMatches } from './crypto-utils.js';
@@ -15,6 +16,7 @@ import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
+import { startAiWorker, stopAiWorker } from './ai-worker.js';
 import { ADMIN_HTML } from './admin-dashboard.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
@@ -327,6 +329,30 @@ app.get('/api/columns', async (req, res, next) => {
         next(e);
     }
 });
+
+// A5 pre-warm: the column catalog is identical for every user but costs ~2s
+// cold (market discovery over odds_markets), and the memo invalidates on
+// every data_version bump - without this, that recompute lands on the first
+// user after each refresh. A 30s tick keeps the slot warm (the freshness
+// contract makes same-version-within-TTL warms free); app-update busting is
+// inherent (in-process memo dies on the deploy restart, ETags hash the
+// body). Per-DATE payloads (/api/records) deliberately stay demand-computed:
+// availability varies by date and tier, so those entries are keyed per
+// (date, tier, version) and warming every combination would be waste.
+let catalogWarmTimer = null;
+function startCatalogWarm() {
+    if (catalogWarmTimer) return;
+    const warm = () => apiCache.warm('/api/columns', () => columnCatalog())
+        .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
+    catalogWarmTimer = setInterval(warm, 30_000);
+    catalogWarmTimer.unref?.();
+    warm(); // boot: pay the cold compute now, not on the first user request
+}
+function stopCatalogWarm() {
+    if (!catalogWarmTimer) return;
+    clearInterval(catalogWarmTimer);
+    catalogWarmTimer = null;
+}
 
 // GET /api/records?date=YYYY-MM-DD&page=&per_page=&sort=[{key,dir}]&filters=[{key,op,value}]
 // date defaults to today; pass date=all for every date.
@@ -651,12 +677,23 @@ async function migrateOnBoot() {
 let server = null;
 (async () => {
     try {
+        // .HALT kill-switch boot gate: refusing to start (exit 1) is what
+        // makes the switch stick under Passenger auto-respawn - the respawn
+        // loop keeps hitting this refusal until the platform marks the app
+        // errored, which is the desired stopped state. Delete .HALT to boot.
+        if (haltRequested()) {
+            console.error('[halt] .HALT file present in the app root - refusing to start. Delete it to boot.');
+            process.exit(1);
+        }
         await migrateOnBoot();
         await loadOverrides();
         server = app.listen(config.API_PORT, config.API_HOST, () => {
             console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
             startAutoRefresh();
             startGeoScheduler();
+            startAiWorker();
+            startCatalogWarm();
+            startHaltWatch(() => shutdown('halt-file'));
         });
     } catch (err) {
         // Fail fast: don't serve on an uncertain schema (or unloadable
@@ -667,12 +704,39 @@ let server = null;
     }
 })();
 
-// Graceful shutdown - stop the scheduler, close the HTTP server and the pool
-for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-        stopAutoRefresh();
-        stopGeoScheduler();
+// ONE graceful shutdown path for signals and the .HALT watcher: stop every
+// scheduler, cooperatively cancel a running refresh job (its writers finish
+// their current step), give it a bounded grace window, then close and exit.
+let shuttingDown = false;
+function shutdown(why) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.debug(`[shutdown] ${why} - stopping schedulers and closing...`);
+    stopAutoRefresh();
+    stopGeoScheduler();
+    stopAiWorker();
+    stopCatalogWarm();
+    stopHaltWatch();
+    requestCancel(); // no-op when nothing is running
+    const finish = () => {
         if (server) server.close(() => closeDb().finally(() => process.exit(0)));
         else closeDb().finally(() => process.exit(0));
-    });
+    };
+    const GRACE_MS = 15_000, POLL_MS = 500;
+    const deadline = Date.now() + GRACE_MS;
+    const wait = setInterval(() => {
+        if (!refreshJob.running || Date.now() >= deadline) {
+            clearInterval(wait);
+            finish();
+        }
+    }, POLL_MS);
+    wait.unref?.();
+    if (!refreshJob.running) {
+        clearInterval(wait);
+        finish();
+    }
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => shutdown(signal));
 }

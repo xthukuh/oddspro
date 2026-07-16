@@ -91,9 +91,9 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     const a = await fetchApisportsPredictions();
     console.debug(`[+] predictions: ${a.fixtures} fixtures processed, ${a.saved} predictions saved (quota remaining: ${a.quota_remaining}).`);
 
-    _step('hot picks (rules + optional AI adjudication)');
+    _step('hot picks (rules; AI reviews run in the background worker)');
     const k = await updateHotPicks();
-    console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
+    console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI reviews pending: ${k.pending_reviews.hot} hot, ${k.pending_reviews.tips} tips - worker/aireview drains them).`);
 
     _step('AI enrichment (upcoming correlated fixtures; collection only)');
     const e = await enrichFixtures();

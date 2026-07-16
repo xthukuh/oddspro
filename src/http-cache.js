@@ -59,18 +59,29 @@ async function writeResponse(req, res, data) {
 // bump invalidates every entry at once without an explicit clear.
 export function makeJsonCache({ max = 12, ttlMs = 10 * 60_000, version = () => 0 } = {}) {
     const store = new Map();
+    const fresh = (key, loader) => {
+        const ver = version();
+        let entry = lruGet(store, key);
+        if (!entryFresh(entry, ver, Date.now(), ttlMs)) {
+            entry = buildEntry(ver, loader);
+            // A failed compute must not poison the slot - drop it so the
+            // next request retries (same idiom as magicSortCached).
+            entry.data.catch(() => { if (lruGet(store, key) === entry) store.delete(key); });
+            lruSet(store, key, entry, max);
+        }
+        return entry;
+    };
     return {
         async send(req, res, key, loader) {
-            const ver = version();
-            let entry = lruGet(store, key);
-            if (!entryFresh(entry, ver, Date.now(), ttlMs)) {
-                entry = buildEntry(ver, loader);
-                // A failed compute must not poison the slot - drop it so the
-                // next request retries (same idiom as magicSortCached).
-                entry.data.catch(() => { if (lruGet(store, key) === entry) store.delete(key); });
-                lruSet(store, key, entry, max);
-            }
-            return writeResponse(req, res, await entry.data);
+            return writeResponse(req, res, await fresh(key, loader).data);
+        },
+        // A5 pre-warm: compute a slot ahead of demand (after a data_version
+        // bump / at boot) so the first USER request is a memo hit, not the
+        // cold compute. Same freshness contract as send; a same-version warm
+        // is a no-op. App-update cache busting is inherent: the memo lives
+        // in-process (a deploy restart clears it) and ETags hash the body.
+        async warm(key, loader) {
+            await fresh(key, loader).data;
         },
         clear: () => store.clear(),
     };

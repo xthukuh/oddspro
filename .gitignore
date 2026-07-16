@@ -63,3 +63,4 @@ release/
 # Custom
 **.xx*
 .playwright-mcp/
+.HALT

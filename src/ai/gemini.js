@@ -1,6 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
-import { parseAiReply, extractGeminiText } from '../ai-parse.js';
+import { parseVerdict, extractGeminiText } from '../ai-parse.js';
 import { tipMarketLabel } from '../db/magic-rules.js';
 import { withRetry } from '../db/retry-rules.js';
 import { isRetryableNetworkError } from '../db/net-rules.js';
@@ -103,24 +103,17 @@ function _protocol({ outcome, breakEven }) {
 // (review = { probability, checks, sources } - persisted as JSON).
 // Throws on any failure; callers record ai_verdict 'error' and keep the rule
 // verdict (fail-open). No JSON response mode - it can't be combined with the
-// google_search tool, so the prompt demands JSON and parseAiReply extracts.
+// google_search tool, so the prompt demands JSON and parseVerdict extracts.
+// Rides the retried complete() (T3): transient transport errors self-heal
+// exactly like the enrichment calls; a bad reply is a model problem and is
+// never retried (isRetryableNetworkError excludes anything with a response).
 async function _adjudicate(prompt) {
-    const res = await axios.post(
-        `${config.GEMINI_URL}/models/${config.HOTPICK_AI_MODEL}:generateContent`,
-        {
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: { temperature: 0 },
-            ...(config.HOTPICK_AI_WEB ? { tools: [{ google_search: {} }] } : {}),
-        },
-        {
-            headers: {
-                'x-goog-api-key': config.GEMINI_API_KEY,
-                'Content-Type': 'application/json',
-            },
-            timeout: 60_000, // grounded calls run searches before answering
-        },
-    );
-    const { verdict, probability, checks, reason, sources } = parseAiReply(res.data);
+    const { text, sources } = await complete({
+        model: config.HOTPICK_AI_MODEL,
+        prompt,
+        grounded: Boolean(config.HOTPICK_AI_WEB),
+    });
+    const { verdict, probability, checks, reason } = parseVerdict(text);
     return {
         verdict,
         reason: reason.substring(0, 512),
