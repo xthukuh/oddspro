@@ -47,24 +47,42 @@ import {
 // uncorrelated or snapshot-less fixture burns a facts+blind call while
 // needAnchored is false, wasting an AI_ENRICH_CAP slot on a fixture that can
 // never pair.
-async function _loadTargets() {
-    const rows = await db('fixtures as f')
+//
+// Fix pass 2, finding A: extracted from `_loadTargets` (was inline) into its
+// own exported function so the leakage-critical binding to KICKOFF_SQL_EXPR
+// and the `kickoff > NOW()` filter is assertable OFFLINE, with no DB
+// connection. Takes a knex/query-builder factory (`knex`) instead of closing
+// over the module's connected `db` singleton, so a test can pass a
+// disconnected `knex({ client: 'mysql2' })` instance (same idiom as
+// tests/market-identity.test.js) and call `.toSQL().sql` on the result -
+// `.toSQL()` only compiles SQL, it never opens a connection. Before this
+// split, reverting the KICKOFF_SQL_EXPR projection (or the strict
+// `kickoff > NOW()` filter) back to something permissive left all tests
+// green, because nothing exercised the QUERY - only the constant's own
+// string and the pure selectEnrichable() guard were pinned. This is the
+// least invasive shape that closes that gap: no new module, no behaviour
+// change, `_loadTargets` becomes a two-line caller that awaits it.
+export function buildTargetsQuery(knex) {
+    return knex('fixtures as f')
         .join('leagues as l', 'l.id', 'f.league_id')
         .join('teams as th', 'th.id', 'f.home_team_id')
         .join('teams as ta', 'ta.id', 'f.away_team_id')
         .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
-        .where('f.kickoff', '>', db.raw('NOW()'))
+        .where('f.kickoff', '>', knex.raw('NOW()'))
         .whereRaw(CORRELATION_GUARDS[0])
         .whereRaw(CORRELATION_GUARDS[1])
-        .select('f.id', db.raw(`${KICKOFF_SQL_EXPR} as kickoff`), 'l.name as league',
+        .select('f.id', knex.raw(`${KICKOFF_SQL_EXPR} as kickoff`), 'l.name as league',
             'th.name as home_name', 'ta.name as away_name',
             'fp.tip_market', 'fp.tip_price');
-    // Review finding 5: no .orderBy here - selectEnrichable() (pure,
+    // No .orderBy here (review finding 5) - selectEnrichable() (pure,
     // test-asserted) re-sorts soonest-first right after this returns, and
     // nothing here LIMITs the SQL result, so a SQL-side order would sort a
     // set that gets fully re-sorted a moment later for zero benefit. One
     // sort, one place.
-    return rows;
+}
+
+async function _loadTargets() {
+    return await buildTargetsQuery(db);
 }
 
 // Review finding 2 (tip-identity reuse gate): loads `payload` too, not just
@@ -97,9 +115,14 @@ async function _upsert(row) {
     // PICK_COLUMNS / fixture_prematch's SNAPSHOT_COLUMNS): MySQL's VALUES(col)
     // resolves to NULL for a column absent from the INSERT list, so merging
     // 'updated_at' here (not present in `row`) would NULL it on every update
-    // instead of bumping it. The reuse gate guarantees any real update path
-    // carries a genuinely different model_tag, so MySQL's own
-    // `ON UPDATE current_timestamp()` fires correctly without help.
+    // instead of bumping it. The reuse gate (_alreadyFresh/insightIsFresh)
+    // guarantees any real update path carries either a genuinely different
+    // model_tag OR (fix pass 2, finding B - the tip-identity fix deliberately
+    // re-fires 'anchored' with an UNCHANGED model_tag when the tip moved on)
+    // a genuinely different payload, so MySQL's own
+    // `ON UPDATE current_timestamp()` still fires correctly without help -
+    // it triggers on any changed column value in the UPDATE, not on
+    // model_tag specifically.
     await db('fixture_ai_insights').insert(row).onConflict(['fixture_id', 'kind', 'provider']).merge([
         'model_tag', 'schema_ver', 'payload', 'sources',
     ]);
