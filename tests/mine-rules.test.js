@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     temporalSplit, benjaminiHochberg, dayClusteredBootstrap,
     configSignature, runnerUpMarkets, hasStraddle, cascadeLadder, LADDER_LINES,
+    blendParts, missProfile, consensusProxies,
 } from '../src/db/mine-rules.js';
 
 // Real breakdown captured from the warehouse on 2026-07-16 (tmp/m42-probe2.mjs)
@@ -171,4 +172,58 @@ test('cascadeLadder returns null for non-Over markets and null scores', () => {
 
 test('LADDER_LINES is the frozen ladder', () => {
     assert.deepEqual(LADDER_LINES, [0.5, 1.5, 2.5, 3.5, 4.5]);
+});
+
+test('blendParts counts only components that are actually present', () => {
+    assert.equal(blendParts(REAL_VIEW), 2); // api_prob is null - 2-part blends are the majority
+    assert.equal(blendParts({ breakdown: { market_prob: 0.5, stats_prob: 0.5, api_prob: 0.5 } }), 3);
+    assert.equal(blendParts({ breakdown: {} }), 0);
+    assert.equal(blendParts(null), 0);
+});
+
+test('missProfile reuses the shared labellers, never a new taxonomy', () => {
+    const p = missProfile(REAL_VIEW);
+    assert.equal(p.market, 'U 3.5');
+    assert.equal(p.group, 'over_under');   // perf-rules marketGroup
+    assert.equal(p.band, '1.35-1.54');     // magic-rules priceBand (1.54)
+    assert.equal(p.parts, 2);
+    assert.equal(p.thin, false);           // home_n 6 / away_n 6 >= 6
+});
+
+test('missProfile flags thin evidence from the persisted samples', () => {
+    const thin = { market: 'O 2.5', price: 1.5, breakdown: { samples: { home_n: 3, away_n: 6, h2h_n: 0 } } };
+    assert.equal(missProfile(thin).thin, true);
+});
+
+test('missProfile treats a sample-less row as thin, and is total on junk', () => {
+    assert.equal(missProfile({ market: 'O 2.5', price: 1.5, breakdown: {} }).thin, true);
+    assert.equal(missProfile(null), null);
+    assert.equal(missProfile({ market: null }), null);
+});
+
+test('consensusProxies exposes the market-vs-stats spread (the thesis lens)', () => {
+    const c = consensusProxies(REAL_VIEW);
+    // |0.6111 - 0.7667| = 0.1556 -> our stats DISAGREE with the market here
+    assert.ok(Math.abs(c.spread - 0.1556) < 1e-4, `spread was ${c.spread}`);
+    assert.equal(c.band, '1.35-1.54');
+    assert.equal(c.parts, 2);
+    assert.equal(c.aiVerdict, null);
+    // tipAgreement = min of present parts = min(0.6111, 0.7667)
+    assert.ok(Math.abs(c.agreement - 0.6111) < 1e-4, `agreement was ${c.agreement}`);
+});
+
+test('consensusProxies spread is null when a component is missing', () => {
+    const c = consensusProxies({ market: '1', price: 2, breakdown: { market_prob: 0.5, stats_prob: null } });
+    assert.equal(c.spread, null);
+});
+
+test('consensusProxies carries the AI verdict through for the (underpowered) lens', () => {
+    const v = { ...REAL_VIEW, vetoed: true };
+    assert.equal(consensusProxies(v).aiVerdict, 'veto');
+    assert.equal(consensusProxies({ ...REAL_VIEW, vetoed: false }).aiVerdict, null);
+});
+
+test('consensusProxies is total on junk', () => {
+    assert.equal(consensusProxies(null), null);
+    assert.equal(consensusProxies({ market: null }), null);
 });

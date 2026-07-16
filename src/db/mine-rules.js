@@ -10,6 +10,8 @@
 // Everything here is read-only analysis of the FROZEN ledger. Nothing in this
 // module may influence bestTip, scoreTip, safeQualifies or any live ranking -
 // that gate is M4.2b, and it is earned by replay, never by assertion.
+import { marketGroup } from './perf-rules.js';
+import { priceBand, tipAgreement } from './magic-rules.js';
 
 // ---------------------------------------------------------------------------
 // Statistics: the anti-false-positive controls.
@@ -152,4 +154,69 @@ export function cascadeLadder(view, fh, fa) {
     const cleared = {};
     for (const line of LADDER_LINES) cleared[String(line)] = total > line;
     return { tipLine, total, cleared };
+}
+
+// Minimum rolling sample per side before we call a tip's evidence sufficient.
+// Mirrors DEFAULT_SAFE.minSamples (magic-rules) - kept as a local literal
+// rather than an import because DEFAULT_SAFE is a live policy knob and this
+// is a frozen analysis constant: if the policy moves, past mines must not
+// silently re-classify.
+const MINE_MIN_SAMPLES = 6;
+
+// Same shape as magic-rules' _num, and the null guard is load-bearing:
+// Number(null) is 0, not NaN, so without it a null api_prob would count as a
+// present blend component and every 2-part tip would report as 3-part.
+const _num = v => {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+};
+
+// How many of the three blend components the tip actually carries. 2-part
+// blends (no api_prob) are the majority - O/U tips carry no API percentage.
+export function blendParts(view) {
+    const b = view?.breakdown;
+    if (!b) return 0;
+    return [b.market_prob, b.stats_prob, b.api_prob].filter(v => _num(v) != null).length;
+}
+
+// PR-3: the shape of a settled pick, for locating where misses concentrate.
+// group/band come from the SHARED labelers - computeCalibration already
+// buckets by these, so a mined "avoid cell" maps onto a real calibration cell
+// instead of a private one only this script understands.
+export function missProfile(view) {
+    if (!view || typeof view.market !== 'string' || !view.market.length) return null;
+    const s = view.breakdown?.samples ?? null;
+    const hn = _num(s?.home_n); const an = _num(s?.away_n);
+    return {
+        market: view.market,
+        group: marketGroup(view.market),
+        band: priceBand(_num(view.price)),
+        parts: blendParts(view),
+        // A sample-less row is thin: absent evidence is not evidence of
+        // sufficiency. Matches hasSufficientStats' spirit, deliberately
+        // stricter than its tolerance of null samples.
+        thin: hn == null || an == null || hn < MINE_MIN_SAMPLES || an < MINE_MIN_SAMPLES,
+    };
+}
+
+// PR-4: the contrarian / fade-the-consensus thesis, in its measurable forms.
+//
+//   spread = |market_prob - stats_prob|. LOW spread is the "consensus trap":
+//   the bookmaker and our own stats agree, which is precisely the state the
+//   user's thesis says underperforms its price. HIGH spread is our stats
+//   dissenting from the market.
+//
+// The AI lens rides along but is pre-declared underpowered (n=61 settled).
+export function consensusProxies(view) {
+    if (!view || typeof view.market !== 'string' || !view.market.length) return null;
+    const mp = _num(view.breakdown?.market_prob);
+    const sp = _num(view.breakdown?.stats_prob);
+    return {
+        band: priceBand(_num(view.price)),
+        agreement: tipAgreement(view),
+        spread: mp == null || sp == null ? null : Math.abs(mp - sp),
+        aiVerdict: view.vetoed ? 'veto' : null,
+        parts: blendParts(view),
+    };
 }
