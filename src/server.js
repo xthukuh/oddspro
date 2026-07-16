@@ -7,7 +7,8 @@ import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
-import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh } from './auto-refresh.js';
+import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
+import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { bearerMatches } from './crypto-utils.js';
@@ -652,6 +653,14 @@ async function migrateOnBoot() {
 let server = null;
 (async () => {
     try {
+        // .HALT kill-switch boot gate: refusing to start (exit 1) is what
+        // makes the switch stick under Passenger auto-respawn - the respawn
+        // loop keeps hitting this refusal until the platform marks the app
+        // errored, which is the desired stopped state. Delete .HALT to boot.
+        if (haltRequested()) {
+            console.error('[halt] .HALT file present in the app root - refusing to start. Delete it to boot.');
+            process.exit(1);
+        }
         await migrateOnBoot();
         await loadOverrides();
         server = app.listen(config.API_PORT, config.API_HOST, () => {
@@ -659,6 +668,7 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
+            startHaltWatch(() => shutdown('halt-file'));
         });
     } catch (err) {
         // Fail fast: don't serve on an uncertain schema (or unloadable
@@ -669,13 +679,38 @@ let server = null;
     }
 })();
 
-// Graceful shutdown - stop the scheduler, close the HTTP server and the pool
-for (const signal of ['SIGINT', 'SIGTERM']) {
-    process.on(signal, () => {
-        stopAutoRefresh();
-        stopGeoScheduler();
-        stopAiWorker();
+// ONE graceful shutdown path for signals and the .HALT watcher: stop every
+// scheduler, cooperatively cancel a running refresh job (its writers finish
+// their current step), give it a bounded grace window, then close and exit.
+let shuttingDown = false;
+function shutdown(why) {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    console.debug(`[shutdown] ${why} - stopping schedulers and closing...`);
+    stopAutoRefresh();
+    stopGeoScheduler();
+    stopAiWorker();
+    stopHaltWatch();
+    requestCancel(); // no-op when nothing is running
+    const finish = () => {
         if (server) server.close(() => closeDb().finally(() => process.exit(0)));
         else closeDb().finally(() => process.exit(0));
-    });
+    };
+    const GRACE_MS = 15_000, POLL_MS = 500;
+    const deadline = Date.now() + GRACE_MS;
+    const wait = setInterval(() => {
+        if (!refreshJob.running || Date.now() >= deadline) {
+            clearInterval(wait);
+            finish();
+        }
+    }, POLL_MS);
+    wait.unref?.();
+    if (!refreshJob.running) {
+        clearInterval(wait);
+        finish();
+    }
+}
+
+for (const signal of ['SIGINT', 'SIGTERM']) {
+    process.on(signal, () => shutdown(signal));
 }
