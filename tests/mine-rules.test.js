@@ -415,3 +415,41 @@ test('PR-4b selects the LOW-spread consensus trap (book and stats agree)', () =>
     assert.equal(h.select({ market: '1', breakdown: { market_prob: 0.60, stats_prob: 0.80 } }), false); // spread 0.20
     assert.equal(h.select({ market: '1', breakdown: { market_prob: 0.60, stats_prob: null } }), false);
 });
+
+// A population that simply does not OCCUR in the test window is not "thin" -
+// it has been legislated out of existence by a policy change (the real case:
+// TIP_MIN_PRICE moved 1.20 -> 1.35 on 2026-07-10, so every tip priced < 1.30
+// lives in the train window and none can ever appear in the test window).
+// Saying so is the difference between "we could not test this" and "this
+// failed" - and a harness that prints a bare "underpowered" here is lying by
+// omission.
+test('evaluatePattern names a population that is ABSENT from the test window', () => {
+    const rows = Array.from({ length: 200 }, () => ({ day: '2026-07-01', hit: 1, price: 1.25 }));
+    const baseRows = [
+        ...Array.from({ length: 200 }, () => ({ day: '2026-07-01', hit: 1, price: 1.25 })),
+        ...Array.from({ length: 200 }, () => ({ day: '2026-07-02', hit: 0, price: 1.5 })),
+    ];
+    const r = evaluatePattern({
+        name: 'old-regime', rows, baseRows,
+        trainDays: ['2026-07-01'], testDays: ['2026-07-02'], draws: 50, seed: 1,
+    });
+    assert.equal(r.klass, 'underpowered');
+    assert.match(r.note, /absent from the test window/i);
+    assert.equal(r.nTest, 0);
+    assert.deepEqual(r.daysCovered, ['2026-07-01']);
+});
+
+test('evaluatePattern reports plain thinness differently from absence', () => {
+    const rows = [
+        { day: '2026-07-01', hit: 1, price: 1.5 },
+        { day: '2026-07-02', hit: 0, price: 1.5 },
+    ];
+    const r = evaluatePattern({
+        name: 'thin', rows, baseRows: rows,
+        trainDays: ['2026-07-01'], testDays: ['2026-07-02'], draws: 20, seed: 1,
+    });
+    assert.equal(r.klass, 'underpowered');
+    // present in BOTH windows, just few - must NOT claim absence
+    assert.doesNotMatch(r.note, /absent from the test window/i);
+    assert.match(r.note, /train 1\/100/);
+});

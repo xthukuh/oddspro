@@ -340,14 +340,27 @@ export function evaluatePattern({ name, rows, baseRows, trainDays, testDays, see
         testPrecision, trainPrecision, liftLo: ci.lo, medPrice, flatEv: ev,
     });
 
+    // A population ABSENT from the test window is not merely thin - it has
+    // been legislated out of existence by a policy change, and saying so is
+    // the difference between "we could not test this" and "this failed".
+    // Real case: TIP_MIN_PRICE moved 1.20 -> 1.35 on 2026-07-10, so all 414
+    // tips priced < 1.30 sit in the train window and none can EVER appear in
+    // the test window. A bare "underpowered" there would be lying by omission.
+    const daysCovered = [...new Set(all.map(r => r.day))].sort();
+    let note = null;
+    if (klass === 'underpowered') {
+        note = all.length > 0 && inTest.length === 0 && testSet.size > 0
+            ? `population absent from the test window - it occurs on ${daysCovered.length} `
+              + `day(s) (${daysCovered[0]}..${daysCovered.at(-1)}), all inside train. NOT a `
+              + 'failed test: this population no longer occurs, so it cannot be tested here.'
+            : `underpowered (train ${inTrain.length}/${MIN_TRAIN}, test ${inTest.length}/${MIN_TEST})`;
+    }
+
     return {
         name, n: all.length, nTrain: inTrain.length, nTest: inTest.length,
         precision, trainPrecision, testPrecision,
         base: baseRate, lift, liftLo: ci.lo, liftHi: ci.hi, p,
-        medPrice, flatEv: ev, klass,
-        note: klass === 'underpowered'
-            ? `underpowered (train ${inTrain.length}/${MIN_TRAIN}, test ${inTest.length}/${MIN_TEST})`
-            : null,
+        medPrice, flatEv: ev, klass, daysCovered, note,
     };
 }
 
