@@ -2,8 +2,8 @@ import { z } from 'zod';
 
 // Pure Gemini reply parsing for the AI adjudicators (v2 structured verdicts).
 // Imports zod only - no config/.env - so tests run fully offline, the same
-// contract as the src/db/*-rules.js modules. src/ai.js owns the HTTP calls
-// and prompts; this module owns everything about decoding what came back.
+// contract as the src/db/*-rules.js modules. src/ai/gemini.js owns the HTTP
+// calls and prompts; this module owns everything about decoding what came back.
 
 // Gemini generateContent response envelope (validated - external data).
 // Tolerant on purpose: grounded replies may split text across parts,
@@ -44,20 +44,33 @@ const Verdict = z.object({
     reason: z.string().nullish().transform(v => v ?? ''),
 });
 
+// Envelope -> { text, sources }. The verdict-shaped sibling of parseAiReply,
+// for callers that apply their own per-kind schema (M4.1 enrichment).
+export function extractGeminiText(data) {
+    const parsed = GeminiEnvelope.parse(data);
+    const candidate = parsed.candidates[0];
+    const text = (candidate.content?.parts ?? []).map(p => p.text ?? '').join('');
+    const sources = (candidate.groundingMetadata?.groundingChunks ?? [])
+        .map(c => c?.web)
+        .filter(w => w && (w.uri || w.title))
+        .map(w => ({ title: w.title ?? null, uri: w.uri ?? null }));
+    return { text, sources };
+}
+
+// First JSON object in a reply (tolerates markdown code fences), parsed.
+// Throws when there is none - callers fail open.
+export function extractJson(text) {
+    const m = /\{[\s\S]*\}/.exec(String(text));
+    if (!m) throw new Error(`AI reply carried no JSON object: ${text}`);
+    return JSON.parse(m[0]);
+}
+
 // Decode one adjudicator reply: envelope -> reply text -> fenced-JSON verdict
 // + grounding citations. Throws on anything unusable; callers fail open
 // (record 'error', keep the rule verdict).
 // Returns { verdict, probability, checks, reason, sources: [{ title, uri }] }.
 export function parseAiReply(data) {
-    const parsed = GeminiEnvelope.parse(data);
-    const candidate = parsed.candidates[0];
-    const content = (candidate.content?.parts ?? []).map(p => p.text ?? '').join('');
-    const m = /\{[\s\S]*\}/.exec(content); // tolerate markdown code fences
-    if (!m) throw new Error(`AI reply carried no JSON object: ${content}`);
-    const verdict = Verdict.parse(JSON.parse(m[0]));
-    const sources = (candidate.groundingMetadata?.groundingChunks ?? [])
-        .map(c => c?.web)
-        .filter(w => w && (w.uri || w.title))
-        .map(w => ({ title: w.title ?? null, uri: w.uri ?? null }));
+    const { text, sources } = extractGeminiText(data);
+    const verdict = Verdict.parse(extractJson(text));
     return { ...verdict, sources };
 }

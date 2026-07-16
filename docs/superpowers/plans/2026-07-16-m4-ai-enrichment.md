@@ -1,5 +1,25 @@
 # M4.1 AI Enrichment Layer Implementation Plan
 
+> **STATUS: COMPLETE 2026-07-16.** All 8 tasks committed on `feat/m4-ai-enrichment`
+> (`1fcd952`..`9e8f210`). Suite 564/564, `build:web` clean.
+>
+> **Task 8 live-verification evidence (the sweep that closed the milestone):**
+> - Both providers land: `openrouter` (blind, `openai/gpt-5.6-terra#e2`) and
+>   `gemini` (anchored, `gemini-2.5-flash+search#e2`); `sources` populated on the
+>   grounded rows.
+> - **Leakage guard holds: 0** rows on a past-kickoff fixture; every enriched
+>   fixture was `NS` with kickoff hours ahead.
+> - **Reuse does not re-bill:** an identical repeat sweep wrote `0 insights, 0 errors`.
+>
+> **Deviation from Step 5 as written (deliberate, not an oversight):** the plan
+> said to bump `PROMPT_VERSION` 1->2, confirm re-enrichment, then revert to 1.
+> `PROMPT_VERSION` is legitimately **2** already (`9e8f210` bumped it when real
+> stats replaced the placeholder), and that bump ALREADY proved tag invalidation
+> live: fixture 1527336's rows carry `created_at 04:10` (written as `#e1`) with
+> `updated_at 05:09` and tag `#e2` - the onConflict merge re-fired the calls and
+> rewrote the row. Bumping to `#e3` would re-bill real AI calls to re-learn what
+> those timestamps already evidence. Reverting to 1 would be wrong outright.
+>
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Turn AI from a boolean adjudicator into a measurable, multi-signal evidence source, and begin forward collection of features the warehouse cannot see.
@@ -57,7 +77,7 @@ Opening the AI faucet (`TIP_AI_MIN_CONFIDENCE 0.80→0`) turned this latent flaw
 - Consumes: nothing (first task).
 - Produces: `_tipFields(r)` keeps emitting `vetoed: r.tip_ai_verdict === 'veto'` (still read by the popover + CSV export); no scorer or gate branches on it.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add to `tests/magic-rules.test.js`:
 
@@ -98,12 +118,12 @@ test('_tipFields still reports the veto (ledger + popover keep reading it)', () 
 
 Ensure the test file's import line includes every symbol used: `computeCalibration`, `scoreTip`, `STRATEGIES`, `safeQualifies`, `DEFAULT_SAFE`, `magicSortRows`.
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `npm test 2>&1 | grep -E "veto|fail "`
 Expected: FAIL — the vetoed row scores `null` while the confirmed one scores a number.
 
-- [ ] **Step 3: Remove the veto from the scorer and the gates**
+- [x] **Step 3: Remove the veto from the scorer and the gates**
 
 In `src/db/magic-rules.js:356`, change:
 
@@ -126,12 +146,12 @@ In `:663`, change `const pool = byDay.get(day).filter(t => !t.vetoed);` to `cons
 
 Update the comment at `:353` and at `:629` to drop "AI-vetoed" from the sink/exclusion list. Leave `:48` (`vetoed: r.tip_ai_verdict === 'veto'`) intact.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `npm test 2>&1 | tail -6`
 Expected: PASS, and the whole suite stays green (506 + 3 new = 509).
 
-- [ ] **Step 5: Remove the web strike-through and the betslip exclusion**
+- [x] **Step 5: Remove the web strike-through and the betslip exclusion**
 
 In `web/src/components/DataTable.jsx`, delete the `const vetoed = ...` lines at `:281` and `:326` and every use, so the tip cell renders on `missed` alone:
 
@@ -161,14 +181,14 @@ to:
 ```
 and update the `:111` comment from "the table's non-vetoed tips" to "the table's tips".
 
-- [ ] **Step 6: Verify the build and the live table**
+- [x] **Step 6: Verify the build and the live table**
 
 Run: `npm run build:web 2>&1 | tail -3`
 Expected: `✓ built in ...` with no unresolved imports.
 
 Restart `serve`, load the table, confirm no tip renders struck through and the magic sort no longer sinks 73.5% of rows.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/db/magic-rules.js web/src/components/DataTable.jsx web/src/components/BetslipPlayground.jsx tests/magic-rules.test.js
@@ -198,7 +218,7 @@ different gate, different evidence base, out of scope. M4.1 spec 3.8."
 **Interfaces:**
 - Produces: `config.OPENROUTER_API_KEY`, `config.OPENROUTER_URL`, `config.OPENROUTER_MODEL`, `config.AI_ENRICH_ENABLED`, `config.AI_ENRICH_CAP`, `config.AI_ENRICH_CONCURRENCY`, `config.AI_BLIND_MODEL`, `config.AI_ANCHORED_MODEL`.
 
-- [ ] **Step 1: Add the config keys**
+- [x] **Step 1: Add the config keys**
 
 In `src/config.js`, add to `EnvSchema` (match the file's existing `boolStr`/`optionalStr` helpers):
 
@@ -220,7 +240,7 @@ In `src/config.js`, add to `EnvSchema` (match the file's existing `boolStr`/`opt
     AI_ANCHORED_MODEL: z.string().default(''),   // '' = provider default
 ```
 
-- [ ] **Step 2: Add the live-editable catalog entries**
+- [x] **Step 2: Add the live-editable catalog entries**
 
 In `src/db/settings-rules.js`, add to the catalog (mirror the shape of the existing `SAFE_*` entries exactly — read the file first and copy the field names it uses):
 
@@ -235,16 +255,16 @@ In `src/db/settings-rules.js`, add to the catalog (mirror the shape of the exist
 
 **Do NOT add `OPENROUTER_API_KEY`** — the catalog excludes secrets by construction.
 
-- [ ] **Step 3: Assert the key stays out of the catalog**
+- [x] **Step 3: Assert the key stays out of the catalog**
 
 In `tests/settings-rules.test.js`, add `'OPENROUTER_API_KEY'` to the existing secret-exclusion list (the test that already loops `HUMAN_TOKEN_SECRET`/`BONGA_API_SECRET`/`DB_PASSWORD` — note `HUMAN_TOKEN_SECRET` and `VITE_HUMAN_POW` are now dead keys and may be dropped from that list while you are here).
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `npm test 2>&1 | tail -6`
 Expected: PASS, suite green.
 
-- [ ] **Step 5: Document the keys in `.env.example`**
+- [x] **Step 5: Document the keys in `.env.example`**
 
 Add beside the existing `GEMINI_API_KEY` block:
 
@@ -261,7 +281,7 @@ Add beside the existing `GEMINI_API_KEY` block:
 #AI_ANCHORED_MODEL=            # blank = provider default
 ```
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/config.js src/db/settings-rules.js tests/settings-rules.test.js .env.example
@@ -292,7 +312,7 @@ what the consensus measurement rests on. Verified against the live model list."
   - `enrichModelTag({ model, grounded, promptVersion })` → string
   - `resolveTask(task, cfg)` → `{ provider, model, grounded }`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Create `tests/ai-rules.test.js`:
 
@@ -393,12 +413,12 @@ test('resolveTask throws on an unknown task (a typo must be loud)', () => {
 });
 ```
 
-- [ ] **Step 2: Run tests to verify they fail**
+- [x] **Step 2: Run tests to verify they fail**
 
 Run: `node --test tests/ai-rules.test.js 2>&1 | tail -5`
 Expected: FAIL — `Cannot find module '../src/db/ai-rules.js'`.
 
-- [ ] **Step 3: Write the implementation**
+- [x] **Step 3: Write the implementation**
 
 Create `src/db/ai-rules.js`:
 
@@ -605,17 +625,17 @@ export function resolveTask(task, cfg) {
 
 **Note for the implementer:** the `FactsPayload` nested-default plumbing above is fiddly. If the zod version in this repo makes a branch of it awkward, simplify it — the only contract the tests pin is: every field defaults to `null` (never `0`/`false`), unknown `extra` keys survive, and `schema_ver` is stamped. Keep it readable over clever.
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --test tests/ai-rules.test.js 2>&1 | tail -5`
 Expected: PASS (13 tests).
 
-- [ ] **Step 5: Run the whole suite**
+- [x] **Step 5: Run the whole suite**
 
 Run: `npm test 2>&1 | tail -6`
 Expected: PASS, green.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/db/ai-rules.js tests/ai-rules.test.js
@@ -638,7 +658,7 @@ inventing a uniform prior."
 **Interfaces:**
 - Produces: table `fixture_ai_insights` with PK `(fixture_id, kind, provider)`.
 
-- [ ] **Step 1: Write the migration**
+- [x] **Step 1: Write the migration**
 
 Create `src/db/migrations/20260716000002_fixture_ai_insights.js`:
 
@@ -673,12 +693,12 @@ export async function down(knex) {
 }
 ```
 
-- [ ] **Step 2: Apply it**
+- [x] **Step 2: Apply it**
 
 Run: `npm run migrate 2>&1 | tail -3`
 Expected: `Batch 14 run: 1 migrations`
 
-- [ ] **Step 3: Verify the shape**
+- [x] **Step 3: Verify the shape**
 
 Run:
 ```bash
@@ -686,7 +706,7 @@ node -e "import('./src/db/connection.js').then(async ({db,closeDb})=>{const r=aw
 ```
 Expected: PK `(fixture_id, kind, provider)`, FK to `fixtures(id)` `ON DELETE CASCADE`, `payload` JSON NOT NULL.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/db/migrations/20260716000002_fixture_ai_insights.js
@@ -715,7 +735,7 @@ Directly mirrors `src/sms/index.js`, which already solved this shape (`PROVIDERS
   - `src/ai/gemini.js`: `complete({ model, prompt, grounded })` → `{ text, sources }`; still exports the adjudicators.
   - `src/ai/openrouter.js`: `complete({ model, prompt })` → `{ text, sources: [] }`.
 
-- [ ] **Step 1: Move the Gemini module (preserve behaviour exactly)**
+- [x] **Step 1: Move the Gemini module (preserve behaviour exactly)**
 
 ```bash
 git mv src/ai.js src/ai/gemini.js
@@ -752,7 +772,7 @@ export async function complete({ model, prompt, grounded }) {
 }
 ```
 
-- [ ] **Step 2: Add the text extractor to `src/ai-parse.js`**
+- [x] **Step 2: Add the text extractor to `src/ai-parse.js`**
 
 The existing `parseAiReply` decodes envelope→verdict in one step; enrichment needs envelope→text and applies its own schema. Add (and export) beside it, reusing `GeminiEnvelope`:
 
@@ -781,7 +801,7 @@ export function extractJson(text) {
 
 Import `extractGeminiText` in `src/ai/gemini.js`. Refactor `parseAiReply` to reuse `extractGeminiText` + `extractJson` (DRY — it currently inlines both).
 
-- [ ] **Step 3: Write the OpenRouter provider**
+- [x] **Step 3: Write the OpenRouter provider**
 
 Create `src/ai/openrouter.js`:
 
@@ -831,7 +851,7 @@ export async function complete({ model, prompt }) {
 
 Wrap the Gemini `complete()` from Step 1 in the same `withRetry(...)`, with the same two imports. **Check `withRetry`'s real signature in `src/db/retry-rules.js` first** — it was written for DB writers; if its options differ from `{ tries, base, isRetryable }`, follow `src/sms/index.js`, which already calls it with `isRetryableNetworkError`.
 
-- [ ] **Step 4: Write the seam**
+- [x] **Step 4: Write the seam**
 
 Create `src/ai/index.js`:
 
@@ -865,7 +885,7 @@ export async function callModel({ task, prompt, cfg = config }) {
 }
 ```
 
-- [ ] **Step 5: Repoint the consumer**
+- [x] **Step 5: Repoint the consumer**
 
 In `src/hotpicks.js:10`, change:
 ```javascript
@@ -882,7 +902,7 @@ grep -rn "from './ai.js'\|from '../ai.js'" src/ tests/ scripts/
 ```
 Expected: no output. Repoint anything that appears.
 
-- [ ] **Step 6: Write the seam tests**
+- [x] **Step 6: Write the seam tests**
 
 Create `tests/ai-provider.test.js`:
 
@@ -939,19 +959,19 @@ import { isRetryableNetworkError } from '../src/db/net-rules.js';
 
 **Do NOT write a test that calls a provider's `complete()`.** `tests/` is offline by contract (no DB, no live APIs) and `.env` carries real keys — such a test would bill real money and fail in CI. The orchestrator's try/catch is the real fail-open guarantee, and Task 8 Step 2 exercises it live.
 
-- [ ] **Step 7: Run the suite**
+- [x] **Step 7: Run the suite**
 
 Run: `npm test 2>&1 | tail -6`
 Expected: PASS, green — proving the `src/ai.js` → `src/ai/gemini.js` move broke nothing.
 
-- [ ] **Step 8: Verify the adjudicator path still really works**
+- [x] **Step 8: Verify the adjudicator path still really works**
 
 The suite does not cover the live Gemini call. Run one real, cheap pass:
 
 Run: `node src/index.js hotpicks 2>&1 | tail -3`
 Expected: a `[+] hotpicks:` line with `AI tips: <n>/<n>/<n>` and NOT all errors. (Cached verdicts are reused, so this should be nearly free.)
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add -A
@@ -976,7 +996,7 @@ extractGeminiText/extractJson, which parseAiReply now reuses."
 - Consumes: `callModel` (Task 5), prompts/schemas (Task 3), the table (Task 4).
 - Produces: `enrichFixtures()` → `{ fixtures, calls, written, errors, skipped }`.
 
-- [ ] **Step 1: Write the failing leakage + cap tests**
+- [x] **Step 1: Write the failing leakage + cap tests**
 
 Add the pure helpers' tests to `tests/enrich-rules.test.js`:
 
@@ -1016,12 +1036,12 @@ test('capFixtures bounds FIXTURES, never truncating one mid-set', () => {
 });
 ```
 
-- [ ] **Step 2: Run to verify it fails**
+- [x] **Step 2: Run to verify it fails**
 
 Run: `node --test tests/enrich-rules.test.js 2>&1 | tail -4`
 Expected: FAIL — `selectEnrichable` is not exported.
 
-- [ ] **Step 3: Add the pure helpers**
+- [x] **Step 3: Add the pure helpers**
 
 Append to `src/db/ai-rules.js`:
 
@@ -1045,12 +1065,12 @@ export function capFixtures(rows, cap) {
 }
 ```
 
-- [ ] **Step 4: Run to verify it passes**
+- [x] **Step 4: Run to verify it passes**
 
 Run: `node --test tests/enrich-rules.test.js 2>&1 | tail -4`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Write the orchestrator**
+- [x] **Step 5: Write the orchestrator**
 
 Create `src/enrich.js`:
 
@@ -1246,12 +1266,12 @@ export async function enrichFixtures() {
 
 **Note for the implementer:** check `_batch`'s exact signature in `src/utils.js` before wiring it (thunks vs promises, arg order) and adapt. Also confirm the `fixtures` column names (`home_name`/`away_name`/`league_id`) against `src/db/records.js` — use whatever that file actually joins.
 
-- [ ] **Step 6: Run the suite**
+- [x] **Step 6: Run the suite**
 
 Run: `npm test 2>&1 | tail -6`
 Expected: PASS, green.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/enrich.js src/db/ai-rules.js tests/enrich-rules.test.js
@@ -1277,7 +1297,7 @@ mid-fixture. Nothing feeds ranking."
 **Interfaces:**
 - Consumes: `enrichFixtures()` (Task 6).
 
-- [ ] **Step 1: Add the CLI action**
+- [x] **Step 1: Add the CLI action**
 
 In `src/index.js`, mirror the existing `hotpicks` case:
 
@@ -1293,7 +1313,7 @@ import { enrichFixtures } from './enrich.js';
 
 Follow the file's actual dispatch shape (read it first — it closes the knex pool on exit for every action).
 
-- [ ] **Step 2: Add the pipeline step**
+- [x] **Step 2: Add the pipeline step**
 
 In `src/pipeline.js`, after the hot-picks step (`:92`), add:
 
@@ -1305,12 +1325,12 @@ In `src/pipeline.js`, after the hot-picks step (`:92`), add:
 
 with `import { enrichFixtures } from './enrich.js';` at the top. It goes AFTER hot picks because the anchored call needs the tip that `updateHotPicks()` writes.
 
-- [ ] **Step 3: Verify it is a no-op while disabled**
+- [x] **Step 3: Verify it is a no-op while disabled**
 
 Run: `node src/index.js enrich 2>&1 | tail -2`
 Expected: `[enrich] AI_ENRICH_ENABLED off - nothing to do.` and `[+] enrich: 0 fixtures, ...` — proving the default-off contract.
 
-- [ ] **Step 4: Document it**
+- [x] **Step 4: Document it**
 
 In `CLAUDE.md`, add to the command list:
 ```
@@ -1318,7 +1338,7 @@ node src/index.js enrich          # M4.1: 3-call AI enrichment for upcoming corr
 ```
 and add an architecture bullet for `src/enrich.js` + `src/ai/` + `src/db/ai-rules.js` + `fixture_ai_insights`, in the voice of the surrounding bullets. State plainly that nothing feeds ranking and that AI reviews cannot be backfilled.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/index.js src/pipeline.js CLAUDE.md
@@ -1336,17 +1356,17 @@ Spec §4: "one real sweep, confirming rows land in `fixture_ai_insights` with bo
 
 **Files:** none (verification only).
 
-- [ ] **Step 1: Confirm no `serve` is running**
+- [x] **Step 1: Confirm no `serve` is running**
 
 Run: `netstat -ano | grep -E ":3001.*LISTENING" || echo "clear"`
 Expected: `clear`. **A CLI sweep racing the scheduler's light pass deadlocks on the same rows** — stop `serve` first.
 
-- [ ] **Step 2: Run a small real sweep**
+- [x] **Step 2: Run a small real sweep**
 
 Run: `AI_ENRICH_ENABLED=1 AI_ENRICH_CAP=3 node src/index.js enrich 2>&1 | tail -5`
 Expected: `[+] enrich: 3 fixtures, 5-6 insights written, 0 errors, N over cap.`
 
-- [ ] **Step 3: Verify what actually landed**
+- [x] **Step 3: Verify what actually landed**
 
 Run:
 ```bash
@@ -1364,7 +1384,7 @@ Expected: both `gemini` and `openrouter` present; `kind` both `blind` and `ancho
 node -e "import('axios').then(async ({default:a})=>{const r=await a.get('https://openrouter.ai/api/v1/models');console.log(r.data.data.map(m=>m.id).filter(i=>/gpt-5|qwen3|llama-3.3/.test(i)).slice(0,10));});"
 ```
 
-- [ ] **Step 4: Prove the leakage guard holds in the real query**
+- [x] **Step 4: Prove the leakage guard holds in the real query**
 
 Run:
 ```bash
@@ -1377,7 +1397,7 @@ node -e "import('./src/db/connection.js').then(async ({db,closeDb})=>{
 ```
 Expected: `0`. **Anything else is a leakage bug — stop and fix before continuing.**
 
-- [ ] **Step 5: Confirm reuse does not re-bill**
+- [x] **Step 5: Confirm reuse does not re-bill**
 
 Run the SAME sweep again: `AI_ENRICH_ENABLED=1 AI_ENRICH_CAP=3 node src/index.js enrich 2>&1 | tail -2`
 
@@ -1385,12 +1405,12 @@ Expected: `[+] enrich: 3 fixtures, 0 insights written, 0 errors` — `_alreadyFr
 
 Then prove the tag actually invalidates: bump `PROMPT_VERSION` to `2` in `src/db/ai-rules.js`, re-run, confirm `written` climbs back to 5-6, then revert it to `1`.
 
-- [ ] **Step 6: Full suite + build**
+- [x] **Step 6: Full suite + build**
 
 Run: `npm test 2>&1 | tail -6 && npm run build:web 2>&1 | tail -2`
 Expected: suite green, build clean.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add -A

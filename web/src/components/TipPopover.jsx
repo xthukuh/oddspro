@@ -201,8 +201,13 @@ export default function TipPopover({ row, x, y, catalog, cal, onClose }) {
 
             {row.tip_market ? (
                 <>
-                    <div className={`mt-1 text-sm ${vetoed ? 'text-label-3' : ''}`}>
-                        <span className={`font-semibold ${vetoed ? 'line-through' : ''}`}>
+                    {/* AI verdict is recorded but never styled here (M4.1 spec 3.8 -
+                        confirm 75.0% vs veto 72.7%, n=61, no measured discrimination).
+                        Struck-through/dimmed text or a "consider skipping" nudge would
+                        demote a pick on a signal that shows no edge; the verdict still
+                        surfaces, unstyled, in the AI double-check section below. */}
+                    <div className="mt-1 text-sm">
+                        <span className="font-semibold">
                             {row.tip_market}{row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}
                         </span>
                         <span className="text-label-2"> - {_label(row.tip_market, marketMap)}</span>
@@ -226,9 +231,6 @@ export default function TipPopover({ row, x, y, catalog, cal, onClose }) {
                     )}
                     {row.hot && (
                         <div className="mt-1 text-hot">🔥 Likely a high-scoring game (3+ goals)</div>
-                    )}
-                    {vetoed && (
-                        <div className="mt-1 text-miss">⚠ Flagged for caution - consider skipping this one.</div>
                     )}
                     {/* Close alternatives: other bettable outcomes for this match */}
                     {b?.runners_up?.length > 0 && (

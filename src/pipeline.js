@@ -5,12 +5,13 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
+import { enrichFixtures } from './enrich.js';
 import { _date, _dtime, debugLog } from './utils.js';
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
 
-const STEPS = 11;
+const STEPS = 12;
 
 // Full ingestion pipeline (default `npm run start` action). Step order is
 // chosen to minimize server hits:
@@ -24,7 +25,9 @@ const STEPS = 11;
 //   8. team history backfill (fetch-once) - needs linked fixtures (5);
 //   9. pre-match snapshots - needs local history (8) and fresh standings (7);
 //   10. API predictions (fetch-once) - the hot-pick boost/veto signal;
-//   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4).
+//   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4);
+//   12. AI enrichment (M4.1, collection only, off by default) - the anchored
+//       call needs the tip hot picks (11) just wrote, so this MUST run last.
 export async function runStartPipeline(days_ahead_ = null, onStep = null, shouldCancel = null) {
     // parseInt: null/undefined parse to NaN (Number(null) would be 0)
     const n = parseInt(days_ahead_, 10);
@@ -91,6 +94,10 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     _step('hot picks (rules + optional AI adjudication)');
     const k = await updateHotPicks();
     console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI: ${k.ai.confirmed} confirmed, ${k.ai.vetoed} vetoed, ${k.ai.errors} errors).`);
+
+    _step('AI enrichment (upcoming correlated fixtures; collection only)');
+    const e = await enrichFixtures();
+    console.debug(`[+] enrich: ${e.fixtures} fixtures, ${e.written} insights, ${e.errors} errors.`);
 
     debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
     debugLog(`total pipeline time ${Date.now() - pipelineStarted}ms`);

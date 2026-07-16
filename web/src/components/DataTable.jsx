@@ -275,16 +275,18 @@ function _tick(outcome) {
 // The chosen-tip main line (🔥 badge · market-as-link · confidence · settled
 // tick), shared VERBATIM by the real Tip cell and the consolidated sticky
 // summary so the two never drift. Needs a `group/tip` ancestor for the
-// market's hover-underline. Missed = red wholesale, AI-veto = struck + dim.
+// market's hover-underline. Missed = red wholesale. The AI verdict is
+// recorded but never styled: it shows no discrimination on settled data
+// (M4.1 spec 3.8), so it must not shape what the user sees. The popover
+// still spells the verdict out.
 function _tipMainInner(row) {
     const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
-    const vetoed = row.tip_ai_verdict === 'veto';
     const missed = row.tip_outcome === 'miss';
     return (
-        <div className={`whitespace-nowrap ${missed ? 'text-miss' : vetoed ? 'text-label-3' : ''}`}>
+        <div className={`whitespace-nowrap ${missed ? 'text-miss' : ''}`}>
             {row.hot ? '🔥 ' : ''}
-            <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${missed || vetoed ? '' : 'text-accent'} ${vetoed ? 'line-through' : ''}`}>{row.tip_market}</span>
-            {pct && <span className={missed || vetoed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
+            <span className={`font-semibold decoration-dotted underline-offset-2 group-hover/tip:underline ${missed ? '' : 'text-accent'}`}>{row.tip_market}</span>
+            {pct && <span className={missed ? '' : _pctClass(row.tip_confidence)}> · {pct}</span>}
             {_tick(row.tip_outcome)}
         </div>
     );
@@ -323,13 +325,12 @@ function _cell(row, col, linkProviders, openTip) {
             );
         }
         const pct = row.tip_confidence != null ? `${Math.round(row.tip_confidence * 100)}%` : null;
-        const vetoed = row.tip_ai_verdict === 'veto';
         // Non-revealing tooltip: the pick, its odds and confidence - never HOW
-        // it's derived (see TipPopover's SHOW_DETAILS).
+        // it's derived (see TipPopover's SHOW_DETAILS). The AI verdict is not
+        // surfaced here (M4.1 spec 3.8) - the popover still spells it out.
         const title = `Safest pick: ${row.tip_market}${row.tip_price != null ? ` @ ${row.tip_price.toFixed(2)}` : ''}`
             + (pct ? ` - confidence ${pct}` : '')
             + (row.hot ? ' - 🔥 likely high-scoring' : '')
-            + (vetoed ? ' - flagged for caution' : '')
             + '\nClick for details';
         // Top-3 picks stacked: the chosen main line (shared _tipMainInner - it's
         // the sort value, so bold/full-size) + up to two smaller, muted runners-up,
@@ -539,8 +540,9 @@ export default function DataTable({
     }, [catalog, rows, marketKeys, statKeys, columnOrder, visibleBase]);
 
     // One ordering for the whole unified chain (column sorts + magic strategies
-    // interleaved by priority); tipless/vetoed rows sink on magic entries, nulls
-    // sink on column entries. The `_no` load-order anchor is stamped by App
+    // interleaved by priority); tipless rows sink on magic entries, nulls
+    // sink on column entries (the AI veto is not acted on - M4.1 spec 3.8).
+    // The `_no` load-order anchor is stamped by App
     // (upstream of the client filters, so `no` is filterable too) - a No-column
     // sort reads it via sortValue.
     // "Prioritize Selected" (bulk menu) floats checked rows to the top of the
@@ -562,7 +564,7 @@ export default function DataTable({
 
     // The magic column tracks the highest-priority magic entry in the chain
     // (if any). Score from that strategy; rank per unique fixture in the FINAL
-    // combined order. Null score = tipless/vetoed row - shows an em dash and
+    // combined order. Null score = tipless row - shows an em dash and
     // shares the sunk tail.
     const primaryMagicId = chain.find(e => e.type === 'magic')?.id;
     const magicMeta = useMemo(() => {

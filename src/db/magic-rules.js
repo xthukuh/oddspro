@@ -350,10 +350,13 @@ export const STRATEGIES = [
 const _byId = new Map(STRATEGIES.map(s => [s.id, s]));
 
 // Score one records/ledger row under a strategy. Null (= sink to the table
-// bottom) for tipless / skip-reason / AI-vetoed rows and unknown strategies.
+// bottom) for tipless / skip-reason rows and unknown strategies.
 export function scoreTip(row, strategyId, cal) {
     const tip = tipView(row);
-    if (!tip || tip.vetoed) return null;
+    // NOTE: tip.vetoed is deliberately NOT consulted (M4.1 spec 3.8). The AI veto
+    // shows no discrimination on settled data (confirm 75.0% vs veto 72.7%, n=61),
+    // so it must not shape ranking. It is still persisted + surfaced for the ledger.
+    if (!tip) return null;
     const strategy = _byId.get(strategyId);
     if (!strategy) return null;
     const v = strategy.score(tip, cal);
@@ -436,16 +439,18 @@ export function hasSufficientStats(row, opts = DEFAULT_SAFE) {
     return true;
 }
 
-// One tip's pass/fail against the safe gates. Vetoed, tipless, thin-breakdown
-// (no components recorded) and insufficient-sample rows always fail. The
-// optional `cal` (a computeCalibration() result) additionally enforces the
-// market maturity floor (spec §5) - a market with too few settled live tips
-// can't yet win the cap. Callers that don't pass `cal` (the web risk-gate
-// badge) are unaffected, exactly as before this gate existed.
+// One tip's pass/fail against the safe gates. Tipless, thin-breakdown (no
+// components recorded) and insufficient-sample rows always fail. The AI
+// verdict is deliberately NOT a gate (M4.1 spec 3.8 - no measured
+// discrimination). The optional `cal` (a computeCalibration() result)
+// additionally enforces the market maturity floor (spec §5) - a market with
+// too few settled live tips can't yet win the cap. Callers that don't pass
+// `cal` (the web risk-gate badge) are unaffected, exactly as before this
+// gate existed.
 export function safeQualifies(row, opts = DEFAULT_SAFE, cal = null) {
     const o = { ...DEFAULT_SAFE, ...opts };
     const tip = tipView(row);
-    if (!tip || tip.vetoed) return false;
+    if (!tip) return false;
     if ((o.minMarketSettled ?? 0) > 0 && cal
         && (cal.markets?.[String(tip.market)]?.n ?? 0) < o.minMarketSettled) return false;
     if (_agreementParts(tip).length < o.minParts) return false;
@@ -626,8 +631,9 @@ const _tierRank = (entries, minDays) => [...entries].sort((a, b) => {
 // survival. rows: [{ day: 'YYYY-MM-DD', tip_market, tip_price,
 // tip_confidence, tip_outcome, tip_breakdown, tip_ai_verdict }].
 export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shrinkK = 10 } = {}) {
-    // Settled tips only; vetoed ones feed calibration but never a slip -
-    // the sorted table sinks them, so replayed slips must too.
+    // Settled tips only. AI-vetoed tips are NOT excluded (M4.1 spec 3.8 - the
+    // veto shows no measured discrimination, so it must not shape the replay
+    // any more than it shapes the live ranking).
     const settled = [];
     for (const r of rows) {
         const tip = tipView(r);
@@ -652,7 +658,7 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
 
     let eligibleDays = 0;
     for (const tips of byDay.values()) {
-        if (tips.filter(t => !t.vetoed).length >= legs) eligibleDays++;
+        if (tips.length >= legs) eligibleDays++;
     }
 
     const results = STRATEGIES.map(strategy => {
@@ -660,7 +666,7 @@ export function simulateStrategies(rows, { legs = 4, minDays = 5, topN = 5, shri
         const quartile = { n: 0, hits: 0 };
         const streak = { days: 0, sum: 0, best: 0 };
         for (const day of days) {
-            const pool = byDay.get(day).filter(t => !t.vetoed);
+            const pool = byDay.get(day);
             const ranked = _rankDay(pool, strategy, lodo.get(day));
             if (!ranked.length) continue;
             // Rank-quality tiebreak metric: the top quarter of every day's

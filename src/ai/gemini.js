@@ -1,7 +1,9 @@
 import axios from 'axios';
-import { config } from './config.js';
-import { parseAiReply } from './ai-parse.js';
-import { tipMarketLabel } from './db/magic-rules.js';
+import { config } from '../config.js';
+import { parseAiReply, extractGeminiText } from '../ai-parse.js';
+import { tipMarketLabel } from '../db/magic-rules.js';
+import { withRetry } from '../db/retry-rules.js';
+import { isRetryableNetworkError } from '../db/net-rules.js';
 
 // Optional Google Gemini adjudicators, both fail-open (absent key or any API
 // failure keeps the rule-based verdict - the features never depend on the AI
@@ -39,6 +41,15 @@ const PROMPT_VERSION = 3;
 export function aiEnabled() {
     return Boolean(config.GEMINI_API_KEY);
 }
+
+// Alias matching the provider-seam interface openrouter.js already exposes
+// (M4.1 final review finding 4: `openrouter.enabled()` had zero callers -
+// dead code, and there was no symmetric Gemini check a caller COULD route
+// through). src/enrich.js's preflight calls getProvider(name).enabled() for
+// BOTH providers uniformly instead of reaching into each module's own
+// differently-named check; aiEnabled() itself stays as the name every
+// existing hotpicks.js/ai/index.js call site already expects.
+export const enabled = aiEnabled;
 
 // Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
 // switching model, grounding or prompt version re-adjudicates automatically.
@@ -116,6 +127,27 @@ async function _adjudicate(prompt) {
         model: aiModelTag(),
         review: { probability, checks, sources },
     };
+}
+
+// Generic single completion for the M4.1 enrichment layer. Returns raw text +
+// grounding citations; the caller applies its own per-kind zod schema.
+// Throws on any failure - callers fail open, exactly like the adjudicators.
+const RETRY = { tries: 3, base: 500, isRetryable: isRetryableNetworkError };
+
+export async function complete({ model, prompt, grounded }) {
+    const res = await withRetry(() => axios.post(
+        `${config.GEMINI_URL}/models/${model}:generateContent`,
+        {
+            contents: [{ parts: [{ text: prompt }] }],
+            generationConfig: { temperature: 0 },
+            ...(grounded ? { tools: [{ google_search: {} }] } : {}),
+        },
+        {
+            headers: { 'x-goog-api-key': config.GEMINI_API_KEY, 'Content-Type': 'application/json' },
+            timeout: 60_000, // grounded calls run searches before answering
+        },
+    ), RETRY);
+    return extractGeminiText(res.data);
 }
 
 // Independent second opinion on one over-2.5 candidate.

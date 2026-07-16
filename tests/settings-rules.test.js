@@ -10,7 +10,7 @@ import {
 test('catalog excludes secrets/creds/build vars by construction', () => {
     const keys = new Set(SETTINGS_CATALOG.map(e => e.key));
     for (const forbidden of ['X_APISPORTS_KEY', 'PIN_PEPPER', 'ADMIN_TOKEN', 'API_TOKEN',
-        'HUMAN_TOKEN_SECRET', 'BONGA_API_SECRET', 'DB_PASSWORD', 'VITE_HUMAN_POW']) {
+        'BONGA_API_SECRET', 'DB_PASSWORD', 'OPENROUTER_API_KEY']) {
         assert.equal(keys.has(forbidden), false, `${forbidden} must NOT be editable`);
     }
     assert.equal(keys.has('SAFE_MAX_PRICE'), true);

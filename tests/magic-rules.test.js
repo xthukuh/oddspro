@@ -289,28 +289,75 @@ test('line strategy uses exact O/U line history and group rate for result market
 
 // --- scoreTip / magicSortRows (the web table contract) ---
 
-test('scoreTip nulls tipless, vetoed and unknown-strategy rows', () => {
+test('scoreTip nulls tipless and unknown-strategy rows, but NOT vetoed ones (M4.1 3.8)', () => {
     assert.equal(scoreTip(row({ tip_market: null, tip_skip_reason: 'no_markets' }), 'confidence', null), null);
-    assert.equal(scoreTip(row({ tip_ai_verdict: 'veto' }), 'confidence', null), null);
+    // Veto shows no measured discrimination (confirm 75.0% vs veto 72.7%, n=61)
+    // - it is recorded but must not shape the score.
+    assert.equal(scoreTip(row({ tip_ai_verdict: 'veto', tip_confidence: 0.75 }), 'confidence', null), 0.75);
     assert.equal(scoreTip(row(), 'nope', null), null);
     assert.equal(scoreTip(row({ tip_confidence: '0.75' }), 'confidence', null), 0.75);
 });
 
-test('magicSortRows sorts score desc, sinks nulls, keeps ties stable', () => {
+test('magicSortRows sorts score desc, sinks nulls, keeps ties stable, does not sink vetoed rows', () => {
     const a = row({ tip_confidence: 0.8, api_id: 1 });
     const b1 = row({ tip_confidence: 0.6, api_id: 2 });
     const b2 = row({ tip_confidence: 0.6, api_id: 3 });     // tie with b1
-    const vetoed = row({ tip_confidence: 0.9, tip_ai_verdict: 'veto', api_id: 4 });
+    const vetoed = row({ tip_confidence: 0.9, tip_ai_verdict: 'veto', api_id: 4 }); // outranks everything on score alone
     const tipless = row({ tip_market: null, api_id: 5 });
     const sorted = magicSortRows([tipless, b2, vetoed, b1, a], 'confidence', null);
-    assert.deepEqual(sorted.map(r => r.api_id), [1, 3, 2, 5, 4]); // ties AND the sunk tail keep input order
+    assert.deepEqual(sorted.map(r => r.api_id), [4, 1, 3, 2, 5]); // vetoed(0.9) ranks FIRST; only the tipless row sinks
     assert.deepEqual([tipless, b2, vetoed, b1, a].map(r => r.api_id), [5, 3, 4, 2, 1], 'input untouched');
+});
+
+test('a vetoed tip scores and ranks exactly like a confirmed one (veto is not acted on)', () => {
+    const base = {
+        api_id: 1, tip_market: '1X', tip_price: 1.4, tip_confidence: 0.8,
+        tip_breakdown: {
+            market_prob: 0.75, stats_prob: 0.7, api_prob: 0.7,
+            samples: { home_n: 8, away_n: 8, h2h_n: 3 },
+        },
+    };
+    const cal = computeCalibration([]);
+    const confirmed = { ...base, tip_ai_verdict: 'confirm' };
+    const vetoed = { ...base, tip_ai_verdict: 'veto' };
+    for (const s of STRATEGIES) {
+        // NOTE: real signature is scoreTip(row, strategyId, cal), not
+        // scoreTip(row, cal, strategyId) as originally drafted in the brief.
+        assert.equal(scoreTip(vetoed, s.id, cal), scoreTip(confirmed, s.id, cal),
+            `strategy ${s.id} must ignore the AI veto`);
+        // Pin the value, not just the equality - both sides null would also
+        // satisfy the assertion above.
+        assert.notEqual(scoreTip(confirmed, s.id, cal), null, `strategy ${s.id} must score the confirmed tip`);
+    }
+});
+
+test('safeQualifies ignores the AI veto', () => {
+    const row = {
+        api_id: 1, tip_market: '1X', tip_price: 1.4, tip_confidence: 0.8,
+        tip_ai_verdict: 'veto',
+        tip_breakdown: {
+            market_prob: 0.75, stats_prob: 0.72, api_prob: 0.7,
+            samples: { home_n: 8, away_n: 8, h2h_n: 3 },
+        },
+    };
+    const cal = computeCalibration([]);
+    const opts = { ...DEFAULT_SAFE, minMarketSettled: 0 };
+    // Pin the value, not just the equality - both sides false would also
+    // satisfy an equality-only assertion.
+    assert.equal(safeQualifies(row, opts, cal), true);
+    assert.equal(safeQualifies(row, opts, cal), safeQualifies({ ...row, tip_ai_verdict: 'confirm' }, opts, cal));
+});
+
+test('tipView still reports the veto verdict, but scoreTip no longer sinks it', () => {
+    const r = { api_id: 1, tip_market: '1X', tip_price: 1.4, tip_confidence: 0.8, tip_ai_verdict: 'veto' };
+    assert.equal(tipView(r).vetoed, true);                              // still recorded
+    assert.notEqual(scoreTip(r, 'sure', computeCalibration([])), null); // but not sunk
 });
 
 // --- safe selection (Safety Net Protocol gates + per-day cap) ---
 
 // A row that clears every DEFAULT_SAFE gate: 3 components (>= 2 required),
-// weakest 0.75 >= 0.65, price 1.25 <= 1.6, not vetoed.
+// weakest 0.75 >= 0.65, price 1.25 <= 1.6. The AI verdict does NOT gate.
 const safe = (over = {}) => row({
     api_id: 1, tip_outcome: null, tip_price: 1.25,
     tip_breakdown: { market_prob: 0.8, stats_prob: 0.75, api_prob: 0.78 },
@@ -326,7 +373,8 @@ test('tipAgreement is the min of present components, null without any', () => {
 
 test('safeQualifies rejects each gate violation individually', () => {
     assert.equal(safeQualifies(safe()), true);
-    assert.equal(safeQualifies(safe({ tip_ai_verdict: 'veto' })), false);
+    // AI veto is deliberately NOT a gate (M4.1 3.8 - no measured discrimination).
+    assert.equal(safeQualifies(safe({ tip_ai_verdict: 'veto' })), true);
     assert.equal(safeQualifies(safe({ tip_market: null })), false);
     assert.equal(safeQualifies(safe({ tip_breakdown: null })), false);          // pre-2026-07-04 rows
     assert.equal(safeQualifies(safe({ tip_breakdown: { market_prob: 0.8 } })), false); // 1 of 3 parts < minParts 2
@@ -497,18 +545,18 @@ test('days below the leg count feed the quartile metric but never a slip', () =>
     assert.equal(conf.stats.quartile.n, 2); // ceil(4/4) + ceil(3/4)
 });
 
-test('vetoed tips are calibration evidence but never slip candidates', () => {
+test('vetoed tips are calibration evidence AND slip candidates (veto is not acted on)', () => {
     const rows = Array.from({ length: 5 }, (_, i) => row({
         day: '2026-07-01',
         tip_confidence: 0.8 - i * 0.05,
-        tip_ai_verdict: i === 0 ? 'veto' : null, // best tip vetoed
+        tip_ai_verdict: i === 0 ? 'veto' : null, // best tip vetoed but still eligible
         tip_outcome: 'hit',
     }));
     const out = simulateStrategies(rows, { topN: 10 });
     assert.equal(out.calibration.settled, 5); // vetoed still counted
     const conf = out.strategies.find(s => s.id === 'confidence');
-    assert.equal(conf.stats.days, 1); // 4 non-vetoed candidates remain
-    assert.equal(conf.stats.quartile.n, 1);
+    assert.equal(conf.stats.days, 1); // all 5 candidates remain (veto no longer excluded)
+    assert.equal(conf.stats.quartile.n, 2); // ceil(5/4), was 1 (ceil(4/4)) before this change
 });
 
 // Leave-one-day-out leak check, hand-computed (k = 10):
