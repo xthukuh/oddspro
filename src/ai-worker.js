@@ -232,10 +232,14 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
         state.last = summary;
         const lat = summary.latency.n
             ? ` (calls ${summary.latency.n}, avg ${Math.round(summary.latency.avg)}ms)` : '';
-        console.debug(`[ai-worker] drain ${Math.round(summary.ms / 1000)}s - hot ${summary.hot.billed} billed `
+        const line = `[ai-worker] drain ${Math.round(summary.ms / 1000)}s - hot ${summary.hot.billed} billed `
             + `(${summary.hot.vetoed} vetoed), tips ${summary.tips.billed} billed (${summary.tips.vetoed} vetoed, `
             + `${summary.tips.skipped} over budget), budget left ${summary.budget_left}${lat}`
-            + (summary.aborted ? ` [ABORTED: ${summary.aborted}]` : ''));
+            + (summary.aborted ? ` [ABORTED: ${summary.aborted}]` : '');
+        // A drain that billed nothing (all reused / budget-deferred) is the
+        // steady state on a 60s tick - keep it out of production logs.
+        if (summary.hot.billed || summary.tips.billed || summary.aborted) console.debug(line);
+        else debugLog(line);
         return summary;
     } finally {
         state.running = false;
