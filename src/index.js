@@ -5,6 +5,7 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks, performanceSummary } from './hotpicks.js';
+import { drainAiReviews } from './ai-worker.js';
 import { enrichFixtures } from './enrich.js';
 import { exportRecords } from './export.js';
 import { backfillGeo } from './geo.js';
@@ -84,6 +85,18 @@ import { _date, _dtime } from './utils.js';
             + `${c.tips} tips, ${c.tips_skipped} skipped ineligible `
             + `(AI reviews pending: ${c.pending_reviews.hot} hot, ${c.pending_reviews.tips} tips - `
             + `run \`node src/index.js aireview\` or let the serve worker drain them).`);
+        return;
+    }
+
+    // Manual drain of the background AI-review queue - for cron-only
+    // deployments (no long-running serve) or ad-hoc catch-up. Idempotent:
+    // the derived pending predicate makes a re-run resume where it stopped.
+    if (action === 'aireview') {
+        const s = await drainAiReviews();
+        if (s.skipped) console.debug(`[+] aireview: skipped (${s.skipped}).`);
+        else console.debug(`[+] aireview: hot ${s.hot.billed} billed (${s.hot.vetoed} vetoed, ${s.hot.errors} errors), `
+            + `tips ${s.tips.billed} billed (${s.tips.vetoed} vetoed, ${s.tips.errors} errors, ${s.tips.skipped} over budget), `
+            + `day budget left ${s.budget_left}${s.aborted ? ` [ABORTED: ${s.aborted}]` : ''}.`);
         return;
     }
 

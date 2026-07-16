@@ -15,6 +15,7 @@ import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
+import { startAiWorker, stopAiWorker } from './ai-worker.js';
 import { ADMIN_HTML } from './admin-dashboard.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
@@ -657,6 +658,7 @@ let server = null;
             console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
             startAutoRefresh();
             startGeoScheduler();
+            startAiWorker();
         });
     } catch (err) {
         // Fail fast: don't serve on an uncertain schema (or unloadable
@@ -672,6 +674,7 @@ for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => {
         stopAutoRefresh();
         stopGeoScheduler();
+        stopAiWorker();
         if (server) server.close(() => closeDb().finally(() => process.exit(0)));
         else closeDb().finally(() => process.exit(0));
     });
