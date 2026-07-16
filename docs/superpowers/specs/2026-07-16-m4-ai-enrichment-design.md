@@ -1,8 +1,27 @@
 # M4.1 — AI Enrichment Layer (design)
 
-> Brainstormed 2026-07-16 with the user. Status: APPROVED design, pending spec
-> review → implementation plan. Predecessor: M3 any-market tips (merged `1ef8890`).
+> Brainstormed 2026-07-16 with the user. Status: APPROVED design; implementation
+> plan written → `docs/superpowers/plans/2026-07-16-m4-ai-enrichment.md`.
+> Predecessor: M3 any-market tips (merged `1ef8890`).
 > Parent backlog: `docs/emergence-patterns-m4-backlog.md`.
+>
+> **Deltas found while planning (the plan is authoritative on these):**
+> - **Migration batch is 14, not 13** — batch 13 was taken by the
+>   `odds_markets` catalog index (`e1c24ff`).
+> - **`fixture_id` is `int(10) unsigned`**, not BIGINT — it must match
+>   `fixtures.id` / `fixture_predictions.fixture_id` or the FK fails (errno 150).
+> - **§3.8 understated the veto's reach.** It is not only the web
+>   strike-through: the veto also sinks rows in `magicSortRows` (`magic-rules.js:356`),
+>   gates `safeQualifies` (`:448`), excludes tips from the betslip pool
+>   (`BetslipPlayground.jsx:122`) and from slip simulation (`:655,663`). Opening
+>   the faucet made this live — **125 of 170 upcoming tips (73.5%) are now
+>   vetoed**. Plan Task 1 removes all of it. Measured caveat: the Safe pool is
+>   0 with AND without the veto gate (other gates bind first), so that one is
+>   currently inert — do not claim removing it fixed anything.
+> - **`openai/gpt-5.6-terra` re-verified present** in the live model list
+>   (2026-07-16, 342 models). Note `openrouter/free` DOES exist, contrary to
+>   §3.1's claim — but it is an auto-router and stays disqualified for the same
+>   reason as `openrouter/auto`.
 
 ## 1. Why this exists
 
