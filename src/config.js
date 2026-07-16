@@ -69,9 +69,17 @@ const EnvSchema = z.object({
     // adjudicators. Opt-in - grounded requests bill extra per call.
     HOTPICK_AI_WEB: boolStr('0'),
     // Tip AI review: only tips at/above this confidence, best-first, at most
-    // this many fresh verdicts per run (cached verdicts don't count).
+    // this many fresh (billed) verdicts per EAT day - enforced by the
+    // background AI-review worker (src/ai-worker.js); cached verdicts and
+    // tolerance-reused ones never consume budget.
     TIP_AI_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.75),
     TIP_AI_DAILY_CAP: z.coerce.number().int().min(0).default(20),
+    // AI-review worker concurrency (network calls only - the DB-writers
+    // concurrency-1 rule does not apply; mirrors AI_ENRICH_CONCURRENCY).
+    HOTPICK_AI_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
+    // Reuse a stored tip verdict while the price drifted no more than this
+    // relative fraction from the price it judged (0 = exact match only).
+    TIP_AI_REUSE_PRICE_TOL: z.coerce.number().min(0).max(0.5).default(0),
     // --- M4.1 AI enrichment (collection only - nothing feeds ranking) ---
     // Keys are secrets: .env ONLY, never the settings catalog.
     OPENROUTER_API_KEY: optionalStr(z.string().min(1).optional()),

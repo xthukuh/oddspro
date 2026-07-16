@@ -57,6 +57,9 @@ export const SETTINGS_CATALOG = [
     { key: 'OPENROUTER_MODEL', type: 'string', group: 'ai', public: false, live: true },
     { key: 'AI_BLIND_MODEL', type: 'string', group: 'ai', public: false, live: true },
     { key: 'AI_ANCHORED_MODEL', type: 'string', group: 'ai', public: false, live: true },
+    // AI-review worker (src/ai-worker.js) - late-read per drain -> live.
+    { key: 'HOTPICK_AI_CONCURRENCY', type: 'int', group: 'ai', public: false, live: true, min: 1, max: 16 },
+    { key: 'TIP_AI_REUSE_PRICE_TOL', type: 'number', group: 'ai', public: false, live: true, min: 0, max: 0.5 },
 ];
 
 const BY_KEY = new Map(SETTINGS_CATALOG.map(e => [e.key, e]));
