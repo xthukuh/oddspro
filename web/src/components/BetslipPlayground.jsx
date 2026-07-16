@@ -108,18 +108,19 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
         localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips }));
     }, [date, config, slips]);
 
-    // Slip candidates: the table's non-vetoed tips - one per canonical
-    // fixture - in the SAME order the table shows (the unified sort chain);
-    // with no active sort they fall back to blend-confidence best-first.
-    // Settled tips are included (backtest mode: past dates replay at their
-    // frozen tip prices); their outcome grades the slip.
+    // Slip candidates: the table's tips - one per canonical fixture - in the
+    // SAME order the table shows (the unified sort chain); with no active
+    // sort they fall back to blend-confidence best-first. Settled tips are
+    // included (backtest mode: past dates replay at their frozen tip
+    // prices); their outcome grades the slip. The AI veto is not a gate here
+    // either (M4.1 spec 3.8 - no measured discrimination).
     const candidates = useMemo(() => {
         const seen = new Set();
         const unique = [];
         for (const r of rows) {
             if (seen.has(r.api_id)) continue;
             seen.add(r.api_id);
-            if (r.tip_market != null && r.tip_ai_verdict !== 'veto') unique.push(r);
+            if (r.tip_market != null) unique.push(r);
         }
         const ranked = chain?.length
             ? orderRows(unique, chain, columns, cal)
