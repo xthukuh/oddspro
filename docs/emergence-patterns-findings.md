@@ -98,7 +98,7 @@ the `TIP_MIN_PRICE` change (PR-3, PR-4a) or by the AI reviews stopping after
 
 ## Per-hypothesis verdicts
 
-### PR-1 — O/U cascade ladder: **directionally confirmed, economically unproven**
+### PR-1 — O/U cascade ladder: **CLOSED 2026-07-16 — economically REFUTED** (was: directionally confirmed, economically unproven)
 
 *Claim:* a fixture we tip `O 2.5` clears the lower line `O 1.5` far more often
 than the `O 2.5` tip itself lands.
@@ -120,6 +120,18 @@ The generic table row for PR-1 measures the O 2.5 **tip**, not the ladder — th
 claim is about a different market than the tip, so it cannot ride the generic
 tip-hit path. That is why its row reads −0.7pp while the detail block reads
 85.1%. They are answering different questions.
+
+**RESOLUTION (2026-07-16, `scripts/close-pr1-ladder-ev.js`):** the bounded
+follow-up ran. `O 1.5` had a fresh stored price at **72** of the 101 fixtures:
+clear rate **83.3%**, but **median price 1.13** against the 1.175 break-even —
+laddered flat EV **−5.9%** (CI [−15.1%, +2.2%]), recent regime **−6.1%**. The
+bettable ≥ 1.20 slice is n=5 (nothing there); the sub-1.20 slice is −6.1%. The
+ladder "saved" 9 of 21 tip-misses but paid for them several times over in
+price. **The pre-registered expectation ("expect a sub-1.20 price trap") was
+exactly right — class `unbettable`, economic claim REFUTED.** With this, every
+deterministic route from rolling stats to profit has been measured and closed
+(see `docs/m4.2b-booster-validation-and-value-edge.md` for the mechanistic
+reason: rolling stats carry no market-orthogonal information).
 
 ### PR-2a — Straddle configuration: **underpowered (n=27)**
 
