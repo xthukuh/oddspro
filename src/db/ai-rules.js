@@ -25,20 +25,46 @@ const FAMILIES = [['1', 'X', '2'], ['O 2.5', 'U 2.5'], ['GG', 'NG']];
 const _team = (label, t) => `${label}: last ${t.n} games - avg total goals ${t.avgTotal},`
     + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`;
 
-const _facts = facts => (facts
-    ? ['Verified context (from an earlier grounded research pass):', JSON.stringify(facts)]
-    : []);
+// Any leaked price/betting mention, wherever a grounded model might have
+// written free text. `extra` (FactsPayload.extra) is the obvious channel,
+// but motivation.home_stakes/away_stakes/rotation_risk and the key-absence
+// name arrays are ALSO free-form strings authored by the same grounded,
+// web-searching model - typed *shape* is not vetted *content*. The stakes/
+// rotation fields are additionally enum-constrained at the schema level
+// (see FactsPayload below), so this regex is defense in depth for them, and
+// the ONLY guard for the one remaining free-text leaf class: absence names.
+const _LEAK_RE = /odds|price|bookmaker|vig|break-even|betting|\d+\.\d+/i;
 
-// BLIND-SAFE facts: `extra` is free-form text filled by the grounded research
-// model (FactsPayload.extra) - unvetted, and the exact kind of field that can
-// carry a price or a bookmaker name ("bookmakers price the home win near
-// 1.40"). The blind prompt may only see the TYPED fact sections; dropping
-// `extra` here (by construction, not by caller discipline) is what keeps the
-// blind-vs-anchored measurement valid. The anchored prompt keeps using
-// `_facts` unchanged - it is supposed to see everything.
-const _factsBlind = facts => {
+// Recurses through plain objects/arrays; a leaky string leaf becomes null
+// (object leaf) or is dropped entirely (array element, so a clean sibling
+// name survives with nothing left marking where the leaky one was).
+// Non-string leaves and already-null values pass through untouched.
+function _screenLeaks(value) {
+    if (typeof value === 'string') return _LEAK_RE.test(value) ? null : value;
+    if (Array.isArray(value)) return value.map(_screenLeaks).filter(v => v !== null);
+    if (value && typeof value === 'object') {
+        return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, _screenLeaks(v)]));
+    }
+    return value;
+}
+
+// ONE shared fact projection used by BOTH prompts (blind and anchored).
+// `extra` (FactsPayload.extra) is the unvetted free-form escape hatch - it
+// stays PERSISTED in the parsed payload for later analysis/promotion to
+// typed fields (Task 6), but it never reaches a prompt, blind OR anchored.
+// Everything else is screened through `_screenLeaks` before either prompt
+// sees it. Because both prompts call this SAME function over the SAME
+// `facts` argument, the fact block they carry is byte-identical by
+// construction - the only asymmetry left in this module is the tip/price
+// block `buildAnchoredPrompt` appends afterward. That is what makes
+// `anchored - blind` a clean paired measurement of the anchoring effect
+// (spec: "both reasoners work the identical evidence, so any disagreement
+// is reasoning difference rather than one model simply knowing more").
+const _promptFacts = facts => {
     if (!facts) return [];
-    const { extra, ...safe } = facts;
+    const { extra, ...rest } = facts;
+    const safe = _screenLeaks(rest);
+    if (!safe || Object.keys(safe).length === 0) return [];
     return ['Verified context (from an earlier grounded research pass):', JSON.stringify(safe)];
 };
 
@@ -56,7 +82,7 @@ export function buildBlindPrompt({ fixture, kickoff, league, home, away, h2h, fa
         _team('Home', home),
         _team('Away', away),
         `Head-to-head: ${h2h?.n ? `last ${h2h.n} meetings - avg total goals ${h2h.avgTotal}` : 'no prior meetings known'}`,
-        ..._factsBlind(facts),
+        ..._promptFacts(facts),
         '',
         'Estimate P for EVERY outcome below. 1 = home win, X = draw, 2 = away win,',
         '"O 2.5"/"U 2.5" = over/under 2.5 total goals, GG/NG = both teams score yes/no.',
@@ -69,8 +95,10 @@ export function buildBlindPrompt({ fixture, kickoff, league, home, away, h2h, fa
     ].join('\n');
 }
 
-// ANCHORED: sees everything - tip, price, stats, facts. anchored - blind on the
-// same fixture and model is a PAIRED measurement of the anchoring effect.
+// ANCHORED: sees the SAME screened facts as blind (via `_promptFacts` - see
+// its comment), plus the tip/price block below. That block is the ONLY
+// asymmetry versus buildBlindPrompt. anchored - blind on the same fixture
+// and model is a PAIRED measurement of the anchoring effect.
 export function buildAnchoredPrompt({ fixture, kickoff, league, tip, home, away, h2h, facts }) {
     return [
         'You are a football analyst reviewing one candidate bet.',
@@ -81,7 +109,7 @@ export function buildAnchoredPrompt({ fixture, kickoff, league, tip, home, away,
         _team('Home', home),
         _team('Away', away),
         `Head-to-head: ${h2h?.n ? `last ${h2h.n} meetings - avg total goals ${h2h.avgTotal}` : 'no prior meetings known'}`,
-        ..._facts(facts),
+        ..._promptFacts(facts),
         '',
         `Candidate bet: ${tip.market} at bookmaker price ${tip.price}.`,
         '',
@@ -109,8 +137,21 @@ const _prob = z.preprocess(v => {
 }, z.number().min(0).max(1).nullable());
 
 const _nn = z.number().nullish().transform(v => v ?? null);
-const _ns = z.string().nullish().transform(v => v ?? null);
 const _nb = z.boolean().nullish().transform(v => v ?? null);
+
+// Tolerant enum: an out-of-vocabulary value (including a leaky free-form
+// sentence like "must win; market has them near 1.40") degrades to `null`
+// via preprocess rather than failing the whole payload - fail-open, not a
+// hard throw, so one odd field never discards an otherwise-good facts call.
+// This is ALSO what keeps home_stakes/away_stakes/rotation_risk out of the
+// leak-screening burden for typed FactsPayload callers: they cannot carry
+// free text at all once parsed, by construction, not by caller discipline.
+const _enum = values => z.preprocess(
+    v => (typeof v === 'string' && values.includes(v) ? v : null),
+    z.enum(values).nullable(),
+);
+const _stakes = _enum(['dead_rubber', 'must_win', 'title_race', 'relegation', 'secured', 'normal']);
+const _rotationRisk = _enum(['low', 'medium', 'high']);
 
 // Fact payload v1. EVERY field nullable: absent evidence must stay
 // distinguishable from "no problem found" - a 0 would assert a fact we never
@@ -132,7 +173,7 @@ const AVAILABILITY_EMPTY = { home_out_count: null, away_out_count: null,
     home_key_absences: null, away_key_absences: null, top_scorer_out: null, first_choice_gk_out: null };
 
 const MotivationSection = z.object({
-    home_stakes: _ns, away_stakes: _ns, rotation_risk: _ns,
+    home_stakes: _stakes, away_stakes: _stakes, rotation_risk: _rotationRisk,
 });
 const MOTIVATION_EMPTY = { home_stakes: null, away_stakes: null, rotation_risk: null };
 
@@ -217,8 +258,13 @@ export function resolveTask(task, cfg) {
         // free-form env config and a valid OpenRouter slug
         // (`google/gemini-2.5-pro`) would otherwise silently defeat it.
         const model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL;
+        // Name the source key that actually resolved the model - the model may
+        // have fallen through to OPENROUTER_MODEL, and an operator chasing the
+        // error by editing AI_BLIND_MODEL would otherwise be editing the wrong
+        // key.
+        const src = cfg.AI_BLIND_MODEL ? 'AI_BLIND_MODEL' : 'OPENROUTER_MODEL';
         if (model && /gemini|google|gemma/i.test(model)) {
-            throw new Error(`AI_BLIND_MODEL "${model}" is a Google model - the blind reasoner must be `
+            throw new Error(`${src} "${model}" is a Google model - the blind reasoner must be `
                 + 'non-Google so it is an independent check on the (Google) anchored/facts reasoner, '
                 + 'not the same model agreeing with itself.');
         }

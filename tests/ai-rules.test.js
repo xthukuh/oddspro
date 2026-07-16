@@ -39,6 +39,58 @@ test('buildBlindPrompt never leaks facts.extra (free-form text can carry odds)',
     }
 });
 
+test('buildBlindPrompt never leaks a free-text motivation.home_stakes (screened, not just typed)', () => {
+    const p = buildBlindPrompt({
+        ...FIXTURE,
+        facts: { motivation: { home_stakes: 'must win; market has them near 1.40' } },
+    });
+    for (const banned of ['odds', 'price', 'bookmaker', 'tip', 'break-even', 'vig', '1.40']) {
+        assert.ok(!p.toLowerCase().includes(banned), `blind prompt must not leak "${banned}" via motivation.home_stakes`);
+    }
+});
+
+test('buildBlindPrompt screens key-absence names for a leaked price mention, keeping clean names', () => {
+    const p = buildBlindPrompt({
+        ...FIXTURE,
+        facts: { availability: { home_key_absences: ['striker priced 1.40 to score', 'J. Doe'] } },
+    });
+    for (const banned of ['odds', 'price', 'bookmaker', 'tip', 'break-even', 'vig', '1.40']) {
+        assert.ok(!p.toLowerCase().includes(banned), `blind prompt must not leak "${banned}" via home_key_absences`);
+    }
+    assert.ok(p.includes('J. Doe'), 'a clean absence name must survive screening');
+});
+
+// THE IDENTICAL-EVIDENCE CONTRACT. Extracts the two-line "Verified context"
+// block from each prompt and asserts the anchored prompt contains the blind
+// prompt's block byte-for-byte. A `facts.extra` note is included on purpose:
+// before the fix, `buildAnchoredPrompt` kept `extra` while `buildBlindPrompt`
+// dropped it, so the two fact blocks diverged and this assertion caught
+// exactly that gap (anchored "knowing" something blind didn't). Substring
+// containment (rather than a looser "both mention X" check) is what pins the
+// blocks as identical rather than merely overlapping.
+function _factsBlockOf(prompt) {
+    const idx = prompt.indexOf('Verified context (from an earlier grounded research pass):');
+    if (idx === -1) return null;
+    return prompt.slice(idx).split('\n').slice(0, 2).join('\n');
+}
+
+test('blind and anchored prompts see byte-identical fact evidence (the paired-measurement contract)', () => {
+    const facts = FactsPayload.parse({
+        availability: { home_key_absences: ['J. Doe'] },
+        extra: { note: 'an analyst note that must never reach a prompt' },
+    });
+    const blind = buildBlindPrompt({ ...FIXTURE, facts });
+    const anchored = buildAnchoredPrompt({ ...FIXTURE, facts, tip: { market: '1X', price: 1.4 } });
+    const blindBlock = _factsBlockOf(blind);
+    assert.ok(blindBlock, 'blind prompt must carry a facts block for this test to be meaningful');
+    assert.ok(anchored.includes(blindBlock), 'anchored prompt must contain the EXACT same facts block as blind');
+});
+
+test('prompt omits the facts header entirely when the screened projection is empty (extra-only facts)', () => {
+    const p = buildBlindPrompt({ ...FIXTURE, facts: { extra: { note: 'x' } } });
+    assert.ok(!p.includes('Verified context'));
+});
+
 test('buildAnchoredPrompt DOES carry the tip and price (that is the point)', () => {
     const p = buildAnchoredPrompt({ ...FIXTURE, tip: { market: '1X', price: 1.4 } });
     assert.ok(p.includes('1X'));
@@ -78,6 +130,28 @@ test('FactsPayload distinguishes absent evidence from "no problem found"', () =>
 test('FactsPayload tolerates unknown extra keys (the escape hatch)', () => {
     const parsed = FactsPayload.parse({ extra: { weather: 'storm' } });
     assert.deepEqual(parsed.extra, { weather: 'storm' });
+});
+
+test('FactsPayload coerces an out-of-vocabulary stakes value to null WITHOUT throwing, and still parses the rest', () => {
+    assert.doesNotThrow(() => FactsPayload.parse({
+        motivation: { home_stakes: 'must win; market has them near 1.40', away_stakes: 'normal', rotation_risk: 'high' },
+    }));
+    const parsed = FactsPayload.parse({
+        motivation: { home_stakes: 'must win; market has them near 1.40', away_stakes: 'normal', rotation_risk: 'high' },
+    });
+    assert.equal(parsed.motivation.home_stakes, null);
+    assert.equal(parsed.motivation.away_stakes, 'normal');
+    assert.equal(parsed.motivation.rotation_risk, 'high');
+});
+
+test('FactsPayload keeps `extra` for persistence even though no prompt ever sees it', () => {
+    const parsed = FactsPayload.parse({ extra: { note: 'bookmaker price 1.40 on the home win' } });
+    assert.deepEqual(parsed.extra, { note: 'bookmaker price 1.40 on the home win' });
+
+    const blind = buildBlindPrompt({ ...FIXTURE, facts: parsed });
+    const anchored = buildAnchoredPrompt({ ...FIXTURE, facts: parsed, tip: { market: '1X', price: 1.4 } });
+    assert.ok(!blind.includes('1.40'), 'blind prompt must not carry the persisted extra note');
+    assert.ok(!anchored.includes('1.40'), 'anchored prompt must not carry the persisted extra note either');
 });
 
 test('FactsPayload defaults a BOOLEAN fact field to null, never false (absent != no)', () => {
@@ -136,4 +210,11 @@ test('resolveTask throws on an unknown task (a typo must be loud)', () => {
 test('resolveTask refuses a Google model for the blind task (reasoner independence is required, not advisory)', () => {
     const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', AI_BLIND_MODEL: 'google/gemini-2.5-pro' };
     assert.throws(() => resolveTask('blind', cfg), /non-google|google/i);
+});
+
+test('resolveTask names the ACTUAL source key in the blind Google-model guard, not always AI_BLIND_MODEL', () => {
+    // AI_BLIND_MODEL unset -> the model resolved from OPENROUTER_MODEL; the
+    // error must say so, or an operator would edit the wrong env key.
+    const cfg = { OPENROUTER_MODEL: 'google/gemini-2.5-pro' };
+    assert.throws(() => resolveTask('blind', cfg), /OPENROUTER_MODEL "google\/gemini-2.5-pro"/);
 });
