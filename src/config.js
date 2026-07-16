@@ -72,6 +72,21 @@ const EnvSchema = z.object({
     // this many fresh verdicts per run (cached verdicts don't count).
     TIP_AI_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.75),
     TIP_AI_DAILY_CAP: z.coerce.number().int().min(0).default(20),
+    // --- M4.1 AI enrichment (collection only - nothing feeds ranking) ---
+    // Keys are secrets: .env ONLY, never the settings catalog.
+    OPENROUTER_API_KEY: optionalStr(z.string().min(1).optional()),
+    OPENROUTER_URL: z.string().default('https://openrouter.ai/api/v1'),
+    // Pinned, non-Google by REQUIREMENT: reasoner independence is what the
+    // consensus signal is built on - two Google models agreeing is Gemini
+    // agreeing with itself. openrouter/auto and openrouter/free are auto-routers
+    // that silently vary the model per fixture; they are disqualified.
+    // Verified present in the live /api/v1/models list 2026-07-16.
+    OPENROUTER_MODEL: z.string().default('openai/gpt-5.6-terra'),
+    AI_ENRICH_ENABLED: boolStr('0'),
+    AI_ENRICH_CAP: z.coerce.number().int().min(0).default(200),        // FIXTURES per run, not calls
+    AI_ENRICH_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
+    AI_BLIND_MODEL: z.string().default(''),      // '' = provider default
+    AI_ANCHORED_MODEL: z.string().default(''),   // '' = provider default
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)

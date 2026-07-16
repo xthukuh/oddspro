@@ -48,6 +48,15 @@ export const SETTINGS_CATALOG = [
     { key: 'SMS_ENABLED', type: 'boolean', group: 'features', public: false, live: true },
     { key: 'BOT_UA_FILTER_ENABLED', type: 'boolean', group: 'features', public: false, live: true },
     { key: 'GEO_RESOLVE_ENABLED', type: 'boolean', group: 'features', public: false, live: false },
+    // M4.1 AI enrichment (collection only - nothing feeds ranking). All late-read
+    // per run (src/enrich.js et al, Task 3+) -> live. OPENROUTER_API_KEY is a
+    // secret and stays OUT of this catalog by construction (config.js only).
+    { key: 'AI_ENRICH_ENABLED', type: 'boolean', group: 'ai', public: false, live: true },
+    { key: 'AI_ENRICH_CAP', type: 'int', group: 'ai', public: false, live: true, min: 0, max: 2000 },
+    { key: 'AI_ENRICH_CONCURRENCY', type: 'int', group: 'ai', public: false, live: true, min: 1, max: 16 },
+    { key: 'OPENROUTER_MODEL', type: 'string', group: 'ai', public: false, live: true },
+    { key: 'AI_BLIND_MODEL', type: 'string', group: 'ai', public: false, live: true },
+    { key: 'AI_ANCHORED_MODEL', type: 'string', group: 'ai', public: false, live: true },
 ];
 
 const BY_KEY = new Map(SETTINGS_CATALOG.map(e => [e.key, e]));
