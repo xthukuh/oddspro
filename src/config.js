@@ -4,6 +4,7 @@ import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS } from './db/goals-rules.js'; // ze
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
+import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
 
 // A committed-but-blank .env line (`KEY=`, the .env.example shape) reaches zod
 // as '' - treat that as unset for optional strings, else `.min(1).optional()`
@@ -141,6 +142,16 @@ const EnvSchema = z.object({
     AUTO_LIGHT_MINUTES: z.coerce.number().int().min(0).default(10), // 0 = light mode off
     AUTO_FULL_AT: z.string().default('06:00'),                      // ''/off = full mode off
     AUTO_FULL_DAYS: z.coerce.number().int().min(0).default(5),      // days ahead for the daily sweep
+    // Kickoff-proximity decaying backoff for per-game odds DETAIL fetches
+    // (light pass only; full sweep + manual refresh bypass). CSV
+    // `upToMin:maxAgeMin` tiers, `*` catch-all; 'off'/invalid = never skip.
+    ODDS_REFRESH_TIERS: z.string().default(DEFAULT_ODDS_TIERS),
+    // Idle-aware light pass: skip the odds+link scrape when nothing is
+    // in-play and the next kickoff is further out than the lookahead
+    // (0 = feature off); during idle still run every EVERY minutes so newly
+    // published games are discovered (0 = don't force-run while idle).
+    AUTO_IDLE_LOOKAHEAD_MINUTES: z.coerce.number().int().min(0).default(120),
+    AUTO_IDLE_EVERY_MINUTES: z.coerce.number().int().min(0).default(60),
     // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
     // has no log rotation and tight disk quotas).
     AUTO_LOG: boolStr('1'),

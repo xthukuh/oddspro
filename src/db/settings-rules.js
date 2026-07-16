@@ -39,6 +39,10 @@ export const SETTINGS_CATALOG = [
     { key: 'REFRESH_CACHE_MINUTES', type: 'number', group: 'refresh', public: false, live: true, min: 0 },
     { key: 'AUTO_LIGHT_MINUTES', type: 'int', group: 'refresh', public: false, live: true, min: 0 },
     { key: 'AUTO_FULL_DAYS', type: 'int', group: 'refresh', public: false, live: true, min: 0 },
+    // Odds-detail backoff + idle-aware light pass - late-read per pass -> live.
+    { key: 'ODDS_REFRESH_TIERS', type: 'string', group: 'refresh', public: false, live: true },
+    { key: 'AUTO_IDLE_LOOKAHEAD_MINUTES', type: 'int', group: 'refresh', public: false, live: true, min: 0 },
+    { key: 'AUTO_IDLE_EVERY_MINUTES', type: 'int', group: 'refresh', public: false, live: true, min: 0 },
     // Read once when the scheduler starts -> restart required.
     { key: 'AUTO_REFRESH_ENABLED', type: 'boolean', group: 'refresh', public: false, live: false },
     { key: 'AUTO_FULL_AT', type: 'string', group: 'refresh', public: false, live: false },
