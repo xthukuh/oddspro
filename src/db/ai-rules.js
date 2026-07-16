@@ -276,6 +276,73 @@ export function resolveTask(task, cfg) {
     throw new Error(`unknown ai task: ${task}`);
 }
 
+// TZ HAZARD FIX (Task 6 review finding 1): fixtures.kickoff is a naive EAT
+// (+03:00) wall-clock DATETIME. mysql2 decodes a BARE DATETIME column into a
+// JS Date using the NODE PROCESS's local timezone to read those wall-clock
+// digits - NOT the pinned SQL session '+03:00' (that setting only governs
+// server-side functions like NOW(), never how the client driver decodes
+// column bytes). Off-EAT (e.g. a UTC host), that Date represents a DIFFERENT
+// instant than the true kickoff, so selectEnrichable's `new Date(r.kickoff)`
+// below could admit a fixture that already kicked off up to 3h ago - the
+// exact silent, FLATTERING leakage this whole module exists to prevent
+// (a grounded call on a played match retrieves the final score).
+//
+// The fix: `_loadTargets` (src/enrich.js) must never hand selectEnrichable a
+// bare/naive kickoff. This DATE_FORMAT expression bakes the '+03:00' offset
+// into the projected STRING itself, so `new Date()` parses it as an ABSOLUTE
+// instant on ANY host, EAT or not - ISO 8601 strings carrying an explicit
+// offset are unambiguous by spec. DO NOT "simplify" this back to a bare
+// `f.kickoff` select - see tests/enrich-rules.test.js's TZ HAZARD test,
+// which pins this exact string and demonstrates the failure mode it closes.
+export const KICKOFF_SQL_EXPR = "DATE_FORMAT(f.kickoff, '%Y-%m-%dT%H:%i:%s+03:00')";
+
+// CORRELATION GUARDS (Task 6 review finding 3): plain SQL-fragment strings,
+// not a db.raw()-wrapped function, so this file stays zod-imports-only;
+// `_loadTargets` (src/enrich.js) applies them itself via its own db.raw().
+// Mirrored VERBATIM from hotpicks.js's own upcoming-fixture target loader
+// (src/hotpicks.js:129-130, updateHotPicks) - duplicated deliberately (same
+// "not because purity forbids the import" precedent as this file's own
+// `_prob`, which duplicates ai-parse.js's), because hotpicks.js is not a
+// pure module this file can import from. An uncorrelated fixture (no linked
+// bookmaker match) or one with no pre-match snapshot (history backfill never
+// ran, so bestTip has nothing to blend) can never produce a usable tip, so
+// `needAnchored` stays false and the fixture would burn a facts+blind call
+// for nothing while occupying an AI_ENRICH_CAP slot a pairable fixture could
+// have used - exactly the unpaired-blind waste the cap exists to prevent.
+export const CORRELATION_GUARDS = [
+    'EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)',
+    'EXISTS (SELECT 1 FROM fixture_prematch p WHERE p.fixture_id = f.id)',
+];
+
+// REUSE-FRESHNESS CHECK (Task 6 review finding 2): reuse is keyed on
+// (fixture, kind, provider, model_tag) PLUS tip identity for 'anchored' rows.
+// bestTip re-updates an upcoming fixture's tip_market/tip_price on EVERY
+// hotpicks run, so a changed tip must re-fire the anchored call even when
+// model_tag is unchanged - otherwise the stored anchored payload silently
+// keeps measuring anchoring against a tip the model never actually saw,
+// mis-attributing the paired anchored-minus-blind measurement to the wrong
+// bet. 'blind' never sees a tip (by construction - the whole point of a
+// blind reasoner), so it is judged on model_tag alone; `currentTip` is
+// ignored for it.
+//
+// `stored` is `{ model_tag, tip }` (tip only meaningful for 'anchored');
+// `tip` is `{ market, price } | null`. A legacy anchored row written before
+// this fix carries no `tip` at all - that must compare UNEQUAL to any real
+// current tip so it re-fires exactly once to backfill what it should have
+// recorded from the start, rather than being trusted forever on faith.
+//
+// `tip_price` is a DECIMAL(8,2) column - mysql2 hands it back as a STRING
+// ('1.85'), so price identity is compared numerically, not by strict ===.
+export function insightIsFresh(kind, wantModelTag, stored, currentTip) {
+    if (!stored || stored.model_tag !== wantModelTag) return false;
+    if (kind !== 'anchored') return true;
+    const storedTip = stored.tip;
+    if (!storedTip || storedTip.market !== currentTip?.market) return false;
+    const a = storedTip.price, b = currentTip?.price;
+    if (a == null || b == null) return a == null && b == null;
+    return Number(a) === Number(b);
+}
+
 // THE invariant that protects everything: an AI call must never touch a
 // past-kickoff fixture. A grounded call on a played match retrieves the final
 // score - leakage that RESEMBLES brilliance, and fails silently. This is the

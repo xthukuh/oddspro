@@ -8,6 +8,7 @@ import {
     selectEnrichable, capFixtures, buildBlindPrompt, buildAnchoredPrompt,
     FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities,
     enrichModelTag, resolveTask, FACT_SCHEMA_VER,
+    KICKOFF_SQL_EXPR, CORRELATION_GUARDS, insightIsFresh,
 } from './db/ai-rules.js';
 
 // M4.1 AI enrichment: three calls per upcoming fixture.
@@ -31,6 +32,21 @@ import {
 // team/league NAMES require joining teams/leagues, exactly like updateHotPicks'
 // own target load in src/hotpicks.js. The brief's f.home_name/f.away_name guess
 // does not exist on the fixtures table; fixed here to the real join.
+//
+// Review finding 1 (TZ HAZARD): kickoff is projected via KICKOFF_SQL_EXPR
+// (an explicit +03:00-offset STRING), never the bare `f.kickoff` column -
+// mysql2 decodes a bare DATETIME using the NODE PROCESS's local timezone,
+// not the pinned SQL session, so selectEnrichable's leakage guard could
+// admit an already-started fixture off-EAT. See ai-rules.js's comment on
+// KICKOFF_SQL_EXPR and tests/enrich-rules.test.js's TZ HAZARD tests. The SQL
+// `where kickoff > NOW()` below stays too (the session IS pinned +03:00, so
+// it is correct) - belt AND braces, now both actually load-bearing.
+//
+// Review finding 3 (CAP-WASTE): CORRELATION_GUARDS mirrors hotpicks.js's own
+// upcoming-fixture target loader (src/hotpicks.js:129-130) - without them, an
+// uncorrelated or snapshot-less fixture burns a facts+blind call while
+// needAnchored is false, wasting an AI_ENRICH_CAP slot on a fixture that can
+// never pair.
 async function _loadTargets() {
     const rows = await db('fixtures as f')
         .join('leagues as l', 'l.id', 'f.league_id')
@@ -38,19 +54,41 @@ async function _loadTargets() {
         .join('teams as ta', 'ta.id', 'f.away_team_id')
         .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
         .where('f.kickoff', '>', db.raw('NOW()'))
-        .select('f.id', 'f.kickoff', 'l.name as league',
+        .whereRaw(CORRELATION_GUARDS[0])
+        .whereRaw(CORRELATION_GUARDS[1])
+        .select('f.id', db.raw(`${KICKOFF_SQL_EXPR} as kickoff`), 'l.name as league',
             'th.name as home_name', 'ta.name as away_name',
-            'fp.tip_market', 'fp.tip_price')
-        .orderBy('f.kickoff', 'asc');
+            'fp.tip_market', 'fp.tip_price');
+    // Review finding 5: no .orderBy here - selectEnrichable() (pure,
+    // test-asserted) re-sorts soonest-first right after this returns, and
+    // nothing here LIMITs the SQL result, so a SQL-side order would sort a
+    // set that gets fully re-sorted a moment later for zero benefit. One
+    // sort, one place.
     return rows;
 }
 
+// Review finding 2 (tip-identity reuse gate): loads `payload` too, not just
+// `model_tag` - an 'anchored' row's stored tip identity (see _upsert below)
+// must be compared against the fixture's CURRENT tip, because bestTip
+// re-updates on every hotpicks run and a changed tip must re-fire the
+// anchored call even when model_tag is unchanged. See ai-rules.js's
+// insightIsFresh for the freshness decision itself.
 async function _existingTags(fixtureIds) {
     if (!fixtureIds.length) return new Map();
     const rows = await db('fixture_ai_insights').whereIn('fixture_id', fixtureIds)
-        .select('fixture_id', 'kind', 'provider', 'model_tag');
+        .select('fixture_id', 'kind', 'provider', 'model_tag', 'payload');
     const map = new Map();
-    for (const r of rows) map.set(`${r.fixture_id}:${r.kind}:${r.provider}`, r.model_tag);
+    for (const r of rows) {
+        // mysql2 may return a JSON column as an object or a string depending
+        // on driver flags (same hazard as records.js's `_json`) - tolerate
+        // both.
+        let payload = r.payload;
+        if (typeof payload === 'string') {
+            try { payload = JSON.parse(payload); } catch { payload = null; }
+        }
+        const tip = r.kind === 'anchored' ? (payload?.tip ?? null) : null;
+        map.set(`${r.fixture_id}:${r.kind}:${r.provider}`, { model_tag: r.model_tag, tip });
+    }
     return map;
 }
 
@@ -68,12 +106,18 @@ async function _upsert(row) {
 }
 
 // Reuse gate: skip a call whose stored row already carries the tag we WOULD
-// write. Keyed on (fixture, kind, provider, model_tag), so switching model,
-// grounding or prompt version re-enriches automatically and a steady-state
-// rerun re-bills nothing. Same idiom as the adjudicator's verdict reuse.
+// write. Keyed on (fixture, kind, provider, model_tag) - PLUS tip identity
+// for 'anchored' (finding 2: bestTip re-updates on every hotpicks run, so a
+// changed tip_market/tip_price must re-fire the anchored call even when
+// model_tag is unchanged, or the stored payload silently measures anchoring
+// against a tip the model never saw). So switching model, grounding, prompt
+// version OR tip re-enriches automatically, and a steady-state rerun
+// re-bills nothing. Same idiom as the adjudicator's verdict reuse. The
+// freshness decision itself is pure (ai-rules.js#insightIsFresh, tested).
 function _alreadyFresh(kind, f, tags) {
     const { provider, model, grounded } = resolveTask(kind === 'blind' ? 'blind' : 'anchored', config);
-    return tags.get(`${f.id}:${kind}:${provider}`) === enrichModelTag({ model, grounded });
+    const stored = tags.get(`${f.id}:${kind}:${provider}`);
+    return insightIsFresh(kind, enrichModelTag({ model, grounded }), stored, { market: f.tip_market, price: f.tip_price });
 }
 
 // One fixture's full 3-call set. Returns { written, errors }.
@@ -130,16 +174,23 @@ async function _enrichOne(f, tags) {
     // 3. ANCHORED (sees the tip + price; only meaningful when we HAVE a tip).
     if (needAnchored) {
         try {
+            const tip = { market: f.tip_market, price: f.tip_price };
             const r = await callModel({
                 task: 'anchored',
-                prompt: buildAnchoredPrompt({ ...stats, facts, tip: { market: f.tip_market, price: f.tip_price } }),
+                prompt: buildAnchoredPrompt({ ...stats, facts, tip }),
             });
             const p = AnchoredPayload.parse(extractJson(r.text));
             await _upsert({
                 fixture_id: f.id, kind: 'anchored', provider: r.provider,
                 model_tag: enrichModelTag({ model: r.model, grounded: r.grounded }),
                 schema_ver: FACT_SCHEMA_VER,
-                payload: JSON.stringify({ facts, probability: p.probability, consensus: p.consensus, reason: p.reason }),
+                // `tip` recorded verbatim (finding 2): the reuse gate
+                // (_alreadyFresh/insightIsFresh) reads it back on the NEXT
+                // run to tell "tip unchanged" apart from "tip moved on" -
+                // without it, M4.2/M4.3 would join this insight to whatever
+                // the CURRENT tip happens to be, silently mis-attributing
+                // the anchoring measurement to a bet the model never saw.
+                payload: JSON.stringify({ facts, tip, probability: p.probability, consensus: p.consensus, reason: p.reason }),
                 sources: r.sources?.length ? JSON.stringify(r.sources) : null,
             });
             written++;
@@ -181,6 +232,16 @@ export async function enrichFixtures() {
         console.debug('[enrich] AI_ENRICH_ENABLED off - nothing to do.');
         return { fixtures: 0, written: 0, errors: 0, skipped: 0 };
     }
+    // Review finding 4: resolveTask('blind', ...) THROWS on a misconfigured
+    // Google blind model (reasoner independence is a hard requirement - see
+    // ai-rules.js#resolveTask). That is a deterministic misconfiguration, so
+    // failing fast is correct - but _alreadyFresh called it from INSIDE each
+    // _batch worker with no surrounding try/catch, so the first fixture
+    // processed would throw mid-sweep and abort the whole run via _batch's
+    // reject path. Validate once, here, before any fixture is touched or any
+    // call is made, so a bad config fails loudly and immediately instead of
+    // N-times-over from wherever _batch happened to schedule it first.
+    resolveTask('blind', config);
     const all = await _loadTargets();
     // Pure guard, belt AND braces with the SQL filter above.
     const upcoming = selectEnrichable(all);
