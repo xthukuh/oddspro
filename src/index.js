@@ -5,6 +5,7 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks, performanceSummary } from './hotpicks.js';
+import { enrichFixtures } from './enrich.js';
 import { exportRecords } from './export.js';
 import { backfillGeo } from './geo.js';
 import { sendSms, smsBalance, smsDelivery } from './sms/index.js';
@@ -83,6 +84,12 @@ import { _date, _dtime } from './utils.js';
             + `${c.tips} tips, ${c.tips_skipped} skipped ineligible `
             + `(AI hot: ${c.ai.confirmed}/${c.ai.vetoed}/${c.ai.errors} confirmed/vetoed/errors; `
             + `AI tips: ${c.tip_ai.confirmed}/${c.tip_ai.vetoed}/${c.tip_ai.errors}).`);
+        return;
+    }
+
+    if (action === 'enrich') {
+        const r = await enrichFixtures();
+        console.debug(`[+] enrich: ${r.fixtures} fixtures, ${r.written} insights written, ${r.errors} errors, ${r.skipped} over cap.`);
         return;
     }
 
