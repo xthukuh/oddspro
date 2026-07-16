@@ -5,7 +5,23 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     temporalSplit, benjaminiHochberg, dayClusteredBootstrap,
+    configSignature, runnerUpMarkets, hasStraddle, cascadeLadder, LADDER_LINES,
 } from '../src/db/mine-rules.js';
+
+// Real breakdown captured from the warehouse on 2026-07-16 (tmp/m42-probe2.mjs)
+const REAL_VIEW = {
+    market: 'U 3.5', price: 1.54, confidence: 0.663, outcome: 'hit', vetoed: false,
+    breakdown: {
+        market: 'U 3.5', price: 1.54, confidence: 0.663,
+        market_prob: 0.6111, stats_prob: 0.7667, api_prob: null,
+        weights: { market: 0.6667, stats: 0.3333, api: null },
+        samples: { home_n: 6, away_n: 6, h2h_n: 5 },
+        runners_up: [
+            { market: 'O 2.5', price: 1.59, confidence: 0.5696, market_prob: 0.5934, stats_prob: 0.5222, api_prob: null },
+            { market: '1', price: 1.66, confidence: 0.543, market_prob: 0.5745, stats_prob: 0.5111, api_prob: 0.45 },
+        ],
+    },
+};
 
 test('temporalSplit cuts on day boundaries, oldest 70% train', () => {
     const days = ['2026-07-01', '2026-07-02', '2026-07-03', '2026-07-04', '2026-07-05',
@@ -87,4 +103,72 @@ test('dayClusteredBootstrap is deterministic for a given seed', () => {
 test('dayClusteredBootstrap returns nulls on empty input', () => {
     assert.deepEqual(dayClusteredBootstrap([], () => null, { draws: 10, seed: 1 }),
         { point: null, lo: null, hi: null });
+});
+
+test('configSignature renders winner first, then runners-up in order', () => {
+    assert.equal(configSignature(REAL_VIEW), 'U 3.5|O 2.5|1');
+});
+
+test('configSignature is total on malformed / absent breakdown', () => {
+    assert.equal(configSignature(null), null);
+    assert.equal(configSignature({ market: 'O 2.5', breakdown: null }), null);
+    assert.equal(configSignature({ market: 'O 2.5', breakdown: {} }), null);
+    assert.equal(configSignature({ market: 'O 2.5', breakdown: { runners_up: [] } }), null);
+    assert.equal(configSignature({ market: 'O 2.5', breakdown: { runners_up: 'junk' } }), null);
+    assert.equal(configSignature({ market: null, breakdown: { runners_up: [{ market: '1' }] } }), null);
+    // a runner-up with no market key must not render "undefined"
+    assert.equal(configSignature({ market: 'O 2.5', breakdown: { runners_up: [{ price: 2 }] } }), null);
+});
+
+test('runnerUpMarkets returns [] rather than throwing on junk', () => {
+    assert.deepEqual(runnerUpMarkets(REAL_VIEW), ['O 2.5', '1']);
+    assert.deepEqual(runnerUpMarkets(null), []);
+    assert.deepEqual(runnerUpMarkets({ breakdown: { runners_up: [{ market: 5 }] } }), []);
+});
+
+// The user's own observation: runners-up "2:O 3.5, 3:U 3.5" => high-scoring.
+test('hasStraddle detects an O k / U k pair on the SAME line', () => {
+    const straddle = { market: '1', breakdown: { runners_up: [{ market: 'O 3.5' }, { market: 'U 3.5' }] } };
+    assert.equal(hasStraddle(straddle), true);
+});
+
+test('hasStraddle rejects O/U pairs on DIFFERENT lines', () => {
+    const mixed = { market: '1', breakdown: { runners_up: [{ market: 'O 3.5' }, { market: 'U 2.5' }] } };
+    assert.equal(hasStraddle(mixed), false);
+});
+
+test('hasStraddle is false without a pair, and total on junk', () => {
+    assert.equal(hasStraddle(REAL_VIEW), false);
+    assert.equal(hasStraddle(null), false);
+    assert.equal(hasStraddle({ breakdown: { runners_up: [] } }), false);
+});
+
+test('cascadeLadder marks every line the fixture actually cleared', () => {
+    const view = { market: 'O 2.5', breakdown: {} };
+    const l = cascadeLadder(view, 2, 1); // 3 goals
+    assert.equal(l.tipLine, 2.5);
+    assert.equal(l.total, 3);
+    assert.equal(l.cleared['0.5'], true);
+    assert.equal(l.cleared['1.5'], true);
+    assert.equal(l.cleared['2.5'], true);
+    assert.equal(l.cleared['3.5'], false);
+    assert.equal(l.cleared['4.5'], false);
+});
+
+test('cascadeLadder uses strict > at the boundary (2 goals does NOT clear O 2.5)', () => {
+    const l = cascadeLadder({ market: 'O 2.5', breakdown: {} }, 1, 1); // 2 goals
+    assert.equal(l.cleared['1.5'], true);
+    assert.equal(l.cleared['2.5'], false);
+});
+
+test('cascadeLadder returns null for non-Over markets and null scores', () => {
+    assert.equal(cascadeLadder({ market: 'U 3.5', breakdown: {} }, 1, 1), null);
+    assert.equal(cascadeLadder({ market: '1X', breakdown: {} }, 1, 1), null);
+    assert.equal(cascadeLadder({ market: 'O 2.5', breakdown: {} }, null, 1), null);
+    assert.equal(cascadeLadder({ market: 'O 2.5', breakdown: {} }, 1, undefined), null);
+    assert.equal(cascadeLadder(null, 1, 1), null);
+});
+
+test('LADDER_LINES is the frozen ladder', () => {
+    assert.deepEqual(LADDER_LINES, [0.5, 1.5, 2.5, 3.5, 4.5]);
 });

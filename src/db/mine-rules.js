@@ -90,3 +90,66 @@ export function dayClusteredBootstrap(rows, statFn, { draws = 1000, seed = 42 } 
     const at = f => (stats.length ? stats[Math.min(stats.length - 1, Math.floor(f * stats.length))] : null);
     return { point: statFn(list), lo: at(0.025), hi: at(0.975) };
 }
+
+// ---------------------------------------------------------------------------
+// Feature extractors. Every one is TOTAL: tip_breakdown is persisted JSON
+// written by older code versions, so it is external data. Malformed input
+// returns null/[]/false - it never throws. Prior art: tipHitSafe, the
+// tolerant apisports-events parser.
+// ---------------------------------------------------------------------------
+
+export const LADDER_LINES = [0.5, 1.5, 2.5, 3.5, 4.5];
+
+const _overLine = market => {
+    const m = /^O (\d+(?:\.\d+)?)$/.exec(String(market ?? ''));
+    return m ? Number(m[1]) : null;
+};
+const _underLine = market => {
+    const m = /^U (\d+(?:\.\d+)?)$/.exec(String(market ?? ''));
+    return m ? Number(m[1]) : null;
+};
+
+// The runners-up the blend ranked behind the winning tip. Pre-phase-14 rows
+// carry no runners_up at all and simply drop out of the population.
+export function runnerUpMarkets(view) {
+    const ru = view?.breakdown?.runners_up;
+    if (!Array.isArray(ru)) return [];
+    return ru.map(r => r?.market).filter(m => typeof m === 'string' && m.length > 0);
+}
+
+// The configuration signature: what the blend ranked 1st, 2nd, 3rd. The
+// hypothesis (PR-2) is that this ORDERING encodes outcome signal the winning
+// tip's own confidence does not.
+export function configSignature(view) {
+    const winner = view?.market;
+    if (typeof winner !== 'string' || !winner.length) return null;
+    const rus = runnerUpMarkets(view);
+    if (!rus.length) return null;
+    return [winner, ...rus].join('|');
+}
+
+// The user's observed precursor: O k and U k both sitting in the runners-up
+// for the SAME line k means the blend is genuinely torn about that line -
+// read as a high-variance game. Different lines (O 3.5 / U 2.5) are NOT a
+// straddle; they are the blend agreeing the total lands in a middle band.
+export function hasStraddle(view) {
+    const rus = runnerUpMarkets(view);
+    const overs = new Set(rus.map(_overLine).filter(v => v != null));
+    return rus.map(_underLine).filter(v => v != null).some(u => overs.has(u));
+}
+
+// PR-1: for an Over tip, which lower lines did the fixture actually clear?
+// The "ladder down" idea is that a laddered leg lands more often than the tip
+// itself - true, but it only MATTERS if the lower line's real price still
+// clears break-even, which is what evaluatePattern goes on to test.
+export function cascadeLadder(view, fh, fa) {
+    const tipLine = _overLine(view?.market);
+    if (tipLine == null) return null;
+    if (fh == null || fa == null) return null;
+    const h = Number(fh); const a = Number(fa);
+    if (!Number.isFinite(h) || !Number.isFinite(a)) return null;
+    const total = h + a;
+    const cleared = {};
+    for (const line of LADDER_LINES) cleared[String(line)] = total > line;
+    return { tipLine, total, cleared };
+}
