@@ -921,26 +921,23 @@ test('retry classification: transport errors retry, bad replies do not', () => {
     assert.equal(isRetryableNetworkError(new Error('AI reply carried no JSON object: blah')), false);
 });
 
-// Spec 4: fail-open. callModel THROWS on provider failure; the orchestrator is
-// what swallows it. This pins the contract that a throw is what callers get.
-test('callModel propagates a provider failure (callers fail open on it)', async () => {
-    await assert.rejects(
-        () => callModel({ task: 'blind', prompt: 'x', cfg: { OPENROUTER_MODEL: 'openai/gpt-5.6-terra',
-            AI_BLIND_MODEL: '', HOTPICK_AI_WEB: 0 } }),
-        // No API key configured in tests -> the axios call fails. Any throw
-        // satisfies the contract; we assert it does not silently resolve.
-        () => true,
-    );
+// Spec 4: failures PROPAGATE out of callModel (the orchestrator's try/catch is
+// what fails open). Routed through an unknown task so the assertion is fully
+// OFFLINE - `npm test` must never touch the network, and a real
+// OPENROUTER_API_KEY in .env would otherwise make this fire a live request.
+test('callModel propagates a routing failure rather than resolving silently', async () => {
+    await assert.rejects(() => callModel({ task: 'nonsense', prompt: 'x', cfg: {} }),
+        /unknown ai task/i);
 });
 ```
 
-Add `isRetryableNetworkError` and `callModel` to the imports:
+Add `callModel` and `isRetryableNetworkError` to the imports:
 ```javascript
 import { getProvider, callModel } from '../src/ai/index.js';
 import { isRetryableNetworkError } from '../src/db/net-rules.js';
 ```
 
-**If the fail-open test proves flaky** (e.g. a real key in `.env` makes it hit the network), delete it rather than weakening it — `tests/` must stay offline. The orchestrator's try/catch is the real fail-open guarantee and Task 8 exercises it live.
+**Do NOT write a test that calls a provider's `complete()`.** `tests/` is offline by contract (no DB, no live APIs) and `.env` carries real keys — such a test would bill real money and fail in CI. The orchestrator's try/catch is the real fail-open guarantee, and Task 8 Step 2 exercises it live.
 
 - [ ] **Step 7: Run the suite**
 
@@ -1234,10 +1231,12 @@ export async function enrichFixtures() {
     const tags = await _existingTags(targets.map(f => f.id));
 
     let written = 0, errors = 0;
-    // Bounded concurrency: these are NETWORK calls, so the _batch(...,1) used
+    // Bounded concurrency: these are NETWORK calls, so the _batch(..., 1) rule
     // for DB writers (InnoDB deadlock avoidance) does not apply here.
+    // _batch(list, each, parallel) - verified signature in src/utils.js:51.
     const results = await _batch(
-        targets.map(f => () => _enrichOne(f, tags)),
+        targets,
+        f => _enrichOne(f, tags),
         Number(effective('AI_ENRICH_CONCURRENCY')),
     );
     for (const r of results) { written += r?.written ?? 0; errors += r?.errors ?? 0; }
