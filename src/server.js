@@ -1,4 +1,5 @@
 import express from 'express';
+import compression from 'compression';
 import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
@@ -607,10 +608,17 @@ app.get('/admin', (req, res) => res.type('html').send(ADMIN_HTML));
 // index.html is served no-cache so every app load revalidates - the browser
 // re-requests it (rather than serving a memory-cached copy), which both picks up
 // new deploys AND lets the visit-log middleware record repeat visitors. The
-// hash-named assets keep their default (immutable) caching.
+// vite-hashed assets are content-addressed, so they cache immutably for a year
+// (a new deploy = new filenames); only index.html revalidates.
+// gzip only reaches static requests: the /api/* handlers terminate their own
+// responses above without next(), so this middleware never re-compresses the
+// API layer's own gzip (http-cache.js).
 const dist = path.resolve('web', 'dist');
 if (existsSync(dist)) {
+    app.use(compression());
     app.use(express.static(dist, {
+        maxAge: '1y',
+        immutable: true,
         setHeaders: (res, filePath) => {
             if (filePath.endsWith('.html')) res.setHeader('Cache-Control', 'no-cache');
         },
