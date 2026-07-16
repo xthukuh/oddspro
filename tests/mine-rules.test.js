@@ -8,7 +8,7 @@ import {
     configSignature, runnerUpMarkets, hasStraddle, cascadeLadder, LADDER_LINES,
     blendParts, missProfile, consensusProxies,
     CLASSES, MIN_TRAIN, MIN_TEST, BETTABLE_FLOOR,
-    flatEv, hitRate, classifyPattern, evaluatePattern,
+    flatEv, hitRate, classifyPattern, evaluatePattern, PRE_REGISTERED,
 } from '../src/db/mine-rules.js';
 
 // Real breakdown captured from the warehouse on 2026-07-16 (tmp/m42-probe2.mjs)
@@ -352,4 +352,66 @@ test('evaluatePattern is total on an empty population', () => {
     assert.equal(r.n, 0);
     assert.equal(r.klass, 'underpowered');
     assert.equal(r.precision, null);
+});
+
+test('PRE_REGISTERED is a frozen, pre-committed registry with the spec ids', () => {
+    const ids = PRE_REGISTERED.map(h => h.id);
+    assert.deepEqual(ids, [
+        'PR-1-cascade-o15',
+        'PR-2a-straddle',
+        'PR-2b-concord',
+        'PR-2c-confidence-gap',
+        'PR-3-thin-evidence',
+        'PR-4a-short-price',
+        'PR-4b-low-spread',
+        'PR-4c-ai-verdict',
+    ]);
+});
+
+test('every PRE_REGISTERED entry documents its claim and a total selector', () => {
+    for (const h of PRE_REGISTERED) {
+        assert.ok(h.hypothesis?.length > 10, `${h.id} needs a hypothesis`);
+        assert.ok(h.population?.length > 5, `${h.id} needs a population`);
+        assert.ok(h.claim?.length > 10, `${h.id} needs a claim`);
+        assert.equal(typeof h.select, 'function');
+        assert.equal(typeof h.ship_eligible, 'boolean');
+        // selectors must be total - junk in, false out, never a throw
+        assert.equal(h.select(null), false, `${h.id}.select(null) must not throw`);
+        assert.equal(h.select({}), false, `${h.id}.select({}) must not throw`);
+        assert.equal(h.select({ market: null, breakdown: null }), false);
+    }
+});
+
+test('PR-4c (AI verdict) is pre-declared ship-INELIGIBLE at n=61', () => {
+    const h = PRE_REGISTERED.find(x => x.id === 'PR-4c-ai-verdict');
+    assert.equal(h.ship_eligible, false);
+    assert.match(h.claim, /underpowered/i);
+});
+
+test('PR-2a selects the straddle configuration the user actually observed', () => {
+    const h = PRE_REGISTERED.find(x => x.id === 'PR-2a-straddle');
+    assert.equal(h.select({ market: '1', breakdown: { runners_up: [{ market: 'O 3.5' }, { market: 'U 3.5' }] } }), true);
+    assert.equal(h.select({ market: '1', breakdown: { runners_up: [{ market: 'O 3.5' }, { market: 'U 2.5' }] } }), false);
+});
+
+test('PR-2b concord selects same-family winner+runners-up via the SHARED labeller', () => {
+    const h = PRE_REGISTERED.find(x => x.id === 'PR-2b-concord');
+    // all over_under
+    assert.equal(h.select({ market: 'O 2.5', breakdown: { runners_up: [{ market: 'U 3.5' }, { market: 'O 1.5' }] } }), true);
+    // mixed families
+    assert.equal(h.select({ market: 'O 2.5', breakdown: { runners_up: [{ market: 'U 3.5' }, { market: '1X' }] } }), false);
+});
+
+test('PR-2c selects a >= 0.10 confidence gap over the first runner-up', () => {
+    const h = PRE_REGISTERED.find(x => x.id === 'PR-2c-confidence-gap');
+    assert.equal(h.select({ market: '1', confidence: 0.70, breakdown: { runners_up: [{ market: 'X', confidence: 0.55 }] } }), true);
+    assert.equal(h.select({ market: '1', confidence: 0.70, breakdown: { runners_up: [{ market: 'X', confidence: 0.65 }] } }), false);
+    assert.equal(h.select({ market: '1', confidence: null, breakdown: { runners_up: [{ market: 'X', confidence: 0.5 }] } }), false);
+});
+
+test('PR-4b selects the LOW-spread consensus trap (book and stats agree)', () => {
+    const h = PRE_REGISTERED.find(x => x.id === 'PR-4b-low-spread');
+    assert.equal(h.select({ market: '1', breakdown: { market_prob: 0.60, stats_prob: 0.62 } }), true);  // spread 0.02
+    assert.equal(h.select({ market: '1', breakdown: { market_prob: 0.60, stats_prob: 0.80 } }), false); // spread 0.20
+    assert.equal(h.select({ market: '1', breakdown: { market_prob: 0.60, stats_prob: null } }), false);
 });

@@ -350,3 +350,124 @@ export function evaluatePattern({ name, rows, baseRows, trainDays, testDays, see
             : null,
     };
 }
+
+// ---------------------------------------------------------------------------
+// The pre-registered hypothesis registry (spec S6).
+//
+// This constant is committed BEFORE the mine runs. That is the whole point:
+// a claim written down in advance is evidence; a claim discovered by staring
+// at outputs is a fishing trip. Anything found post-hoc goes in the findings
+// doc's EXPLORATORY section and is never ship-eligible.
+//
+// Precedents for why this discipline is not optional: the "X2 +15% EV" claim
+// was REFUTED by a fair re-test, and the runner-up swap backtested
+// net-negative (+108/-128). Both looked great before they were tested fairly.
+// ---------------------------------------------------------------------------
+
+const CONFIDENCE_GAP = 0.10;
+const LOW_SPREAD = 0.05;
+const SHORT_PRICE = 1.30;
+
+export const PRE_REGISTERED = [
+    {
+        id: 'PR-1-cascade-o15',
+        hypothesis: 'H1 - O/U cascade ladder',
+        population: 'settled tips whose market is O 2.5',
+        claim: 'A fixture we tipped O 2.5 clears the LOWER line O 1.5 materially '
+            + 'more often than the O 2.5 tip itself lands. Probe suggested 85.1% vs '
+            + '70.3% (n=101). Expect a sub-1.20 price trap: O 1.5 is a live -5.4% loser.',
+        ship_eligible: true,
+        select: v => v?.market === 'O 2.5',
+    },
+    {
+        id: 'PR-2a-straddle',
+        hypothesis: 'H2 - runner-up configuration (straddle)',
+        population: 'settled tips whose runners-up contain O k and U k for the same line k',
+        claim: "The user's observed precursor: when the blend ranks both O k and U k "
+            + 'behind the winner it is torn about that line, which reads as a '
+            + 'high-variance/high-scoring game.',
+        ship_eligible: true,
+        select: v => hasStraddle(v),
+    },
+    {
+        id: 'PR-2b-concord',
+        hypothesis: 'H2 - runner-up configuration (concord)',
+        population: 'settled tips where winner and all runners-up share one market family',
+        claim: 'When the blend ranks three candidates from a single family it is '
+            + 'confident about the DIMENSION (goals, or result) and its winning tip '
+            + 'should land more often than the unconditional base.',
+        ship_eligible: true,
+        select: v => {
+            const w = v?.market;
+            if (typeof w !== 'string' || !w.length) return false;
+            const rus = runnerUpMarkets(v);
+            if (!rus.length) return false;
+            const g = marketGroup(w);
+            return rus.every(m => marketGroup(m) === g);
+        },
+    },
+    {
+        id: 'PR-2c-confidence-gap',
+        hypothesis: 'H2 - runner-up configuration (confidence gap)',
+        population: `settled tips where winner.confidence - ru1.confidence >= ${CONFIDENCE_GAP}`,
+        claim: 'A winner that clears its nearest rival by a wide margin reflects a '
+            + 'decisive blend and should land more often than a photo-finish pick.',
+        ship_eligible: true,
+        select: v => {
+            const w = _num(v?.confidence);
+            const r1 = _num(v?.breakdown?.runners_up?.[0]?.confidence);
+            if (w == null || r1 == null) return false;
+            return w - r1 >= CONFIDENCE_GAP;
+        },
+    },
+    {
+        id: 'PR-3-thin-evidence',
+        hypothesis: 'H3 - miss commonality (thin evidence)',
+        population: 'settled tips whose persisted samples are thin (either side < 6 games)',
+        claim: 'Misses concentrate on thin-evidence fixtures. If true this is an '
+            + 'avoid-rule candidate - but only if its EV is worse than the book '
+            + "average, not merely its hit rate (a thin tip priced right isn't a loss).",
+        ship_eligible: true,
+        select: v => missProfile(v)?.thin === true,
+    },
+    {
+        id: 'PR-4a-short-price',
+        hypothesis: 'H7 - consensus anti-signal (price shortness)',
+        population: `settled tips priced under ${SHORT_PRICE}`,
+        claim: 'The founding contrarian thesis in its bluntest form: the shortest '
+            + '(most public-favoured) tips underperform what their price demands. '
+            + 'Probe: <1.30 => -7.3% EV vs 1.30-1.60 => -3.3%. Directionally pro-thesis. '
+            + 'NB this pattern is expected to LOSE on hit-rate-per-price - a confirmed '
+            + 'anti-signal is an AVOID rule, never a bet.',
+        ship_eligible: true,
+        select: v => {
+            const p = _num(v?.price);
+            return p != null && p < SHORT_PRICE;
+        },
+    },
+    {
+        id: 'PR-4b-low-spread',
+        hypothesis: 'H7 - consensus anti-signal (market-vs-stats agreement)',
+        population: `settled tips where |market_prob - stats_prob| <= ${LOW_SPREAD}`,
+        claim: 'The thesis at its sharpest and best-powered (runs on all ~1,076 rows): '
+            + 'when the bookmaker and our own stats AGREE - the consensus trap - the '
+            + 'tip underperforms its price relative to tips where our stats dissent.',
+        ship_eligible: true,
+        select: v => {
+            const s = consensusProxies(v)?.spread;
+            return s != null && s <= LOW_SPREAD;
+        },
+    },
+    {
+        id: 'PR-4c-ai-verdict',
+        hypothesis: 'H7 - consensus anti-signal (AI verdict)',
+        population: 'settled tips carrying an AI adjudication verdict',
+        claim: 'Gemini agreeing with the book is an anti-signal. PRE-DECLARED '
+            + 'UNDERPOWERED: only 61 settled tips carry a verdict (confirm 75.0% '
+            + 'n=28 vs veto 72.7% n=33). Registered NOW so that when the sample '
+            + 'arrives (n>=300) the test is already pre-registered rather than '
+            + 'fitted after the fact. Ship-ineligible until then.',
+        ship_eligible: false,
+        select: v => v?.vetoed === true,
+    },
+];
