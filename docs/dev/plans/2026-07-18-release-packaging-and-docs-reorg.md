@@ -866,7 +866,7 @@ git commit -m "docs: staleness audit - commands/docs-layout/agent-library pointe
 
 **Interfaces:** none — closing bookkeeping.
 
-- [ ] **Step 1: Full-sweep re-verification**
+- [x] **Step 1: Full-sweep re-verification**
 
 ```sh
 npm test        # 723 pass
@@ -874,18 +874,18 @@ git log --oneline -8    # expect the 5 task commits on main
 ```
 Re-run the Task 3 Step 6 dangling-reference grep once more — still zero hits.
 
-- [ ] **Step 2: Push**
+- [x] **Step 2: Push**
 
 ```sh
 git push origin main
 ```
 
-- [ ] **Step 3: Refresh Claude memory (Write tool, memory dir)**
+- [x] **Step 3: Refresh Claude memory (Write tool, memory dir)**
 
 1. `MEMORY.md` — replace the `oddspro project state` line's hook text with a 2026-07-18 headline (v1.2.0 tagged on main, live deploy user-pending; post-tag features incl. release packaging + docs reorg + agent library; suite 723/723; detail history inside the file).
 2. `resume-point.md` — rewrite: main @ new sha pushed; SHIPPED summary; the docs **path mapping** (docs/superpowers/{specs,plans} → docs/dev/{specs,plans}; root implementation-plan.md → docs/dev/; checklists → docs/dev/checklists/; research → docs/research/; guides → docs/guides/; new AGENTS.md + docs/agents/toolset.md + docs/README.md) so future recalls don't chase dead paths; NEXT = nothing queued (live deploy stays user-gated per [[separation-of-duties]]); new-docs rule (specs/plans go under docs/dev/, overriding the superpowers default).
 3. `oddspro-toolset-nuggets.md` — append: `2026-07-18: SHIPPED — content landed in docs/agents/toolset.md + AGENTS.md; this file remains as provenance; future verified nuggets go straight to the library (dated append).`
 
-- [ ] **Step 4: Report**
+- [x] **Step 4: Report**
 
 Summarize to the user: what shipped per part, the verification evidence (suite count, guard refusal output, tag-warning output, zero-dangling-grep), and the standing note that the tag-creation path fires on the next real version bump.
