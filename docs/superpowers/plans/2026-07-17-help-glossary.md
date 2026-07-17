@@ -1,10 +1,10 @@
-# Help Dialog Glossary + Collapsible Sections Implementation Plan
+﻿# Help Dialog Glossary + Collapsible Sections Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Restructure the web Help dialog into collapsible sections and add a four-category sports-betting glossary (markets & codes, odds & pricing, performance & stats, app terms).
 
-**Architecture:** A zero-import pure-data module (`web/src/glossary.js`) holds the definitions; a small reusable `CollapseSection.jsx` lifts the ▸ disclosure idiom BetslipPlayground already uses inline; `HelpModal.jsx` becomes a stack of six sections (About open, rest collapsed). A node:test file guards the market entries against `tipMarketLabel()` from `src/db/magic-rules.js` so glossary wording can never drift from the labels the table shows.
+**Architecture:** A zero-import pure-data module (`web/src/glossary.js`) holds the definitions; a small reusable `CollapseSection.jsx` lifts the â–¸ disclosure idiom BetslipPlayground already uses inline; `HelpModal.jsx` becomes a stack of six sections (About open, rest collapsed). A node:test file guards the market entries against `tipMarketLabel()` from `src/db/magic-rules.js` so glossary wording can never drift from the labels the table shows.
 
 **Tech Stack:** React 19 + Vite 6 + Tailwind 4 (CSS-var token theme), node:test offline suite.
 
@@ -18,7 +18,7 @@
 - Web + tests only: no server, API, or migration changes. Do **not** run `npm run build:web` (web/dist rebuild is a deploy-time step).
 - `npm test` must stay green: 719 passing before this plan, 723 after (4 new tests).
 - Tailwind token classes in use: `text-label` (primary text), `text-label-2` (secondary), `text-label-3` (tertiary), `border-separator` (hairline), `bg-fill`.
-- Tap targets ≥44px (codebase convention for interactive rows).
+- Tap targets â‰¥44px (codebase convention for interactive rows).
 
 ## File Structure
 
@@ -39,7 +39,7 @@
 - Consumes: `tipMarketLabel(market)` from `src/db/magic-rules.js` (test only; the data module itself imports nothing).
 - Produces: `export const GLOSSARY` - array of 4 categories `{ id, title, terms }`; each term is `{ term, def }` plus optional `{ key, name }` where `name` is the exact `tipMarketLabel(key)` wording. Task 2 renders this verbatim.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/glossary.test.js`:
 
@@ -83,19 +83,19 @@ test('glossary: no em/en dashes anywhere (web copy rule)', () => {
     for (const g of GLOSSARY) {
         for (const t of g.terms) {
             for (const s of [t.term, t.name ?? '', t.def]) {
-                assert.ok(!/[–—]/.test(s), `${g.id} ${t.term}: "${s}"`);
+                assert.ok(!/[â€“â€”]/.test(s), `${g.id} ${t.term}: "${s}"`);
             }
         }
     }
 });
 ```
 
-- [ ] **Step 2: Run the test to verify it fails**
+- [x] **Step 2: Run the test to verify it fails**
 
 Run: `node --test tests/glossary.test.js`
 Expected: FAIL - `Cannot find module ... web/src/glossary.js` (ERR_MODULE_NOT_FOUND).
 
-- [ ] **Step 3: Write the data module**
+- [x] **Step 3: Write the data module**
 
 Create `web/src/glossary.js` (content is the approved spec wording, verbatim):
 
@@ -156,9 +156,9 @@ export const GLOSSARY = [
         terms: [
             { term: 'Tip', def: "The app's best-supported pick for a fixture across all markets, blending bookmaker odds, recent form and expert data." },
             { term: 'Confidence', def: 'How strongly the evidence backs the tip, shown as a percentage. It measures the chance of winning, not profitability.' },
-            { term: 'Hot pick 🔥', def: "An Over 2.5 goals candidate that passed every one of the app's strict checks. Rare by design." },
-            { term: 'Safe pick 🛡', def: 'A tip that also clears the stricter Safety Net gates (strong agreement, modest price, enough evidence). Built for multi-bet slips that survive.' },
-            { term: 'Sure bets ⭐', def: "The day's top picks ranked by estimated chance of winning. A survival claim, never a profit promise. Signed-in feature." },
+            { term: 'Hot pick ðŸ”¥', def: "An Over 2.5 goals candidate that passed every one of the app's strict checks. Rare by design." },
+            { term: 'Safe pick ðŸ›¡', def: 'A tip that also clears the stricter Safety Net gates (strong agreement, modest price, enough evidence). Built for multi-bet slips that survive.' },
+            { term: 'Sure bets â­', def: "The day's top picks ranked by estimated chance of winning. A survival claim, never a profit promise. Signed-in feature." },
             { term: 'Magic sort', def: 'Reorders the table by a strategy ranked on how it would have performed over past settled days, best first.' },
             { term: 'Slip / legs', def: 'A multi-bet: several picks (legs) combined into one bet. The odds multiply and every leg must win, so each added leg raises the payout but lowers the chance the slip survives.' },
             { term: 'Void', def: 'A bet returned with no win or loss (stake back). Example: draw no bet when the match ends in a draw.' },
@@ -168,17 +168,17 @@ export const GLOSSARY = [
 ];
 ```
 
-- [ ] **Step 4: Run the test to verify it passes**
+- [x] **Step 4: Run the test to verify it passes**
 
 Run: `node --test tests/glossary.test.js`
 Expected: 4 passing, 0 failing.
 
-- [ ] **Step 5: Run the full suite**
+- [x] **Step 5: Run the full suite**
 
 Run: `npm test`
 Expected: 723 passing (719 + 4), 0 failing.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add tests/glossary.test.js web/src/glossary.js
@@ -197,14 +197,14 @@ git commit -m "feat(web): betting-lingo glossary data, tipMarketLabel no-drift g
 - Consumes: `GLOSSARY` from Task 1 (`{ id, title, terms: [{ term, def, key?, name? }] }`); `Sheet`, `SheetClose`, `PinToggle` from `./Sheet.jsx` (unchanged).
 - Produces: `CollapseSection` default export, props `{ title, defaultOpen = false, children }`. Body is conditionally rendered - closed sections mount nothing (this is what keeps the YouTube iframe from loading until opened).
 
-- [ ] **Step 1: Create CollapseSection.jsx**
+- [x] **Step 1: Create CollapseSection.jsx**
 
 Create `web/src/components/CollapseSection.jsx`:
 
 ```jsx
 import { useState } from 'react';
 
-// Collapsible section with the app's ▸ disclosure idiom (BetslipPlayground
+// Collapsible section with the app's â–¸ disclosure idiom (BetslipPlayground
 // uses the same inline pattern). The body is only MOUNTED while open -
 // HelpModal relies on this so the demo-video iframe never loads until its
 // section is expanded.
@@ -216,7 +216,7 @@ export default function CollapseSection({ title, defaultOpen = false, children }
                 type="button" onClick={() => setOpen(o => !o)} aria-expanded={open}
                 className="w-full min-h-[44px] flex items-center gap-2 py-2.5 text-left"
             >
-                <span className={`text-label-3 text-xs transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
+                <span className={`text-label-3 text-xs transition-transform ${open ? 'rotate-90' : ''}`}>â–¸</span>
                 <span className="text-sm font-semibold">{title}</span>
             </button>
             {open && <div className="pb-4">{children}</div>}
@@ -225,7 +225,7 @@ export default function CollapseSection({ title, defaultOpen = false, children }
 }
 ```
 
-- [ ] **Step 2: Restructure HelpModal.jsx**
+- [x] **Step 2: Restructure HelpModal.jsx**
 
 Replace the full contents of `web/src/components/HelpModal.jsx` with:
 
@@ -289,11 +289,11 @@ export default function HelpModal({ onClose }) {
                         <p className="text-sm text-label-2 mb-3">
                             <strong className="text-label">{APP_NAME}</strong> is a football odds &amp; tips dashboard. It brings
                             bookmaker odds (BetPawa, Betika) together with official fixture and results data,
-                            matches them up, and highlights the standout <strong className="text-label">Over 2.5 hot picks</strong> 🔥
+                            matches them up, and highlights the standout <strong className="text-label">Over 2.5 hot picks</strong> ðŸ”¥
                             and best-bet <strong className="text-label">tips</strong> for each day - ranked most-likely-to-win first.
                         </p>
                         <ul className="text-sm text-label-2 space-y-1 list-disc pl-5">
-                            <li>Use the <strong className="text-label">date navigation</strong> (‹ ›) and the calendar to browse fixtures by day; the logo returns you to today.</li>
+                            <li>Use the <strong className="text-label">date navigation</strong> (â€¹ â€º) and the calendar to browse fixtures by day; the logo returns you to today.</li>
                             <li><strong className="text-label">Refresh</strong> re-fetches odds, fixtures &amp; results for the selected date.</li>
                             <li><strong className="text-label">Magic</strong> re-orders tips so the strongest come first.</li>
                             <li><strong className="text-label">Slips</strong> builds virtual multi-bet slips from the day's tips.</li>
@@ -319,7 +319,7 @@ export default function HelpModal({ onClose }) {
                                 />
                             ) : (
                                 <div className="absolute inset-0 flex flex-col items-center justify-center text-center text-white/70 p-4">
-                                    <span className="text-4xl mb-2">▶</span>
+                                    <span className="text-4xl mb-2">â–¶</span>
                                     <span className="text-sm">Demo video coming soon</span>
                                     <span className="text-xs text-white/50 mt-1">A walkthrough will be published here shortly.</span>
                                 </div>
@@ -339,26 +339,26 @@ export default function HelpModal({ onClose }) {
 
 Notes for the implementer: the intro `<p>`/`<ul>` copy is byte-identical to the old file except the `<ul>` dropped `mb-4` (section padding covers it) and the old standalone `<h3>Demo video</h3>` heading is replaced by its section title. The credit line gained `pt-3 border-t border-separator` so it reads as a footer under the last section.
 
-- [ ] **Step 3: Run the full suite (regression only - no new tests this task)**
+- [x] **Step 3: Run the full suite (regression only - no new tests this task)**
 
 Run: `npm test`
 Expected: 723 passing, 0 failing (React components aren't unit-tested in this repo; the suite guards the data + shared modules).
 
-- [ ] **Step 4: Browser-verify on the Vite dev server**
+- [x] **Step 4: Browser-verify on the Vite dev server**
 
 Start: `cd web && npm run dev` (proxies `/api/*` to :3001; if :5173 is held by an orphan, Vite picks :5174 - use whatever port it prints; on Windows kill orphans with `taskkill //PID <pid> //T //F`).
 
 Checklist (reuse the existing MCP browser tab if one is open - do not spawn a second):
-1. Open the printed URL. Click the **?** help icon (nav right zone; inside the ⋯ overflow menu on narrow widths).
+1. Open the printed URL. Click the **?** help icon (nav right zone; inside the â‹¯ overflow menu on narrow widths).
 2. "About & how to use" is expanded; the four glossary sections and "Demo video" are collapsed.
-3. Each section toggles independently; the ▸ chevron rotates 90° when open; opening one does NOT close another.
+3. Each section toggles independently; the â–¸ chevron rotates 90Â° when open; opening one does NOT close another.
 4. Network tab: **no** `youtube-nocookie.com` request until "Demo video" is expanded (with `VITE_DEMO_VIDEO_URL` unset the placeholder shows instead - then just confirm the placeholder only mounts on expand).
 5. Spot-check glossary copy: "DNB1 - Home (draw no bet)." style rows, no em dashes visible.
 6. Sections render identically signed-out (glossary is not details-gated).
 7. Zero console errors.
 8. Cleanup: stop the dev server (kill the process tree), close any page/context you opened.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/components/CollapseSection.jsx web/src/components/HelpModal.jsx
