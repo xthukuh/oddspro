@@ -21,6 +21,37 @@ export function toMsisdn(e164) {
     return e164.slice(1);
 }
 
+// Region -> E.164 calling code for the national-form inference below. Only
+// regions the app actually serves (SMS_DEFAULT_REGION); extend as needed -
+// an unlisted region simply can't infer bare national numbers (fail-safe).
+const REGION_CALLING_CODES = { KE: '254', UG: '256', TZ: '255' };
+
+// Normalize a user-typed phone into E.164, or null when it can't be done
+// safely. Accepts: E.164 passthrough (`+254...`), the 00 international
+// dialing prefix (`00254...`), MSISDN form (`254...`), national trunk form
+// (`0799...`), and the bare national significant number (`799...`) - the
+// last three resolved via `region`'s calling code. Formatting noise
+// (spaces, dashes, dots, parens) is stripped first. Every candidate is
+// re-validated as E.164, so a bad guess returns null rather than a junk key.
+export function normalizePhone(input, { region = 'KE' } = {}) {
+    if (typeof input !== 'string') return null;
+    const s = input.replace(/[\s\-.()]/g, '');
+    if (!s) return null;
+    if (s.startsWith('+')) return isValidE164(s) ? s : null;
+    if (!/^\d+$/.test(s)) return null;
+    if (s.startsWith('00')) {
+        const intl = `+${s.slice(2)}`;
+        return isValidE164(intl) ? intl : null;
+    }
+    const code = REGION_CALLING_CODES[region];
+    if (!code) return null;
+    // Already carries the calling code (MSISDN form) - don't double-prefix.
+    if (s.startsWith(code) && isValidE164(`+${s}`)) return `+${s}`;
+    const national = s.startsWith('0') ? s.slice(1) : s;
+    const e164 = `+${code}${national}`;
+    return isValidE164(e164) ? e164 : null;
+}
+
 // --- OTP codes --------------------------------------------------------------
 // A uniform numeric code of `len` digits with leading zeros preserved.
 // `randomInt` is INJECTED - pass crypto.randomInt in production, a stub in

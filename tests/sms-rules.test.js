@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    isValidE164, toMsisdn, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
+    isValidE164, toMsisdn, normalizePhone, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
     resendCooldownSeconds, canResend, otpIssueDecision, parseBongaSend, parseBongaBalance,
     parseBongaDelivery, classifyBongaStatus, isCleartextUrl,
 } from '../src/db/sms-rules.js';
@@ -21,6 +21,35 @@ test('isValidE164 accepts real numbers and rejects junk', () => {
 test('toMsisdn strips the + (Bonga MSISDN form)', () => {
     assert.equal(toMsisdn('+254799944004'), '254799944004');
     assert.throws(() => toMsisdn('0799944004'), /invalid E\.164/);
+});
+
+test('normalizePhone: national/local Kenyan forms become E.164 (+254...)', () => {
+    // Bare national significant number (what a Kenyan types without the 0).
+    assert.equal(normalizePhone('799944004'), '+254799944004');
+    // National format with the trunk 0.
+    assert.equal(normalizePhone('0799944004'), '+254799944004');
+    // Already E.164: passthrough untouched.
+    assert.equal(normalizePhone('+254799944004'), '+254799944004');
+    // MSISDN form (calling code, no +) round-trips instead of double-prefixing.
+    assert.equal(normalizePhone('254799944004'), '+254799944004');
+    // 00 international dialing prefix.
+    assert.equal(normalizePhone('00254799944004'), '+254799944004');
+    // Formatting noise (spaces, dashes, dots, parens) is stripped.
+    assert.equal(normalizePhone(' 0712 345-678 '), '+254712345678');
+    assert.equal(normalizePhone('(254) 799.944.004'), '+254799944004');
+});
+
+test('normalizePhone: invalid input and unknown regions fail safe (null)', () => {
+    assert.equal(normalizePhone('abc'), null);
+    assert.equal(normalizePhone(''), null);
+    assert.equal(normalizePhone(null), null);
+    assert.equal(normalizePhone('+0799944004'), null);      // invalid E.164 stays invalid
+    assert.equal(normalizePhone('07999'), null);            // too short even prefixed
+    // Unknown region: national forms can't be inferred, but explicit
+    // international forms (+ / 00) still normalize.
+    assert.equal(normalizePhone('799944004', { region: 'ZZ' }), null);
+    assert.equal(normalizePhone('+254799944004', { region: 'ZZ' }), '+254799944004');
+    assert.equal(normalizePhone('0041446681800', { region: 'ZZ' }), '+41446681800');
 });
 
 test('generateOtp makes a fixed-length numeric code, leading zeros kept', () => {

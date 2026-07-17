@@ -26,6 +26,7 @@ import {
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema, mustChangePinBlocks,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
+import { normalizePhone } from './db/sms-rules.js';
 import { validatePrefsPut } from './db/prefs-rules.js';
 import { accessFromUser, guestDateAllowed } from './db/access-rules.js';
 import { getUserPrefs, saveUserPrefs } from './prefs.js';
@@ -213,7 +214,12 @@ if (config.AUTH_ENABLED) {
     app.post('/api/auth/login', authJson, async (req, res, next) => {
         if (!csrfOk(req, res)) return;
         try {
-            const { phone, pin } = loginSchema.parse(req.body);
+            // Normalize local/national forms (0799..., 799..., 254...) to E.164
+            // BEFORE the schema gate, so the rate limiter and the users.phone
+            // comparison always see the one canonical form. A phone that can't
+            // be normalized passes through unchanged and fails loudly in zod.
+            const normalized = normalizePhone(req.body?.phone, { region: config.SMS_DEFAULT_REGION });
+            const { phone, pin } = loginSchema.parse({ ...req.body, phone: normalized ?? req.body?.phone });
             const rl = rateLimit(`login:${phone}`, { windowMs: 900_000, max: 10 });
             if (!rl.allowed) return res.status(429).json({ error: 'Too many attempts - try again later.', retry_after_seconds: rl.retryAfterSeconds });
             const user = await authenticate({ phone, pin });
