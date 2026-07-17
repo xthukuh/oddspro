@@ -86,6 +86,17 @@ const TEXT_TARGET_OPS = new Set(['like', 'not-contains', 'in', 'not-in']);
 // (RHS is another column, not a literal); text/set ops intentionally excluded.
 const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 
+// Catalog-gated pivot allow-list (2026-07-17 perf pass): the market keys of
+// the last catalog computed IN THIS PROCESS. Every web consumer of
+// row.markets resolves keys through /api/columns' catalog, so pivoting
+// anything beyond it (~84% of a busy date's payload: below-coverage
+// period-tagged/team-total/combo keys) was pure waste - 698 KB raw and a
+// 10.5K-element DOM per the 2026-07-16 audit. null (no catalog computed yet:
+// CLI export, pre-warm boot window) = full pivot, the pre-trim behavior; the
+// serve process computes it at boot + every 30s via the A5 catalog warm.
+// `?markets=all` on /api/records bypasses the gate per request.
+let _pivotAllowed = null;
+
 // Column catalog consumed by the settings modal (and the CSV default set).
 // `providers` is discovered from the warehouse so newly-integrated bookmakers
 // appear in the settings UI without frontend changes.
@@ -99,10 +110,12 @@ export async function columnCatalog() {
         .select('type_name', 'name', 'handicap')
         .countDistinct({ matches: 'match_id' })
         .groupBy('type_name', 'name', 'handicap');
+    const markets = discoverMarketColumns(marketRows); // already carries sortable/filterable
+    _pivotAllowed = new Set(markets.map(c => c.key));
     return {
         providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
-        markets: discoverMarketColumns(marketRows), // already carries sortable/filterable
+        markets,
         stats: [
             ...STAT_COLUMNS.map(c => ({ ...c, sortable: false, filterable: false })),
             ...types.map(({ type }) => ({
@@ -202,7 +215,9 @@ function _coerceList(key, value, op) {
 //   completed match) - the web "Show completed games" settings toggle
 //   providers: array limiting rows to those bookmakers (default: all)
 //   per_page: 'all' disables pagination (the web table shows a whole date)
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null } = {}) {
+//   markets: 'all' pivots every stored non-filter-only market key (the
+//   pre-trim behavior); default gates the pivot on the catalog allow-list
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null, markets = null } = {}) {
     const unpaged = per_page === 'all';
     page = unpaged ? 1 : Math.max(1, Number(page) || 1);
     per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
@@ -286,7 +301,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'fp.tip_ai_review',
         );
 
-    const hydrated = await _hydrate(rows);
+    const hydrated = await _hydrate(rows, markets === 'all' ? null : _pivotAllowed);
     // Redacted tiers (guests) lose the internal reasoning per row - pure
     // redactRecordForRole; full tiers (and access:null callers - the CLI/CSV
     // export and AUTH_ENABLED=0 installs) get the rows untouched.
@@ -330,7 +345,9 @@ function _h2hMeetings(h2h, r, homeName, awayName) {
 
 // Attach odds pivot, pre-match stats (frozen fixture_prematch snapshot when
 // present, live standings/H2H derivation otherwise) and fixture statistics.
-async function _hydrate(rows) {
+// `allowed` (Set|null): catalog market-key allow-list gating the pivot -
+// null pivots everything non-filter-only (CLI / pre-catalog / markets=all).
+async function _hydrate(rows, allowed = null) {
     if (!rows.length) return [];
     const matchIds = rows.map(r => r.match_id);
     const fixtureIds = [...new Set(rows.map(r => r.api_id))];
@@ -340,11 +357,12 @@ async function _hydrate(rows) {
     // separate maps (stale = vanished from the latest bookmaker update;
     // last-seen price kept for display). Fresh row count (ALL markets, not
     // just canonical) feeds the per-match availability flag. Keyed by
-    // canonicalMarket() (M2 Task 4): pivots every 'column' + 'grouped' family
+    // canonicalMarket() (M2 Task 4): pivots 'column' + 'grouped' families
     // (canonical + BTTS/DNB/odd-even/team-totals/combos/HT-FT/...), skipping
-    // only 'filter-only' markets (correct_score, raw: passthrough) - those stay
-    // stored + SQL-filterable via marketIdentity but are never pivoted for
-    // display (huge/unbounded cardinality).
+    // 'filter-only' markets (correct_score, raw: passthrough) plus - since the
+    // 2026-07-17 perf pass - anything outside the catalog allow-list (below-
+    // coverage keys the UI can't offer). Skipped markets stay stored +
+    // SQL-filterable via marketIdentity; they are just never pivoted.
     const odds = await db('odds_markets').whereIn('match_id', matchIds)
         .select('match_id', 'type_name', 'name', 'price', 'handicap', 'is_stale');
     const marketsByMatch = new Map(), staleByMatch = new Map(), freshCounts = new Map();
@@ -352,6 +370,9 @@ async function _hydrate(rows) {
         if (!o.is_stale) freshCounts.set(o.match_id, (freshCounts.get(o.match_id) ?? 0) + 1);
         const m = canonicalMarket(o);
         if (m.columnizable === 'filter-only') continue;
+        // Catalog gate (perf): keys the UI can never offer stay out of the
+        // payload; SQL sort/filter on them still works via marketIdentity.
+        if (allowed && !allowed.has(m.key)) continue;
         const map = o.is_stale ? staleByMatch : marketsByMatch;
         let obj = map.get(o.match_id);
         if (!obj) map.set(o.match_id, obj = {});

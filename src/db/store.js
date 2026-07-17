@@ -104,7 +104,8 @@ export async function oddsExcludeIds(provider, from_start_time = null, { tiers =
     return { ids, completed, backoff };
 }
 
-// Persist fetched provider games: upsert `matches` by (provider, provider_match_id),
+// Persist fetched provider games: upsert `matches` by (provider, provider_match_id)
+// (metadata is written on INSERT only - see the exclusion below),
 // then refresh each match's `odds_markets` rows: markets present in the latest
 // snapshot are replaced (delete + insert), markets that vanished are kept and
 // flagged stale (last-seen price survives for display; see odds-diff.js).
@@ -137,9 +138,13 @@ export async function saveMatches(games) {
             let match_id;
             if (found) {
                 match_id = found.id;
+                // metadata (raw ~39KB provider JSON) is insert-only: written at
+                // first sight, excluded here so refreshes stop rewriting 556MB
+                // of write-only blobs every sweep (settle-columns idiom).
+                const { metadata, ...refresh } = _matchRow(g);
                 // Explicit bump: ON UPDATE CURRENT_TIMESTAMP skips no-op updates,
                 // but updated_at must reflect every odds refresh (UI freshness).
-                await trx('matches').where('id', match_id).update({ ..._matchRow(g), updated_at: db.fn.now() });
+                await trx('matches').where('id', match_id).update({ ...refresh, updated_at: db.fn.now() });
                 updated = true;
             } else {
                 const [id] = await trx('matches').insert(_matchRow(g));

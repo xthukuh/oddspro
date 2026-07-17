@@ -371,7 +371,7 @@ function stopCatalogWarm() {
 // AUTH_ENABLED=0 installs: access=null = the legacy behavior, untouched.
 app.get('/api/records', optionalAuth, async (req, res, next) => {
     try {
-        const { date, page, per_page, sort, filters, completed, providers } = req.query;
+        const { date, page, per_page, sort, filters, completed, providers, markets } = req.query;
         // Normalize the date for the cache key so absent/'today'/'now' hit the
         // same slot as the explicit YYYY-MM-DD the web client sends.
         const day = date === 'all' ? 'all' : _dtime(date || new Date()).slice(0, 10);
@@ -395,6 +395,9 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
             completed: completed !== '0', // ?completed=0 hides concluded games
             providers: providers ? String(providers).split(',').filter(Boolean) : null,
             access,
+            // ?markets=all bypasses the catalog pivot allow-list (full pre-trim
+            // payload); the req.query spread above already keys the cache on it.
+            markets: markets === 'all' ? 'all' : null,
         }));
     } catch (e) {
         next(e);
