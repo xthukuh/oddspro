@@ -504,9 +504,11 @@ export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
 
 // Sure bets (2026-07-17 spec): the day's top-N safest legs, ranked by the
 // SAME calibrated win probability the betslip survival meter shows. Pool =
-// the shipped safe gates unchanged (safeQualifies - callers pass their
-// effective safe policy in `opts`; unknown gate fields fall back to
-// DEFAULT_SAFE inside safeQualifies). Deliberately NOT ranked by the 'sure'
+// the spec-pinned DEFAULT_SAFE gates (safeQualifies' fallback) - the web
+// passes only DEFAULT_SURE_BETS, so v1 has no env/user gate tunability
+// (spec §5; the ~8-9 legs/day evidence holds only for those literals, and
+// an env-tightened policy starves the list). `opts` may still override
+// gates for tests/tuning scripts. Deliberately NOT ranked by the 'sure'
 // strategy: the design replay found its top ranks underperform (rank #1
 // realized 63-64% vs ~85% at ranks 8-10), while estimateLegProb is
 // self-consistent - the number we sort by IS the number the UI displays.

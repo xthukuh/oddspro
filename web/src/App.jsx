@@ -8,7 +8,7 @@ import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate,
 import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
-import BetslipPlayground from './components/BetslipPlayground.jsx';
+import BetslipPlayground, { seedSlip } from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
@@ -445,14 +445,18 @@ export default function App() {
     );
     // Sure-bets picks: the day's top-10 by calibrated leg prob over the WHOLE
     // loaded selection - same day-level scope as safePicks, so other toggles/
-    // filters never change who makes the list. Gates = effectiveSafe (identical
-    // to Safe-only, so Sure bets ⊆ safe pool); cap/slip size pinned by
-    // DEFAULT_SURE_BETS. Empty for guests (their rows lack tip_breakdown; the
-    // magic sheet shows a sign-in nudge instead).
+    // filters never change who makes the list. Gates = the spec-PINNED
+    // DEFAULT_SAFE literals (safeQualifies' fallback), deliberately NOT
+    // effectiveSafe: the design evidence (~8-9 legs/day) holds only for those
+    // values, v1 ships no env/user tunability (spec §5), and a host whose
+    // SAFE_* env tightens the gates (e.g. minParts 3) would starve Sure bets
+    // to permanent zero-days ("tighter starves", spec §2 - live-verified on
+    // this host). Cap/slip size pinned by DEFAULT_SURE_BETS. Empty for guests
+    // (their rows lack tip_breakdown; the magic sheet shows a sign-in nudge).
     const signedIn = !!session?.user;
     const surePicks = useMemo(
-        () => (signedIn ? sureBetsSelection(visibleData, cal, { ...effectiveSafe, ...DEFAULT_SURE_BETS }) : []),
-        [signedIn, visibleData, cal, effectiveSafe],
+        () => (signedIn ? sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS) : []),
+        [signedIn, visibleData, cal],
     );
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
@@ -822,6 +826,14 @@ export default function App() {
         setSureBets(value);
         localStorage.setItem(LS_SURE_BETS, value ? '1' : '0');
     };
+    // "Top-3 slip" (magic sheet): seed a slip from the top sure-bets legs into
+    // the persisted book, then open the playground (it reads storage on mount).
+    const seedTopSlip = () => {
+        if (!surePicks.length) return;
+        seedSlip(surePicks.slice(0, DEFAULT_SURE_BETS.slipSize), date || 'all', 'Sure top-3');
+        setShowMagic(false);
+        setShowSlips(true);
+    };
     const saveRiskGate = value => {
         setRiskGate(value);
         localStorage.setItem(LS_RISK_GATE, value ? '1' : '0');
@@ -1179,7 +1191,10 @@ export default function App() {
             {showMagic && (
                 <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
                     onToggle={id => { onToggleMagic(id); setShowMagic(false); }}
-                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)}
+                    signedIn={signedIn} sureBets={sureBets} sureCount={surePicks.length}
+                    sureCap={DEFAULT_SURE_BETS.maxPerDay} slipSize={DEFAULT_SURE_BETS.slipSize}
+                    onSureBets={saveSureBets} onTopSlip={seedTopSlip} />
             )}
 
             {showFilters && catalog && (
