@@ -4,6 +4,13 @@
 
 Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — only Setup Node.js App, Cron Jobs, File Manager, and phpMyAdmin. This is the **manual-first** workflow: build locally, upload the built files. No Git Version Control, no `deploy` branch, no build step on the server. (CI/CD can come later when the host gains SSH — see §7.)
 
+## What's new in the 2026-07-17 detours (deployment-relevant)
+
+- **`./.HALT` kill-switch.** cPanel's Stop button is unreliable; creating a file named `.HALT` in the app root (File Manager) gracefully stops the serve process within ~30s, and any respawned process **refuses to boot** (exit 1) while the file exists — Passenger eventually marks the app errored, which IS the desired "stopped" state. Delete the file to allow boot again.
+- **AI verdicts moved to a background worker.** The daily sweep no longer bills AI (it dropped from ~75 min to seconds); hot-pick/tip verdicts are drained by an in-process worker every 60s while the serve runs. **Hosts running cron-only (no always-on serve): add `node src/index.js aireview` after the daily sweep**, or verdicts stop accumulating. `TIP_AI_DAILY_CAP` is now a per-EAT-day billed budget held in memory PER PROCESS — a serve restart resets it (worst case one extra cap that day), and each `aireview` cron invocation gets its own budget (effectively per-invocation, like the old per-run cap).
+- **Light passes are cheaper:** kickoff-proximity backoff (`ODDS_REFRESH_TIERS`) + an idle skip (`AUTO_IDLE_LOOKAHEAD_MINUTES`) cut odds detail calls sharply; matches ≤90 min from kickoff always refresh. The daily full sweep and the manual refresh button bypass the backoff.
+- New `.env` knobs (all with sane defaults, see `.env.example`): `HOTPICK_AI_CONCURRENCY`, `TIP_AI_REUSE_PRICE_TOL`, `ODDS_REFRESH_TIERS`, `AUTO_IDLE_LOOKAHEAD_MINUTES`, `AI_RUN_MAX_MINUTES`, `AI_BREAKER_AFTER`; plus the DARK regime switches `AI_INJECTION_PREAMBLE` / `AI_CONSENSUS_*` (leave OFF — flipping one requires the dated `docs/memory-bank.md` regime note first).
+
 ## What's new in v1.1.0 (deployment-relevant)
 
 - **User accounts (phone + 4-digit PIN, SMS OTP verification).** ON by default (`AUTH_ENABLED=1`). Anonymous visitors become a **guest tier**: no future dates on `/api/records` (403 `{auth_required}` → the SPA shows a sign-in panel), the all-dates view stops at today, and rows lose the internal reasoning (`tip_breakdown` / AI reviews / hot signals; confidence quantized). Signing in restores everything. `AUTH_ENABLED=0` (or an `API_TOKEN`/`ADMIN_TOKEN` machine bearer) restores the legacy full-access behavior — note this means **plain `curl` against a production host now gets redacted records**; use a bearer when smoke-testing full payloads.

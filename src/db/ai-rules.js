@@ -257,11 +257,28 @@ export function enrichModelTag({ model, grounded, promptVersion = PROMPT_VERSION
     return `${model}${grounded ? '+search' : ''}#e${promptVersion}`;
 }
 
+// T10a: activating the injection preamble (AI_INJECTION_PREAMBLE, dark by
+// default) changes the grounded facts prompt's BYTES, and every payload
+// embeds those facts - so activation must bump the effective prompt version
+// (#e2 -> #e3) exactly like a manual prompt edit would. Keeping the old tag
+// would silently mislabel a changed prompt as the old measurement regime
+// (the TIP_MIN_PRICE lesson). Pure so the bump math is test-asserted.
+export function effectivePromptVersion(preambleOn, base = PROMPT_VERSION) {
+    return preambleOn ? base + 1 : base;
+}
+
 // task -> { provider, model, grounded }. Facts are extracted ONCE by the
 // grounded model; both reasoners then work identical evidence, so disagreement
 // is reasoning difference rather than one model simply knowing more.
 export function resolveTask(task, cfg) {
     const grounded = Boolean(cfg.HOTPICK_AI_WEB);
+    // 'adjudicate' (T9): the hot-pick/tip adjudicators, routed through the
+    // same resolver now that they ride callStructured. Byte-identical to what
+    // gemini.js#_adjudicate hardcoded before the harness migration - model,
+    // grounding and therefore the #p3 reuse tag are all unchanged.
+    if (task === 'adjudicate') {
+        return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
+    }
     if (task === 'facts') {
         return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
     }

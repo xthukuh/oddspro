@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     FACT_SCHEMA_VER, PROMPT_VERSION, BLIND_MARKETS, buildBlindPrompt, buildAnchoredPrompt,
-    FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag, resolveTask,
+    FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag,
+    effectivePromptVersion, resolveTask,
 } from '../src/db/ai-rules.js';
 
 const FIXTURE = {
@@ -226,6 +227,12 @@ test('enrichModelTag encodes model + grounding + prompt version', () => {
         'openai/gpt-5.6-terra#e1');
 });
 
+test('effectivePromptVersion: preamble activation bumps the tag version, off = base (T10a regime math)', () => {
+    assert.equal(effectivePromptVersion(false), PROMPT_VERSION, 'dark default: unchanged tag');
+    assert.equal(effectivePromptVersion(true), PROMPT_VERSION + 1, 'a changed prompt must never wear the old tag');
+    assert.equal(effectivePromptVersion(true, 7), 8);
+});
+
 test('resolveTask routes facts+anchored to Gemini and the blind reasoner off-Google', () => {
     const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', OPENROUTER_MODEL: 'openai/gpt-5.6-terra',
         HOTPICK_AI_WEB: 1, AI_BLIND_MODEL: '', AI_ANCHORED_MODEL: '' };
@@ -235,6 +242,21 @@ test('resolveTask routes facts+anchored to Gemini and the blind reasoner off-Goo
         { provider: 'openrouter', model: 'openai/gpt-5.6-terra', grounded: false });
     assert.deepEqual(resolveTask('anchored', cfg),
         { provider: 'gemini', model: 'gemini-2.5-flash', grounded: true });
+});
+
+test('resolveTask routes adjudicate to Gemini on the adjudicator model + grounding (T9 harness migration)', () => {
+    // Byte-identical to what gemini.js#_adjudicate hardcoded pre-harness:
+    // model = HOTPICK_AI_MODEL, grounded = Boolean(HOTPICK_AI_WEB) - the #p3
+    // reuse tag depends on this mapping never drifting.
+    const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', HOTPICK_AI_WEB: 1 };
+    assert.deepEqual(resolveTask('adjudicate', cfg),
+        { provider: 'gemini', model: 'gemini-2.5-flash', grounded: true });
+});
+
+test('resolveTask adjudicate grounding follows HOTPICK_AI_WEB off too', () => {
+    const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', HOTPICK_AI_WEB: 0 };
+    assert.deepEqual(resolveTask('adjudicate', cfg),
+        { provider: 'gemini', model: 'gemini-2.5-flash', grounded: false });
 });
 
 test('resolveTask honours per-task model overrides', () => {

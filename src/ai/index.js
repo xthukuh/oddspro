@@ -9,9 +9,10 @@ import * as openrouter from './openrouter.js';
 // nothing else changes.
 const PROVIDERS = { gemini, openrouter };
 
-// Today's adjudicator API, re-exported unchanged so src/hotpicks.js keeps
-// working exactly as before.
-export { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './gemini.js';
+// The adjudicators moved to src/ai/adjudicators.js (T9) and are no longer
+// re-exported here - re-exporting them would form the import cycle the split
+// exists to prevent (adjudicators -> harness -> index -> adjudicators).
+// Adjudication callers import from './ai/adjudicators.js' directly.
 
 export function getProvider(name) {
     const p = PROVIDERS[name];

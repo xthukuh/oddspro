@@ -7,7 +7,7 @@ import {
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
-import { aiEnabled, aiModelTag } from './ai/index.js';
+import { aiEnabled, aiModelTag } from './ai/adjudicators.js';
 import { canReuseHotVerdict, hotReviewPending, tipReviewPending } from './db/adjudicate-rules.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';

@@ -1,8 +1,10 @@
 import { config } from './config.js';
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
-import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai/index.js';
+import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai/adjudicators.js';
+import { newRunGuard } from './db/ai-guard-rules.js';
 import { loadTeamHistory } from './hotpicks.js';
+import { effectiveAiConfig } from './enrich.js';
 import { pairedTeamGoalsAggregates, h2hGoalsAggregates, apiPredictionSignal } from './db/goals-rules.js';
 import {
     hotReviewPending, tipReviewPending, selectTipReviews, marketLine, latencyStats,
@@ -33,7 +35,8 @@ import { _batch, _progress, debugLog } from './utils.js';
 // Hot adjudications are uncapped (a handful/day) but counted.
 
 const CHUNK = 50;             // persist granularity: a kill loses at most one chunk of calls
-const MAX_CONSEC_ERRORS = 5;  // abort the drain when the API looks dead (breaker lands in T9)
+const MAX_CONSEC_ERRORS = 5;  // abort the drain when the API looks dead (belt + braces with
+                              // the T9 run-guard breaker, which makes refused calls instant)
 
 const state = {
     running: false,
@@ -112,6 +115,13 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
         const tag = aiModelTag();
         const tol = Number(effective('TIP_AI_REUSE_PRICE_TOL'));
         const conc = Number(effective('HOTPICK_AI_CONCURRENCY'));
+        // T9 run guard: one per drain. Wall-clock budget (AI_RUN_MAX_MINUTES,
+        // 0 = off) + circuit breaker (AI_BREAKER_AFTER consecutive transport/
+        // parse failures) - once tripped, remaining calls refuse instantly
+        // instead of burning a 60s timeout each; refusals resolve to 'error'
+        // verdicts and the consec-error abort below ends the drain.
+        const cfg = effectiveAiConfig();
+        const guard = newRunGuard(startedMs);
         const rows = await _loadPending();
         const hotPend = rows.filter(r => hotReviewPending(r, tag));
         const tipPend = rows.filter(r => tipReviewPending(r, tag,
@@ -195,7 +205,7 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
                 fixture: r.fixture, kickoff: r.kickoff, league: r.league,
                 home: pair.home, away: pair.away, h2h, market,
                 api: apiPredictionSignal(apiPreds.get(r.fixture_id), line),
-            });
+            }, { guard, cfg });
         }, async (r, verdict) => {
             // Fresh reviews carry their verdict-time context (judged) - the
             // row only holds the CURRENT evaluation once columns are
@@ -214,7 +224,7 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
         summary.tips.skipped += skipped.length;
         await _phase(billable, 'tips', r => reviewTip({
             fixture: r.fixture, kickoff: r.kickoff, league: r.league, tip: _tipFromRow(r),
-        }), async (r, verdict) => {
+        }, { guard, cfg }), async (r, verdict) => {
             const review = verdict.review
                 ? { ...verdict.review, judged: { tip_market: r.tip_market, tip_price: Number(r.tip_price) } }
                 : null;

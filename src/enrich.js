@@ -1,17 +1,28 @@
 import { db } from './db/connection.js';
 import { config } from './config.js';
 import { effective, effectiveConfig } from './settings.js';
-import { callModel, getProvider } from './ai/index.js';
-import { extractJson } from './ai-parse.js';
+import { getProvider } from './ai/index.js';
+import { callStructured } from './ai/harness.js';
+import { newRunGuard, injectionPreamble } from './db/ai-guard-rules.js';
 import { _batch } from './utils.js';
 import { pairedTeamGoalsAggregates, h2hGoalsAggregates } from './db/goals-rules.js';
 import { loadTeamHistory } from './hotpicks.js';
 import {
     selectEnrichable, capFixtures, buildBlindPrompt, buildAnchoredPrompt,
     FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities,
-    enrichModelTag, resolveTask, FACT_SCHEMA_VER,
+    enrichModelTag, effectivePromptVersion, resolveTask, FACT_SCHEMA_VER,
     KICKOFF_SQL_EXPR, CORRELATION_GUARDS, insightIsFresh,
 } from './db/ai-rules.js';
+
+// T10a (DARK by default): the injection preamble targets GROUNDED prompts -
+// here that is the facts call (grounded iff HOTPICK_AI_WEB). Because every
+// blind/anchored payload EMBEDS those facts, activation is a regime change
+// for all three kinds: `_tag` below bumps the effective prompt version
+// (#e2 -> #e3, pure math in ai-rules#effectivePromptVersion) so reuse
+// re-fires instead of mislabeling new-regime rows with the old tag.
+const _preambleOn = cfg => Boolean(cfg.AI_INJECTION_PREAMBLE && cfg.HOTPICK_AI_WEB);
+const _tag = (cfg, model, grounded) =>
+    enrichModelTag({ model, grounded, promptVersion: effectivePromptVersion(_preambleOn(cfg)) });
 
 // M4.1 AI enrichment: three calls per upcoming fixture.
 //   1. facts    - grounded Gemini extracts typed facts ONCE
@@ -148,7 +159,7 @@ async function _upsert(row) {
 function _alreadyFresh(kind, f, tags, cfg) {
     const { provider, model, grounded } = resolveTask(kind === 'blind' ? 'blind' : 'anchored', cfg);
     const stored = tags.get(`${f.id}:${kind}:${provider}`);
-    return insightIsFresh(kind, enrichModelTag({ model, grounded }), stored, { market: f.tip_market, price: f.tip_price });
+    return insightIsFresh(kind, _tag(cfg, model, grounded), stored, { market: f.tip_market, price: f.tip_price });
 }
 
 // FINAL REVIEW finding 1 (THE USER HAS RULED - spec §3.1 governs): both
@@ -187,7 +198,10 @@ function _buildStats(f, fixturesByTeam, cfg) {
 }
 
 // One fixture's full 3-call set. Returns { written, errors }.
-async function _enrichOne(f, tags, fixturesByTeam, cfg) {
+// All three calls ride callStructured (T9): sanitize -> extractJson ->
+// per-kind zod schema -> observe-only suspicion flags, plus the shared
+// per-run guard - prompt bytes and tags are UNCHANGED, so nothing re-bills.
+async function _enrichOne(f, tags, fixturesByTeam, cfg, guard) {
     // Nothing to do -> spend NOTHING. Without this the grounded facts call (the
     // most expensive of the three) would re-bill on every sweep even when both
     // reasoners are already fresh.
@@ -200,8 +214,8 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
 
     // 1. FACTS (grounded, once).
     try {
-        const r = await callModel({ task: 'facts', prompt: _factsPrompt(stats), cfg });
-        facts = FactsPayload.parse(extractJson(r.text));
+        const r = await callStructured({ task: 'facts', prompt: _factsPrompt(stats, cfg), schema: FactsPayload, cfg, guard });
+        facts = r.data;
         sources = r.sources ?? null;
     } catch (e) {
         errors++;
@@ -213,11 +227,11 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     // would skip the anchored call below and leave the pair half-measured.
     if (needBlind) {
         try {
-            const r = await callModel({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }), cfg });
-            const p = BlindPayload.parse(extractJson(r.text));
+            const r = await callStructured({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }), schema: BlindPayload, cfg, guard });
+            const p = r.data;
             await _upsert({
                 fixture_id: f.id, kind: 'blind', provider: r.provider,
-                model_tag: enrichModelTag({ model: r.model, grounded: r.grounded }),
+                model_tag: _tag(cfg, r.model, r.grounded),
                 schema_ver: FACT_SCHEMA_VER,
                 payload: JSON.stringify({ facts, probabilities: normalizeProbabilities(p.probabilities), reason: p.reason }),
                 sources: sources ? JSON.stringify(sources) : null,
@@ -233,15 +247,17 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     if (needAnchored) {
         try {
             const tip = { market: f.tip_market, price: f.tip_price };
-            const r = await callModel({
+            const r = await callStructured({
                 task: 'anchored',
                 prompt: buildAnchoredPrompt({ ...stats, facts, tip }),
+                schema: AnchoredPayload,
                 cfg,
+                guard,
             });
-            const p = AnchoredPayload.parse(extractJson(r.text));
+            const p = r.data;
             await _upsert({
                 fixture_id: f.id, kind: 'anchored', provider: r.provider,
-                model_tag: enrichModelTag({ model: r.model, grounded: r.grounded }),
+                model_tag: _tag(cfg, r.model, r.grounded),
                 schema_ver: FACT_SCHEMA_VER,
                 // `tip` recorded verbatim (finding 2): the reuse gate
                 // (_alreadyFresh/insightIsFresh) reads it back on the NEXT
@@ -261,8 +277,11 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     return { written, errors };
 }
 
-function _factsPrompt({ fixture, kickoff, league }) {
+// T10a insertion point: the ONLY grounded prompt in the enrichment set. The
+// preamble prepends when active (dark by default) - see _preambleOn above.
+function _factsPrompt({ fixture, kickoff, league }, cfg = config) {
     return [
+        ...(_preambleOn(cfg) ? [...injectionPreamble(), ''] : []),
         'Research this football fixture and report ONLY verified facts.',
         '',
         `Fixture: ${fixture}`,
@@ -369,12 +388,17 @@ export async function enrichFixtures() {
     const fixturesByTeam = await loadTeamHistory(teamIds);
 
     let written = 0, errors = 0;
+    // T9 run guard, one per sweep: wall-clock budget (AI_RUN_MAX_MINUTES,
+    // 0 = off) + circuit breaker (AI_BREAKER_AFTER consecutive failures).
+    // Refusals surface as counted per-call errors (fail-open), never batch
+    // rejections.
+    const guard = newRunGuard(Date.now());
     // Bounded concurrency: these are NETWORK calls, so the _batch(..., 1) rule
     // for DB writers (InnoDB deadlock avoidance) does not apply here.
     // _batch(list, each, parallel) - verified signature in src/utils.js:51.
     const results = await _batch(
         targets,
-        f => _enrichOne(f, tags, fixturesByTeam, cfg),
+        f => _enrichOne(f, tags, fixturesByTeam, cfg, guard),
         Number(effective('AI_ENRICH_CONCURRENCY')),
     );
     for (const r of results) { written += r?.written ?? 0; errors += r?.errors ?? 0; }
