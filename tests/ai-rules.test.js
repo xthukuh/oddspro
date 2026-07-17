@@ -4,7 +4,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     FACT_SCHEMA_VER, PROMPT_VERSION, BLIND_MARKETS, buildBlindPrompt, buildAnchoredPrompt,
-    FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag, resolveTask,
+    FactsPayload, BlindPayload, AnchoredPayload, normalizeProbabilities, enrichModelTag,
+    effectivePromptVersion, resolveTask,
 } from '../src/db/ai-rules.js';
 
 const FIXTURE = {
@@ -224,6 +225,12 @@ test('enrichModelTag encodes model + grounding + prompt version', () => {
         'gemini-2.5-flash+search#e1');
     assert.equal(enrichModelTag({ model: 'openai/gpt-5.6-terra', grounded: false, promptVersion: 1 }),
         'openai/gpt-5.6-terra#e1');
+});
+
+test('effectivePromptVersion: preamble activation bumps the tag version, off = base (T10a regime math)', () => {
+    assert.equal(effectivePromptVersion(false), PROMPT_VERSION, 'dark default: unchanged tag');
+    assert.equal(effectivePromptVersion(true), PROMPT_VERSION + 1, 'a changed prompt must never wear the old tag');
+    assert.equal(effectivePromptVersion(true, 7), 8);
 });
 
 test('resolveTask routes facts+anchored to Gemini and the blind reasoner off-Google', () => {

@@ -148,6 +148,23 @@ export function isCrossVendor(models) {
     return new Set((models ?? []).map(m => m?.provider).filter(Boolean)).size >= 2;
 }
 
+// T10b: opt-in consensus config -> { models, minAgree, numericTol } | null.
+// null (the shipped default: AI_CONSENSUS_TASKS='') = single-model path,
+// byte-identical to pre-T10 behavior. When a task IS listed, the panel is
+// returned AS PARSED - a too-small or single-vendor panel is a deterministic
+// misconfiguration the harness fails LOUDLY on (same fail-fast stance as
+// resolveTask's non-Google blind guard), never a silent fallback.
+export function consensusFor(task, cfg) {
+    const tasks = String(cfg?.AI_CONSENSUS_TASKS ?? '')
+        .split(',').map(s => s.trim()).filter(Boolean);
+    if (!tasks.includes(task)) return null;
+    return {
+        models: parseConsensusModels(cfg?.AI_CONSENSUS_MODELS),
+        minAgree: Math.max(2, Math.trunc(Number(cfg?.AI_CONSENSUS_MIN_AGREE) || 2)),
+        numericTol: 0.1,
+    };
+}
+
 // Majority agreement per field across N parsed replies.
 //   - numeric fields agree within `numericTol` ABSOLUTE distance of the
 //     panel median (probabilities live in 0..1, so absolute beats relative);

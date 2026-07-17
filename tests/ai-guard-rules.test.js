@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
     injectionPreamble, sanitizeReply, suspicionChecks,
-    parseConsensusModels, isCrossVendor, consensusVerdict,
+    parseConsensusModels, isCrossVendor, consensusVerdict, consensusFor,
     newRunGuard, guardVerdict, recordCall, structuredContract,
 } from '../src/db/ai-guard-rules.js';
 
@@ -124,6 +124,32 @@ test('parseConsensusModels drops malformed entries and handles empty/null input'
     assert.deepEqual(parseConsensusModels(''), []);
     assert.deepEqual(parseConsensusModels(null), []);
     assert.deepEqual(parseConsensusModels(':model,provider:,justtext,ok:m'), [{ provider: 'ok', model: 'm' }]);
+});
+
+test('consensusFor is DARK by default and only activates for a listed task', () => {
+    assert.equal(consensusFor('adjudicate', { AI_CONSENSUS_TASKS: '' }), null, 'shipped default = off');
+    assert.equal(consensusFor('adjudicate', {}), null);
+    assert.equal(consensusFor('blind', { AI_CONSENSUS_TASKS: 'adjudicate' }), null, 'unlisted task stays single-model');
+});
+
+test('consensusFor returns the parsed panel + agreement floor for a listed task', () => {
+    const cfg = {
+        AI_CONSENSUS_TASKS: 'adjudicate',
+        AI_CONSENSUS_MODELS: 'gemini:g1,openrouter:o1',
+        AI_CONSENSUS_MIN_AGREE: 3,
+    };
+    assert.deepEqual(consensusFor('adjudicate', cfg), {
+        models: [{ provider: 'gemini', model: 'g1' }, { provider: 'openrouter', model: 'o1' }],
+        minAgree: 3,
+        numericTol: 0.1,
+    });
+});
+
+test('consensusFor floors minAgree at 2 and returns a broken panel AS PARSED (the harness fails loudly, never silently falls back)', () => {
+    const cfg = { AI_CONSENSUS_TASKS: 'adjudicate', AI_CONSENSUS_MODELS: 'junk', AI_CONSENSUS_MIN_AGREE: 0 };
+    const r = consensusFor('adjudicate', cfg);
+    assert.deepEqual(r.models, [], 'misconfigured panel surfaces as empty, not as null/off');
+    assert.equal(r.minAgree, 2);
 });
 
 test('isCrossVendor requires at least two distinct providers', () => {

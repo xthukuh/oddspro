@@ -103,6 +103,20 @@ const EnvSchema = z.object({
     // instantly instead of burning a 60s timeout per remaining call.
     AI_RUN_MAX_MINUTES: z.coerce.number().min(0).default(0),
     AI_BREAKER_AFTER: z.coerce.number().int().min(0).default(5),
+    // T10 DARK switches - deliberately .env-only (NOT in the settings
+    // catalog): flipping either is a POLICY-REGIME change (prompt/tag bump =
+    // one bounded re-adjudication wave + a dataset split) and requires an
+    // explicit go + a dated note in docs/memory-bank.md first.
+    // Preamble: prepend the injection guard to GROUNDED prompts (adjudicator
+    // protocol + enrichment facts); bumps #p3->#p4 and #e2->#e3 while on.
+    AI_INJECTION_PREAMBLE: boolStr('0'),
+    // Consensus: CSV of resolveTask keys (only 'adjudicate' is wired; blind/
+    // anchored need their own tag work first - see src/ai/harness.js), a
+    // cross-vendor 'provider:model' CSV panel, and the per-field agreement
+    // floor. '' = off (single-model calls, byte-identical to pre-T10).
+    AI_CONSENSUS_TASKS: z.string().default(''),
+    AI_CONSENSUS_MODELS: z.string().default(''),
+    AI_CONSENSUS_MIN_AGREE: z.coerce.number().int().min(2).max(9).default(2),
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)

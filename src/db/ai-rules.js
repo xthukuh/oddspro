@@ -257,6 +257,16 @@ export function enrichModelTag({ model, grounded, promptVersion = PROMPT_VERSION
     return `${model}${grounded ? '+search' : ''}#e${promptVersion}`;
 }
 
+// T10a: activating the injection preamble (AI_INJECTION_PREAMBLE, dark by
+// default) changes the grounded facts prompt's BYTES, and every payload
+// embeds those facts - so activation must bump the effective prompt version
+// (#e2 -> #e3) exactly like a manual prompt edit would. Keeping the old tag
+// would silently mislabel a changed prompt as the old measurement regime
+// (the TIP_MIN_PRICE lesson). Pure so the bump math is test-asserted.
+export function effectivePromptVersion(preambleOn, base = PROMPT_VERSION) {
+    return preambleOn ? base + 1 : base;
+}
+
 // task -> { provider, model, grounded }. Facts are extracted ONCE by the
 // grounded model; both reasoners then work identical evidence, so disagreement
 // is reasoning difference rather than one model simply knowing more.

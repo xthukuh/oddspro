@@ -1,7 +1,8 @@
 import { config } from '../config.js';
 import { Verdict } from '../ai-parse.js';
 import { tipMarketLabel } from '../db/magic-rules.js';
-import { callStructured } from './harness.js';
+import { injectionPreamble, consensusFor } from '../db/ai-guard-rules.js';
+import { callStructured, ensembleTag } from './harness.js';
 import { aiEnabled } from './gemini.js';
 
 // The hot-pick/tip adjudicators, moved out of gemini.js (T9) so the provider
@@ -46,12 +47,25 @@ export { aiEnabled };
 // model tag), so material prompt changes take effect without manual resets.
 const PROMPT_VERSION = 3;
 
+// T10a (DARK by default): the injection preamble applies to GROUNDED prompts
+// only - an ungrounded call retrieves nothing, so there is nothing to guard
+// and no reason to perturb its bytes (a bumped tag on an unchanged prompt
+// would re-bill for nothing).
+const _preambleActive = () => Boolean(config.AI_INJECTION_PREAMBLE && config.HOTPICK_AI_WEB);
+
 // Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
-// switching model, grounding or prompt version re-adjudicates automatically.
+// switching model, grounding, prompt version, the injection preamble (T10a:
+// #p3 -> #p4, a prompt-byte change) or a consensus panel (T10b: the ensemble
+// replaces the single-model identity) re-adjudicates automatically. The
+// ensemble base comes from the harness's OWN ensembleTag so the persisted
+// verdict tag and this pending-predicate tag can never drift.
 export function aiModelTag() {
-    return config.HOTPICK_AI_MODEL
-        + (config.HOTPICK_AI_WEB ? '+search' : '')
-        + `#p${PROMPT_VERSION}`;
+    const pv = _preambleActive() ? PROMPT_VERSION + 1 : PROMPT_VERSION;
+    const panel = consensusFor('adjudicate', config);
+    const base = panel
+        ? ensembleTag(panel.models, panel.minAgree)
+        : config.HOTPICK_AI_MODEL + (config.HOTPICK_AI_WEB ? '+search' : '');
+    return `${base}#p${pv}`;
 }
 
 // Veto margin under the break-even probability: the model's own estimate
@@ -62,9 +76,13 @@ const VETO_MARGIN = 0.05;
 const _breakEven = price => Math.round((1 / Number(price)) * 100) / 100;
 
 // The shared reply contract + verdict rule, parameterized per adjudicator.
+// T10a: when the (dark-by-default) injection preamble is active, it prepends
+// here - both adjudicator prompts embed _protocol, so one insertion point
+// covers them, and aiModelTag()'s #p bump above rides the same predicate.
 function _protocol({ outcome, breakEven }) {
     const floor = Math.round((breakEven - VETO_MARGIN) * 100) / 100;
     return [
+        ...(_preambleActive() ? [...injectionPreamble(), ''] : []),
         'Review protocol - work through these steps in order:',
         '1. CONTEXT - what kind of match is this really? Preseason or club friendly,',
         '   youth/reserve sides, a cup dead rubber, end-of-season nothing-at-stake,',

@@ -2,7 +2,7 @@ import { config } from '../config.js';
 import { callModel as _realCallModel, getProvider as _realGetProvider } from './index.js';
 import { extractJson } from '../ai-parse.js';
 import {
-    sanitizeReply, suspicionChecks, consensusVerdict, isCrossVendor,
+    sanitizeReply, suspicionChecks, consensusVerdict, isCrossVendor, consensusFor,
     guardVerdict, recordCall,
 } from '../db/ai-guard-rules.js';
 import { _batch, debugLog } from '../utils.js';
@@ -38,7 +38,10 @@ export class AiGuardOpen extends Error {
 
 // Ensemble label persisted as the model of a consensus verdict - reuse tags
 // must reflect that a panel (not a single model) produced the verdict.
-function _ensembleTag(models, minAgree) {
+// Exported: the adjudicators' aiModelTag() builds its ensemble base from
+// this SAME function, so the persisted verdict tag and the pending-predicate
+// tag can never drift apart (drift = rows forever pending = re-bill loop).
+export function ensembleTag(models, minAgree) {
     return `consensus(${models.map(m => m.model).join('+')})@${minAgree}`;
 }
 
@@ -70,10 +73,20 @@ export async function callStructured({ task, prompt, schema, cfg = config, guard
         if (!v.ok) throw new AiGuardOpen(v.reason);
     }
 
+    // T10b: cfg-driven consensus (AI_CONSENSUS_TASKS, dark by default) is
+    // honoured for the ADJUDICATE task only - the adjudicators' aiModelTag()
+    // is ensemble-aware, so verdict reuse keys stay consistent. The
+    // enrichment tasks (facts/blind/anchored) are deliberately excluded
+    // until their tags get the same treatment: an ensemble verdict stored
+    // under a single-model tag would either never be reused or re-bill
+    // forever, and the blind stream is additionally frozen by policy until
+    // the M4.3 verdict (enablement = tag change + dated regime note).
+    const panel = consensus ?? (task === 'adjudicate' ? consensusFor(task, cfg) : null);
+
     const t0 = now();
     try {
-        const result = consensus
-            ? await _consensusCall({ prompt, schema, consensus, getProvider })
+        const result = panel
+            ? await _consensusCall({ prompt, schema, consensus: panel, getProvider })
             : await _singleCall({ task, prompt, schema, cfg, callModel });
         if (guard) recordCall(guard, { ms: now() - t0, transportError: false });
         if (result.flags.length) debugLog(`[ai-harness] ${task} flags: ${result.flags.join(', ')}`);
@@ -129,6 +142,6 @@ async function _consensusCall({ prompt, schema, consensus, getProvider }) {
     flags.push(...suspicionChecks(data, { prompt }));
     return {
         data, sources: [], provider: 'consensus',
-        model: _ensembleTag(models, minAgree), grounded: false, flags,
+        model: ensembleTag(models, minAgree), grounded: false, flags,
     };
 }
