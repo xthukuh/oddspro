@@ -392,14 +392,14 @@ Note: the tag-CREATION path is not exercisable without a version bump — it shi
 - Consumes: nothing from earlier tasks.
 - Produces: the final docs layout every later task references — `docs/` (project) vs `docs/dev/` (pipeline: `specs/`, `plans/`, `checklists/`), `docs/guides/`, `docs/research/`. Tasks 4–5 write into this layout.
 
-- [ ] **Step 1: Make sure the tree is clean and this plan file is committed**
+- [x] **Step 1: Make sure the tree is clean and this plan file is committed**
 
 ```sh
 git status --porcelain
 ```
 If this plan file is untracked, commit it first (`git add docs/superpowers/plans/2026-07-18-release-packaging-and-docs-reorg.md && git commit -m "docs(plan): release packaging + docs reorg implementation plan"`) — `git mv` needs it tracked.
 
-- [ ] **Step 2: Create the tree and move everything (Bash tool — POSIX)**
+- [x] **Step 2: Create the tree and move everything (Bash tool — POSIX)**
 
 ```bash
 mkdir -p docs/dev/specs docs/dev/plans docs/dev/checklists docs/guides docs/research
@@ -419,7 +419,7 @@ rmdir docs/superpowers/specs docs/superpowers/plans docs/superpowers 2>/dev/null
 ```
 `docs/DEPLOYMENT.md`, `docs/memory-bank.md` (referenced from `src/` comments) and `docs/visuals/` stay put. Verify: `git status` shows only renames; `ls docs` shows `DEPLOYMENT.md memory-bank.md dev guides research visuals`.
 
-- [ ] **Step 3: Write `docs/README.md`** (Write tool, exact content):
+- [x] **Step 3: Write `docs/README.md`** (Write tool, exact content):
 
 ```markdown
 # docs/ — documentation index
@@ -470,7 +470,7 @@ This layout overrides the superpowers-skill default location (`docs/superpowers/
 the skills honor project preference.
 ```
 
-- [ ] **Step 4: Reference sweep — ordered path replaces (Bash tool)**
+- [x] **Step 4: Reference sweep — ordered path replaces (Bash tool)**
 
 Order matters (specific before generic). The two 2026-07-18 release-packaging files are EXCLUDED — their old-path mentions document this migration itself (sanctioned historical prose):
 
@@ -504,7 +504,7 @@ sed -i \
 ```
 Then `git diff --stat` — every touched file should show a SMALL +/- count; a file showing every line changed means line endings got mangled (revert that file and redo its edits with the Edit tool).
 
-- [ ] **Step 5: Fix the remaining bare `implementation-plan.md` mentions (root file → `docs/dev/`)**
+- [x] **Step 5: Fix the remaining bare `implementation-plan.md` mentions (root file → `docs/dev/`)**
 
 ```bash
 grep -rn "implementation-plan.md" CLAUDE.md README.md docs scripts \
@@ -512,7 +512,7 @@ grep -rn "implementation-plan.md" CLAUDE.md README.md docs scripts \
 ```
 Expected hits (~3): `README.md` ("phase-by-phase progress in \`implementation-plan.md\`"), `CLAUDE.md` ("Source spec and progress tracking live in \`implementation-plan.md\`"), `docs/memory-bank.md` ("progress: \`implementation-plan.md\`"). Edit each to `docs/dev/implementation-plan.md` (Edit tool). Re-run the grep — expect zero hits.
 
-- [ ] **Step 6: Verify — dangling-reference sweep + suite + history**
+- [x] **Step 6: Verify — dangling-reference sweep + suite + history**
 
 ```bash
 grep -rn "docs/superpowers\|docs/safety-net-protocol.md\|docs/sms-bonga-integration.md\|docs/sure-win-analysis.md\|docs/fair-comparison-and-false-positives.md\|docs/data-independence.md\|docs/data-integrity-and-signal-audit.md\|docs/precursor-patterns.md\|docs/emergence-patterns\|docs/m4.2b-booster\|docs/ai-edge-sentinel.md\|docs/beat-the-book-roadmap.md\|docs/prediction-scoping.md\|docs/spa-performance-audit\|docs/v1.0.1-ui-tweaks\|docs/v1.0.2-ui-pass\|docs/perf-pass-2026-07-17\|docs/v1.1.0-implementation" \
@@ -524,7 +524,7 @@ npm test                                                # 723 pass
 git log --follow --oneline docs/research/sure-win-analysis.md | tail -3   # history preserved back past the move
 ```
 
-- [ ] **Step 7: Commit (ONE commit: moves + docs/README.md + all reference updates)**
+- [x] **Step 7: Commit (ONE commit: moves + docs/README.md + all reference updates)**
 
 ```sh
 git add -A
@@ -544,7 +544,7 @@ git commit -m "docs: reorganize docs/ into project vs dev-pipeline layout (git m
 - Consumes: the Task 3 layout (paths like `docs/dev/specs/`, `docs/research/`).
 - Produces: the two library files Task 5's CLAUDE.md pointer references. Content below is final — drafted from the incumbent session's verified memory (staged in the `oddspro-toolset-nuggets` auto-memory); VERIFIED-only.
 
-- [ ] **Step 1: Write `AGENTS.md`** (exact content):
+- [x] **Step 1: Write `AGENTS.md`** (exact content):
 
 ```markdown
 # AGENTS.md — agent entry point (any harness: Claude, Codex, Gemini, …)
@@ -591,7 +591,7 @@ banned); never delete a working recipe without a replacement; supersede with a d
 not a silent rewrite.
 ```
 
-- [ ] **Step 2: Write `docs/agents/toolset.md`** (exact content):
+- [x] **Step 2: Write `docs/agents/toolset.md`** (exact content):
 
 ```markdown
 # Agent Toolset Library — verified operational knowledge
@@ -772,11 +772,11 @@ the shown bet). Sources: `docs/research/`.
   exported from the incumbent agent's verified session memory.
 ```
 
-- [ ] **Step 3: Review both files against the VERIFIED-only rule**
+- [x] **Step 3: Review both files against the VERIFIED-only rule**
 
 Re-read each recipe: every command must be one actually run in a session (sources: the `oddspro-toolset-nuggets` staged memory, `cleanup-after-verification` memory, memory-bank §Environment facts / §Resolved issues, CLAUDE.md Commands). Delete anything you cannot trace to a real session run.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```sh
 git add AGENTS.md docs/agents/toolset.md
@@ -796,7 +796,7 @@ git commit -m "docs(agents): add cross-harness agent entry (AGENTS.md) + verifie
 - Consumes: Task 3 layout + Task 4 files (the pointer references them).
 - Produces: nothing downstream — final documentation state.
 
-- [ ] **Step 1: CLAUDE.md — Commands block additions**
+- [x] **Step 1: CLAUDE.md — Commands block additions**
 
 In the Commands ```sh block, insert AFTER the `cd web && npm run dev` line (before the blank line preceding `npm test`):
 
@@ -815,7 +815,7 @@ node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seco
                                     # AI-market dissent, dissent calibration over fixture_ai_insights
 ```
 
-- [ ] **Step 2: CLAUDE.md — Conventions additions (docs layout + agent-library pointer)**
+- [x] **Step 2: CLAUDE.md — Conventions additions (docs layout + agent-library pointer)**
 
 Append two bullets at the end of the `## Conventions` section:
 
@@ -824,7 +824,7 @@ Append two bullets at the end of the `## Conventions` section:
 - Agent operations: consult `AGENTS.md` + `docs/agents/toolset.md` (verified command playbooks, what-to-use-when, ops issue KB) BEFORE inventing operational procedures; after solving a novel operational problem, append a dated verified entry there.
 ```
 
-- [ ] **Step 3: README.md currency pass (light touch)**
+- [x] **Step 3: README.md currency pass (light touch)**
 
 Four edits (Edit tool):
 1. Commands block — after the `cd web && npm run dev` line, add:
@@ -841,7 +841,7 @@ node src/index.js aireview          # drain pending AI hot/tip verdicts once (se
 4. "How it works" closing line — extend to: `Only correlated records are visualized. Architecture details live in `CLAUDE.md`; phase-by-phase progress in `docs/dev/implementation-plan.md`; hard-won lessons in `docs/memory-bank.md`; the full docs index is `docs/README.md`.`
 5. Web UI tips bullet — replace `a **Tip** column (the safest bettable outcome per fixture, with a plain-language justification popover)` with `a **Tip** column (the best-supported market per fixture across seven families — 1X2, double chance, O/U, BTTS, draw-no-bet, team totals, odd/even — with a plain-language justification popover)`.
 
-- [ ] **Step 4: memory-bank dated state entry**
+- [x] **Step 4: memory-bank dated state entry**
 
 Insert this bullet at the END of the `## Goals & state (2026-07-03)` section (immediately before `## Resolved issues`):
 
@@ -849,7 +849,7 @@ Insert this bullet at the END of the `## Goals & state (2026-07-03)` section (im
 - **2026-07-18: state checkpoint + docs/release conventions.** Current through: v1.0.2 analytics/admin, v1.0.3 `sure` default sort (win-probability, NOT +EV — flat-stake EV ≈ −3%), v1.1.0 phone+PIN accounts/tiers, **v1.2.0 tagged (`f7f1f9d`, suite 707)** with the deploy package built (live deploy = user-gated manual upload; live still runs the 2026-07-12 build); post-tag: filters+slips cross-device sync, collapsible Help + betting glossary, sure-bets slip filter, the 2026-07-17 perf pass (insert-only `matches.metadata`, catalog-gated pivot), Detours A/B (worker-owned AI verdicts + the guarded `callStructured` harness). Honest analytics verdicts stand: M2 all-markets (display/filter only), M3 any-market tips (honestly-labelled; every market −EV at real prices), M4.1 enrichment (collection only, off by default), M4.2 mining (zero edges, zero boosters; PR-1 unbettable; H5 refuted; the policy-regime lesson). **NEW conventions:** docs reorganized — project docs at `docs/` root (`guides/`, `research/`, `agents/` + `docs/README.md` index), dev pipeline under `docs/dev/` (specs/plans/checklists; new docs go there); agent ops library `AGENTS.md` + `docs/agents/toolset.md` (verified-only, append-only); **releases are built from `main` only** via `npm run package:deploy [-- --export-db]`, which idempotently tags `v<package.json version>` at HEAD (suite 723/723 @ 2026-07-18).
 ```
 
-- [ ] **Step 5: Verify + commit**
+- [x] **Step 5: Verify + commit**
 
 ```sh
 npm test        # 723 pass
