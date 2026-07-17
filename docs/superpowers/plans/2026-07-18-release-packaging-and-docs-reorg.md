@@ -37,7 +37,7 @@
 - Consumes: nothing new (existing `src/config.js` for DB creds — unchanged import).
 - Produces: `export async function exportDb({ outPath, container = null })` → resolves `{ path: string, bytes: number }`, **throws** `Error` (current error texts) instead of `process.exit`. Container resolution: explicit arg > `DB_DOCKER_CONTAINER` env > auto-detect; `mariadb-dump` probed before `mysqldump`. Importing the module never runs the CLI.
 
-- [ ] **Step 1: Replace `scripts/db-export.js` with the refactored version**
+- [x] **Step 1: Replace `scripts/db-export.js` with the refactored version**
 
 ```js
 // Dumps the local Docker MySQL/MariaDB database, gzipped, for phpMyAdmin
@@ -151,7 +151,7 @@ if (isMain) {
 }
 ```
 
-- [ ] **Step 2: Verify importing the module runs no CLI**
+- [x] **Step 2: Verify importing the module runs no CLI**
 
 Run (repo root):
 ```sh
@@ -159,7 +159,7 @@ node --input-type=module -e "const m = await import('./scripts/db-export.js'); c
 ```
 Expected: prints exactly `function` — no `[db-export]` lines, no dump started, no file written.
 
-- [ ] **Step 3: Verify the standalone CLI is unchanged (Docker up)**
+- [x] **Step 3: Verify the standalone CLI is unchanged (Docker up)**
 
 Check the DB container is running (`docker ps` shows the mariadb container on 3306; if Docker is down, flag to the user and pause — DB issues are user-resolved by global rule). Then:
 ```sh
@@ -167,7 +167,7 @@ node scripts/db-export.js
 ```
 Expected: same output shape as before — `auto-detected container`, `using mariadb-dump in container ... for database ...`, `wrote D:\...\backups\oddspro_<ts>.sql.gz (N KB)`, phpMyAdmin hint. The dump file may be kept (it is a genuine backup in the folder meant for them; `backups/` is gitignored).
 
-- [ ] **Step 4: Run the suite + commit**
+- [x] **Step 4: Run the suite + commit**
 
 ```sh
 npm test        # expect 723 pass / 0 fail (read the output tail for the summary)
@@ -186,7 +186,7 @@ git commit -m "refactor(scripts): extract importable exportDb() from db-export C
 - Consumes: `exportDb({ outPath })` from Task 1 (lazy `await import('./db-export.js')`, only when `--export-db` is passed).
 - Produces: the release CLI contract — `npm run package:deploy [-- --export-db] [-- --out-dir <dir>]`. Execution order (each step gates the next): sanity → **branch guard (must be exactly `main`)** → dirty-tree warning → backend+frontend zips (shared `<ts>` stamp) → optional DB dump `oddspro-db_<ts>.sql.gz` (same stamp) → **idempotent annotated tag `v<package.json version>` at HEAD, pushed** (exists → skip; exists≠HEAD → loud version-not-bumped warning; push failure → die but keep the local tag).
 
-- [ ] **Step 1: Replace `scripts/package-deploy.js`**
+- [x] **Step 1: Replace `scripts/package-deploy.js`**
 
 ```js
 // Builds the upload archives for the manual cPanel deploy (see
@@ -340,7 +340,7 @@ function zipDirContents(srcDir, outZip) {
 }
 ```
 
-- [ ] **Step 2: Verify the branch guard refuses a feature branch**
+- [x] **Step 2: Verify the branch guard refuses a feature branch**
 
 ```sh
 git checkout -b tmp-branch-guard-check
@@ -351,25 +351,25 @@ Expected: exit 1 with `ERROR: releases are built from the main branch (currently
 git checkout main && git branch -D tmp-branch-guard-check
 ```
 
-- [ ] **Step 3: Verify the no-flag run on `main` (two zips + tag skip warning)**
+- [x] **Step 3: Verify the no-flag run on `main` (two zips + tag skip warning)**
 
 ```sh
 npm run package:deploy
 ```
 Expected: both zips written to `release/` with a fresh shared stamp, then the tag step logs the WARNING `v1.2.0 already tagged at f7f1f9d which is not HEAD - the codebase changed but the version was not bumped...` and creates nothing. Confirm no tag moved: `git tag -l` still shows only `v1.2.0`, and `git rev-parse v1.2.0^{commit}` still starts `f7f1f9d`.
 
-- [ ] **Step 4: Verify `--export-db` (Docker up)**
+- [x] **Step 4: Verify `--export-db` (Docker up)**
 
 ```sh
 npm run package:deploy -- --export-db
 ```
 Expected: third artifact `release/oddspro-db_<ts>.sql.gz` with the SAME stamp as that run's zips, size printed in the report; same v1.2.0 warning; still no new tag. (If Docker is down, flag to the user rather than working around it.)
 
-- [ ] **Step 5: Clean up verification artifacts**
+- [x] **Step 5: Clean up verification artifacts**
 
 Delete ONLY the zip/dump files created in Steps 3–4 (identify by their fresh stamps). Do NOT touch the original v1.2.0 release files (`oddspro-app_20260717_*.zip`, `oddspro-web_20260717_*.zip`, `DEPLOY-CHECKLIST-v1.2.0.md`).
 
-- [ ] **Step 6: Run the suite + commit**
+- [x] **Step 6: Run the suite + commit**
 
 ```sh
 npm test        # expect 723 pass
