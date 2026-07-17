@@ -13,7 +13,7 @@ It scrapes odds from two Kenyan bookmakers (**BetPawa**, **Betika**), ingests ca
 - **Pre-match snapshots freeze at kickoff.** `fixture_prematch` rows (rank, form, H2H, rolling-goals aggregates) are upserted while a fixture is upcoming and never written after kickoff — historical pre-match stats stay exactly as they were, unaffected by later matches.
 - **Vanished odds markets are kept, flagged stale** — the last-seen price survives for display (greyed in the UI) and revives if the market is re-listed.
 
-Only correlated records are visualized. Architecture details live in `CLAUDE.md`; phase-by-phase progress in `docs/dev/implementation-plan.md`; hard-won lessons in `docs/memory-bank.md`.
+Only correlated records are visualized. Architecture details live in `CLAUDE.md`; phase-by-phase progress in `docs/dev/implementation-plan.md`; hard-won lessons in `docs/memory-bank.md`; the full docs index is `docs/README.md`.
 
 ## Providers
 
@@ -50,6 +50,7 @@ node src/index.js history           # backfill team last-N + head-to-head for up
 node src/index.js prematch          # upsert pre-match snapshots (frozen once kickoff passes)
 node src/index.js predictions       # API-Football /predictions for upcoming correlated fixtures
 node src/index.js hotpicks          # settle + recompute over-2.5 hot picks 🔥 + best tips
+node src/index.js aireview          # drain pending AI hot/tip verdicts once (serve runs this every 60s)
 node src/index.js performance       # flat-stake ROI / hit-rate report for tips + hot picks
 node src/index.js export [date]     # temp CSV of the date's correlated records → tmp/
 node src/index.js geo               # force a visitor-IP → country/region geo backfill pass
@@ -57,6 +58,8 @@ node src/index.js geo               # force a visitor-IP → country/region geo 
 npm run serve                       # visualization API server on :3001 (serves web/dist when built)
 npm run build:web                   # build the React frontend → web/dist/
 cd web && npm run dev               # frontend dev server on :5173 (proxies /api/* → :3001)
+npm run package:deploy [-- --export-db]  # build the cPanel deploy zips (+ optional gzipped DB dump) into
+                                    # release/ — main-only; idempotently tags v<version> after success
 
 npm test                            # offline node:test suite (no DB / live APIs)
 ```
@@ -69,8 +72,8 @@ knobs `AUTO_LIGHT_MINUTES`/`AUTO_FULL_AT`, `AUTO_REFRESH_ENABLED=0` to opt out l
 Task Scheduler task `oddspro-pipeline` runs `scripts/pipeline-task.cmd` (the full sweep) daily at
 08:00 → `logs/pipeline.log` as an optional local backup; on the host, cron is an optional backup only.
 
-**Live / deployment:** the app is live at **[oddspro.ke](https://oddspro.ke)** (v1.0.1, deployed
-2026-07-12). It runs on shared cPanel hosting with no SSH — deploys are a **manual local build +
+**Live / deployment:** the app is live at **[oddspro.ke](https://oddspro.ke)** (the 2026-07-12 build; the
+repo is at **v1.2.0** — tagged, deploy package built, awaiting the manual upload). It runs on shared cPanel hosting with no SSH — deploys are a **manual local build +
 upload** (there is no automatic deploy from `dev`/`main`). See `docs/DEPLOYMENT.md` for the full guide.
 
 ## Web UI
@@ -78,7 +81,7 @@ upload** (there is no automatic deploy from `dev`/`main`). See `docs/DEPLOYMENT.
 `npm run serve` + `npm run build:web` serve a React 19 / Vite 6 / Tailwind 4 datatable on :3001:
 
 - Unpaginated, multi-sort (additive header clicks) datatable of the focused date's correlated records: odds market columns (1, X, 2, 1X, X2, 12, U/O 0.5–6.5) alongside score, goals, status, rank/form, H2H and rolling-goals pre-match stats, and dynamically discovered post-match STATS columns.
-- **Betting predictions:** an over-2.5 **hot picks** 🔥 flag and a **Tip** column (the safest bettable outcome per fixture, with a plain-language justification popover) — both frozen at kickoff and settled from canonical final scores. A **✨ magic sort** ranks tips by backtested strategies, a **betslip playground** assembles multi-leg slips (combined odds / payout / EV), and a **🛡 Safe-only** filter cherry-picks the highest-quality legs.
+- **Betting predictions:** an over-2.5 **hot picks** 🔥 flag and a **Tip** column (the best-supported market per fixture across seven families — 1X2, double chance, O/U, BTTS, draw-no-bet, team totals, odd/even — with a plain-language justification popover) — both frozen at kickoff and settled from canonical final scores. A **✨ magic sort** ranks tips by backtested strategies, a **betslip playground** assembles multi-leg slips (combined odds / payout / EV), and a **🛡 Safe-only** filter cherry-picks the highest-quality legs.
 - Date navigation via a custom calendar popover (prev / next / Today) and a per-date **Refresh** button; connected browsers also pick up the in-process auto-refreshes silently (scroll, sort and filters preserved).
 - Settings sheet: light/dark/system theme, multi-select market/STATS columns, provider priority and column/sort reordering (persisted in localStorage); an advanced filter builder.
 - Freshness tooltips per row; stale market prices greyed; matches with no live markets (or concluded) render unlinked unless re-enabled per provider in Settings. iPadOS-native look, responsive to phone.

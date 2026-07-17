@@ -54,6 +54,19 @@ npm run serve                       # visualization API server on :3001 (serves 
 npm run build:web                   # build the React frontend → web/dist/
 cd web && npm run dev               # frontend dev server on :5173 (proxies /api/* → :3001)
 
+npm run package:deploy [-- --export-db] [-- --out-dir <dir>]
+                                    # build the two cPanel upload zips into release/ (backend = HEAD via
+                                    # git archive, frontend = web/dist); --export-db adds a gzipped DB dump
+                                    # (same <ts> stamp). MAIN-ONLY: refuses to run off `main` (releases are
+                                    # built from main; version tags exist only on main), then idempotently
+                                    # tags v<package.json version> at HEAD + pushes the tag - an existing
+                                    # tag is skipped (loud warning when it isn't at HEAD: bump the version)
+node scripts/db-export.js [--container <name>]
+                                    # standalone gzipped Docker-DB dump -> backups/ (phpMyAdmin-ready; also
+                                    # exports exportDb() consumed by package:deploy --export-db)
+node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seconds): anchoring effect,
+                                    # AI-market dissent, dissent calibration over fixture_ai_insights
+
 npm test                            # node:test suite (tests/*.test.js) — offline, no DB/live APIs:
                                     # market registry invariants, stale-odds diff scenarios, pre-match calc
                                     # (H2H/rolling-goals windows), hot-pick rules (gates/devig/veto logic),
@@ -135,3 +148,5 @@ Pipeline: **odds scrapers + fixtures ingester → MySQL warehouse → linker cor
 - Foreign keys use `ON DELETE CASCADE`/`RESTRICT`; a NULLABLE audit pointer may use `ON DELETE SET NULL` (prior art: `settings.updated_by`, batch 11 — deleting a user must not delete the settings they once touched). Migrations that seed data may read `process.env` directly (they run under the knex CLI as well as the app; prior art: the users migration's `ADMIN_SEED_PIN`/`PIN_PEPPER`).
 - All external data (API responses, env) through zod schemas; keep field schemas tolerant (`nullable().optional()`) — live data has taught this (`league.round` can be null; `/fixtures/events` `type` can be null — parsed by the tolerant `src/apisports-events.js`, and per-fixture ZodErrors are caught so one bad record can't abort a sweep).
 - `x-*-output.xx.json` files at the root are legacy fetched-data snapshots — do not delete.
+- Docs layout (2026-07-18): root `docs/` holds PROJECT documentation (`docs/README.md` is the index: `DEPLOYMENT.md`, `memory-bank.md`, `guides/`, `research/`, `agents/`, `visuals/`); `docs/dev/` holds the DEVELOPMENT pipeline (`implementation-plan.md`, `specs/`, `plans/`, `checklists/`). NEW docs: spec → `docs/dev/specs/`, plan → `docs/dev/plans/`, checklist → `docs/dev/checklists/`, research finding → `docs/research/`, guide → `docs/guides/` (this OVERRIDES the superpowers-skill default `docs/superpowers/...` location). Releases: built from `main` only via `npm run package:deploy`; version tags exist only on `main`.
+- Agent operations: consult `AGENTS.md` + `docs/agents/toolset.md` (verified command playbooks, what-to-use-when, ops issue KB) BEFORE inventing operational procedures; after solving a novel operational problem, append a dated verified entry there.
