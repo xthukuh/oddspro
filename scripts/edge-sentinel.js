@@ -4,7 +4,7 @@
 //
 //   node scripts/edge-sentinel.js
 //
-// WHY. M4.2b (docs/m4.2b-booster-validation-and-value-edge.md) proved rolling
+// WHY. M4.2b (docs/research/m4.2b-booster-validation-and-value-edge.md) proved rolling
 // stats carry ZERO information orthogonal to the devigged market price - the
 // mechanistic reason no bettable edge exists on the current signal set. The
 // one untested lever is the M4.1 AI enrichment (grounded facts + a blind

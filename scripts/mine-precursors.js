@@ -1,22 +1,22 @@
 // Tier-A/Tier-B precursor mine, PROMOTED VERBATIM from tmp/precursor-mine.mjs
 // (2026-07-14) - it was gitignored and one `git clean` from oblivion. This is
-// the harness behind docs/precursor-patterns.md: 203 enumerated candidates
+// the harness behind docs/research/precursor-patterns.md: 203 enumerated candidates
 // over a leak-free warehouse reconstruction, temporal OOS + day-clustered
 // bootstrap + BH-FDR at q=0.10, then a price-aware Tier B.
 //
 // Deliberately NOT refactored during the M4.2 promotion. Its numbers are
-// published in docs/precursor-patterns.md; a rewrite would invalidate that
+// published in docs/research/precursor-patterns.md; a rewrite would invalidate that
 // provenance for zero gain. Read-only: no writes, no API calls.
 //
 // It mines the WAREHOUSE reconstruction (raw team aggregates). The companion
 // scripts/mine-patterns.js mines the TIP LEDGER (tip_breakdown, runners-up,
 // AI verdicts) - a surface this one never touches. See
-// docs/emergence-patterns-findings.md.
+// docs/research/emergence-patterns-findings.md.
 //
 //   node scripts/mine-precursors.js
 //
 // NB it writes its JSON output to tmp/ (gitignored), which must exist.
-// READ-ONLY precursor-pattern mine for docs/precursor-patterns.md.
+// READ-ONLY precursor-pattern mine for docs/research/precursor-patterns.md.
 // Two tiers:
 //   TIER A (deep, price-blind): 25,952 finished fixtures. Leak-free pre-kickoff
 //     features -> candidate (market, condition) grid. Temporal 70/30 OOS split,

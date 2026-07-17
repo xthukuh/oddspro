@@ -4,7 +4,7 @@
 //
 // THE IDEA (and why it is new). Every sort this project has ever shipped —
 // `sure`, Safe-only, the hot-pick gate, and the three precursor boosters —
-// selects on HIGH STATS SUPPORT (or confidence). docs/precursor-patterns.md
+// selects on HIGH STATS SUPPORT (or confidence). docs/research/precursor-patterns.md
 // proved that region lands in the CHEAP sub-1.20 tail, where EV is worst, and
 // closed with the one door left open:
 //

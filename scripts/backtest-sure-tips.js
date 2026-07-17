@@ -6,7 +6,7 @@
 // what a "sure-win" gate must be built on. Market blend + ROI are validated
 // separately on the live sample (analyze-safe-tips.js).
 //
-// Output feeds docs/sure-win-analysis.md and the Phase 4 gate choices. Writes a
+// Output feeds docs/research/sure-win-analysis.md and the Phase 4 gate choices. Writes a
 // machine-readable dump to tmp/sure-win/backtest.json for the analysis agents.
 //
 //   node scripts/backtest-sure-tips.js

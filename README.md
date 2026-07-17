@@ -13,7 +13,7 @@ It scrapes odds from two Kenyan bookmakers (**BetPawa**, **Betika**), ingests ca
 - **Pre-match snapshots freeze at kickoff.** `fixture_prematch` rows (rank, form, H2H, rolling-goals aggregates) are upserted while a fixture is upcoming and never written after kickoff — historical pre-match stats stay exactly as they were, unaffected by later matches.
 - **Vanished odds markets are kept, flagged stale** — the last-seen price survives for display (greyed in the UI) and revives if the market is re-listed.
 
-Only correlated records are visualized. Architecture details live in `CLAUDE.md`; phase-by-phase progress in `implementation-plan.md`; hard-won lessons in `docs/memory-bank.md`.
+Only correlated records are visualized. Architecture details live in `CLAUDE.md`; phase-by-phase progress in `docs/dev/implementation-plan.md`; hard-won lessons in `docs/memory-bank.md`.
 
 ## Providers
 

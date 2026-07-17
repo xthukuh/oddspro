@@ -9,8 +9,8 @@
 // scripts/analyze-safe-tips.js uses - so the two harnesses can never disagree
 // about what "a settled tip" is. This script adds ZERO new DB code.
 //
-// Read docs/emergence-patterns-findings.md for the interpretation, and
-// docs/superpowers/specs/2026-07-16-m4.2-pattern-mining-design.md for why
+// Read docs/research/emergence-patterns-findings.md for the interpretation, and
+// docs/dev/specs/2026-07-16-m4.2-pattern-mining-design.md for why
 // certain hypotheses are absent (H5, the golden-longshot spotter, is refuted:
 // >=10x went 2-for-153, about -79% EV).
 import { closeDb } from '../src/db/connection.js';
@@ -126,7 +126,7 @@ try {
         + `${_pct(tipHits / (o25.length || 1))} but the fixture cleared O 1.5 `
         + `${_pct(cleared15 / (ladders.length || 1))} (n=${ladders.length}).`);
     console.log('  NB: a laddered leg only pays if O 1.5\'s REAL price clears break-even at');
-    console.log('  that rate. O 1.5 is a live -5.4% loser (docs/precursor-patterns.md), so');
+    console.log('  that rate. O 1.5 is a live -5.4% loser (docs/research/precursor-patterns.md), so');
     console.log('  treat this as a survival booster unless its priced EV says otherwise.');
     console.log('  The generic PR-1 row above measures the O 2.5 TIP, not the ladder.');
 } finally {

@@ -1,5 +1,5 @@
 // M4.2b — live-ledger validation of the three precursor-pattern boosters from
-// docs/precursor-patterns.md Verdict §(i), the best-evidenced-but-never-shipped
+// docs/research/precursor-patterns.md Verdict §(i), the best-evidenced-but-never-shipped
 // candidates in the project. READ-ONLY: no writes, no API calls.
 //
 //   node scripts/validate-precursor-boosters.js
@@ -33,7 +33,7 @@
 // this harness cannot invent a second, kinder taxonomy. The leak-free
 // reconstruction (teamShape/buildFeatures/settle/devig/price-attach) MIRRORS
 // scripts/mine-precursors.js — which is deliberately frozen (published
-// provenance behind docs/precursor-patterns.md) and does not export its
+// provenance behind docs/research/precursor-patterns.md) and does not export its
 // internals, so the same "mirror the idiom" pattern the mine itself uses
 // (teamShape mirrors backtest-sure-tips) is applied here.
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -123,7 +123,7 @@ function buildFeatures(f, byTeam) {
     };
 }
 
-// ---- the three boosters (docs/precursor-patterns.md Verdict §i) -------------
+// ---- the three boosters (docs/research/precursor-patterns.md Verdict §i) -------------
 // Each: primary gate = the exact condition behind the published OOS number;
 // `variant` = the prose's alternate phrasing, reported alongside for honesty.
 const BOOSTERS = [
