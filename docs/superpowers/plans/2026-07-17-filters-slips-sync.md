@@ -27,7 +27,7 @@
 **Interfaces:**
 - Produces: `export function sanitizeFilters(filters, columns)` → same-shape tree; `columns` = the `filterColumns` descriptor array `[{key, group}]`. Task 2 imports it in App.jsx.
 
-- [ ] **Step 1: Failing tests** — append to `tests/filter-values.test.js` (import `sanitizeFilters` from `../web/src/filterValues.js` alongside the existing names):
+- [x] **Step 1: Failing tests** — append to `tests/filter-values.test.js` (import `sanitizeFilters` from `../web/src/filterValues.js` alongside the existing names):
 
 ```js
 // --- sanitizeFilters (persisted-filter restore, 2026-07-17 sync spec) ---
@@ -72,8 +72,8 @@ test('sanitizeFilters returns [] for garbage input or a fully-emptied tree', () 
 });
 ```
 
-- [ ] **Step 2: Run** `node --test tests/filter-values.test.js` — Expected FAIL (no export).
-- [ ] **Step 3: Implement** in `web/src/filterValues.js` after `conditionCount`:
+- [x] **Step 2: Run** `node --test tests/filter-values.test.js` — Expected FAIL (no export).
+- [x] **Step 3: Implement** in `web/src/filterValues.js` after `conditionCount`:
 
 ```js
 // Sanitize a PERSISTED filter tree against the loaded catalog before applying
@@ -102,8 +102,8 @@ export function sanitizeFilters(filters, columns) {
 }
 ```
 
-- [ ] **Step 4: Run** `node --test tests/filter-values.test.js` then `npm test` — Expected PASS (714 + 5 = 719).
-- [ ] **Step 5: Commit** `feat(web): sanitizeFilters - catalog-validated restore of persisted filters`
+- [x] **Step 4: Run** `node --test tests/filter-values.test.js` then `npm test` — Expected PASS (714 + 5 = 719).
+- [x] **Step 5: Commit** `feat(web): sanitizeFilters - catalog-validated restore of persisted filters`
 
 ---
 
@@ -116,7 +116,7 @@ export function sanitizeFilters(filters, columns) {
 **Interfaces:**
 - Consumes: `sanitizeFilters` (Task 1), existing `filterColumns` memo, `applyFilters`, `syncNow`.
 
-- [ ] **Step 1: App.jsx.** Add to the filterValues import: `sanitizeFilters`. Below `LS_SORT` (or near the other LS consts):
+- [x] **Step 1: App.jsx.** Add to the filterValues import: `sanitizeFilters`. Below `LS_SORT` (or near the other LS consts):
 
 ```js
 // Advanced-filter tree (FilterBuilder wire shape, incl. enabled flags) - persisted
@@ -153,7 +153,7 @@ Hydrate effect (after the `filterColumns` memo):
     }, [catalog, filters, filterColumns, startTransition]);
 ```
 
-- [ ] **Step 2: prefsSync.js.** Replace `startAutoSync`:
+- [x] **Step 2: prefsSync.js.** Replace `startAutoSync`:
 
 ```js
 // Debounced-by-cheapness auto-sync: an interval push that no-ops (no network)
@@ -182,13 +182,13 @@ export function startAutoSync(userId, intervalMs = 120_000, focusThrottleMs = 30
 }
 ```
 
-- [ ] **Step 3: Run** `npm test` — Expected PASS (719).
-- [ ] **Step 4: Commit** `feat(web): persist oddspro.filters + catalog-gated hydrate + tab-focus prefs sync`
+- [x] **Step 3: Run** `npm test` — Expected PASS (719).
+- [x] **Step 4: Commit** `feat(web): persist oddspro.filters + catalog-gated hydrate + tab-focus prefs sync`
 
 ---
 
 ### Task 3: Browser verification + docs + merge
 
-- [ ] **Step 1: Browser (:5173, chrome MCP):** (a) build a filter → reload → filter restored + "N filters" chip; (b) corrupt `oddspro.filters` with an unknown key → reload → pruned, no 400; (c) sign in test account (+254700000199 / 4321) → PUT prefs round-trip: confirm `oddspro.filters` AND `oddspro.betslips` appear in `GET /api/prefs` data (slips E2E); (d) clear both keys locally → `syncNow` pull → both restored.
-- [ ] **Step 2: Docs.** CLAUDE.md web bullet, after the prefsSync sentence: filters persist under `oddspro.filters` (catalog-sanitized restore), slips already synced, focus-sync note.
-- [ ] **Step 3:** `npm test` final; commit docs; merge branch to `main` per the standing branch rule; push.
+- [x] **Step 1: Browser (:5173, chrome MCP):** (a) build a filter → reload → filter restored + "N filters" chip; (b) corrupt `oddspro.filters` with an unknown key → reload → pruned, no 400; (c) sign in test account (+254700000199 / 4321) → PUT prefs round-trip: confirm `oddspro.filters` AND `oddspro.betslips` appear in `GET /api/prefs` data (slips E2E); (d) clear both keys locally → `syncNow` pull → both restored.
+- [x] **Step 2: Docs.** CLAUDE.md web bullet, after the prefsSync sentence: filters persist under `oddspro.filters` (catalog-sanitized restore), slips already synced, focus-sync note.
+- [x] **Step 3:** `npm test` final; commit docs; merge branch to `main` per the standing branch rule; push.
