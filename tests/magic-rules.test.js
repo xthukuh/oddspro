@@ -8,6 +8,7 @@ import {
     STRATEGIES, scoreTip, magicSortRows, slipSummary, slipOutcome, slipTotals, simulateStrategies,
     buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
     safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats, tipMarketLabel,
+    sureBetsSelection, DEFAULT_SURE_BETS,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -463,6 +464,75 @@ test('safeSelection passes its calibration through to the maturity floor', () =>
     const matureCal = { markets: { '1X': { n: 40, hits: 30 } } };
     assert.deepEqual(safeSelection(rows, thinCal), []);
     assert.deepEqual(safeSelection(rows, matureCal).map(r => r.api_id), [1, 2]);
+});
+
+// --- sureBetsSelection (daily top-10 safe list, 2026-07-17 spec) ---
+
+test('sureBetsSelection ranks by calibrated leg prob desc and carries the prob', () => {
+    const rows = [
+        safe({ api_id: 1, tip_confidence: 0.70 }),
+        safe({ api_id: 2, tip_confidence: 0.78 }),
+        safe({ api_id: 3, tip_confidence: 0.74 }),
+    ];
+    const picks = sureBetsSelection(rows, null);
+    assert.deepEqual(picks.map(e => e.row.api_id), [2, 3, 1]);
+    // prob IS estimateLegProb's number (cal-less fallback = blend confidence)
+    assert.deepEqual(picks.map(e => e.prob), [0.78, 0.74, 0.7]);
+});
+
+test('sureBetsSelection caps at maxPerDay (10) and shows what exists unpadded', () => {
+    const twelve = Array.from({ length: 12 }, (_, i) => safe({ api_id: i + 1, tip_confidence: 0.6 + i * 0.01 }));
+    assert.equal(sureBetsSelection(twelve, null).length, DEFAULT_SURE_BETS.maxPerDay);
+    // thin day: 4 qualifiers -> 4 entries, no padding
+    assert.equal(sureBetsSelection(twelve.slice(0, 4), null).length, 4);
+    // empty pool -> [] (also for non-array input)
+    assert.deepEqual(sureBetsSelection([], null), []);
+    assert.deepEqual(sureBetsSelection(null, null), []);
+});
+
+test('sureBetsSelection dedups one entry per canonical fixture, first row represents', () => {
+    const rows = [
+        safe({ api_id: 7, provider: 'betpawa' }),
+        safe({ api_id: 7, provider: 'betika' }),
+        safe({ api_id: 8 }),
+    ];
+    const picks = sureBetsSelection(rows, null);
+    assert.deepEqual(picks.map(e => e.row.api_id), [7, 8]);
+    assert.equal(picks[0].row.provider, 'betpawa');
+});
+
+test('sureBetsSelection reuses the safe gates - a safeQualifies reject never enters', () => {
+    const rows = [
+        safe({ api_id: 1, tip_price: 1.7, tip_confidence: 0.95 }), // price > maxPrice 1.6
+        safe({ api_id: 2, tip_market: null }),                     // tipless
+        safe({ api_id: 3 }),
+    ];
+    assert.deepEqual(sureBetsSelection(rows, null).map(e => e.row.api_id), [3]);
+    // caller gate overrides are honored (maxPrice 1.2 rejects the 1.25 default)
+    assert.deepEqual(sureBetsSelection(rows, null, { ...DEFAULT_SURE_BETS, maxPrice: 1.2 }), []);
+});
+
+test('sureBetsSelection excludes rows whose leg prob is null', () => {
+    // Passes every gate (2 parts, agreement 0.75, price ok) but with no cal and
+    // no confidence there is no number to rank by - excluded, never NaN-sorted.
+    const noProb = safe({ api_id: 1, tip_confidence: null, tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } });
+    assert.deepEqual(sureBetsSelection([noProb, safe({ api_id: 2 })], null).map(e => e.row.api_id), [2]);
+});
+
+test('sureBetsSelection caps per EAT day independently', () => {
+    const rows = [
+        safe({ api_id: 1, day: '2026-07-01', tip_confidence: 0.8 }),
+        safe({ api_id: 2, day: '2026-07-01', tip_confidence: 0.7 }),
+        safe({ api_id: 3, day: '2026-07-02', tip_confidence: 0.6 }),
+    ];
+    const picks = sureBetsSelection(rows, null, { ...DEFAULT_SURE_BETS, maxPerDay: 1 });
+    assert.deepEqual(picks.map(e => e.row.api_id), [1, 3]); // one per day, day order
+});
+
+test('sureBetsSelection enforces the market maturity floor when a calibration is supplied', () => {
+    const rows = [safe({ api_id: 1 })]; // tip_market '1X'
+    const thinCal = { markets: { '1X': { n: 5, hits: 4 } } };
+    assert.deepEqual(sureBetsSelection(rows, thinCal), []);
 });
 
 // --- tipMarketLabel (plain-language market names) ---

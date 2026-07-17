@@ -5,10 +5,10 @@ import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
-import { safeSelection } from '../../src/db/magic-rules.js';
+import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
-import BetslipPlayground from './components/BetslipPlayground.jsx';
+import BetslipPlayground, { seedSlip } from './components/BetslipPlayground.jsx';
 import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
@@ -52,6 +52,11 @@ const LS_SAFE_ONLY = 'oddspro.show.safeOnly';
 // policy and passed as safeSelection opts - the browser can't read .env, so
 // this is how a user tunes the gates locally). Object, not array.
 const LS_SAFE_OVERRIDES = 'oddspro.safe.overrides';
+// Sure-bets toggle (magic sheet; default off): keep only the day's top-10
+// safest tips ranked by calibrated win probability (magic-rules
+// sureBetsSelection). Signed-in only - guest rows are redacted server-side
+// (no tip_breakdown), so the gates cannot evaluate.
+const LS_SURE_BETS = 'oddspro.show.sureBets';
 // Risk gate (settings; default ON): when a magic sort or Safe-only is active,
 // hide games without sufficient stats (thin rolling sample / H2H / no tip) -
 // the "exclude risky bets" filter. Uses the shared hasSufficientStats gate.
@@ -245,6 +250,7 @@ export default function App() {
     const [noMiss, setNoMiss] = useState(() => localStorage.getItem(LS_NO_MISS) === '1');
     const [safeOnly, setSafeOnly] = useState(() => localStorage.getItem(LS_SAFE_ONLY) === '1');
     const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
+    const [sureBets, setSureBets] = useState(() => localStorage.getItem(LS_SURE_BETS) === '1');
     // Risk gate defaults ON (absent key = on); only an explicit '0' disables it.
     const [riskGate, setRiskGate] = useState(() => localStorage.getItem(LS_RISK_GATE) !== '0');
     // Base/synthetic column visibility (null = all shown), No pin, and the
@@ -437,6 +443,21 @@ export default function App() {
         () => safeSelection(visibleData, cal, effectiveSafe),
         [visibleData, cal, effectiveSafe],
     );
+    // Sure-bets picks: the day's top-10 by calibrated leg prob over the WHOLE
+    // loaded selection - same day-level scope as safePicks, so other toggles/
+    // filters never change who makes the list. Gates = the spec-PINNED
+    // DEFAULT_SAFE literals (safeQualifies' fallback), deliberately NOT
+    // effectiveSafe: the design evidence (~8-9 legs/day) holds only for those
+    // values, v1 ships no env/user tunability (spec §5), and a host whose
+    // SAFE_* env tightens the gates (e.g. minParts 3) would starve Sure bets
+    // to permanent zero-days ("tighter starves", spec §2 - live-verified on
+    // this host). Cap/slip size pinned by DEFAULT_SURE_BETS. Empty for guests
+    // (their rows lack tip_breakdown; the magic sheet shows a sign-in nudge).
+    const signedIn = !!session?.user;
+    const surePicks = useMemo(
+        () => (signedIn ? sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS) : []),
+        [signedIn, visibleData, cal],
+    );
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
     // not a fresh `[]`): a new array each render would change the
@@ -471,11 +492,18 @@ export default function App() {
             const ids = new Set(safePicks.map(r => r.api_id));
             out = out.filter(r => ids.has(r.api_id));
         }
+        // Sure bets: same membership idiom as Safe-only - all provider rows of
+        // a listed fixture survive; independent of the Safe-only toggle (both
+        // on = AND; Sure bets ⊆ safe pool, so Sure bets effectively wins).
+        if (sureBets && signedIn) {
+            const ids = new Set(surePicks.map(e => e.row.api_id));
+            out = out.filter(r => ids.has(r.api_id));
+        }
         // One-of-each collapses to a single row per game (highest-priority
         // enabled provider); loaded rows are already the enabled providers.
         if (oneEach) out = applyOneOfEach(out, orderedProviders);
         return out;
-    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, riskGate, activeMagicIds, effectiveSafe, safeOnly, safePicks, oneEach, orderedProviders]);
+    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, riskGate, activeMagicIds, effectiveSafe, safeOnly, safePicks, sureBets, signedIn, surePicks, oneEach, orderedProviders]);
     // Day-level hit-rate scoreboard: computed over the whole loaded selection
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
@@ -794,6 +822,18 @@ export default function App() {
         setSafeOnly(value);
         localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
     };
+    const saveSureBets = value => {
+        setSureBets(value);
+        localStorage.setItem(LS_SURE_BETS, value ? '1' : '0');
+    };
+    // "Top-3 slip" (magic sheet): seed a slip from the top sure-bets legs into
+    // the persisted book, then open the playground (it reads storage on mount).
+    const seedTopSlip = () => {
+        if (!surePicks.length) return;
+        seedSlip(surePicks.slice(0, DEFAULT_SURE_BETS.slipSize), date || 'all', 'Sure top-3');
+        setShowMagic(false);
+        setShowSlips(true);
+    };
     const saveRiskGate = value => {
         setRiskGate(value);
         localStorage.setItem(LS_RISK_GATE, value ? '1' : '0');
@@ -1023,6 +1063,8 @@ export default function App() {
                 <ViewPills
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
                     noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
+                    sureBets={sureBets && signedIn} sureCount={surePicks.length}
+                    sureCap={DEFAULT_SURE_BETS.maxPerDay} onSureBets={saveSureBets}
                     hideSelected={hideSelected} hideUnselected={keepSelected}
                     riskGate={riskGate} riskGateActive={activeMagicIds.length > 0 || safeOnly}
                     onShowCompleted={saveShowCompleted} onHideHits={saveHideHits} onHideMiss={saveHideMiss}
@@ -1149,7 +1191,10 @@ export default function App() {
             {showMagic && (
                 <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
                     onToggle={id => { onToggleMagic(id); setShowMagic(false); }}
-                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)} />
+                    onClearMagic={onClearMagic} onClose={() => setShowMagic(false)}
+                    signedIn={signedIn} sureBets={sureBets} sureCount={surePicks.length}
+                    sureCap={DEFAULT_SURE_BETS.maxPerDay} slipSize={DEFAULT_SURE_BETS.slipSize}
+                    onSureBets={saveSureBets} onTopSlip={seedTopSlip} />
             )}
 
             {showFilters && catalog && (

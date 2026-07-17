@@ -17,7 +17,10 @@ const STATS_TITLE = 'What each number means (replayed on past days):\n'
     + '· streak - wins in a row from the top of the list (average / best day)\n'
     + '· ROI - average profit per day, in stakes (+100% = doubled the stake)';
 
-export default function MagicMenu({ data, error, activeIds, onToggle, onClearMagic, onClose }) {
+export default function MagicMenu({
+    data, error, activeIds, onToggle, onClearMagic, onClose,
+    signedIn, sureBets, sureCount, sureCap, slipSize, onSureBets, onTopSlip,
+}) {
     // Session-aware: methodology prose + backtest numbers hide for guests
     const showDetails = useShowDetails();
     const strategies = data?.strategies ?? [];
@@ -72,6 +75,47 @@ export default function MagicMenu({ data, error, activeIds, onToggle, onClearMag
                 {data && !strategies.length && (
                     <div className="px-2 py-1 text-sm text-label-3">No settled tips to rank yet.</div>
                 )}
+                {/* Sure bets (2026-07-17 spec) - a FILTER, not a sort: the daily
+                    top-10 safe list. Signed-in only: guest rows are redacted
+                    (no tip_breakdown), so the gates cannot evaluate. */}
+                <div className="mt-2 pt-2 border-t border-separator-2">
+                    {signedIn ? (
+                        <div className={`px-3 py-2.5 rounded-xl ${sureBets ? 'bg-accent-soft' : ''}`}>
+                            <button onClick={() => onSureBets(!sureBets)} className="cursor-pointer block w-full text-left">
+                                <span className="flex items-center text-[15px]">
+                                    <span className="font-semibold text-label">⭐ Sure bets</span>
+                                    <span className="ml-2 text-xs text-label-2 tabular-nums">{sureCount} of {sureCap} today</span>
+                                    {sureBets && <span className="ml-auto text-accent">✓</span>}
+                                </span>
+                                <span className="block text-[12.5px] text-label-2">
+                                    Filter the table to the day's safest list, ranked by calibrated win chance.
+                                </span>
+                            </button>
+                            {sureBets && sureCount === 0 && (
+                                <div className="mt-1 text-xs text-hot">No sure bets today - no fixture passed the safety gates.</div>
+                            )}
+                            <div className="mt-1.5 flex items-center gap-3">
+                                <button
+                                    onClick={onTopSlip}
+                                    disabled={!sureCount}
+                                    title={`Seed a slip with the top ${slipSize} legs and open the playground`}
+                                    className="cursor-pointer text-[13px] font-semibold text-accent hover:underline disabled:opacity-50 disabled:cursor-default disabled:no-underline"
+                                >
+                                    Top-{slipSize} slip
+                                </button>
+                                {showDetails && (
+                                    <span className="text-xs text-label-3" title="Live replay numbers - survival odds, not profit. Flat-stake EV stays ~ -vig.">
+                                        legs ~72-76% · 3-leg slip lands ~40% of days
+                                    </span>
+                                )}
+                            </div>
+                        </div>
+                    ) : (
+                        <div className="px-3 py-2.5 text-[13px] text-label-2">
+                            ⭐ Sure bets - sign in to unlock the daily top-10 safe list.
+                        </div>
+                    )}
+                </div>
             </div>
             <div className="px-5 py-3 border-t border-separator-2">
                 <button

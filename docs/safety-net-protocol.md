@@ -126,3 +126,26 @@ The calibrated parts of the system (bucket posteriors, strategy replay,
 these gates) improve mechanically as settled days accumulate. Revisit the
 per-day cap (3 → 4–5) only after the safe pool holds ≥ 90% legs over 30+
 replayable days. Until then: small, boring, repeatable.
+
+## Sure bets — the daily top-10 safe list (2026-07-17)
+
+The ✨ Magic sheet's "Sure bets" toggle (signed-in only — guest rows are
+redacted server-side, so the gates cannot evaluate) filters the table to the
+day's top-10 legs: the shipped safe gates unchanged (`DEFAULT_SAFE` literals —
+deliberately NOT any env-tightened variant, which starves the list), ranked by
+the calibrated win probability the betslip survival meter shows. NOT ranked by
+the `sure` strategy: its top ranks underperformed in the design replay (rank #1
+realized 63–64% vs ~85% at ranks 8–10 — short-priced favourites cluster at the
+top). Thin days show fewer than 10; zero-days say so explicitly instead of
+padding.
+
+Honest numbers (LODO + strict walk-forward replays, 15 days, design time —
+`docs/superpowers/specs/2026-07-17-sure-bets-filter-design.md`): per-leg
+~72–76% live; a top-3 slip lands ~40% of days at combined odds ~2.4–3.5; a
+full 10-leg stack survives ~5–7% of days; flat-stake EV stays ≈ −vig. Sure
+bets maximizes the chance a SMALL slip survives — it does not promise profit.
+
+Suggested use: the one-tap "Top-3 slip" (the sheet seeds it into the betslip
+playground, where survival/EV render live). Same staking discipline as the
+protocol above — flat small stakes, never chase; a 10-leg ticket is
+entertainment, not a strategy.

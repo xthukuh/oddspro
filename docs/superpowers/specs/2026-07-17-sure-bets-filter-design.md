@@ -1,6 +1,12 @@
 # Sure Bets — daily top-10 safe list (design)
 
-Date: 2026-07-17. Status: approved by user (conversation), implementation pending.
+Date: 2026-07-17. Status: IMPLEMENTED 2026-07-17 (branch `feat/sure-bets-filter`,
+plan `docs/superpowers/plans/2026-07-17-sure-bets-filter.md`, suite 714/714,
+browser-verified). Execution note: the pool is gated by the DEFAULT_SAFE
+LITERALS exactly as §3.1 states — wiring it to the env-merged effective policy
+was tried first and starved the list to zero-days on a host with
+SAFE_MIN_PARTS=3 (§2's "tighter starves", live-confirmed); §5 already excludes
+env/user tunability from v1.
 Owner intent (verbatim goal): "a custom filter for magic called sure-bets only …
 the best top 10 multibet safe list daily. Warning where no viable options exist
 or showing just the available ones."

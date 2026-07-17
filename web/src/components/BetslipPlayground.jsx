@@ -69,6 +69,30 @@ function _loadSlips() {
 // Wrap buildSlips leg-arrays into named slip objects numbered from `start`
 const _wrap = (legArrays, start) => legArrays.map((legs, i) => ({ id: _id(), name: `Slip ${start + i}`, legs }));
 
+// Seed a named slip into the persisted book from sure-bets entries
+// [{ row, prob }] (App's "Top-3 slip" action, spec 2026-07-17). Lives HERE so
+// the oddspro.betslips format has exactly one owner. Legs are self-contained
+// (same fields the candidate mapper emits, minus the optional runner-up
+// picks - the leg renderer already tolerates legacy legs without `picks`),
+// so they render and settle on any loaded date. The playground loads storage
+// on mount, so seed BEFORE opening it. Returns the created slip.
+export function seedSlip(entries, date, name) {
+    const legs = entries.map(({ row: r, prob }) => ({
+        api_id: r.api_id,
+        fixture: r.fixture,
+        market: r.tip_market,
+        price: r.tip_price == null ? null : Number(r.tip_price),
+        prob,
+        outcome: r.tip_outcome ?? null,
+        date,
+        time: _hm(r.start_time),
+    }));
+    const { config, slips } = _loadSlips();
+    const slip = { id: _id(), name, legs };
+    localStorage.setItem(LS_SLIPS, JSON.stringify({ date, config, slips: [...slips, slip] }));
+    return slip;
+}
+
 // One good / caution / bad pill scale for a slip or book outcome (AX6), kept
 // separate from the numeric metrics grid so the state reads at a glance.
 function OutcomePill({ tone, children }) {
