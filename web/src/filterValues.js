@@ -83,6 +83,31 @@ export function conditionCount(filters) {
     return 0;
 }
 
+// Sanitize a PERSISTED filter tree against the loaded catalog before applying
+// it (2026-07-17 sync spec): oddspro.filters may have been saved by an older
+// deploy/another device, and a condition on a column the server no longer
+// knows would 400 the records query. Keeps expr nodes (always client-side -
+// they cannot 400 the server), preserves group nesting + enabled flags, drops
+// unknown-key conditions and groups that end up empty. Garbage input -> [].
+export function sanitizeFilters(filters, columns) {
+    const known = new Set((columns ?? []).map(c => c.key));
+    const cond = f => f && typeof f === 'object' && (
+        f.type === 'expr'
+        || (typeof f.key === 'string' && known.has(f.key) && (f.col == null || known.has(f.col)))
+    );
+    const walk = node => {
+        if (!node || typeof node !== 'object') return null;
+        if (node.type === 'group') {
+            const items = (Array.isArray(node.items) ? node.items : []).map(walk).filter(Boolean);
+            return items.length ? { ...node, items } : null;
+        }
+        return cond(node) ? node : null;
+    };
+    if (Array.isArray(filters)) return filters.map(walk).filter(Boolean);
+    if (filters && typeof filters === 'object' && filters.type === 'group') return walk(filters) ?? [];
+    return [];
+}
+
 // AND-combined client conditions over the loaded day. A flat condition array is
 // an implicit top-level AND group; filterRows (filterExpr.js) evaluates each
 // condition with the SAME derived semantics sorting uses (form → points,
