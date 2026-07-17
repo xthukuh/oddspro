@@ -29,7 +29,7 @@
 - Produces: `BASE_FIELDS.<key>.like_sql` (optional string) — text SQL target used only for `like` conditions. `_coerce(key, value, op)` — throws `TypeError` for unparsable numeric input under comparison ops; returns `String(value)` for `like`.
 - Consumes: existing `FILTER_OPS`, `COL_OPS`, the server error handler mapping `TypeError` → 400 (`src/server.js:153`).
 
-- [ ] **Step 1: Write the failing smoke script**
+- [x] **Step 1: Write the failing smoke script**
 
 Create `C:\Users\User\AppData\Local\Temp\claude\D--Apps-lab-oddspro\9a8a5e07-d8f1-49cb-9433-4a5de72fd115\scratchpad\tip-filter-smoke.mjs` (scratchpad, NOT the repo):
 
@@ -79,12 +79,12 @@ await db.destroy();
 process.exit(fail ? 1 : 0);
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `node "C:\Users\User\AppData\Local\Temp\claude\D--Apps-lab-oddspro\9a8a5e07-d8f1-49cb-9433-4a5de72fd115\scratchpad\tip-filter-smoke.mjs"`
 Expected: FAIL lines — check 1 returns 0 rows (like against confidence), check 3 fails with `Unknown column 'NaN'` (not a TypeError).
 
-- [ ] **Step 3: Implement the registry + guard**
+- [x] **Step 3: Implement the registry + guard**
 
 In `src/db/records.js`, change the `tip` entry (line 35):
 
@@ -167,17 +167,17 @@ Update the two call sites in the filter loop (lines 169-185): the LHS target pas
 
 (Sort call site `_sqlTarget(query, s?.key, joined)` stays unchanged — no op.)
 
-- [ ] **Step 4: Run the smoke script to verify it passes**
+- [x] **Step 4: Run the smoke script to verify it passes**
 
 Run: `node "C:\Users\User\AppData\Local\Temp\claude\D--Apps-lab-oddspro\9a8a5e07-d8f1-49cb-9433-4a5de72fd115\scratchpad\tip-filter-smoke.mjs"`
 Expected: all `PASS`, exit 0.
 
-- [ ] **Step 5: Run the offline suite (regression gate)**
+- [x] **Step 5: Run the offline suite (regression gate)**
 
 Run: `npm test`
 Expected: all tests pass (records.js is not in the suite; this guards accidental import breakage).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/db/records.js
@@ -196,7 +196,7 @@ git commit -m "fix: tip filter targets market text for like, rejects NaN compari
 - Consumes: `applyClientFilters(rows, filters, columns)` (existing), `sortValue` tip extractor (confidence + hot bonus — unchanged).
 - Produces: `like` on key `tip` matches `row.tip_market` text, mirroring the server's `like_sql`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Append to `tests/filter-values.test.js`:
 
@@ -221,12 +221,12 @@ test('tip: like matches the tip market text, comparisons use confidence', () => 
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `node --test tests/filter-values.test.js`
 Expected: FAIL — the `like 'o 2'` assertion returns `[]` (reads nonexistent `row.tip`).
 
-- [ ] **Step 3: Implement the extractor**
+- [x] **Step 3: Implement the extractor**
 
 In `web/src/filterValues.js`, replace `_raw` (lines 55-61):
 
@@ -242,12 +242,12 @@ function _raw(row, col) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --test tests/filter-values.test.js`
 Expected: PASS (all tests, including the new one).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/filterValues.js tests/filter-values.test.js
@@ -265,7 +265,7 @@ git commit -m "fix: client tip like filter matches tip market text (server parit
 - Consumes: `sortValue(row, col)` from `web/src/sortValues.js` (existing export).
 - Produces: display-only tooltip line; no exports.
 
-- [ ] **Step 1: Implement the tooltip hint**
+- [x] **Step 1: Implement the tooltip hint**
 
 In `web/src/components/DataTable.jsx`, extend the sortValues import (line 8):
 
@@ -306,12 +306,12 @@ function _cellTitle(row, col) {
 }
 ```
 
-- [ ] **Step 2: Build to verify**
+- [x] **Step 2: Build to verify**
 
 Run: `npm run build:web`
 Expected: vite build succeeds, no errors.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/components/DataTable.jsx
@@ -332,7 +332,7 @@ git commit -m "feat: cell tooltips surface the derived sort value"
   `{ state: 'won' | 'lost' | 'open', settled: number, total: number, broken: number[] }`
   (`broken` = api_ids of missed legs, `[]` unless lost; empty slip = open 0/0).
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Append to `tests/magic-rules.test.js` (match its existing import line — add `slipOutcome` to the import list from `../src/db/magic-rules.js`):
 
@@ -363,12 +363,12 @@ test('slipOutcome: pending legs stay open; legacy legs without outcome are pendi
 });
 ```
 
-- [ ] **Step 2: Run to verify failure**
+- [x] **Step 2: Run to verify failure**
 
 Run: `node --test tests/magic-rules.test.js`
 Expected: FAIL — `slipOutcome` is not exported.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 In `src/db/magic-rules.js`, insert after `slipSummary` (after line 256):
 
@@ -389,12 +389,12 @@ export function slipOutcome(legs) {
 }
 ```
 
-- [ ] **Step 4: Run tests to verify they pass**
+- [x] **Step 4: Run tests to verify they pass**
 
 Run: `node --test tests/magic-rules.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/db/magic-rules.js tests/magic-rules.test.js
@@ -412,7 +412,7 @@ git commit -m "feat: slipOutcome pure helper grades slips from settled legs"
 - Consumes: `slipOutcome(legs)` from Task 4; candidate/leg objects gain `outcome: 'hit' | 'miss' | null`.
 - Produces: UI only. localStorage legs now persist `outcome`; old entries (no field) degrade to pending.
 
-- [ ] **Step 1: Widen the candidate gate and carry outcomes**
+- [x] **Step 1: Widen the candidate gate and carry outcomes**
 
 Import `slipOutcome` (line 2):
 
@@ -446,7 +446,7 @@ Replace the candidates memo (lines 51-66):
     }, [rows, magic, calibration]);
 ```
 
-- [ ] **Step 2: Show outcomes in the candidate list and update its header**
+- [x] **Step 2: Show outcomes in the candidate list and update its header**
 
 Header (line 151-153) — the count is no longer pending-only:
 
@@ -465,7 +465,7 @@ In each candidate row, insert the outcome mark right after the price span (after
                                     <span className="tabular-nums text-slate-500" title="Calibrated win estimate">{_pct(c.prob)}</span>
 ```
 
-- [ ] **Step 3: Grade slips — verdict line + leg outcome marks**
+- [x] **Step 3: Grade slips — verdict line + leg outcome marks**
 
 Inside the `slips.map(slip => …)` render (line 188), compute the verdict next to the existing summary:
 
@@ -524,12 +524,12 @@ Add the verdict to the summary line (insert as FIRST children of the summary fle
 
 (The rest of the summary line — payout/survival/EV/warnings — stays exactly as is.)
 
-- [ ] **Step 4: Build to verify**
+- [x] **Step 4: Build to verify**
 
 Run: `npm run build:web`
 Expected: vite build succeeds.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/components/BetslipPlayground.jsx
@@ -547,7 +547,7 @@ git commit -m "feat: betslip playground backtests past dates - settled tips grad
 - Consumes: `scoreTip(row, strategyId, cal)`, `STRATEGIES` from `src/db/magic-rules.js` (existing exports); the `magic` prop `{ id, calibration } | null` (existing).
 - Produces: UI only — synthetic column key `'magic'`, never part of the settings catalog or persisted column order.
 
-- [ ] **Step 1: Import the scorer surface**
+- [x] **Step 1: Import the scorer surface**
 
 Line 11 becomes:
 
@@ -555,7 +555,7 @@ Line 11 becomes:
 import { magicSortRows, scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 ```
 
-- [ ] **Step 2: Compute per-fixture rank + score, inject the column**
+- [x] **Step 2: Compute per-fixture rank + score, inject the column**
 
 After the `sorted` memo (line 329), add:
 
@@ -606,7 +606,7 @@ and replace the two uses of `columns` in the pin assembly (lines 369-374) with `
 
 (The `sorted` memo keeps using `columns` — the synthetic column never drives sorting.)
 
-- [ ] **Step 3: Header — ✨ label, no sort, no magic-clear**
+- [x] **Step 3: Header — ✨ label, no sort, no magic-clear**
 
 In the header `<th>` render (lines 399-418), the magic column must not trigger `onSort` (which clears magic). Change the `onClick` and `title` attributes:
 
@@ -628,7 +628,7 @@ Also drop the pointer cursor for the magic header — the className `cursor-poin
                                     className={`${sticky} bg-slate-50 px-2 py-1.5 font-medium ${col.key === 'magic' ? '' : 'cursor-pointer hover:bg-slate-100'} ${col.group === 'market' ? 'text-center' : ''}`}
 ```
 
-- [ ] **Step 4: Cell — `#rank · score`**
+- [x] **Step 4: Cell — `#rank · score`**
 
 Add a module-level cell renderer next to `_marketCell` (after line 292):
 
@@ -650,12 +650,12 @@ In the body cell render (line 437), branch on the magic key:
                                         : _cell(row, col.key, links, openTip)}
 ```
 
-- [ ] **Step 5: Build + offline suite**
+- [x] **Step 5: Build + offline suite**
 
 Run: `npm run build:web && npm test`
 Expected: build succeeds; all tests pass.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/components/DataTable.jsx
@@ -669,12 +669,12 @@ git commit -m "feat: left-pinned magic score column (#rank · score) while a str
 **Files:**
 - Modify: `implementation-plan.md` (progress tracking), `docs/memory-bank.md` (if present)
 
-- [ ] **Step 1: Full test suite + build**
+- [x] **Step 1: Full test suite + build**
 
 Run: `npm test && npm run build:web`
 Expected: everything green.
 
-- [ ] **Step 2: Live smoke via the API**
+- [x] **Step 2: Live smoke via the API**
 
 Restart the serve process (stale :3001 holds old code), then:
 
@@ -690,7 +690,7 @@ curl -s "http://127.0.0.1:3001/api/records?date=2026-07-05&filters=%5B%7B%22key%
 
 Expected: `400` (clean client error, not 500).
 
-- [ ] **Step 3: Browser sanity check (dev server or built app)**
+- [x] **Step 3: Browser sanity check (dev server or built app)**
 
 Open the app on a PAST date (e.g. `?date=2026-07-04`) and verify:
 - Filters: `tip contains O 2.5` narrows rows; `tip ≥ 0.7` narrows by confidence; `tip = abc` shows the 400 error banner (not a crash).
@@ -699,7 +699,7 @@ Open the app on a PAST date (e.g. `?date=2026-07-04`) and verify:
 - Magic: pick a ✨ strategy → the ✨ column appears left of Tip showing `#rank · score`; scroll right → Score/✨/Tip pin left in order; clicking ✨ header does nothing; clicking any other header clears magic and removes the column.
 - Clean up any browser instance / dev-server process started for this check.
 
-- [ ] **Step 4: Update progress docs + commit**
+- [x] **Step 4: Update progress docs + commit**
 
 Append a Phase 16 entry to `implementation-plan.md` mirroring the existing phase-entry style (filter parity + tip fix, sort tooltips, slips backtest, magic column) and note it in `docs/memory-bank.md` if that file exists.
 

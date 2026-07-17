@@ -82,7 +82,7 @@ Radii: controls `rounded-[10px]`, cards/sheets `rounded-2xl` (14px), pills `roun
 **Interfaces:**
 - Produces: Tailwind token utilities `bg-app bg-surface bg-surface-2 bg-nav bg-fill bg-accent bg-accent-soft text-label text-label-2 text-label-3 text-accent text-hit text-miss text-hot border-separator` and CSS vars `--bg --surface --surface-2 --nav-bg --chrome --label --label-2 --label-3 --separator --separator-2 --fill --fill-hover --accent --accent-soft --green --orange --red --logo`, flipping by theme.
 
-- [ ] **Step 1: Replace `web/src/index.css` with the token layer**
+- [x] **Step 1: Replace `web/src/index.css` with the token layer**
 
 ```css
 /* Inter Variable stays the cross-platform fallback; the Apple system stack
@@ -194,12 +194,12 @@ body {
 @keyframes op-pop { from { opacity: 0; transform: translateY(-6px) scale(0.97); } to { opacity: 1; transform: none; } }
 ```
 
-- [ ] **Step 2: Verify build + tokens resolve**
+- [x] **Step 2: Verify build + tokens resolve**
 
 Run: `npm test` → PASS (unchanged). Then `npm run build:web` → builds clean.
 Then `cd web && npm run dev`, open the app, and in devtools confirm `getComputedStyle(document.body).backgroundColor` changes when you toggle OS dark mode, and that setting `document.documentElement.dataset.theme='dark'` flips it too. (The app still looks half-old — later tasks consume the tokens.)
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/index.css
@@ -216,7 +216,7 @@ git commit -m "feat(web): iOS light/dark design-token layer (Tailwind 4 @theme +
 **Interfaces:**
 - Produces: named components `IconRefresh, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconChevronLeft, IconChevronRight, IconChevronDown` — each `(props) => <svg .../>` accepting `className`/`style`, `stroke="currentColor"`, `fill="none"` (except the filled magic sparkle), sized to inherit (`width="21" height="21"` default, overridable).
 
-- [ ] **Step 1: Create the icon set** (paths copied verbatim from spec §8)
+- [x] **Step 1: Create the icon set** (paths copied verbatim from spec §8)
 
 ```jsx
 // iOS line icons for the toolbar; currentColor so they inherit label/accent.
@@ -255,9 +255,9 @@ export const IconChevronDown = (p) => (
 );
 ```
 
-- [ ] **Step 2: Verify** — `npm run build:web` builds (icons are unused until Task 5, so just confirm no syntax error).
+- [x] **Step 2: Verify** — `npm run build:web` builds (icons are unused until Task 5, so just confirm no syntax error).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/components/icons.jsx
@@ -274,7 +274,7 @@ git commit -m "feat(web): iOS toolbar SVG icon set"
 **Interfaces:**
 - Produces: `default export Logo({ onHome })` — an inline-SVG `[OP]` mark filled with `var(--logo)` (purple light / white dark), wrapped in a home button that calls `onHome` (App passes `() => changeDate(TODAY)`).
 
-- [ ] **Step 1: Create the component**
+- [x] **Step 1: Create the component**
 
 ```jsx
 // Theme-adaptive brand mark: [OP] filled via --logo (purple on light, white
@@ -304,9 +304,9 @@ export default function Logo({ onHome }) {
 
 Note: OS-driven theming needs no JS. A **manual** theme toggle is out of scope (not requested); the `data-theme` hook exists for future use.
 
-- [ ] **Step 2: Verify** — build clean; visual check deferred to Task 5 (wired into the nav there). Confirm in an isolated render (or after Task 5) the mark is purple in light, white in dark.
+- [x] **Step 2: Verify** — build clean; visual check deferred to Task 5 (wired into the nav there). Confirm in an isolated render (or after Task 5) the mark is purple in light, white in dark.
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/components/Logo.jsx
@@ -323,7 +323,7 @@ git commit -m "feat(web): theme-adaptive [OP] logo (home->today link)"
 **Interfaces:**
 - Produces: `default export Sheet({ onClose, children, className, labelledBy })` — centered card over a blurred backdrop; dismiss on **Escape** and **backdrop click** (not inner click); `z-40`; `op-sheet-in` animation. Consumers render their own header (title + × via `onClose`).
 
-- [ ] **Step 1: Create the shell**
+- [x] **Step 1: Create the shell**
 
 ```jsx
 import { useEffect } from 'react';
@@ -369,9 +369,9 @@ export function SheetClose({ onClose }) {
 }
 ```
 
-- [ ] **Step 2: Verify** — build clean (used from Task 9 onward).
+- [x] **Step 2: Verify** — build clean (used from Task 9 onward).
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add web/src/components/Sheet.jsx
@@ -389,7 +389,7 @@ git commit -m "feat(web): shared iOS sheet shell (backdrop blur, Escape/backdrop
 - Consumes: `Logo` (Task 3), `icons.jsx` (Task 2). Keeps all existing handlers (`onRefresh`, `changeDate`, `setShowSlips/Filters/Help/Settings`, `activeMagicIds`, `dayRates`, `safePicks`, etc.).
 - Produces: the fixed app-shell layout the table and sheets sit in.
 
-- [ ] **Step 1: Convert the root to a fixed app-shell**
+- [x] **Step 1: Convert the root to a fixed app-shell**
 
 Replace the outer wrapper and header. Change the root `<div className="min-h-screen bg-slate-100 text-slate-800">` to:
 
@@ -416,7 +416,7 @@ Replace the `<header className="bg-slate-900 ...">` opening with the distinct-ba
 </header>
 ```
 
-- [ ] **Step 2: Date-nav center zone** (calendar popover is Task 6; wire the trigger + chevrons now)
+- [x] **Step 2: Date-nav center zone** (calendar popover is Task 6; wire the trigger + chevrons now)
 
 ```jsx
 <button onClick={() => changeDate(PREV_DATE)} disabled={date <= MIN_DATE}
@@ -438,7 +438,7 @@ Replace the `<header className="bg-slate-900 ...">` opening with the distinct-ba
 
 Add state near the other `useState`s: `const [showCal, setShowCal] = useState(false);`. (The `⌂` today button is removed — the Logo is now home; keep `changeDate(TODAY)` reachable via Logo + the calendar's Today button.)
 
-- [ ] **Step 3: Right-zone actions — responsive (full row `≥sm`, ⋯ menu `<sm`)**
+- [x] **Step 3: Right-zone actions — responsive (full row `≥sm`, ⋯ menu `<sm`)**
 
 Add state near the others: `const [showMagic, setShowMagic] = useState(false);` and `const [showOverflow, setShowOverflow] = useState(false);`. Shared classes:
 
@@ -499,7 +499,7 @@ Overflow ⋯ button — shown only below `sm` (holds every action except the dat
 
 Note: `setShowFilters(true)` — Filters now opens as a sheet (Task 9b), not the old inline toggle. Add imports: `import Logo from './components/Logo.jsx';`, `import OverflowMenu from './components/OverflowMenu.jsx';`, `import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconChevronLeft, IconChevronRight, IconChevronDown } from './components/icons.jsx';`. Add the `op-spin` keyframe to `index.css` (`@keyframes op-spin { to { transform: rotate(360deg); } }`). `MagicMenu` becomes the Magic **sheet** content (Task 7), opened by `showMagic` — render it near the other sheets in the JSX.
 
-- [ ] **Step 3b: Create the overflow menu** (`web/src/components/OverflowMenu.jsx`)
+- [x] **Step 3b: Create the overflow menu** (`web/src/components/OverflowMenu.jsx`)
 
 ```jsx
 import { IconRefresh, IconMagic, IconSlips, IconFilter, IconHelp, IconGear } from './icons.jsx';
@@ -535,7 +535,7 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
 }
 ```
 
-- [ ] **Step 4: `<main>` becomes the flex scroll parent; footer restyle**
+- [x] **Step 4: `<main>` becomes the flex scroll parent; footer restyle**
 
 Change `<main className="p-4 pb-10">` to `<main className="flex-1 min-h-0 flex flex-col px-3.5 pb-0">` (the table card scrolls internally — Task 11 sets its height to `flex-1`). Move `<SortPills>` inside main above the table.
 
@@ -553,7 +553,7 @@ Restyle the footer to the chrome bar, keeping **records · 🔥 O2.5 · Tips · 
 
 Restyle the error banner (`border-red-300 bg-red-50 text-red-700` → `border border-miss/40 bg-miss/10 text-miss rounded-2xl`) and the notice banner (sky → accent tokens). Keep `role`, dismiss buttons, auto-dismiss timers.
 
-- [ ] **Step 5: Verify (light + dark, 3 widths)**
+- [x] **Step 5: Verify (light + dark, 3 widths)**
 
 `npm test` PASS · `npm run build:web` clean · drive the app:
 - Nav bar is a distinct bar (own bg, hairline, shadow) separated from the table; logo is purple (light) / white (dark) and clicking it returns to today.
@@ -564,7 +564,7 @@ Restyle the error banner (`border-red-300 bg-red-50 text-red-700` → `border bo
 - Footer shows the four items (records · O2.5 · Tips · Safe) with correct colors; at a narrow width whole items wrap to a second row (no mid-item break).
 - No page scroll; only the table area scrolls. Check portrait, landscape, desktop.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/src/App.jsx web/src/index.css
@@ -583,7 +583,7 @@ git commit -m "feat(web): iOS app-shell layout, distinct nav bar, restyled foote
 - Consumes: `{ date, min, max, onPick(iso|''), onClose }` from App (`date`, `MIN_DATE`, `MAX_DATE`, `changeDate`).
 - Produces: a month-grid popover; `onPick('')` clears to All dates, `onPick(TODAY)` for Today.
 
-- [ ] **Step 1: Create the calendar** (month grid, weekday header, Clear/Today; disables out-of-range days; noon-anchored date math to dodge tz shift)
+- [x] **Step 1: Create the calendar** (month grid, weekday header, Clear/Today; disables out-of-range days; noon-anchored date math to dodge tz shift)
 
 ```jsx
 import { useState } from 'react';
@@ -640,7 +640,7 @@ const prevMonth = v => (v.m === 0 ? { y: v.y - 1, m: 11 } : { y: v.y, m: v.m - 1
 const nextMonth = v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m: v.m + 1 });
 ```
 
-- [ ] **Step 2: Wire into App** (inside the center date-nav zone, after the date button)
+- [x] **Step 2: Wire into App** (inside the center date-nav zone, after the date button)
 
 ```jsx
 {showCal && (
@@ -651,9 +651,9 @@ const nextMonth = v => (v.m === 11 ? { y: v.y + 1, m: 0 } : { y: v.y, m: v.m + 1
 
 Add `import CalendarPopover from './components/CalendarPopover.jsx';`. Ensure the center zone `<div>` is `relative` so the popover anchors to it.
 
-- [ ] **Step 3: Verify** — build clean; open the calendar: month nav works, out-of-range days (before `2026-07-02`, after +7d) are disabled, selecting a day navigates + updates `?date=`, Clear → All dates, Today → today. Light + dark.
+- [x] **Step 3: Verify** — build clean; open the calendar: month nav works, out-of-range days (before `2026-07-02`, after +7d) are disabled, selecting a day navigates + updates `?date=`, Clear → All dates, Today → today. Light + dark.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/src/components/CalendarPopover.jsx web/src/App.jsx
@@ -670,8 +670,8 @@ git commit -m "feat(web): custom iOS calendar popover (replaces native date inpu
 
 Convert Magic from an anchored dropdown to a **modal dialog** (per the toolbar-overflow decision — keeps the ⋯ menu simple). The toolbar/overflow trigger already sets `showMagic` (Task 5). `MagicMenu` drops its own trigger button and renders only its body: explanatory text (`text-label-2`), strategy rows (name `font-semibold text-label`, stats `text-label-2`, active row `bg-accent-soft`), "Clear magic sorts", sample-size footer. **Keep all props, the `activeIds`/`onToggle`/`onClearMagic` logic, small-sample warnings, and legend text verbatim** — only the container changes.
 
-- [ ] **Step 1: Refactor `MagicMenu.jsx`** to export the body only (no trigger); accept `onClose`. Header: title "Magic sort" + `SheetClose`. Restyle rows per the cheat-sheet.
-- [ ] **Step 2: Wire in App** — near the other sheets:
+- [x] **Step 1: Refactor `MagicMenu.jsx`** to export the body only (no trigger); accept `onClose`. Header: title "Magic sort" + `SheetClose`. Restyle rows per the cheat-sheet.
+- [x] **Step 2: Wire in App** — near the other sheets:
 
 ```jsx
 {showMagic && (
@@ -682,8 +682,8 @@ Convert Magic from an anchored dropdown to a **modal dialog** (per the toolbar-o
 )}
 ```
 
-- [ ] **Step 3: Verify** — the ⋯ menu and the `≥sm` magic button both open the sheet; toggling strategies still updates the sort chain + ✨ column; multiple strategies stack; Clear works; Escape/backdrop close. Light + dark.
-- [ ] **Step 4: Commit** — `style(web): magic sort as iOS sheet`
+- [x] **Step 3: Verify** — the ⋯ menu and the `≥sm` magic button both open the sheet; toggling strategies still updates the sort chain + ✨ column; multiple strategies stack; Clear works; Escape/backdrop close. Light + dark.
+- [x] **Step 4: Commit** — `style(web): magic sort as iOS sheet`
 
 ---
 
@@ -694,8 +694,8 @@ Convert Magic from an anchored dropdown to a **modal dialog** (per the toolbar-o
 
 Restyle only: "Sorted by" label `text-label-2`; each pill `bg-surface border border-separator rounded-[10px]` with priority # `text-label-3 tabular-nums`, label `font-semibold`, arrow `text-accent`, × button `hover:bg-fill`; "Clear all" `text-label-2`. Keep the chain rendering, remove/clear callbacks, priority numbers.
 
-- [ ] Restyle; verify pills reflect the chain, removal + Clear-all work, priority numbers correct. Light + dark.
-- [ ] Commit: `style(web): iOS sort pills`
+- [x] Restyle; verify pills reflect the chain, removal + Clear-all work, priority numbers correct. Light + dark.
+- [x] Commit: `style(web): iOS sort pills`
 
 ---
 
@@ -732,8 +732,8 @@ Each sub-task wraps the existing modal body in `Sheet` and restyles its chrome p
 
 Restyle only (used inside Settings/Slips): dropdown surfaces `bg-surface border border-separator rounded-xl shadow-lg`, options hover `bg-fill`, selected `text-accent`; inputs `bg-fill rounded-[10px] h-9 text-label`. Keep all input parsing/validation logic (`numberInput.js`) and selection behavior untouched.
 
-- [ ] Restyle; verify multi-selects (markets/stats/providers) and numeric inputs (slips) work identically. Light + dark.
-- [ ] Commit: `style(web): iOS multiselect + number inputs`
+- [x] Restyle; verify multi-selects (markets/stats/providers) and numeric inputs (slips) work identically. Light + dark.
+- [x] Commit: `style(web): iOS multiselect + number inputs`
 
 ---
 
@@ -750,9 +750,9 @@ Restyle only — **do not touch** the column pipeline, sort/`orderRows`, pin hys
 - Cell content colors via cheat-sheet: fixture link `text-accent`; provider badge `bg-accent-soft text-accent` (betpawa) / a green tint (betika) — keep both distinguishable; tip cell hit `text-hit`, miss `text-miss`, veto `text-label-3 line-through`, `%` `text-label-2`; 🔥 flame keep emoji (or `text-hot`); market stale/frozen `text-label-3`; dashes `text-label-3`.
 - Tap target: bump row `py-1` → `py-1.5` (touch-tuned compact); keep `text-xs`/`text-[13px]`.
 
-- [ ] Restyle; **run `npm test`** (must stay green — shared `sortValues`/`ordering` untouched).
-- [ ] Verify (critical, all widths + themes): sticky header + **Score/Tip left-pins still track on horizontal scroll**; sort (click/shift-click/multi) unchanged; row tints pair per fixture; tip cell states (hot/hit/miss/veto/%); market fresh/stale/frozen greys distinguishable in dark; magic column; scroll preserved across a silent refresh.
-- [ ] Commit: `style(web): iOS data table (pins/sort/scroll behavior unchanged)`
+- [x] Restyle; **run `npm test`** (must stay green — shared `sortValues`/`ordering` untouched).
+- [x] Verify (critical, all widths + themes): sticky header + **Score/Tip left-pins still track on horizontal scroll**; sort (click/shift-click/multi) unchanged; row tints pair per fixture; tip cell states (hot/hit/miss/veto/%); market fresh/stale/frozen greys distinguishable in dark; magic column; scroll preserved across a silent refresh.
+- [x] Commit: `style(web): iOS data table (pins/sort/scroll behavior unchanged)`
 
 ---
 
@@ -763,8 +763,8 @@ Restyle only — **do not touch** the column pipeline, sort/`orderRows`, pin hys
 
 Restyle to the prototype card: `bg-surface rounded-2xl shadow-2xl` anchored popover with a full-screen click-catcher behind; fixture title + `SheetClose`; blue headline (`text-accent text-lg font-bold`); section labels `text-[11px] font-bold tracking-wider text-label-2 uppercase` (CONFIDENCE BLEND / RUNNERS-UP / OVER-2.5 GATE AUDIT); blend rows (label + sub `text-label-2` + colored value); audit ✓ `text-hit`; hot marker `text-hot`. **Keep all content**: `SIGNAL_LABEL` glossary, `signalValue`, `skipLabel` skip reasons, AI verdict (probability, per-check findings, grounding links), Safe-pick 🛡 badge, runners-up.
 
-- [ ] Restyle; verify a normal tip, a hot tip (gate audit), a vetoed tip, an AI-reviewed tip (v2 fields), and a "no data" skip all render correctly. Light + dark.
-- [ ] Commit: `style(web): iOS tip popover`
+- [x] Restyle; verify a normal tip, a hot tip (gate audit), a vetoed tip, an AI-reviewed tip (v2 fields), and a "no data" skip all render correctly. Light + dark.
+- [x] Commit: `style(web): iOS tip popover`
 
 ---
 
@@ -775,8 +775,8 @@ Restyle to the prototype card: `bg-surface rounded-2xl shadow-2xl` anchored popo
 
 Extend the existing touch-friendly tooltip so it opens on **tap** (touch) as well as hover (pointer), for header definitions and cell context that currently rely on native `title=`. Restyle the bubble to `bg-label text-surface` (inverted) or `bg-surface border border-separator shadow-lg` rounded, `text-xs`. Keep the current API (`content`, children) so all call sites are unaffected. Do **not** convert interactive cells (tip/fixture) that own their own tap actions.
 
-- [ ] Restyle + add tap-open; verify on a touch emulation that header/cell definitions appear on tap and dismiss on outside tap; pointer hover still works.
-- [ ] Commit: `style(web): touch-friendly tap tooltips`
+- [x] Restyle + add tap-open; verify on a touch emulation that header/cell definitions appear on tap and dismiss on outside tap; pointer hover still works.
+- [x] Commit: `style(web): touch-friendly tap tooltips`
 
 ---
 
@@ -784,13 +784,13 @@ Extend the existing touch-friendly tooltip so it opens on **tap** (touch) as wel
 
 **Files:** none (verification only).
 
-- [ ] `npm test` → all green.
-- [ ] `npm run build:web` → clean; `npm run serve` → drive the built app against the real DB.
-- [ ] Walk the **no-regression inventory** (spec §9) end-to-end in **light and dark** at **iPad portrait, iPad landscape, desktop, AND a narrow phone width (`< sm`)**: date nav + calendar + URL sync, refresh + freshness silent reload, unified sort (column + magic, additive + shift-isolate + pills), magic **sheet** (opens from both the `≥sm` button and the ⋯ menu), slips (all limits/auto/fill/EV/persistence), filters (all ops + server/client split), settings (every toggle + order + safe-only + sort priority), table (pins/tints/tip states/market greys/magic col/scroll preservation), tip popover (all variants), footer (four items, whole-item wrap), refresh button (idle icon + last-refresh tooltip; running → disabled + spinner icon + step tooltip), outcome toggles, providers filter, completed toggle, localStorage persistence.
-- [ ] **Responsive overflow:** at `< sm`, all actions live in the ⋯ menu (date nav still inline, no wrap); at `≥ sm` the full icon row shows. Every overflow row works.
-- [ ] Confirm the favicon/app-icon/toolbar logo render (light + dark).
-- [ ] Fix any regression found; re-verify.
-- [ ] Final commit if fixes were needed: `fix(web): iOS redesign verification fixes`
+- [x] `npm test` → all green.
+- [x] `npm run build:web` → clean; `npm run serve` → drive the built app against the real DB.
+- [x] Walk the **no-regression inventory** (spec §9) end-to-end in **light and dark** at **iPad portrait, iPad landscape, desktop, AND a narrow phone width (`< sm`)**: date nav + calendar + URL sync, refresh + freshness silent reload, unified sort (column + magic, additive + shift-isolate + pills), magic **sheet** (opens from both the `≥sm` button and the ⋯ menu), slips (all limits/auto/fill/EV/persistence), filters (all ops + server/client split), settings (every toggle + order + safe-only + sort priority), table (pins/tints/tip states/market greys/magic col/scroll preservation), tip popover (all variants), footer (four items, whole-item wrap), refresh button (idle icon + last-refresh tooltip; running → disabled + spinner icon + step tooltip), outcome toggles, providers filter, completed toggle, localStorage persistence.
+- [x] **Responsive overflow:** at `< sm`, all actions live in the ⋯ menu (date nav still inline, no wrap); at `≥ sm` the full icon row shows. Every overflow row works.
+- [x] Confirm the favicon/app-icon/toolbar logo render (light + dark).
+- [x] Fix any regression found; re-verify.
+- [x] Final commit if fixes were needed: `fix(web): iOS redesign verification fixes`
 
 ---
 

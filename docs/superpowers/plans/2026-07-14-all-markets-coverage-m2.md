@@ -75,7 +75,7 @@ Tasks 1 & 3 must include a Betika team-total and a period-prefixed case.
 - Produces: `MARKET_FAMILIES: {group, typeNames:string[], columnizable:'column'|'grouped'|'filter-only', resolve(row)->{key,label}|null}[]`; `canonicalMarket(row)->{key,group,label,columnizable}` (never null — unknown rows return a `raw:` passthrough).
 - Consumes: nothing new.
 
-- [ ] **Step 1: Write the failing test** (append to `tests/markets.test.js`)
+- [x] **Step 1: Write the failing test** (append to `tests/markets.test.js`)
 
 ```javascript
 import { canonicalMarket } from '../src/markets.js';
@@ -102,12 +102,12 @@ test('canonicalMarket unifies provider spellings and passes through unknowns', (
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/markets.test.js`
 Expected: FAIL — `canonicalMarket` is not exported.
 
-- [ ] **Step 3: Implement `MARKET_FAMILIES` + `canonicalMarket`** (append to `src/markets.js`)
+- [x] **Step 3: Implement `MARKET_FAMILIES` + `canonicalMarket`** (append to `src/markets.js`)
 
 Build the family table from the DB inventory (`tmp/market-inventory.txt`, both providers). Each family declares its provider `type_name` spellings, a `columnizable` class, and a `resolve(row)`. Reuse the existing `marketKey` for the three canonical families so their keys stay identical. Full implementation:
 
@@ -172,12 +172,12 @@ export function canonicalMarket(row) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/markets.test.js`
 Expected: PASS (existing canonical tests + the new `canonicalMarket` test).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/markets.js tests/markets.test.js
@@ -196,7 +196,7 @@ git commit -m "feat(markets): generic canonicalMarket taxonomy (M2) alongside th
 - Consumes: `MARKET_FAMILIES`, `canonicalMarket` (Task 1); existing `whereMarket`.
 - Produces: `marketIdentity(qb, key)` — applies a WHERE selecting the odds_markets rows for `key` (canonical, family, or `raw:`), the generic replacement for `whereMarket` used by the read layer. Returns `qb`.
 
-- [ ] **Step 1: Write the failing test** (`tests/market-identity.test.js`)
+- [x] **Step 1: Write the failing test** (`tests/market-identity.test.js`)
 
 ```javascript
 import { test } from 'node:test';
@@ -222,12 +222,12 @@ test('marketIdentity builds type_name WHEREs for canonical, family and raw keys'
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/market-identity.test.js`
 Expected: FAIL — `marketIdentity` not exported.
 
-- [ ] **Step 3: Implement `marketIdentity`** (append to `src/markets.js`)
+- [x] **Step 3: Implement `marketIdentity`** (append to `src/markets.js`)
 
 ```javascript
 // Reverse map: canonical/family key -> the family that owns it (for WHERE building).
@@ -273,12 +273,12 @@ export function marketIdentity(qb, key) {
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `node --test tests/market-identity.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/markets.js tests/market-identity.test.js
@@ -297,7 +297,7 @@ git commit -m "feat(markets): marketIdentity generic WHERE builder for any disco
 - Consumes: `canonicalMarket` (Task 1).
 - Produces: `columnCatalog().markets` = the union of the canonical `MARKET_COLUMNS` (default set incl. promoted BTTS+DNB) **plus** every `columnizable:'column'|'grouped'` market discovered in `odds_markets`, each `{key, label, group, columnizable, default, sortable:true, filterable:true}`.
 
-- [ ] **Step 1: Write the failing test** (append to `tests/markets.test.js`)
+- [x] **Step 1: Write the failing test** (append to `tests/markets.test.js`)
 
 ```javascript
 import { discoverMarketColumns } from '../src/markets.js';
@@ -318,12 +318,12 @@ test('discoverMarketColumns dedupes, tags group, excludes filter-only, marks BTT
 });
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `node --test tests/markets.test.js`
 Expected: FAIL — `discoverMarketColumns` not exported.
 
-- [ ] **Step 3: Implement `discoverMarketColumns`** (append to `src/markets.js`)
+- [x] **Step 3: Implement `discoverMarketColumns`** (append to `src/markets.js`)
 
 ```javascript
 // Promoted-to-default additions beyond the canonical MARKET_COLUMNS defaults.
@@ -358,7 +358,7 @@ function _probeRow(key) {
 
 > Note: BTTS/DNB keys (`GG/NG/DNB1/DNB2`) are NOT in `MARKET_COLUMNS`; they enter via the discovered-rows loop and get `default:true` from `DEFAULT_EXTRA_KEYS`. Confirm the inventory shows them present (it does — BetPawa `Both Teams To Score | Full Time`, `Draw No Bet | Full Time`).
 
-- [ ] **Step 4: Wire into `columnCatalog()`** — modify `src/db/records.js:91-106`:
+- [x] **Step 4: Wire into `columnCatalog()`** — modify `src/db/records.js:91-106`:
 
 ```javascript
 export async function columnCatalog() {
@@ -382,12 +382,12 @@ export async function columnCatalog() {
 
 Add `discoverMarketColumns` to the `markets.js` import at the top of `records.js`.
 
-- [ ] **Step 5: Run tests**
+- [x] **Step 5: Run tests**
 
 Run: `node --test tests/markets.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/markets.js src/db/records.js tests/markets.test.js
@@ -405,7 +405,7 @@ git commit -m "feat(records): discover market columns from odds_markets (BTTS+DN
 - Consumes: `canonicalMarket`, `marketIdentity` (Tasks 1-2).
 - Produces: sort/filter works on any discovered market key; `row.markets`/`markets_stale` are keyed by `canonicalMarket().key` (all recognized + grouped families; filter-only excluded from the pivot but still queryable via SQL).
 
-- [ ] **Step 1: Modify `_sqlTarget`** (`records.js:118-131`) to accept any catalog market key. Replace the `if (!isMarketKey(key)) return null;` gate with a catalog-membership gate and use `marketIdentity`:
+- [x] **Step 1: Modify `_sqlTarget`** (`records.js:118-131`) to accept any catalog market key. Replace the `if (!isMarketKey(key)) return null;` gate with a catalog-membership gate and use `marketIdentity`:
 
 ```javascript
     // markets: any key present in the discovered catalog resolves to a MIN(price)
@@ -428,7 +428,7 @@ git commit -m "feat(records): discover market columns from odds_markets (BTTS+DN
 
 > The server already validates sort/filter keys against `columnCatalog()` before calling `_sqlTarget` (unknown keys 400), so an out-of-catalog key never reaches here. Confirm that validation path in `server.js` includes the discovered market keys (it reads the same catalog).
 
-- [ ] **Step 2: Modify the `_hydrate` odds pivot** (~`records.js:313-324`) to key by `canonicalMarket` and skip filter-only:
+- [x] **Step 2: Modify the `_hydrate` odds pivot** (~`records.js:313-324`) to key by `canonicalMarket` and skip filter-only:
 
 ```javascript
     for (const o of oddsRows) {
@@ -443,7 +443,7 @@ git commit -m "feat(records): discover market columns from odds_markets (BTTS+DN
 
 Keep the existing `markets`/`markets_stale` assembly onto each row; only the key source changes (`marketKey` → `canonicalMarket().key`). Replace the `marketKey` import usage in `_hydrate` with `canonicalMarket`.
 
-- [ ] **Step 3: Add a regression test** (append to `tests/markets.test.js`) that the pivot key matches the catalog key for a family market:
+- [x] **Step 3: Add a regression test** (append to `tests/markets.test.js`) that the pivot key matches the catalog key for a family market:
 
 ```javascript
 test('canonicalMarket pivot key matches discoverMarketColumns key (GG)', () => {
@@ -454,14 +454,14 @@ test('canonicalMarket pivot key matches discoverMarketColumns key (GG)', () => {
 });
 ```
 
-- [ ] **Step 4: Run tests + a live smoke check**
+- [x] **Step 4: Run tests + a live smoke check**
 
 Run: `node --test tests/markets.test.js`
 Expected: PASS.
 Then (DB available): `node -e "import('./src/db/records.js').then(async m=>{const c=await m.columnCatalog();console.log('market cols:',c.markets.length, c.markets.filter(x=>x.default).map(x=>x.key).join(','));process.exit(0)})"`
 Expected: market cols count > 20, defaults include `GG,NG,DNB1,DNB2`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/db/records.js tests/markets.test.js
@@ -478,18 +478,18 @@ git commit -m "feat(records): generic market pivot + sort/filter over discovered
 **Interfaces:**
 - Consumes: `columnCatalog().markets` (now carries `group` + `label`), which `App.jsx` already threads to these components unchanged.
 
-- [ ] **Step 1: Group the market MultiSelect by `group`.** In `SettingsModal.jsx`, replace the flat `options={catalog.markets}` with options grouped by `col.group` (Result / Double chance / Over-Under / BTTS / DNB / Odd-Even / HT-FT), rendering a group header per bucket. Keep selection persistence (`oddspro.cols.markets`) unchanged — keys are still plain strings. Add a text filter input above the list that substring-matches `label`.
+- [x] **Step 1: Group the market MultiSelect by `group`.** In `SettingsModal.jsx`, replace the flat `options={catalog.markets}` with options grouped by `col.group` (Result / Double chance / Over-Under / BTTS / DNB / Odd-Even / HT-FT), rendering a group header per bucket. Keep selection persistence (`oddspro.cols.markets`) unchanged — keys are still plain strings. Add a text filter input above the list that substring-matches `label`.
 
-- [ ] **Step 2: Group + search the FilterBuilder market fields** (`FilterBuilder.jsx:524-547`): the "Odds markets" field group becomes sub-grouped by `group`; add the same search box. Behavior/ops unchanged (numeric `= ≠ > ≥ ≤` / `in`/`not-in`).
+- [x] **Step 2: Group + search the FilterBuilder market fields** (`FilterBuilder.jsx:524-547`): the "Odds markets" field group becomes sub-grouped by `group`; add the same search box. Behavior/ops unchanged (numeric `= ≠ > ≥ ≤` / `in`/`not-in`).
 
-- [ ] **Step 3: Data-drive the tooltip glossary** (`DataTable.jsx:68-75`): replace the hardcoded `MARKET_INFO` literal with a lookup into the market catalog `label`/`group` passed via props; fall back to the O/U regex for canonical lines. An unknown market renders its `label` as the tooltip instead of `null`.
+- [x] **Step 3: Data-drive the tooltip glossary** (`DataTable.jsx:68-75`): replace the hardcoded `MARKET_INFO` literal with a lookup into the market catalog `label`/`group` passed via props; fall back to the O/U regex for canonical lines. An unknown market renders its `label` as the tooltip instead of `null`.
 
-- [ ] **Step 4: Build + browser-verify**
+- [x] **Step 4: Build + browser-verify**
 
 Run: `npm run build:web`
 Then load the app, open Settings → Markets: confirm grouped list + search; confirm BTTS + DNB appear as **default** columns in the table; add a Correct-Score filter and confirm it filters (filter-only, no column). Confirm the canonical default view is otherwise unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/src/components/SettingsModal.jsx web/src/components/FilterBuilder.jsx web/src/components/DataTable.jsx
@@ -502,20 +502,20 @@ git commit -m "feat(web): grouped/searchable market picker + data-driven market 
 
 **Files:** none (verification only)
 
-- [ ] **Step 1: Full offline suite**
+- [x] **Step 1: Full offline suite**
 
 Run: `npm test`
 Expected: all pass, including the existing canonical `markets.test.js` assertions (unchanged) + the new ones.
 
-- [ ] **Step 2: Restart server + smoke `/api/columns` and a market sort**
+- [x] **Step 2: Restart server + smoke `/api/columns` and a market sort**
 
 Run: restart `npm run serve`; `curl 'http://127.0.0.1:3001/api/columns'` → `markets[]` count > 20 with groups; `curl 'http://127.0.0.1:3001/api/records?sort=[{"key":"GG","dir":"desc"}]&per_page=all' | head` → 200, sorted by BTTS-Yes price.
 
-- [ ] **Step 3: Confirm predictions unchanged**
+- [x] **Step 3: Confirm predictions unchanged**
 
 Run: `node src/index.js hotpicks` (or inspect that `_loadMarkets`/`marketKey` are untouched) — tip output must be identical to pre-M2 (M2 changes no prediction code path).
 
-- [ ] **Step 4: Commit any doc updates**
+- [x] **Step 4: Commit any doc updates**
 
 Update `CLAUDE.md` (markets.js + records.js notes) and `implementation-plan.md` to record M2. Commit.
 
