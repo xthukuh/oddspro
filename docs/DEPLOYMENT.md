@@ -1,6 +1,6 @@
 # cPanel Shared-Hosting Deployment (manual)
 
-> **Status:** oddspro is **live at [oddspro.ke](https://oddspro.ke)** — v1.0.1 deployed 2026-07-12 via this workflow. Use this guide for the next release upload.
+> **Status:** oddspro is **live at [oddspro.ke](https://oddspro.ke)** — the 2026-07-12 upload (pre-v1.1.0; web titled v1.0.3) is still what the host runs, verified 2026-07-17. **v1.2.0 is tagged (`v1.2.0` @ `f7f1f9d`, suite 707/707) and packaged** — zips + step-by-step in `release/DEPLOY-CHECKLIST-v1.2.0.md` (gitignored); upload it via this workflow. ⚠ Its first restart runs migration batches 9–14 and seeds the admin — **`PIN_PEPPER` must be in the host `.env` BEFORE that restart** (§5 + the checklist).
 
 Deploying oddspro to a shared cPanel host with **no SSH/terminal access** — only Setup Node.js App, Cron Jobs, File Manager, and phpMyAdmin. This is the **manual-first** workflow: build locally, upload the built files. No Git Version Control, no `deploy` branch, no build step on the server. (CI/CD can come later when the host gains SSH — see §7.)
 
