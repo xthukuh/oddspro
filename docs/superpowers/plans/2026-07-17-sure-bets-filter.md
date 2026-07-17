@@ -32,7 +32,7 @@
 - Consumes (already in the module): `safeQualifies(row, opts, cal)`, `tipView(row)`, `estimateLegProb(tip, cal)`, module-private `_dayKey(r)`.
 - Produces: `export const DEFAULT_SURE_BETS = { maxPerDay: 10, slipSize: 3 }` and `export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS)` → ordered `Array<{ row, prob }>` (prob = the exact `estimateLegProb` number, so consumers never recompute). Tasks 2–3 import both.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Extend the import on line ~9 of `tests/magic-rules.test.js` with `sureBetsSelection, DEFAULT_SURE_BETS`. The file's existing `safe()` factory (line ~361) makes a gate-passing row: `api_id 1`, `day '2026-07-01'`, `tip_market '1X'`, `tip_price 1.25`, `tip_confidence 0.75`, 3-part breakdown (agreement 0.75). With `cal = null`, `estimateLegProb` falls back to blend confidence — so ordering tests just vary `tip_confidence`.
 
@@ -109,12 +109,12 @@ test('sureBetsSelection enforces the market maturity floor when a calibration is
 });
 ```
 
-- [ ] **Step 2: Run the tests to verify they fail**
+- [x] **Step 2: Run the tests to verify they fail**
 
 Run: `node --test tests/magic-rules.test.js`
 Expected: FAIL — `SyntaxError`-level import failure (`sureBetsSelection` is not exported) or equivalent.
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 Insert in `src/db/magic-rules.js` directly after `safeSelection`'s closing brace (~line 503):
 
@@ -157,17 +157,17 @@ export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS) {
 }
 ```
 
-- [ ] **Step 4: Run the tests to verify they pass**
+- [x] **Step 4: Run the tests to verify they pass**
 
 Run: `node --test tests/magic-rules.test.js`
 Expected: PASS (all pre-existing magic-rules tests + the 7 new ones).
 
-- [ ] **Step 5: Run the FULL suite** (the web imports this module verbatim — a regression here breaks two consumers)
+- [x] **Step 5: Run the FULL suite** (the web imports this module verbatim — a regression here breaks two consumers)
 
 Run: `npm test`
 Expected: PASS, 707 + 7 = 714 (or whatever the true new total is — record it).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```powershell
 git add src/db/magic-rules.js tests/magic-rules.test.js
@@ -186,7 +186,7 @@ git commit -m "feat(magic): sureBetsSelection - daily top-10 safe list (pure, sp
 - Consumes: `sureBetsSelection`, `DEFAULT_SURE_BETS` (Task 1); existing `session` (`useSession()`), `visibleData`, `cal`, `effectiveSafe`, `saveSafeOnly` idiom.
 - Produces (Task 3 relies on these exact names): App state `sureBets`/`setSureBets`, `const signedIn = !!session?.user`, memo `surePicks` (`Array<{ row, prob }>`), saver `saveSureBets(value)`.
 
-- [ ] **Step 1: App.jsx — import + LS key + state**
+- [x] **Step 1: App.jsx — import + LS key + state**
 
 Line ~8, extend the magic-rules import:
 
@@ -210,7 +210,7 @@ After the `safeOverrides` state (~line 247):
 const [sureBets, setSureBets] = useState(() => localStorage.getItem(LS_SURE_BETS) === '1');
 ```
 
-- [ ] **Step 2: App.jsx — surePicks memo**
+- [x] **Step 2: App.jsx — surePicks memo**
 
 Directly after the `safePicks` memo (~line 439):
 
@@ -228,7 +228,7 @@ Directly after the `safePicks` memo (~line 439):
     );
 ```
 
-- [ ] **Step 3: App.jsx — membership cut in the rows memo**
+- [x] **Step 3: App.jsx — membership cut in the rows memo**
 
 Inside the `rows` memo (~line 460), directly AFTER the existing `if (safeOnly) { ... }` block and BEFORE the `oneEach` line, add:
 
@@ -244,7 +244,7 @@ Inside the `rows` memo (~line 460), directly AFTER the existing `if (safeOnly) {
 
 Extend the memo's dependency array with `sureBets, signedIn, surePicks`.
 
-- [ ] **Step 4: App.jsx — saver + ViewPills props**
+- [x] **Step 4: App.jsx — saver + ViewPills props**
 
 Next to `saveSafeOnly` (~line 794):
 
@@ -262,7 +262,7 @@ In the `<ViewPills ...>` call (~line 1025), add:
                     sureCap={DEFAULT_SURE_BETS.maxPerDay} onSureBets={saveSureBets}
 ```
 
-- [ ] **Step 5: ViewPills.jsx — chip + zero-day warning**
+- [x] **Step 5: ViewPills.jsx — chip + zero-day warning**
 
 Add `sureBets, sureCount, sureCap, onSureBets` to the destructured props. After the `safeOnly` items.push line (~line 20):
 
@@ -273,12 +273,12 @@ Add `sureBets, sureCount, sureCap, onSureBets` to the destructured props. After 
     if (sureBets && sureCount === 0) items.push(['sureBets', '⭐ No sure bets today - no fixture passed the safety gates', 'Nothing qualified today; × turns Sure bets off', () => onSureBets(false)]);
 ```
 
-- [ ] **Step 6: Verify offline + visually**
+- [x] **Step 6: Verify offline + visually**
 
 Run: `npm test` — Expected: PASS (no count change vs Task 1).
 Run: `cd web; npm run dev` (backend serve already on :3001) → open `http://localhost:5173`, sign in, toggle Sure bets on via localStorage (`localStorage.setItem('oddspro.show.sureBets','1')` in DevTools console — the Magic-sheet row arrives in Task 3), reload: table filters to ≤10 fixtures, pill reads "⭐ Sure bets (N of 10)". Signed out: no pill, table unfiltered.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```powershell
 git add web/src/App.jsx web/src/components/ViewPills.jsx
@@ -298,7 +298,7 @@ git commit -m "feat(web): sure-bets membership filter + view pill with zero-day 
 - Consumes: `surePicks` / `saveSureBets` / `signedIn` / `DEFAULT_SURE_BETS` (Task 2), playground-private `_loadSlips`/`_id`/`_hm`/`LS_SLIPS`.
 - Produces: `export function seedSlip(entries, date, name)` in `BetslipPlayground.jsx` (entries = `Array<{ row, prob }>`); MagicMenu props `signedIn, sureBets, sureCount, sureCap, slipSize, onSureBets, onTopSlip`.
 
-- [ ] **Step 1: BetslipPlayground.jsx — seedSlip export**
+- [x] **Step 1: BetslipPlayground.jsx — seedSlip export**
 
 After the `_wrap` helper (~line 70):
 
@@ -328,7 +328,7 @@ export function seedSlip(entries, date, name) {
 }
 ```
 
-- [ ] **Step 2: App.jsx — import + handler + MagicMenu props**
+- [x] **Step 2: App.jsx — import + handler + MagicMenu props**
 
 Line ~11: `import BetslipPlayground, { seedSlip } from './components/BetslipPlayground.jsx';`
 
@@ -353,7 +353,7 @@ MagicMenu render (~line 1150) gains:
                     onSureBets={saveSureBets} onTopSlip={seedTopSlip}
 ```
 
-- [ ] **Step 3: MagicMenu.jsx — Sure bets section**
+- [x] **Step 3: MagicMenu.jsx — Sure bets section**
 
 Extend the props destructuring with `signedIn, sureBets, sureCount, sureCap, slipSize, onSureBets, onTopSlip`. Inside the scroll area, AFTER the `{data && !strategies.length && (...)}` block (~line 74), add:
 
@@ -401,12 +401,12 @@ Extend the props destructuring with `signedIn, sureBets, sureCount, sureCap, sli
                 </div>
 ```
 
-- [ ] **Step 4: Verify offline + visually**
+- [x] **Step 4: Verify offline + visually**
 
 Run: `npm test` — Expected: PASS.
 On :5173 signed in: ✨ sheet shows the Sure bets row with a live "N of 10 today"; toggling filters the table + shows the pill; "Top-3 slip" closes the sheet, opens the playground with a "Sure top-3" slip of ≤3 legs (fixture names, prices, probs populated; survival/EV rendered). Signed out (or in a private window as guest): the row is the sign-in nudge; no toggle.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```powershell
 git add web/src/components/BetslipPlayground.jsx web/src/components/MagicMenu.jsx web/src/App.jsx
@@ -423,7 +423,7 @@ git commit -m "feat(web): magic-sheet sure-bets row + guest nudge + top-3 slip s
 
 **Interfaces:** none — prose only.
 
-- [ ] **Step 1: safety-net-protocol.md — Sure bets section**
+- [x] **Step 1: safety-net-protocol.md — Sure bets section**
 
 Read the doc first and match its heading depth/tone. Append (adjust heading level to fit):
 
@@ -447,7 +447,7 @@ playground). Same staking discipline as the Safe protocol above - flat small
 stakes, never chase; a 10-leg ticket is entertainment, not a strategy.
 ```
 
-- [ ] **Step 2: CLAUDE.md — two one-liners**
+- [x] **Step 2: CLAUDE.md — two one-liners**
 
 In the `src/db/magic-rules.js` bullet, after the `SAFE_TIERS` / M3-additions prose, add one sentence:
 
@@ -461,16 +461,16 @@ In the `web/` bullet, after the Safe-only toggle prose, add one sentence:
 **Sure bets (2026-07-17, signed-in only):** a ✨ Magic-sheet row (guests get a sign-in nudge) toggles `oddspro.show.sureBets` — membership cut by `api_id` over the whole loaded selection exactly like Safe-only, ViewPills chip "⭐ Sure bets (N of 10)" with an explicit zero-day warning, and a "Top-3 slip" action that seeds the top legs into the betslip book (`seedSlip` export in `BetslipPlayground.jsx` — the one owner of the `oddspro.betslips` format) and opens the playground.
 ```
 
-- [ ] **Step 3: Full suite + final browser pass**
+- [x] **Step 3: Full suite + final browser pass**
 
 Run: `npm test` — Expected: PASS (record the final count).
 Re-verify on :5173: toggle on/off round-trips (persisted across reload), Safe-only + Sure bets together = AND (both pills visible), guest view clean. Do NOT rebuild `web/dist`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add docs/safety-net-protocol.md CLAUDE.md
 git commit -m "docs: sure-bets section in safety-net protocol + CLAUDE.md notes"
 ```
 
-- [ ] **Step 5: Update this plan's checkboxes + the spec status line** (`Status: approved by user (conversation), implementation pending` → `implemented <date>, commits <hashes>`), commit with the docs commit above or as `docs(spec): mark sure-bets implemented`.
+- [x] **Step 5: Update this plan's checkboxes + the spec status line** (`Status: approved by user (conversation), implementation pending` → `implemented <date>, commits <hashes>`), commit with the docs commit above or as `docs(spec): mark sure-bets implemented`.
