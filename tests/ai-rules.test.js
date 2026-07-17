@@ -237,6 +237,21 @@ test('resolveTask routes facts+anchored to Gemini and the blind reasoner off-Goo
         { provider: 'gemini', model: 'gemini-2.5-flash', grounded: true });
 });
 
+test('resolveTask routes adjudicate to Gemini on the adjudicator model + grounding (T9 harness migration)', () => {
+    // Byte-identical to what gemini.js#_adjudicate hardcoded pre-harness:
+    // model = HOTPICK_AI_MODEL, grounded = Boolean(HOTPICK_AI_WEB) - the #p3
+    // reuse tag depends on this mapping never drifting.
+    const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', HOTPICK_AI_WEB: 1 };
+    assert.deepEqual(resolveTask('adjudicate', cfg),
+        { provider: 'gemini', model: 'gemini-2.5-flash', grounded: true });
+});
+
+test('resolveTask adjudicate grounding follows HOTPICK_AI_WEB off too', () => {
+    const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', HOTPICK_AI_WEB: 0 };
+    assert.deepEqual(resolveTask('adjudicate', cfg),
+        { provider: 'gemini', model: 'gemini-2.5-flash', grounded: false });
+});
+
 test('resolveTask honours per-task model overrides', () => {
     const cfg = { HOTPICK_AI_MODEL: 'gemini-2.5-flash', OPENROUTER_MODEL: 'openai/gpt-5.6-terra',
         HOTPICK_AI_WEB: 0, AI_BLIND_MODEL: 'qwen/qwen3.7-plus', AI_ANCHORED_MODEL: 'gemini-2.5-pro' };

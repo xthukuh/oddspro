@@ -37,7 +37,10 @@ const _prob = z.preprocess(v => {
 
 // v2 structured verdict. Only `verdict` is load-bearing; probability, checks
 // and reason tolerate omission (Gemini sometimes trims fields on confirms).
-const Verdict = z.object({
+// Exported (T9) so the harness path (src/ai/adjudicators.js via
+// callStructured) applies the SAME schema parseVerdict does - one contract,
+// two entry points, no drift.
+export const Verdict = z.object({
     verdict: z.enum(['confirm', 'veto']),
     probability: _prob.optional().transform(v => v ?? null),
     checks: z.record(z.string(), z.string().nullable()).nullish().transform(v => v ?? null),

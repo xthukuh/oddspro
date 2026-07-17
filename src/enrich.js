@@ -1,8 +1,9 @@
 import { db } from './db/connection.js';
 import { config } from './config.js';
 import { effective, effectiveConfig } from './settings.js';
-import { callModel, getProvider } from './ai/index.js';
-import { extractJson } from './ai-parse.js';
+import { getProvider } from './ai/index.js';
+import { callStructured } from './ai/harness.js';
+import { newRunGuard } from './db/ai-guard-rules.js';
 import { _batch } from './utils.js';
 import { pairedTeamGoalsAggregates, h2hGoalsAggregates } from './db/goals-rules.js';
 import { loadTeamHistory } from './hotpicks.js';
@@ -187,7 +188,10 @@ function _buildStats(f, fixturesByTeam, cfg) {
 }
 
 // One fixture's full 3-call set. Returns { written, errors }.
-async function _enrichOne(f, tags, fixturesByTeam, cfg) {
+// All three calls ride callStructured (T9): sanitize -> extractJson ->
+// per-kind zod schema -> observe-only suspicion flags, plus the shared
+// per-run guard - prompt bytes and tags are UNCHANGED, so nothing re-bills.
+async function _enrichOne(f, tags, fixturesByTeam, cfg, guard) {
     // Nothing to do -> spend NOTHING. Without this the grounded facts call (the
     // most expensive of the three) would re-bill on every sweep even when both
     // reasoners are already fresh.
@@ -200,8 +204,8 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
 
     // 1. FACTS (grounded, once).
     try {
-        const r = await callModel({ task: 'facts', prompt: _factsPrompt(stats), cfg });
-        facts = FactsPayload.parse(extractJson(r.text));
+        const r = await callStructured({ task: 'facts', prompt: _factsPrompt(stats), schema: FactsPayload, cfg, guard });
+        facts = r.data;
         sources = r.sources ?? null;
     } catch (e) {
         errors++;
@@ -213,8 +217,8 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     // would skip the anchored call below and leave the pair half-measured.
     if (needBlind) {
         try {
-            const r = await callModel({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }), cfg });
-            const p = BlindPayload.parse(extractJson(r.text));
+            const r = await callStructured({ task: 'blind', prompt: buildBlindPrompt({ ...stats, facts }), schema: BlindPayload, cfg, guard });
+            const p = r.data;
             await _upsert({
                 fixture_id: f.id, kind: 'blind', provider: r.provider,
                 model_tag: enrichModelTag({ model: r.model, grounded: r.grounded }),
@@ -233,12 +237,14 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg) {
     if (needAnchored) {
         try {
             const tip = { market: f.tip_market, price: f.tip_price };
-            const r = await callModel({
+            const r = await callStructured({
                 task: 'anchored',
                 prompt: buildAnchoredPrompt({ ...stats, facts, tip }),
+                schema: AnchoredPayload,
                 cfg,
+                guard,
             });
-            const p = AnchoredPayload.parse(extractJson(r.text));
+            const p = r.data;
             await _upsert({
                 fixture_id: f.id, kind: 'anchored', provider: r.provider,
                 model_tag: enrichModelTag({ model: r.model, grounded: r.grounded }),
@@ -369,12 +375,17 @@ export async function enrichFixtures() {
     const fixturesByTeam = await loadTeamHistory(teamIds);
 
     let written = 0, errors = 0;
+    // T9 run guard, one per sweep: wall-clock budget (AI_RUN_MAX_MINUTES,
+    // 0 = off) + circuit breaker (AI_BREAKER_AFTER consecutive failures).
+    // Refusals surface as counted per-call errors (fail-open), never batch
+    // rejections.
+    const guard = newRunGuard(Date.now());
     // Bounded concurrency: these are NETWORK calls, so the _batch(..., 1) rule
     // for DB writers (InnoDB deadlock avoidance) does not apply here.
     // _batch(list, each, parallel) - verified signature in src/utils.js:51.
     const results = await _batch(
         targets,
-        f => _enrichOne(f, tags, fixturesByTeam, cfg),
+        f => _enrichOne(f, tags, fixturesByTeam, cfg, guard),
         Number(effective('AI_ENRICH_CONCURRENCY')),
     );
     for (const r of results) { written += r?.written ?? 0; errors += r?.errors ?? 0; }

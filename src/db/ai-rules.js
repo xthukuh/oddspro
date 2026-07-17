@@ -262,6 +262,13 @@ export function enrichModelTag({ model, grounded, promptVersion = PROMPT_VERSION
 // is reasoning difference rather than one model simply knowing more.
 export function resolveTask(task, cfg) {
     const grounded = Boolean(cfg.HOTPICK_AI_WEB);
+    // 'adjudicate' (T9): the hot-pick/tip adjudicators, routed through the
+    // same resolver now that they ride callStructured. Byte-identical to what
+    // gemini.js#_adjudicate hardcoded before the harness migration - model,
+    // grounding and therefore the #p3 reuse tag are all unchanged.
+    if (task === 'adjudicate') {
+        return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
+    }
     if (task === 'facts') {
         return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
     }

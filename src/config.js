@@ -96,6 +96,13 @@ const EnvSchema = z.object({
     AI_ENRICH_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
     AI_BLIND_MODEL: z.string().default(''),      // '' = provider default
     AI_ANCHORED_MODEL: z.string().default(''),   // '' = provider default
+    // --- Detour B: AI safety-harness run guards (src/ai/harness.js) ---
+    // Per-run wall-clock budget in minutes (0 = off; TIP_AI_DAILY_CAP /
+    // AI_ENRICH_CAP already bound call COUNTS) and the circuit breaker:
+    // N consecutive transport/parse failures refuse the rest of the run
+    // instantly instead of burning a 60s timeout per remaining call.
+    AI_RUN_MAX_MINUTES: z.coerce.number().min(0).default(0),
+    AI_BREAKER_AFTER: z.coerce.number().int().min(0).default(5),
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)

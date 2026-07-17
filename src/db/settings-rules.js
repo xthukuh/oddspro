@@ -64,6 +64,10 @@ export const SETTINGS_CATALOG = [
     // AI-review worker (src/ai-worker.js) - late-read per drain -> live.
     { key: 'HOTPICK_AI_CONCURRENCY', type: 'int', group: 'ai', public: false, live: true, min: 1, max: 16 },
     { key: 'TIP_AI_REUSE_PRICE_TOL', type: 'number', group: 'ai', public: false, live: true, min: 0, max: 0.5 },
+    // Safety-harness run guards (src/ai/harness.js) - late-read per drain/
+    // enrich run -> live. Wall-clock budget minutes (0 = off) + breaker.
+    { key: 'AI_RUN_MAX_MINUTES', type: 'number', group: 'ai', public: false, live: true, min: 0 },
+    { key: 'AI_BREAKER_AFTER', type: 'int', group: 'ai', public: false, live: true, min: 0, max: 100 },
 ];
 
 const BY_KEY = new Map(SETTINGS_CATALOG.map(e => [e.key, e]));
