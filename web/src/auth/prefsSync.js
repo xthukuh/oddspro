@@ -118,10 +118,26 @@ export async function syncNow(userId) {
 }
 
 // Debounced-by-cheapness auto-sync: an interval push that no-ops (no network)
-// while the fingerprint is clean. Returns the stop function for the effect
-// teardown. Per-write auto-push stays deferred (plan escalation #4 - needs a
-// central localStorage write helper).
-export function startAutoSync(userId, intervalMs = 120_000) {
+// while the fingerprint is clean, PLUS a tab-focus sync (2026-07-17 spec):
+// walking to this device runs syncNow - push-if-dirty FIRST, so our own focus
+// event can never clobber fresh local edits, else pull (adopt + reload only
+// when another device actually changed content). Throttled; 'focus' catches
+// app switches where visibility never changed. Returns the stop function.
+export function startAutoSync(userId, intervalMs = 120_000, focusThrottleMs = 30_000) {
     const t = setInterval(() => { pushPrefs(userId); }, intervalMs);
-    return () => clearInterval(t);
+    let last = 0;
+    const onFocus = () => {
+        if (document.visibilityState !== 'visible') return;
+        const now = Date.now();
+        if (now - last < focusThrottleMs) return;
+        last = now;
+        syncNow(userId);
+    };
+    document.addEventListener('visibilitychange', onFocus);
+    window.addEventListener('focus', onFocus);
+    return () => {
+        clearInterval(t);
+        document.removeEventListener('visibilitychange', onFocus);
+        window.removeEventListener('focus', onFocus);
+    };
 }

@@ -4,6 +4,7 @@ import {
     serverKeys, splitFilters, applyClientFilters, applyOutcomeToggles,
     distinctValues, toFilterCsv, applyOneOfEach, conditionCount,
     stampSelection, applySelectionHide, applySelectionKeep, displayedSummary,
+    sanitizeFilters,
 } from '../web/src/filterValues.js';
 import { parseFilterList } from '../src/db/filter-csv.js';
 
@@ -483,4 +484,45 @@ test('applyOneOfEach is a no-op for 0/1 rows', () => {
     const one = [provRow(1, 'betpawa')];
     assert.equal(applyOneOfEach(one, ['betpawa']), one);
     assert.equal(applyOneOfEach([], ['betpawa']).length, 0);
+});
+
+// --- sanitizeFilters (persisted-filter restore, 2026-07-17 sync spec) ---
+
+const SAN_COLS = [{ key: 'league', group: 'base' }, { key: 'status', group: 'base' }, { key: 'score', group: 'base' }];
+
+test('sanitizeFilters keeps known-key conditions and drops unknown ones', () => {
+    const kept = { key: 'league', op: 'like', value: 'Premier' };
+    const stale = { key: 'gone_column', op: 'eq', value: '1' };
+    assert.deepEqual(sanitizeFilters([kept, stale], SAN_COLS), [kept]);
+});
+
+test('sanitizeFilters preserves enabled flags and expr nodes', () => {
+    const off = { key: 'status', op: 'eq', value: 'FT', enabled: false };
+    const expr = { type: 'expr', value: 'a > b' };
+    assert.deepEqual(sanitizeFilters([off, expr], SAN_COLS), [off, expr]);
+});
+
+test('sanitizeFilters validates column-to-column conditions on both sides', () => {
+    const ok = { key: 'league', op: 'eq', col: 'status' };
+    const bad = { key: 'league', op: 'eq', col: 'gone_column' };
+    assert.deepEqual(sanitizeFilters([ok, bad], SAN_COLS), [ok]);
+});
+
+test('sanitizeFilters recurses groups and drops emptied ones', () => {
+    const tree = {
+        type: 'group', join: 'or', items: [
+            { key: 'league', op: 'like', value: 'Cup' },
+            { type: 'group', join: 'and', items: [{ key: 'gone_column', op: 'eq', value: 'x' }] },
+        ],
+    };
+    const out = sanitizeFilters(tree, SAN_COLS);
+    assert.equal(out.type, 'group');
+    assert.equal(out.items.length, 1); // inner group emptied -> dropped
+    assert.equal(out.items[0].key, 'league');
+});
+
+test('sanitizeFilters returns [] for garbage input or a fully-emptied tree', () => {
+    assert.deepEqual(sanitizeFilters(null, SAN_COLS), []);
+    assert.deepEqual(sanitizeFilters('nope', SAN_COLS), []);
+    assert.deepEqual(sanitizeFilters({ type: 'group', items: [{ key: 'gone', op: 'eq', value: '1' }] }, SAN_COLS), []);
 });
