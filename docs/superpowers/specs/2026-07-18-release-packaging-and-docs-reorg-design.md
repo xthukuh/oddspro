@@ -20,6 +20,13 @@
 3. **Stale-knowledge audit**: close the currency gaps found in the 2026-07-18
    review (CLAUDE.md Commands omissions, stale root README, memory-bank state
    entry, Claude-memory index hooks).
+4. **Agent toolset knowledge library** (user, 2026-07-18): a repo-committed,
+   harness-agnostic operations reference so ANY model (Opus, Codex, Gemini,
+   future Claude) starts with everything that already works — verified
+   command playbooks, what-to-use-when guidance, operational issue KB, and
+   strict do-not-break guardrails. Exports the transferable parts of the
+   incumbent agent's private session memory into the repo. Agent-density
+   sanctioned: optimized for agent use, not human skimming.
 
 ## Non-goals
 
@@ -125,6 +132,8 @@ reference update, so no intermediate commit has dangling links.
 | `docs/dev/specs/` | everything in `docs/superpowers/specs/` (13 incl. this spec) |
 | `docs/dev/plans/` | everything in `docs/superpowers/plans/` (11 incl. this spec's companion plan) |
 | `docs/dev/checklists/` | `v1.0.1-ui-tweaks-checklist.md`, `v1.0.2-ui-pass-checklist.md`, `perf-pass-2026-07-17-checklist.md` |
+| `docs/agents/` (NEW) | `toolset.md` — the agent toolset knowledge library (Part 4) |
+| REPO ROOT (NEW) | `AGENTS.md` — cross-harness agent entry point (Part 4) |
 
 `docs/superpowers/` is removed (empty after the moves).
 
@@ -182,6 +191,52 @@ Gaps found in the 2026-07-18 review, each becomes a concrete edit:
 5. **Claude memory**: refresh the stale `oddspro-project-state` hook line in
    `MEMORY.md` (still headlines 2026-07-15/v1.1.0); record the docs-path
    mapping in the resume-point so future recalls don't chase dead paths.
+6. **CLAUDE.md agent-library pointer** (Part 4): direct automated agents to
+   `AGENTS.md` / `docs/agents/toolset.md`.
+
+---
+
+## Part 4 — Agent toolset knowledge library
+
+**Problem:** much of what makes sessions efficient lives in the incumbent
+agent's PRIVATE session memory (process-tree cleanup, PowerShell 5.1 traps,
+browser-E2E rituals, serve lifecycle) — invisible to Opus, Codex, Gemini, or
+any fresh harness. The library exports the transferable parts into the repo.
+
+**Artifacts:**
+
+1. **Root `AGENTS.md`** (~40 dense lines) — cross-harness entry point (the
+   `AGENTS.md` convention is auto-read by several non-Claude harnesses; Claude
+   Code reaches it via the CLAUDE.md pointer). Contains: read-order
+   (CLAUDE.md architecture → `docs/agents/toolset.md` operations →
+   `docs/memory-bank.md` issue history), the HARD-INVARIANTS shortlist (the
+   strict do-not-break guardrails for unoriented models), and the library
+   maintenance protocol.
+2. **`docs/agents/toolset.md`** — the library. Agent-density sanctioned
+   (user: "keep it as complex as necessary"). VERIFIED-ONLY rule: every
+   command/procedure recorded was actually run in a session; aspirational
+   content is banned. Sections: environment map (Windows/PS 5.1 quirks,
+   Docker DB, ports); operational playbooks (test loop, serve lifecycle,
+   frontend dev + orphan ports, browser E2E incl. huge-snapshot workaround +
+   cleanup ritual, DB ops, release packaging, pipeline/AI-worker ops);
+   what-to-use-when decision table (which analysis script answers which
+   question, e.g. `analyze-safe-tips.js` BEFORE touching `DEFAULT_SAFE`);
+   operational issues KB (dated, cause → fix/mitigation, cross-referencing
+   `docs/memory-bank.md`'s numbered resolved issues instead of duplicating —
+   memory-bank REMAINS the historical/code-level KB and the DARK-switch
+   dated-note target); doc/knowledge topology (where things live, where new
+   docs go, separation-of-duties rule).
+3. **CLAUDE.md pointer** — one line directing agents to consult
+   `docs/agents/toolset.md` before inventing operational procedures, and to
+   append dated verified entries after solving novel operational problems.
+
+**Maintenance protocol (written into both files):** append-only dated
+entries; verified-only; never delete a working recipe without a replacement;
+supersede with a dated note rather than silent rewrite.
+
+**Content source:** drafted IN the implementation plan (full inline text)
+while the incumbent session's experiential knowledge is at hand; execution
+lands it mechanically.
 
 ## Risks & notes
 
