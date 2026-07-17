@@ -502,6 +502,43 @@ export function safeSelection(rows, cal, opts = DEFAULT_SAFE) {
     return out;
 }
 
+// Sure bets (2026-07-17 spec): the day's top-N safest legs, ranked by the
+// SAME calibrated win probability the betslip survival meter shows. Pool =
+// the shipped safe gates unchanged (safeQualifies - callers pass their
+// effective safe policy in `opts`; unknown gate fields fall back to
+// DEFAULT_SAFE inside safeQualifies). Deliberately NOT ranked by the 'sure'
+// strategy: the design replay found its top ranks underperform (rank #1
+// realized 63-64% vs ~85% at ranks 8-10), while estimateLegProb is
+// self-consistent - the number we sort by IS the number the UI displays.
+// Returns ordered [{ row, prob }] so consumers never recompute or drift;
+// null prob = excluded (nothing to rank by). Survival claim, never EV.
+export const DEFAULT_SURE_BETS = { maxPerDay: 10, slipSize: 3 };
+
+export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS) {
+    const o = { ...DEFAULT_SURE_BETS, ...opts };
+    const seen = new Set();
+    const byDay = new Map();
+    for (const r of Array.isArray(rows) ? rows : []) {
+        const key = r?.api_id ?? r;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        if (!safeQualifies(r, o, cal)) continue;
+        const prob = estimateLegProb(tipView(r), cal);
+        if (prob == null) continue;
+        const day = _dayKey(r);
+        let list = byDay.get(day);
+        if (!list) byDay.set(day, list = []);
+        list.push({ row: r, prob });
+    }
+    const out = [];
+    for (const day of [...byDay.keys()].sort()) {
+        // Stable sort: equal probs keep row (insertion) order.
+        const ranked = byDay.get(day).sort((a, b) => b.prob - a.prob);
+        out.push(...ranked.slice(0, Math.max(1, o.maxPerDay)));
+    }
+    return out;
+}
+
 // Virtual multi-bet math over legs [{ price, prob }]: combined odds, payout,
 // survival (independence assumption) and EV. Empty slip = the identity bet.
 export function slipSummary(legs, stake = 1) {
