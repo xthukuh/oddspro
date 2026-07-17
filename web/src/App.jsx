@@ -4,7 +4,7 @@ import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
-import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
+import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, sanitizeFilters, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
@@ -68,6 +68,10 @@ const LS_MAGIC = 'oddspro.magic.strategy';
 // list (index 0 = highest priority). Entries are { type:'column', key, dir }
 // or { type:'magic', id }.
 const LS_SORT = 'oddspro.sort';
+// Advanced-filter tree (FilterBuilder wire shape, incl. enabled flags) - persisted
+// so filters survive reload AND ride the prefs sync / .oddspro exports
+// (2026-07-17 sync spec). Restored catalog-gated through sanitizeFilters.
+const LS_FILTERS = 'oddspro.filters';
 // Visible base/synthetic columns (R27b/R28a; null = all shown). "Pin position"
 // freezes the No column's numbers. Row selection persists PER DISPLAY DATE
 // (keyed by match_id) under the `.d.` prefix so "Clear all selections" can wipe
@@ -396,6 +400,20 @@ export default function App() {
         ...catalog.markets.map(c => ({ key: c.key, group: 'market' })),
         ...catalog.stats.map(c => ({ key: c.key, group: 'stat' })),
     ] : []), [catalog]);
+    // One-time persisted-filter hydrate, gated on the catalog (a stale saved
+    // key would 400 the records query; sanitizeFilters prunes it). Skipped if
+    // the user already built filters this session (initial state is []).
+    const filtersHydratedRef = useRef(false);
+    useEffect(() => {
+        if (!catalog || filtersHydratedRef.current) return;
+        filtersHydratedRef.current = true;
+        if (Array.isArray(filters) ? filters.length : filters) return;
+        try {
+            const saved = JSON.parse(localStorage.getItem(LS_FILTERS));
+            const clean = sanitizeFilters(saved, filterColumns);
+            if (Array.isArray(clean) ? clean.length : clean) startTransition(() => setFilters(clean));
+        } catch { /* corrupted - ignore */ }
+    }, [catalog, filters, filterColumns, startTransition]);
     // Selection-stamped + hide-cut data: the single upstream source every record
     // view derives from, so "Hide selection" removes checked rows from the table,
     // the filter option lists, the day calcs AND the betslip pool at once. Each
@@ -697,7 +715,10 @@ export default function App() {
     }, [startTransition]);
 
     // Filter apply/clear is a heavy re-filter+re-sort too - same transition.
-    const applyFilters = useCallback(f => startTransition(() => setFilters(f)), [startTransition]);
+    const applyFilters = useCallback(f => {
+        try { localStorage.setItem(LS_FILTERS, JSON.stringify(f ?? [])); } catch { /* private mode */ }
+        startTransition(() => setFilters(f));
+    }, [startTransition]);
 
     // Delayed spinner: show the table's loading overlay only if a transition
     // outlasts the threshold, so fast changes never flash a spinner.
