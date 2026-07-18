@@ -168,9 +168,17 @@ the shown bet). Sources: `docs/research/`.
   `checklists/`. NEW docs go per the `docs/README.md` table.
 - Separation of duties: user-gated ops (live cPanel deploys, DB blob reclaim, billing,
   PAT rotation) are surfaced to the user once — never tracked as agent work.
+- 2026-07-18 — topology additions: `docs/engine/` (numbered system-behavior chapters; index
+  + the doc update-triggers table in `engine/00-README.md`) and repo-root
+  `QUICK-REFERENCE.md` (command/routine quick card + warnings + definitions — updated in
+  the SAME commit as any command/routine change). Dev-pipeline files now carry a
+  `YYYY-MM-DD-HHmm-` timestamp prefix (same stamp across one effort; forward-only).
 
 ## 7. Update log
 
 - 2026-07-18 — library created (spec:
   `docs/dev/specs/2026-07-18-release-packaging-and-docs-reorg-design.md`); initial content
   exported from the incumbent agent's verified session memory.
+- 2026-07-18 — §6 append: `docs/engine/` + root `QUICK-REFERENCE.md` joined the topology;
+  dev-pipeline timestamp-prefix convention (plan:
+  `docs/dev/plans/2026-07-18-0324-quickref-engine-docs.md`).

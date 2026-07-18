@@ -34,37 +34,11 @@ npm run migrate         # forward-only knex migrations
 
 ## Commands
 
-```sh
-npm run start [-- days]             # DEFAULT full pipeline: fixtures + odds for today..+3 days
-                                    # (`npm run start -- 5` overrides), then results, link, stats,
-                                    # standings, team history, pre-match snapshots
-
-node src/index.js betpawa [date]    # scrape BetPawa odds → DB, then auto-link
-node src/index.js betika [date]     # scrape Betika odds → DB, then auto-link
-node src/index.js fixtures [date]   # API-Football fixtures for date → DB, then auto-link
-node src/index.js results           # refresh unfinished past-kickoff fixtures; settle scores
-node src/index.js link [provider]   # correlate bookmaker matches ↔ canonical fixtures
-node src/index.js stats             # statistics + lineups + events for final correlated fixtures
-node src/index.js standings         # refresh league tables for correlated leagues
-node src/index.js history           # backfill team last-N + head-to-head for upcoming fixtures
-node src/index.js prematch          # upsert pre-match snapshots (frozen once kickoff passes)
-node src/index.js predictions       # API-Football /predictions for upcoming correlated fixtures
-node src/index.js hotpicks          # settle + recompute over-2.5 hot picks 🔥 + best tips
-node src/index.js aireview          # drain pending AI hot/tip verdicts once (serve runs this every 60s)
-node src/index.js performance       # flat-stake ROI / hit-rate report for tips + hot picks
-node src/index.js export [date]     # temp CSV of the date's correlated records → tmp/
-node src/index.js geo               # force a visitor-IP → country/region geo backfill pass
-
-npm run serve                       # visualization API server on :3001 (serves web/dist when built)
-npm run build:web                   # build the React frontend → web/dist/
-cd web && npm run dev               # frontend dev server on :5173 (proxies /api/* → :3001)
-npm run package:deploy [-- --export-db]  # build the cPanel deploy zips (+ optional gzipped DB dump) into
-                                    # release/ — main-only; idempotently tags v<version> after success
-
-npm test                            # offline node:test suite (no DB / live APIs)
-```
-
-`[date]` defaults to today; accepts anything `new Date()` parses, or `today`/`now`.
+All commands, setup sequences, routines, health checks and critical warnings live in
+**[QUICK-REFERENCE.md](QUICK-REFERENCE.md)** (the single command reference — Development §1,
+Production §2). Annotated semantics: `CLAUDE.md` `## Commands`; system behavior:
+`docs/engine/`. Quick start: `npm run start` (full sweep) · `npm run serve` (API :3001) ·
+`npm test` (offline suite).
 
 **Automation:** in production the always-on `npm run serve` process refreshes itself — an in-process
 scheduler runs a light pass every few minutes and a full sweep once daily (`src/auto-refresh.js`;

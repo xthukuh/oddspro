@@ -7,9 +7,12 @@ ES modules, knex/mysql2, zod. Dev box: Windows 11, PowerShell 5.1 default shell,
 **Read order:** 1) `CLAUDE.md` — architecture, commands, invariants (authoritative, dense).
 2) `docs/agents/toolset.md` — VERIFIED operational playbooks (test/serve/E2E/DB/release),
 what-to-use-when, operational issue KB. 3) `docs/memory-bank.md` — state history, numbered
-resolved issues, the AI regime-switch log. New docs go per `docs/README.md` (spec →
-`docs/dev/specs/`, plan → `docs/dev/plans/`, checklist → `docs/dev/checklists/`, research →
-`docs/research/`, guide → `docs/guides/`).
+resolved issues, the AI regime-switch log. System behavior reference: `docs/engine/`
+(chapter index + doc-update triggers in `00-README.md`); daily command sequences: repo-root
+`QUICK-REFERENCE.md`. New docs go per `docs/README.md` (spec → `docs/dev/specs/`, plan →
+`docs/dev/plans/`, checklist → `docs/dev/checklists/`, research → `docs/research/`, guide →
+`docs/guides/`; dev-pipeline files carry a `YYYY-MM-DD-HHmm-` timestamp prefix, same stamp
+across one effort, forward-only).
 
 **HARD INVARIANTS (do not break; detail in CLAUDE.md):**
 - Frozen ledger: prediction/prematch rows freeze at kickoff and settle exactly once — NEVER
