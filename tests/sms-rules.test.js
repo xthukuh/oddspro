@@ -179,12 +179,31 @@ test('parseBongaBalance + parseBongaDelivery', () => {
     assert.equal(b.ok, true);
     assert.equal(b.credits, 4980);
     assert.equal(b.clientName, 'Intent');
+    // The exact live envelope captured 2026-07-19 (no delivery_status field).
     const d = parseBongaDelivery({
-        status: 222, status_message: 'OK', delivery_status: 'DeliveredToTerminal',
-        delivery_status_desc: 'Delivered',
+        status: 222, status_message: 'fetched delivery status', unique_id: '597538152',
+        delivery_status_desc: 'DeliveredToTerminal',
+        date_received: '2026-07-19 01:07:24', correlator: null, msisdn: '254724212034',
     });
     assert.equal(d.ok, true);
-    assert.equal(d.deliveryStatus, 'DeliveredToTerminal');
+    assert.equal(d.deliveryStatusDesc, 'DeliveredToTerminal');
+    assert.equal(d.dateReceived, '2026-07-19 01:07:24');
+    assert.equal(d.msisdn, '254724212034');
+});
+
+test('send/delivery envelopes are tolerant - shape drift folds to ok:false, never throws', () => {
+    // A provider outage page / HTML body / empty object must not throw in the
+    // OTP request path (a thrown ZodError used to masquerade as "couldn't send").
+    const junk = parseBongaSend('<html>503 upstream</html>');
+    assert.equal(junk.ok, false);
+    assert.equal(junk.status, null);
+    assert.match(junk.message, /^unparseable send response:/);
+    const empty = parseBongaSend({});
+    assert.equal(empty.ok, false);
+    assert.equal(empty.messageId, null);
+    const dJunk = parseBongaDelivery({ nonsense: true });
+    assert.equal(dJunk.ok, false);
+    assert.match(dJunk.message, /^unparseable delivery response:/);
 });
 
 test('classifyBongaStatus: 222 ok, everything else fatal (never retried)', () => {

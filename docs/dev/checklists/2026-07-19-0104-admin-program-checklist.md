@@ -7,13 +7,15 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] Spec + plan + checklist committed (this stamp)
 - [x] `docs/dev/apis/BongaSMS-postman-*.json` added to git
 
-## M1 — Bonga SMS send fix
-- [ ] Diagnostics: `smsBalance()` with real creds (creds+credits verdict)
-- [ ] Diagnostics: one live send to 254724212034; capture `[auth] OTP SMS … failed: <detail>` / raw envelope
-- [ ] Pure `buildSendForm` in `src/db/sms-rules.js` + tests (field names, MSISDN no `+`)
-- [ ] Tolerant `SendEnvelope` (safeParse; never throws) + tests
-- [ ] `src/sms/bonga.js` multipart FormData send
-- [ ] Suite green; live SMS received (user confirmed); signup→OTP→verify E2E in dev
+## M1 — Bonga SMS send fix — COMPLETED 2026-07-19 (evidence-narrowed scope)
+- [x] Diagnostics: `smsBalance()` → ok, client "Intent", **136 credits** (creds + credits valid)
+- [x] Diagnostics: live send to 254724212034 → **222 "sent" (unique_id 597538152)**; delivery report → **DeliveredToTerminal 01:07:24**
+- [x] ROOT CAUSE VERDICT: pipeline works end-to-end with the EXISTING urlencoded transport — the reported failure was transient (most plausibly zero credits at the time). **Multipart switch REJECTED by evidence** (plan's evidence gate); `buildSendForm` dropped with it.
+- [x] Tolerant `SendEnvelope` + `DeliveryEnvelope` (safeParse — shape drift folds to `ok:false`, never throws in a request path) + real live delivery envelope mapped (`delivery_status_desc`/`date_received`/`msisdn`; vendor sends NO `delivery_status`) + tests
+- [x] `bonga.js` comment records the live verification (do not switch to multipart without new evidence)
+- [x] Suite green (724/724)
+- [ ] User acks reception of the diagnostic SMS on 254724212034 (delivery report already says DeliveredToTerminal)
+- Note: signup→OTP→verify app-level E2E folds into M13 verification (the resend path is reworked there anyway)
 
 ## M2 — Tracking v2
 - [ ] Migration `20260719000001_visitor_tracking_v2.js` (4 tables)

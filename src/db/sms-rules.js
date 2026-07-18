@@ -124,8 +124,21 @@ const SendEnvelope = z.object({
     unique_id: _num,
     credits: _num,
 });
+// Compact evidence for an unparseable provider body (logged, never rendered).
+function _snippet(data) {
+    let s;
+    try { s = typeof data === 'string' ? data : JSON.stringify(data); } catch { s = String(data); }
+    return String(s).slice(0, 120);
+}
+// Tolerant by design (M1 2026-07-19): send sits in a user request path, so a
+// provider shape drift must fold to a loud { ok:false } verdict - a thrown
+// ZodError here used to masquerade as "couldn't send" with no evidence.
 export function parseBongaSend(data) {
-    const d = SendEnvelope.parse(data);
+    const p = SendEnvelope.safeParse(data);
+    if (!p.success) {
+        return { ok: false, status: null, message: `unparseable send response: ${_snippet(data)}`, messageId: null, credits: null };
+    }
+    const d = p.data;
     return {
         ok: d.status === 222,
         status: d.status,
@@ -155,20 +168,31 @@ export function parseBongaBalance(data) {
     };
 }
 
+// Real envelope verified live 2026-07-19 (unique_id 597538152): the vendor
+// sends NO delivery_status field - only delivery_status_desc (e.g.
+// "DeliveredToTerminal"), plus date_received + msisdn. Tolerant like send: the
+// M13 resend-time delivery check runs inside a user request path.
 const DeliveryEnvelope = z.object({
     status: z.coerce.number(),
     status_message: z.string().optional().default(''),
-    delivery_status: z.string().optional(),
-    delivery_status_desc: z.string().optional(),
+    unique_id: _num,
+    delivery_status_desc: z.string().nullable().optional(),
+    date_received: z.string().nullable().optional(),
+    msisdn: z.union([z.string(), z.number()]).nullable().optional(),
 });
 export function parseBongaDelivery(data) {
-    const d = DeliveryEnvelope.parse(data);
+    const p = DeliveryEnvelope.safeParse(data);
+    if (!p.success) {
+        return { ok: false, status: null, message: `unparseable delivery response: ${_snippet(data)}`, deliveryStatusDesc: null, dateReceived: null, msisdn: null };
+    }
+    const d = p.data;
     return {
         ok: d.status === 222,
         status: d.status,
         message: d.status_message,
-        deliveryStatus: d.delivery_status ?? null,
         deliveryStatusDesc: d.delivery_status_desc ?? null,
+        dateReceived: d.date_received ?? null,
+        msisdn: d.msisdn != null ? String(d.msisdn) : null,
     };
 }
 

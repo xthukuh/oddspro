@@ -25,9 +25,9 @@ function _creds({ needSecret = false } = {}) {
 
 export async function send({ to, text }) {
     const { apiClientID, key, secret } = _creds({ needSecret: true });
-    // send-sms is documented as form-data; urlencoded is the zero-dependency
-    // body axios sets the header for. (VERIFY live - switch to the Node-18
-    // global FormData if the endpoint demands strict multipart.)
+    // send-sms is documented as form-data, but urlencoded VERIFIED LIVE
+    // 2026-07-19: status 222 + DeliveredToTerminal on the vendor send host
+    // (unique_id 597538152). Do not switch to multipart without new evidence.
     const body = new URLSearchParams({
         apiClientID,
         key,
