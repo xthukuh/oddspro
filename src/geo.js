@@ -43,17 +43,25 @@ async function resolveViaApi(publicIps) {
 // One backfill pass. Idempotent + safe to run concurrently-ish (ip_geo inserts
 // ignore conflicts; the visits UPDATE only touches pending rows).
 export async function backfillGeo({ limit = config.GEO_BATCH_LIMIT } = {}) {
-    // Visits with no IP can never be resolved - mark them so they're skipped.
+    // Rows with no IP can never be resolved - mark them so they're skipped.
     await db('visits').whereNull('ip').whereNull('geo_status').update({ geo_status: 'unresolvable' });
+    await db('visit_sessions').whereNull('ip').whereNull('geo_status').update({ geo_status: 'unresolvable' });
 
-    // Distinct visitor IPs not yet cached (newly discovered).
+    // Distinct visitor IPs not yet cached (newly discovered) - from the legacy
+    // middleware log AND the v2 beacon sessions (M2), through one ip_geo cache.
     const rows = await db('visits as v')
         .distinct('v.ip')
         .leftJoin('ip_geo as g', 'v.ip', 'g.ip')
         .whereNull('g.ip')
         .whereNotNull('v.ip')
         .limit(limit);
-    const discovered = rows.map(r => r.ip);
+    const sessionRows = await db('visit_sessions as s')
+        .distinct('s.ip')
+        .leftJoin('ip_geo as g', 's.ip', 'g.ip')
+        .whereNull('g.ip')
+        .whereNotNull('s.ip')
+        .limit(limit);
+    const discovered = [...new Set([...rows.map(r => r.ip), ...sessionRows.map(r => r.ip)])];
     const { publicIps, privateIps } = planGeoBatch(discovered, limit);
 
     const now = new Date();
@@ -72,13 +80,19 @@ export async function backfillGeo({ limit = config.GEO_BATCH_LIMIT } = {}) {
     }
     if (cache.length) await db('ip_geo').insert(cache).onConflict('ip').ignore();
 
-    // Copy the cache onto every pending visit row (newly-cached IPs AND repeat
+    // Copy the cache onto every pending row (newly-cached IPs AND repeat
     // visits of previously-cached IPs), stamping geo_status so they're skipped
-    // next time. Private/unresolvable rows get a status but null country.
+    // next time. Private/unresolvable rows get a status but null country. Both
+    // tracking tables share the one cache and the same stamping idiom.
     const [res] = await db.raw(
         'UPDATE visits v JOIN ip_geo g ON v.ip = g.ip '
         + 'SET v.country = g.country, v.region = g.region, v.geo_status = g.status '
         + 'WHERE v.geo_status IS NULL',
+    );
+    const [sess] = await db.raw(
+        'UPDATE visit_sessions s JOIN ip_geo g ON s.ip = g.ip '
+        + 'SET s.country = g.country, s.region = g.region, s.geo_status = g.status '
+        + 'WHERE s.geo_status IS NULL',
     );
     return {
         discovered: discovered.length,
@@ -86,7 +100,7 @@ export async function backfillGeo({ limit = config.GEO_BATCH_LIMIT } = {}) {
         private: privateIps.length,
         resolved,
         unresolvable,
-        applied: res?.affectedRows ?? null,
+        applied: (res?.affectedRows ?? 0) + (sess?.affectedRows ?? 0),
     };
 }
 

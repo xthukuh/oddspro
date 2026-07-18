@@ -21,13 +21,14 @@ export class ApiError extends Error {
 // Auth headers: one Authorization bearer - the user's session token when
 // signed in, else the optional build-time API_TOKEN. No-op when unset - a
 // server that isn't enforcing simply ignores it.
-function _authHeaders() {
+export function authHeaders() {
     const h = {};
     const session = getSessionToken();
     if (session) h.Authorization = `Bearer ${session}`;
     else if (API_TOKEN) h.Authorization = `Bearer ${API_TOKEN}`;
     return h;
 }
+const _authHeaders = authHeaders;
 
 async function _get(path, params = {}) {
     const search = new URLSearchParams();

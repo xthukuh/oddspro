@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
+import { startTracking } from './track.js';
 import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
@@ -339,6 +340,11 @@ export default function App() {
         const id = setInterval(load, 120000);
         return () => { alive = false; clearInterval(id); };
     }, []);
+    // Visitor-tracking v2 beacon (M2): check-in + feature-event queue. Module-
+    // level singleton - startTracking is idempotent, so StrictMode double-mount
+    // is harmless and it deliberately never stops on unmount (checkout fires on
+    // pagehide, not on React lifecycle).
+    useEffect(() => { startTracking(); }, []);
     // Persisted magic entries revalidate against the fetched strategy list
     // (catalog-sanitizer idiom): a renamed/retired strategy drops out of the
     // chain. Column entries pass through - orderRows tolerates unknown keys.

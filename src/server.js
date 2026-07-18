@@ -13,8 +13,10 @@ import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
-import { shouldLogVisit } from './db/visit-rules.js';
-import { visitRowFromReq, logVisit, dailyUniqueVisitors, visitsSummary } from './visits.js';
+import { shouldLogVisit, pickIp } from './db/visit-rules.js';
+import { visitRowFromReq, logVisit, visitsSummary } from './visits.js';
+import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js';
+import { checkin, ingestEvents, checkout, dailyUniqueSessions } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
 import { ADMIN_HTML } from './admin-dashboard.js';
@@ -437,16 +439,55 @@ app.get('/api/magic-sort', async (req, res, next) => {
 });
 
 // GET /api/visits/daily-unique?date= - today's (or a given EAT day's) unique
-// visitors + page views for the public status-bar badge. Cheap grouped count;
-// no PII returned (just numbers), so it needs no admin token.
+// visitors + session count for the public status-bar badge. Cheap grouped
+// count; no PII returned (just numbers), so it needs no admin token. Since M2
+// this counts the v2 beacon `visit_sessions` (identical on dev and prod - the
+// prod SPA is Apache-served, so the legacy middleware `visits` log never fires
+// there); dailyUniqueVisitors stays available for legacy-history reads.
 app.get('/api/visits/daily-unique', async (req, res, next) => {
     try {
         const date = /^\d{4}-\d{2}-\d{2}$/.test(String(req.query.date ?? '')) ? req.query.date : null;
-        res.json(await dailyUniqueVisitors(date));
+        res.json(await dailyUniqueSessions(date));
     } catch (e) {
         next(e);
     }
 });
+
+// --- Visitor-tracking v2 beacons (M2) ---------------------------------------
+// Public + CSRF-guarded, tiny JSON bodies, best-effort by contract: tracking
+// must never break the app, so handler errors fold to { ok:true } (the debug
+// log keeps the evidence). optionalAuth links a signed-in check-in to its user.
+const _beacon = handler => async (req, res) => {
+    try {
+        res.json(await handler(req));
+    } catch (e) {
+        console.debug('[track] beacon failed:', e?.message ?? e);
+        res.json({ ok: true });
+    }
+};
+app.post('/api/visit/checkin', express.json({ limit: '8kb' }), optionalAuth, _beacon(async req => {
+    if (!csrfOk(req)) return { ok: true };
+    const body = checkinSchema.parse(req.body ?? {});
+    const r = await checkin({
+        anonId: body.anon_id,
+        ua: req.get('user-agent') || '',
+        ip: pickIp(req.headers['x-forwarded-for'], req.socket?.remoteAddress),
+        path: body.path ?? null,
+        referer: body.referer ?? null,
+        userId: req.user?.id ?? null,
+    });
+    return { ok: true, ...r };
+}));
+app.post('/api/visit/events', express.json({ limit: '8kb' }), _beacon(async req => {
+    if (!csrfOk(req)) return { ok: true };
+    const body = eventsSchema.parse(req.body ?? {});
+    return ingestEvents(body.sid, body.key, body.events);
+}));
+app.post('/api/visit/checkout', express.json({ limit: '8kb' }), _beacon(async req => {
+    if (!csrfOk(req)) return { ok: true };
+    const body = checkoutSchema.parse(req.body ?? {});
+    return checkout(body.sid, body.key);
+}));
 
 // Admin guard for the traffic dashboard + its data. Reuses the bearer-token
 // mechanism but on a SEPARATE secret (ADMIN_TOKEN, falling back to API_TOKEN) so
