@@ -17,16 +17,16 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [ ] User acks reception of the diagnostic SMS on 254724212034 (delivery report already says DeliveredToTerminal)
 - Note: signup→OTP→verify app-level E2E folds into M13 verification (the resend path is reworked there anyway)
 
-## M2 — Tracking v2 (code complete 2026-07-19; DB verification blocked on Docker)
-- [x] Migration `20260719000001_visitor_tracking_v2.js` (4 tables) — written, NOT yet applied locally (Docker down)
+## M2 — Tracking v2 — COMPLETED 2026-07-19 (live-verified)
+- [x] Migration `20260719000001_visitor_tracking_v2.js` (4 tables) — applied locally (batch 15)
 - [x] Pure `src/db/track-rules.js` + `tests/track-rules.test.js` (7 tests)
 - [x] Service `src/track.js` (checkin/ingestEvents/checkout/dailyUniqueSessions, best-effort)
 - [x] Routes `POST /api/visit/checkin|events|checkout` (public + csrfOk + 8kb + optionalAuth; errors fold to `{ok:true}`)
 - [x] Client `web/src/track.js` (UUID, server-side resume, 15s/10-event flush, keepalive checkout) + App.jsx mount
 - [x] Geo backfill discovers + stamps `visit_sessions` (shared ip_geo cache)
 - [x] 👤 badge route reads `dailyUniqueSessions` (visit_sessions)
-- [ ] Verify (NEEDS DB): `npm run migrate`; dev checkin/resume/new-tab; events rows; geo stamp; badge counts
-- [x] Suite green offline (731/731)
+- [x] Verify 2026-07-19: `npm run migrate` batch 15 → 4 tables; API checkin/resume same-sid; browser checkin (sid stored ~2s post-mount) + NEW-TAB server-side resume (same sid, fresh sessionStorage); 2 events rows landed (values intact, `events_count` bumped); checkout → `ended_at` + `duration_seconds`; ended-session events → `{ok:false,recheck:true}` (bad-shape key folds to `{ok:true}` via `_beacon`); geo pass stamped `geo_status='private'` from shared `ip_geo` cache (no re-query); badge `dailyUniqueSessions` `{unique:2,total:2}`
+- [x] Suite green offline (731/731, re-run post-verify)
 
 ## M3 — Feature events
 - [ ] `web/src/trackEvents.js` constants + name-regex offline test
