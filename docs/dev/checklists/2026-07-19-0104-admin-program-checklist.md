@@ -42,13 +42,13 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] ProfileView Legal row (accepted vN on date + doc links)
 - [x] Verify 2026-07-19: API signup w/o consent → 400, with → 201 + row stamped (`2026-07-19` / EAT datetime); UI submit disabled until checked, label/Help/footer links open the modal (Terms 14 collapse sections, tab switch works); `/privacy/index.html` + `/terms/index.html` render (11/14 sections, cross-linked); suite 735/735 (signupSchema test extended: false/missing/blank-version all rejected)
 
-## M5 — Admin shell + Dashboard
-- [ ] `useAdminRoute.js` hash routing + SessionProvider boot hash read
-- [ ] AdminPanel full-page shell + section nav (8 sections)
-- [ ] `GET /api/admin/track/summary` (pre-binned) + duration-binning pure fn + test
-- [ ] `DashboardSection.jsx` (tiles, charts, engine KPI strip)
-- [ ] `GET /admin` → 302 `/#admin`; `/api/visits/summary` → requireAdminDual
-- [ ] Verify: deep-link reload; guest bundle unchanged (admin chunk lazy); suite green
+## M5 — Admin shell + Dashboard — COMPLETED 2026-07-19 (live-verified)
+- [x] `useAdminRoute.js` hash routing (`#admin/<section>` parse/normalize, history entry per section visit, StrictMode-safe hash claim, unmount clears the hash) + SessionProvider boot hash read (tiny main-bundle import only) + AuthGate renders SignInView for a guest deep link (`signIn` preserves view='admin' when the account is admin)
+- [x] AdminPanel full-page shell + section nav (8 sections: sidebar rail md+ / pill row below; SettingsEditor + DataLab mount unchanged; Users/Messaging/Performance/Database placeholders name their milestone; About links the legal pages); `useDark` extracted to a shared admin module (one copy for DataLab + Dashboard)
+- [x] `GET /api/admin/track/summary` (requireAdminRole session-only, pre-binned in track.js: daily sessions+people, feature ranking, duration histogram via pure `durationHistogram`, repeat-visitor share, device/country splits, today tiles incl. `active_now`) + fixed `durationBucket(null)` binning as '<30s' (`Number(null)===0`) + tests
+- [x] `DashboardSection.jsx` (today tiles; engine KPI strip from `/api/performance` + `/api/magic-sort` with n-badges and signed ROI colour; zero-filled visits/day chart; duration histogram; feature/device/country rank lists; 7/30/90d window select)
+- [x] `GET /admin` → 302 `/#admin` (curl + browser follow-through verified); `/api/visits/summary` → requireAdminDual (ADMIN_TOKEN bearer 200 AND admin session 200); `requireAdmin` dropped, `adminBearerOk` retained
+- [x] Verify 2026-07-19: suite 736/736; build clean — recharts (`CartesianGrid`) zero hits in the guest bundle, admin chunk lazy at 415.6 kB; guest `#admin` → sign-in view; admin deep-link reload → `#admin/dashboard` with live tiles+charts (real M2/M3 beacon data); `#admin/settings` reload keeps Settings active; nav click → `#admin/lab`, back button → dashboard; × close → clean URL; `/admin` lands in the panel; zero console errors; track summary 401 unauth AND 401 on ADMIN_TOKEN bearer (session-only confirmed)
 
 ## M6 — Settings catalog + audit + wiring
 - [ ] Catalog metadata (`label/hint/unit/regime/pattern`) on ALL entries

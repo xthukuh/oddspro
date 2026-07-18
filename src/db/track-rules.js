@@ -57,13 +57,29 @@ export function computeDuration(startedAt, lastActiveAt, endedAt = null) {
 // Duration histogram buckets for the admin dashboard (ordered; label = key).
 export const DURATION_BUCKETS = ['<30s', '30s-2m', '2-10m', '10-30m', '>30m'];
 export function durationBucket(seconds) {
+    // Explicit null/undefined guard: Number(null) is 0, which would silently
+    // bin an unknown duration as a '<30s' visit.
     const s = Number(seconds);
-    if (!Number.isFinite(s) || s < 0) return null;
+    if (seconds == null || !Number.isFinite(s) || s < 0) return null;
     if (s < 30) return '<30s';
     if (s < 120) return '30s-2m';
     if (s < 600) return '2-10m';
     if (s < 1800) return '10-30m';
     return '>30m';
+}
+
+// Pre-binned histogram over DURATION_BUCKETS (M5 dashboard): every bucket is
+// present (zero-filled) in fixed order so the chart never re-derives axes;
+// unbinnable entries (null/negative/junk) are dropped, `total` counts what
+// actually binned.
+export function durationHistogram(secondsList) {
+    const counts = Object.fromEntries(DURATION_BUCKETS.map(b => [b, 0]));
+    let total = 0;
+    for (const s of Array.isArray(secondsList) ? secondsList : []) {
+        const b = durationBucket(s);
+        if (b != null) { counts[b]++; total++; }
+    }
+    return { buckets: DURATION_BUCKETS.map(bucket => ({ bucket, count: counts[bucket] })), total };
 }
 
 // --- Beacon request envelopes (zod) -----------------------------------------

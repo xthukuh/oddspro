@@ -16,10 +16,9 @@ import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit, pickIp } from './db/visit-rules.js';
 import { visitRowFromReq, logVisit, visitsSummary } from './visits.js';
 import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js';
-import { checkin, ingestEvents, checkout, dailyUniqueSessions } from './track.js';
+import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
-import { ADMIN_HTML } from './admin-dashboard.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
@@ -85,7 +84,7 @@ app.use((req, res, next) => {
     next();
 });
 
-// Recognized machine bearer secrets: routes own their auth (requireAdmin,
+// Recognized machine bearer secrets: routes own their auth (adminBearerOk /
 // requireAdminDual), but the blanket /api gates below must not 401 those
 // clients before their route's own check runs. One list, both gates - never a
 // per-path allow-list (H2). bearerMatches skips unset entries.
@@ -489,26 +488,21 @@ app.post('/api/visit/checkout', express.json({ limit: '8kb' }), _beacon(async re
     return checkout(body.sid, body.key);
 }));
 
-// Admin guard for the traffic dashboard + its data. Reuses the bearer-token
-// mechanism but on a SEPARATE secret (ADMIN_TOKEN, falling back to API_TOKEN) so
-// a public SPA doesn't have to expose it. The token is ONLY accepted in the
-// Authorization header - never a query string (which leaks into logs, browser
-// history and Referer). 404 when no admin secret is configured (feature off).
+// Admin machine bearer: a SEPARATE secret (ADMIN_TOKEN, falling back to
+// API_TOKEN) so a public SPA doesn't have to expose it. The token is ONLY
+// accepted in the Authorization header - never a query string (which leaks
+// into logs, browser history and Referer). False when no secret is configured
+// (a blank secret never matches) - requireAdminDual's session path still works.
 const adminSecret = () => config.ADMIN_TOKEN || config.API_TOKEN || null;
-// One admin-bearer check shared by requireAdmin and requireAdminDual (C1) -
-// false when no admin secret is configured (a blank secret never matches).
 const adminBearerOk = req => {
     const secret = adminSecret();
     return Boolean(secret && bearerMatches(req.get('authorization'), [secret]));
 };
-function requireAdmin(req, res, next) {
-    if (!adminSecret()) return res.status(404).json({ error: 'Admin dashboard not configured (set ADMIN_TOKEN).' });
-    if (adminBearerOk(req)) return next();
-    return res.status(401).json({ error: 'Unauthorized' });
-}
 
-// GET /api/visits/summary - full traffic aggregates for the admin dashboard.
-app.get('/api/visits/summary', requireAdmin, async (req, res, next) => {
+// GET /api/visits/summary - LEGACY traffic aggregates (the middleware-logged
+// `visits` table). Widened bearer-only -> requireAdminDual (M5) so the SPA
+// admin session can read it too until the v2 dashboard reaches parity (M12).
+app.get('/api/visits/summary', requireAdminDual, async (req, res, next) => {
     try {
         res.json(await visitsSummary());
     } catch (e) {
@@ -602,6 +596,18 @@ app.get('/api/admin/lab/data', requireAdminRole, async (req, res, next) => {
     }
 });
 
+// GET /api/admin/track/summary[?days=] - pre-binned visitor/feature analytics
+// for the admin Dashboard (M5). Admin SESSION only like the lab: raw rows
+// never leave the server (src/track.js#trackSummary aggregates everything).
+app.get('/api/admin/track/summary', requireAdminRole, async (req, res, next) => {
+    try {
+        const days = Math.max(1, Math.min(365, Number(req.query.days) || 30));
+        res.json(await trackSummary({ days }));
+    } catch (e) {
+        next(e);
+    }
+});
+
 // Single-slot refresh job state lives in src/auto-refresh.js - one shared
 // guard for manual AND scheduled runs: parallel refreshes would deadlock on
 // InnoDB delete+insert gap locks (same rule as `_batch` DB-writing
@@ -675,10 +681,10 @@ app.post('/api/refresh/cancel', (req, res) => {
 // mode/dates so clients reload only when their loaded date is in scope)
 app.get('/api/refresh', (req, res) => res.json(refreshStatus()));
 
-// Admin traffic dashboard shell (public HTML; the data behind it is token-gated
-// via requireAdmin). Registered before the static/SPA fallback so /admin doesn't
-// resolve to the React index.html.
-app.get('/admin', (req, res) => res.type('html').send(ADMIN_HTML));
+// Legacy admin dashboard URL -> the SPA admin area (M5, spec decision 14).
+// Registered before the static/SPA fallback so /admin doesn't resolve to the
+// React index.html directly (the redirect carries the deep-link hash).
+app.get('/admin', (req, res) => res.redirect(302, '/#admin'));
 
 // Built frontend (npm run build:web) with SPA fallback for non-/api routes.
 // index.html is served no-cache so every app load revalidates - the browser

@@ -81,6 +81,19 @@ export async function fetchDailyVisitors() {
     return _get('/api/visits/daily-unique');
 }
 
+// Pre-binned visitor/feature analytics for the admin Dashboard (M5):
+//   { generated_at, window_days, today, daily, features, duration, repeat,
+//     devices, countries } - admin session only.
+export async function getTrackSummary(days) {
+    return _get('/api/admin/track/summary', { days });
+}
+
+// Betting-performance report (flat-stake windows/buckets for tips + hot
+// picks) - public, same payload as `node src/index.js performance`.
+export async function fetchPerformance() {
+    return _get('/api/performance');
+}
+
 // Magic sort: top tip-ranking strategies by backtested 4-leg slip survival
 // + the calibration object the client scores today's rows with:
 //   { generated_at, sample: { settled, days, eligible_days, min_days,

@@ -5,6 +5,7 @@ import {
 } from 'recharts';
 import { getLabFeatures, getLabData } from '../api.js';
 import { seriesColor, rampColor, binLabel, pct, MAX_SERIES } from './labPalette.js';
+import useDark from './useDark.js';
 
 // Data-viz lab: pick an X (and optional Y or color-facet) feature plus an
 // outcome, and chart the outcome's empirical rate over settled fixtures from
@@ -14,28 +15,6 @@ import { seriesColor, rampColor, binLabel, pct, MAX_SERIES } from './labPalette.
 // Cells under the min-count guardrail arrive rate:null - they are kept out of
 // the charts (footnote counts them) and render dashed in the table view,
 // which doubles as the accessibility/contrast-relief channel.
-
-// Theme flag for chart colors that must resolve to literal hex/rgba (SVG
-// attributes can't hold var()): tracks the app's data-theme override AND the
-// OS scheme while mounted, so an admin flipping theme mid-session never gets
-// light marks on a dark chart.
-function useDark() {
-    const calc = () => {
-        const forced = document.documentElement.dataset.theme;
-        if (forced) return forced === 'dark';
-        return window.matchMedia?.('(prefers-color-scheme: dark)').matches ?? false;
-    };
-    const [dark, setDark] = useState(calc);
-    useEffect(() => {
-        const mq = window.matchMedia?.('(prefers-color-scheme: dark)');
-        const update = () => setDark(calc());
-        mq?.addEventListener('change', update);
-        const mo = new MutationObserver(update);
-        mo.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
-        return () => { mq?.removeEventListener('change', update); mo.disconnect(); };
-    }, []);
-    return dark;
-}
 
 const CHARTS = [
     { id: 'bar', label: 'Bar' },

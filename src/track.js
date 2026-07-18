@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from './db/connection.js';
 import { parseUserAgent } from './db/visit-rules.js';
-import { sanitizeEvents, sessionResumeAllowed, computeDuration } from './db/track-rules.js';
+import { sanitizeEvents, sessionResumeAllowed, computeDuration, durationHistogram } from './db/track-rules.js';
 
 // Visitor-tracking v2 service (admin program M2): thin knex orchestration over
 // the pure track-rules. The beacon replaces the middleware as the tracking
@@ -122,16 +122,97 @@ export async function checkout(sid, key) {
     return { ok: true };
 }
 
+// A "person" is a user account when the visitor row is linked, else the
+// anonymous visitor - one signed-in human on two devices counts once. Shared
+// by the badge count and every trackSummary people aggregate.
+const PERSON_KEY = "IFNULL(CONCAT('u', vi.user_id), CONCAT('v', s.visitor_id))";
+
 // Today's (or a given EAT day's) unique PEOPLE + session count for the public
-// status-bar badge - v2 twin of visits.js#dailyUniqueVisitors. A person is a
-// user account when the visitor is linked, else the anonymous visitor row, so
-// one signed-in human on two devices counts once.
+// status-bar badge - v2 twin of visits.js#dailyUniqueVisitors.
 export async function dailyUniqueSessions(date = null) {
     const q = db('visit_sessions as s').join('visitors as vi', 'vi.id', 's.visitor_id');
     if (date) q.whereRaw('DATE(s.started_at) = ?', [date]);
     else q.whereRaw('DATE(s.started_at) = CURDATE()');
     const [r] = await q
-        .countDistinct({ unique: db.raw("IFNULL(CONCAT('u', vi.user_id), CONCAT('v', s.visitor_id))") })
+        .countDistinct({ unique: db.raw(PERSON_KEY) })
         .count({ total: '*' });
     return { date: date ?? null, unique: Number(r.unique) || 0, total: Number(r.total) || 0 };
+}
+
+// Pre-binned visitor/feature analytics for the admin Dashboard (M5). Raw rows
+// never leave the server (lab discipline): everything aggregates here, the
+// duration histogram bins via the pure durationHistogram. Date grouping stays
+// in the pinned +03:00 SQL session (DATE_FORMAT strings, the magic.js idiom -
+// a bare DATE() would decode to a JS Date in the NODE process's timezone).
+export async function trackSummary({ days = 30 } = {}) {
+    const win = q => q.whereRaw('s.started_at >= NOW() - INTERVAL ? DAY', [days]);
+
+    const daily = await win(db('visit_sessions as s').join('visitors as vi', 'vi.id', 's.visitor_id'))
+        .groupByRaw("DATE_FORMAT(s.started_at, '%Y-%m-%d')")
+        .orderByRaw('1')
+        .select(db.raw("DATE_FORMAT(s.started_at, '%Y-%m-%d') as day"))
+        .count({ sessions: '*' })
+        .countDistinct({ people: db.raw(PERSON_KEY) });
+
+    // Durations: checkout wrote duration_seconds; abandoned sessions derive
+    // started->last_active via the same pure math the checkout writer uses.
+    const durRows = await win(db('visit_sessions as s'))
+        .select('s.started_at', 's.last_active_at', 's.duration_seconds');
+    const duration = durationHistogram(durRows.map(r =>
+        r.duration_seconds ?? computeDuration(r.started_at, r.last_active_at)));
+
+    const features = await db('visit_events as e')
+        .join('visit_sessions as s', 's.id', 'e.session_id')
+        .whereRaw('e.occurred_at >= NOW() - INTERVAL ? DAY', [days])
+        .groupBy('e.name')
+        .select('e.name')
+        .count({ count: '*' })
+        .countDistinct({ sessions: 'e.session_id' })
+        .orderBy('count', 'desc')
+        .limit(20);
+
+    const perPerson = await win(db('visit_sessions as s').join('visitors as vi', 'vi.id', 's.visitor_id'))
+        .groupByRaw(PERSON_KEY)
+        .select(db.raw(`${PERSON_KEY} as person`))
+        .count({ sessions: '*' });
+    const people = perPerson.length;
+    const repeatPeople = perPerson.filter(p => Number(p.sessions) > 1).length;
+
+    const devices = await win(db('visit_sessions as s').join('visitor_devices as d', 'd.id', 's.device_id'))
+        .groupBy('d.device_type')
+        .select({ device: 'd.device_type' })
+        .count({ sessions: '*' })
+        .orderBy('sessions', 'desc');
+
+    const countries = await win(db('visit_sessions as s'))
+        .groupByRaw("IFNULL(s.country, '(unknown)')")
+        .select(db.raw("IFNULL(s.country, '(unknown)') as country"))
+        .count({ sessions: '*' })
+        .orderBy('sessions', 'desc')
+        .limit(12);
+
+    const [today, [{ eventsToday }], [{ newVisitors }], [{ activeNow }]] = await Promise.all([
+        dailyUniqueSessions(),
+        db('visit_events').whereRaw('occurred_at >= CURDATE()').count({ eventsToday: '*' }),
+        db('visitors').whereRaw('first_seen_at >= CURDATE()').count({ newVisitors: '*' }),
+        db('visit_sessions').whereNull('ended_at')
+            .whereRaw('last_active_at >= NOW() - INTERVAL 5 MINUTE').count({ activeNow: '*' }),
+    ]);
+
+    return {
+        generated_at: new Date().toISOString(),
+        window_days: days,
+        today: {
+            ...today,
+            events: Number(eventsToday) || 0,
+            new_visitors: Number(newVisitors) || 0,
+            active_now: Number(activeNow) || 0,
+        },
+        daily: daily.map(r => ({ day: r.day, sessions: Number(r.sessions), people: Number(r.people) })),
+        features: features.map(r => ({ name: r.name, count: Number(r.count), sessions: Number(r.sessions) })),
+        duration,
+        repeat: { people, repeat_people: repeatPeople, share: people ? Math.round((repeatPeople / people) * 1000) / 1000 : null },
+        devices: devices.map(r => ({ device: r.device ?? '(unknown)', sessions: Number(r.sessions) })),
+        countries: countries.map(r => ({ country: r.country, sessions: Number(r.sessions) })),
+    };
 }

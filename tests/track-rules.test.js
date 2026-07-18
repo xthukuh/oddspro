@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     isValidAnonId, EVENT_NAME_RE, sanitizeEvents, sessionResumeAllowed,
-    computeDuration, durationBucket, DURATION_BUCKETS,
+    computeDuration, durationBucket, DURATION_BUCKETS, durationHistogram,
     checkinSchema, eventsSchema, checkoutSchema,
 } from '../src/db/track-rules.js';
 
@@ -79,8 +79,19 @@ test('durationBucket bins into the dashboard histogram', () => {
     assert.equal(durationBucket(1800), '>30m');
     assert.equal(durationBucket(-1), null);
     assert.equal(durationBucket('junk'), null);
+    assert.equal(durationBucket(null), null); // Number(null)=0 must not bin as '<30s'
     assert.equal(DURATION_BUCKETS.length, 5);
     for (const s of [0, 45, 300, 900, 4000]) assert.ok(DURATION_BUCKETS.includes(durationBucket(s)));
+});
+
+test('durationHistogram pre-bins in fixed bucket order, dropping junk', () => {
+    const h = durationHistogram([5, 45, 45, 300, 4000, -1, null, 'junk']);
+    assert.deepEqual(h.buckets.map(b => b.bucket), DURATION_BUCKETS); // every bucket, fixed order
+    assert.deepEqual(h.buckets.map(b => b.count), [1, 2, 1, 0, 1]);  // zero-filled 10-30m
+    assert.equal(h.total, 5);                                        // junk dropped, not counted
+    const empty = durationHistogram(null);
+    assert.equal(empty.total, 0);
+    assert.deepEqual(empty.buckets.map(b => b.count), [0, 0, 0, 0, 0]);
 });
 
 test('beacon envelopes validate and bound their inputs', () => {

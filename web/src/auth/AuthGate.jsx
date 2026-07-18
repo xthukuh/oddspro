@@ -38,6 +38,9 @@ export default function AuthGate({ children }) {
                     <AdminPanel />
                 </Suspense>
             )}
+            {/* A guest on an #admin deep link (M5) signs in first; SessionProvider
+                keeps view='admin' when the signed-in account is an admin. */}
+            {!forced && s.view === 'admin' && s.isGuest && s.status === 'ready' && <SignInView />}
         </>
     );
 }

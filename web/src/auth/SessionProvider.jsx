@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useMemo, useRef, useState } from 
 import { signup, login, verifyOtp, resendOtp, changePhone, logout as apiLogout, fetchMe, updateProfile } from '../api.js';
 import { getSessionToken, setSessionToken, clearSessionToken } from './sessionToken.js';
 import { syncOnLogin, pushPrefs, syncNow, clearCursor, startAutoSync } from './prefsSync.js';
+import { parseAdminHash } from '../admin/useAdminRoute.js';
 
 // Session context for the whole SPA (main.jsx wraps <App/> in this). Holds the
 // signed-in user + token, hydrates a stored token via GET /api/auth/me on
@@ -25,7 +26,10 @@ export default function SessionProvider({ children }) {
     const [user, setUser] = useState(null);
     // 'loading' only while hydrating a STORED token; guests are 'ready' at once.
     const [status, setStatus] = useState(() => (getSessionToken() ? 'loading' : 'ready'));
-    const [view, setView] = useState(null);
+    // Admin deep link (M5): a `#admin/...` hash at boot opens the admin view -
+    // AuthGate only renders the panel once the hydrated session is role=admin
+    // (guests get the sign-in view instead), so this is UX, never access.
+    const [view, setView] = useState(() => (parseAdminHash(window.location.hash) ? 'admin' : null));
     // Last OTP-send response ({ sent, retry_after_seconds?, error? }) from
     // signup/change-phone/resend - the verify view seeds its resend-cooldown
     // countdown and its "code sent" / "send failed" notice from it.
@@ -98,7 +102,9 @@ export default function SessionProvider({ children }) {
         signIn: async data => {
             const res = await login(data);
             adopt(res);
-            setView(null);
+            // An admin deep link survives the sign-in detour: guest hit
+            // #admin -> sign-in view -> admin panel opens right after.
+            setView(v => (v === 'admin' && res.user.role === 'admin' ? 'admin' : null));
             // Pull this account's synced prefs (or seed them on first login).
             // Fire and forget: a real pull swaps localStorage and reloads.
             syncOnLogin(res.user.id);
