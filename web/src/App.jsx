@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
-import { startTracking } from './track.js';
+import { startTracking, track } from './track.js';
+import { EV, onOff } from './trackEvents.js';
 import { shouldReloadForJob } from './freshness.js';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
@@ -688,6 +689,7 @@ export default function App() {
     }, [refresh?.running, maybeReload]);
 
     const onRefresh = async () => {
+        track(EV.REFRESH_CLICK);
         try {
             const body = await startRefresh(date);
             if (body?.fresh) {
@@ -722,6 +724,7 @@ export default function App() {
 
     // Filter apply/clear is a heavy re-filter+re-sort too - same transition.
     const applyFilters = useCallback(f => {
+        track(EV.FILTERS_APPLY, (f ?? []).length);
         try { localStorage.setItem(LS_FILTERS, JSON.stringify(f ?? [])); } catch { /* private mode */ }
         startTransition(() => setFilters(f));
     }, [startTransition]);
@@ -753,11 +756,14 @@ export default function App() {
 
     // Magic menu: toggle a strategy in/out of the chain (multiple allowed);
     // clear drops every magic entry but keeps the column sorts.
-    const onToggleMagic = useCallback(id => setSortChainPersist(prev => (
-        prev.some(e => e.type === 'magic' && e.id === id)
-            ? prev.filter(e => !(e.type === 'magic' && e.id === id))
-            : [...prev, { type: 'magic', id }]
-    )), [setSortChainPersist]);
+    const onToggleMagic = useCallback(id => {
+        track(EV.MAGIC_SORT_TOGGLE, id);
+        setSortChainPersist(prev => (
+            prev.some(e => e.type === 'magic' && e.id === id)
+                ? prev.filter(e => !(e.type === 'magic' && e.id === id))
+                : [...prev, { type: 'magic', id }]
+        ));
+    }, [setSortChainPersist]);
     const onClearMagic = useCallback(
         () => setSortChainPersist(prev => prev.filter(e => e.type !== 'magic')),
         [setSortChainPersist],
@@ -826,6 +832,7 @@ export default function App() {
         localStorage.setItem(LS_PROVIDER_ORDER, JSON.stringify(keys));
     };
     const saveOneEach = value => {
+        track(EV.ONE_OF_EACH, onOff(value));
         setOneEach(value);
         localStorage.setItem(LS_ONE_EACH, value ? '1' : '0');
     };
@@ -846,10 +853,12 @@ export default function App() {
         localStorage.setItem(LS_NO_MISS, value ? '1' : '0');
     };
     const saveSafeOnly = value => {
+        track(EV.SAFE_ONLY, onOff(value));
         setSafeOnly(value);
         localStorage.setItem(LS_SAFE_ONLY, value ? '1' : '0');
     };
     const saveSureBets = value => {
+        track(EV.SURE_BETS, onOff(value));
         setSureBets(value);
         localStorage.setItem(LS_SURE_BETS, value ? '1' : '0');
     };
@@ -857,11 +866,13 @@ export default function App() {
     // the persisted book, then open the playground (it reads storage on mount).
     const seedTopSlip = () => {
         if (!surePicks.length) return;
+        track(EV.BETSLIP_BUILD, Math.min(surePicks.length, DEFAULT_SURE_BETS.slipSize));
         seedSlip(surePicks.slice(0, DEFAULT_SURE_BETS.slipSize), date || 'all', 'Sure top-3');
         setShowMagic(false);
-        setShowSlips(true);
+        openSlips();
     };
     const saveRiskGate = value => {
+        track(EV.RISK_GATE, onOff(value));
         setRiskGate(value);
         localStorage.setItem(LS_RISK_GATE, value ? '1' : '0');
     };
@@ -900,9 +911,17 @@ export default function App() {
     // Export the selected rows as a full-record CSV (all fields incl. the ones
     // hidden from the table + every market/stat). Acts on the SELECTION, so it
     // ignores the Hide-selection cut (stampedData, not visibleData).
+    // M3 feature-event wrappers: one central open handler per modal so every
+    // entry point (nav icon, ⋯ overflow) reports the same event; date nav is
+    // reported by origin (prev|next|date) - the Logo home jump stays untracked.
+    const openSlips = () => { track(EV.BETSLIP_OPEN); setShowSlips(true); };
+    const openHelp = () => { track(EV.HELP_OPEN); setShowHelp(true); };
+    const openSettings = () => { track(EV.SETTINGS_OPEN); setShowSettings(true); };
+    const navDate = (d, how) => { track(EV.CALENDAR_NAV, how); changeDate(d); };
     const exportSelection = () => {
         const records = stampedData.filter(r => r.select);
         if (!records.length) return;
+        track(EV.CSV_EXPORT, records.length);
         const csv = buildRecordCsv(records, catalog);
         const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8' }); // BOM helps Excel detect UTF-8
         const url = URL.createObjectURL(blob);
@@ -992,7 +1011,7 @@ export default function App() {
                 </div>
                 {/* Centre: chevrons + calendar-popover trigger */}
                 <div ref={calWrapRef} className="relative flex items-center gap-0.5 justify-self-center">
-                    <button onClick={() => changeDate(PREV_DATE)} disabled={date <= MIN_DATE}
+                    <button onClick={() => navDate(PREV_DATE, 'prev')} disabled={date <= MIN_DATE}
                         title={`Previous (${PREV_DATE})`} aria-label="Previous day" className={navBtn}>
                         <IconChevronLeft />
                     </button>
@@ -1002,14 +1021,14 @@ export default function App() {
                         <span>{date ? _human(date) : 'All dates'}</span>
                         <IconChevronDown className="text-accent" />
                     </button>
-                    <button onClick={() => changeDate(NEXT_DATE)} disabled={date >= MAX_DATE}
+                    <button onClick={() => navDate(NEXT_DATE, 'next')} disabled={date >= MAX_DATE}
                         title={guestClamp && date >= MAX_DATE ? 'Sign in to see upcoming games' : `Next (${NEXT_DATE})`}
                         aria-label="Next day" className={navBtn}>
                         <IconChevronRight />
                     </button>
                     {showCal && (
                         <CalendarPopover date={date} today={TODAY} min={MIN_DATE} max={MAX_DATE}
-                            onPick={d => changeDate(d)} onClose={() => setShowCal(false)} />
+                            onPick={d => navDate(d, 'date')} onClose={() => setShowCal(false)} />
                     )}
                 </div>
                 {/* Right: full action row (>=sm) or ⋯ overflow (<sm) */}
@@ -1037,14 +1056,14 @@ export default function App() {
                             className={activeMagicIds.length ? navBtnActive : navBtn}>
                             <IconMagic />{activeMagicIds.length > 1 ? <span className="text-[11px] tabular-nums ml-0.5">{activeMagicIds.length}</span> : null}
                         </button>
-                        <button onClick={() => setShowSlips(true)} aria-label="Betslip playground" title="Betslip playground - build virtual multi-bet slips from the day's tips" className={navBtn}><IconSlips /></button>
+                        <button onClick={openSlips} aria-label="Betslip playground" title="Betslip playground - build virtual multi-bet slips from the day's tips" className={navBtn}><IconSlips /></button>
                         <button onClick={() => setShowFilters(v => !v)} aria-label={`Filters${filterCount ? ` (${filterCount} active)` : ''}`} title="Filter the table rows"
                             className={(showFilters || filterCount) ? navBtnActive : navBtn}>
                             <IconFilter />{filterCount ? <span className="text-[11px] tabular-nums ml-0.5">{filterCount}</span> : null}
                         </button>
                         <div className="w-px h-5 bg-separator mx-1.5" />
-                        <button onClick={() => setShowHelp(true)} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
-                        <button onClick={() => setShowSettings(true)} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
+                        <button onClick={openHelp} aria-label="Help" title="Help - what Odds Pro does + demo video" className={navBtn}><IconHelp /></button>
+                        <button onClick={openSettings} aria-label="Display settings" title="Display settings" className={navBtn}><IconGear /></button>
                         <AvatarMenu btnCls={navBtn} activeCls={navBtnActive} />
                     </div>
                     <div ref={overflowWrapRef} className="relative sm:hidden">
@@ -1056,10 +1075,10 @@ export default function App() {
                                 filterCount={filterCount} magicActive={activeMagicIds.length > 0}
                                 onRefresh={() => { onRefresh(); setShowOverflow(false); }}
                                 onMagic={() => { setShowMagic(true); setShowOverflow(false); }}
-                                onSlips={() => { setShowSlips(true); setShowOverflow(false); }}
+                                onSlips={() => { openSlips(); setShowOverflow(false); }}
                                 onFilters={() => { setShowFilters(v => !v); setShowOverflow(false); }}
-                                onHelp={() => { setShowHelp(true); setShowOverflow(false); }}
-                                onSettings={() => { setShowSettings(true); setShowOverflow(false); }}
+                                onHelp={() => { openHelp(); setShowOverflow(false); }}
+                                onSettings={() => { openSettings(); setShowOverflow(false); }}
                                 user={session?.user}
                                 onSignIn={() => { session?.openAuth('signin'); setShowOverflow(false); }}
                                 onSignUp={() => { session?.openAuth('signup'); setShowOverflow(false); }}

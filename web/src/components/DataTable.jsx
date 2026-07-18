@@ -17,6 +17,8 @@ import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
 // runner-up tick matches the chosen-tip pill's semantics.
 import { tipHitSafe } from '../../../src/db/tip-rules.js';
 import TipPopover, { skipLabel } from './TipPopover.jsx';
+import { track } from '../track.js';
+import { EV } from '../trackEvents.js';
 import Tooltip from './Tooltip.jsx';
 import BulkActionsMenu from './BulkActionsMenu.jsx';
 import { prioritizeSelectedRows } from '../filterValues.js';
@@ -502,6 +504,7 @@ export default function DataTable({
     const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
     const openTip = (row, e) => {
         e.stopPropagation();
+        track(EV.TIP_POPOVER, row.tip_market);
         setTipPop({ row, x: e.clientX, y: e.clientY });
     };
 

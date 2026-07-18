@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { buildSlips, estimateLegProb, legPicks, magicSortRows, slipOutcome, slipSummary, slipTotals, tipView } from '../../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../../src/db/tip-rules.js';
 import { orderRows } from '../ordering.js';
+import { track } from '../track.js';
+import { EV } from '../trackEvents.js';
 import NumberInput from './NumberInput.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 
@@ -201,6 +203,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     // modes) - empty when nothing is unused, so manual drag still works.
     const addSlip = () => {
         const legs = buildSlips(unused, { ...fillOpts, maxSlips: 1 })[0] ?? [];
+        track(EV.BETSLIP_BUILD, legs.length);
         const [slip] = _wrap([legs], slips.length + 1);
         setSlips(prev => [...prev, slip]);
         setActiveId(slip.id);
@@ -209,6 +212,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     // close at Target odds or Max legs, capped by Max slips.
     const fillFromTop = () => {
         if (!plannedFill.length) return;
+        track(EV.BETSLIP_BUILD, plannedFill.reduce((n, legs) => n + legs.length, 0));
         const created = _wrap(plannedFill, slips.length + 1);
         setSlips(prev => [...prev, ...created]);
         setActiveId(created[0].id);
