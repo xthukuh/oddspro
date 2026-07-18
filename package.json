@@ -6,7 +6,7 @@
     "scripts": {
         "start": "node src/index.js",
         "serve": "node src/server.js",
-        "build:web": "npm --prefix web run build",
+        "build:web": "node scripts/gen-legal.js && npm --prefix web run build",
         "package:deploy": "node scripts/package-deploy.js",
         "migrate": "knex migrate:latest",
         "migrate:make": "knex migrate:make",

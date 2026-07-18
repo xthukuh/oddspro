@@ -152,6 +152,7 @@ test('registerOtpAttempt exhausts at the max', () => {
 const validSignup = {
     name: 'Jane Doe', phone: '+254799944004', phone_region: 'KE', phone_code: '254',
     pin: '1234', pin_confirm: '1234',
+    accepted_terms: true, terms_version: '2026-07-19',
 };
 test('signupSchema accepts a valid body and rejects bad ones', () => {
     assert.equal(signupSchema.safeParse(validSignup).success, true);
@@ -159,6 +160,11 @@ test('signupSchema accepts a valid body and rejects bad ones', () => {
     assert.equal(signupSchema.safeParse({ ...validSignup, pin: '12' }).success, false);           // short PIN
     assert.equal(signupSchema.safeParse({ ...validSignup, phone: '0799944004' }).success, false); // not E.164
     assert.equal(signupSchema.safeParse({ ...validSignup, name: '' }).success, false);
+    // M4 consent gate: acceptance must be LITERALLY true, and the shown terms
+    // version must ride along (it stamps users.terms_version at signup).
+    assert.equal(signupSchema.safeParse({ ...validSignup, accepted_terms: false }).success, false);
+    assert.equal(signupSchema.safeParse({ ...validSignup, accepted_terms: undefined }).success, false);
+    assert.equal(signupSchema.safeParse({ ...validSignup, terms_version: '' }).success, false);
 });
 
 test('login / verify-otp / change-phone / profile schemas', () => {

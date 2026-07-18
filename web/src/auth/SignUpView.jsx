@@ -3,6 +3,8 @@ import { useSession } from './SessionProvider.jsx';
 import AuthShell, { inputCls, btnCls, linkCls, FormError } from './AuthShell.jsx';
 import PhoneField, { phoneParts } from './PhoneField.jsx';
 import Field from '../components/Field.jsx';
+import LegalModal from '../components/LegalModal.jsx';
+import { TERMS_VERSION } from '../legal/legalContent.js';
 
 // Create account: name + phone + 4-digit PIN (confirmed). On 201 the session
 // is adopted and AuthGate lands on the forced verify overlay - including when
@@ -15,6 +17,8 @@ export default function SignUpView() {
     const [region, setRegion] = useState('KE'); // select fallback for ambiguous codes
     const [pin, setPin] = useState('');
     const [pinConfirm, setPinConfirm] = useState('');
+    const [agreed, setAgreed] = useState(false);
+    const [legal, setLegal] = useState(null); // 'terms' | 'privacy' | null
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
 
@@ -28,7 +32,10 @@ export default function SignUpView() {
         setBusy(true);
         setError(null);
         try {
-            await signUp({ name: name.trim(), ...phoneParts(phone, region), pin, pin_confirm: pinConfirm });
+            await signUp({
+                name: name.trim(), ...phoneParts(phone, region), pin, pin_confirm: pinConfirm,
+                accepted_terms: agreed, terms_version: TERMS_VERSION,
+            });
         } catch (err) {
             setError(err.message);
             setBusy(false);
@@ -75,12 +82,25 @@ export default function SignUpView() {
                         />
                     </div>
                 </Field>
+                <label className="flex items-start gap-2.5 text-[13px] text-label-2 leading-snug cursor-pointer select-none">
+                    <input
+                        type="checkbox" checked={agreed} onChange={e => setAgreed(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer"
+                    />
+                    <span>
+                        I am 18 or older and I agree to the{' '}
+                        <button type="button" className={linkCls} onClick={() => setLegal('terms')}>Terms of Use</button>
+                        {' '}and{' '}
+                        <button type="button" className={linkCls} onClick={() => setLegal('privacy')}>Privacy Policy</button>.
+                    </span>
+                </label>
                 <FormError>{error}</FormError>
                 <button type="submit" className={btnCls}
-                    disabled={busy || !name.trim() || !phone || pin.length !== 4 || pinConfirm.length !== 4}>
+                    disabled={busy || !name.trim() || !phone || pin.length !== 4 || pinConfirm.length !== 4 || !agreed}>
                     {busy ? 'Creating account…' : 'Create account'}
                 </button>
             </form>
+            {legal && <LegalModal doc={legal} onClose={() => setLegal(null)} />}
         </AuthShell>
     );
 }

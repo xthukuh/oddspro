@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { useSession } from './SessionProvider.jsx';
 import AuthShell, { inputCls, btnCls, linkCls, FormError, FormNotice } from './AuthShell.jsx';
 import Field from '../components/Field.jsx';
+import LegalModal from '../components/LegalModal.jsx';
 
 // Edit profile: display name + optional PIN change (current PIN required by
 // the server). Also serves the FORCED first-login PIN change (`forced`,
@@ -17,6 +18,7 @@ export default function ProfileView({ forced = false }) {
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
+    const [legal, setLegal] = useState(null); // 'terms' | 'privacy' | null
 
     const changingPin = forced || pin.length > 0 || pinConfirm.length > 0 || currentPin.length > 0;
 
@@ -106,6 +108,27 @@ export default function ProfileView({ forced = false }) {
                     {busy ? 'Saving…' : forced ? 'Set new PIN' : 'Save'}
                 </button>
             </form>
+            {/* M4 Legal row: the docs, plus the recorded acceptance for accounts
+                that signed up under the consent gate (older accounts show none). */}
+            {!forced && (
+                <div className="mt-1 pt-3 border-t border-separator text-[13px] text-label-2 flex items-center justify-between gap-2">
+                    <span className="text-label-3">
+                        Legal
+                        {user?.terms_version && (
+                            <span className="ml-1.5">
+                                · accepted v{user.terms_version}
+                                {user.terms_accepted_at ? ` on ${new Date(user.terms_accepted_at).toLocaleDateString()}` : ''}
+                            </span>
+                        )}
+                    </span>
+                    <span className="shrink-0">
+                        <button type="button" className={linkCls} onClick={() => setLegal('terms')}>Terms</button>
+                        <span className="mx-1.5 text-label-3">·</span>
+                        <button type="button" className={linkCls} onClick={() => setLegal('privacy')}>Privacy</button>
+                    </span>
+                </div>
+            )}
+            {legal && <LegalModal doc={legal} onClose={() => setLegal(null)} />}
         </AuthShell>
     );
 }

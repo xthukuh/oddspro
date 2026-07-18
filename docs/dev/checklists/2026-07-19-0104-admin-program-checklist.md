@@ -33,14 +33,14 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] `track()` calls: App.jsx central handlers (refresh, filters_apply(count), magic_sort_toggle(id), safe_only/sure_bets/one_of_each/risk_gate(on|off), csv_export(rows), calendar_nav(prev|next|date) via `navDate`, betslip/help/settings opens via shared wrappers used by nav + overflow) + `tip_popover(market)` at DataTable's `openTip` + `betslip_build(legs)` at addSlip/fillFromTop/seedTopSlip (the debounced AUTO rebuild deliberately untracked — machine-driven, would spam)
 - [x] Verify 2026-07-19: browser clicks landed `help_open`/`settings_open`/`calendar_nav prev,next`/`betslip_open` rows; batch first hit the ENDED stored session → real-client `recheck` → re-checkin (new sid) → retry landed all 5, zero loss
 
-## M4 — Legal consent
-- [ ] `web/src/legal/legalContent.js` + `TERMS_VERSION` (legal-agent draft; Oddspro / info@oddspro.ke / Kenya DPA 2019)
-- [ ] `scripts/gen-legal.js` + committed `web/public/{privacy,terms}/index.html` + `build:web` wiring
-- [ ] `LegalModal.jsx` + links (Help, auth footer, signup label)
-- [ ] Signup checkbox + `signupSchema` `accepted_terms`/`terms_version` + `createUser` persist
-- [ ] Migration `users.terms_accepted_at`/`terms_version`
-- [ ] ProfileView Legal row
-- [ ] Verify: signup blocked unchecked; row persisted; /privacy + /terms serve; suite green
+## M4 — Legal consent — COMPLETED 2026-07-19 (live-verified)
+- [x] `web/src/legal/legalContent.js` + `TERMS_VERSION` `2026-07-19` (legal-agent draft, reviewed; PRIVACY 11 / TERMS 14 sections; Oddspro / info@oddspro.ke / Kenya DPA 2019; negative-EV disclosed, 18+, opt-out, responsible gambling)
+- [x] `scripts/gen-legal.js` + committed `web/public/{privacy,terms}/index.html` + `build:web` wiring (one content module feeds modal AND pages — no drift)
+- [x] `LegalModal.jsx` (Sheet + CollapseSection + Terms/Privacy tab toggle + printable link `/x/index.html` — the pretty dir URL falls to the SPA on vite DEV only) + links: HelpModal footer, AuthShell footer (all auth views), signup label
+- [x] Signup checkbox ("18 or older + agree") gates submit; `signupSchema` `accepted_terms z.literal(true)` + `terms_version`; `createUser` persists; `publicUser` exposes both
+- [x] Migration `20260719000002_user_terms_consent.js` (batch 16, nullable — no retro-gate)
+- [x] ProfileView Legal row (accepted vN on date + doc links)
+- [x] Verify 2026-07-19: API signup w/o consent → 400, with → 201 + row stamped (`2026-07-19` / EAT datetime); UI submit disabled until checked, label/Help/footer links open the modal (Terms 14 collapse sections, tab switch works); `/privacy/index.html` + `/terms/index.html` render (11/14 sections, cross-linked); suite 735/735 (signupSchema test extended: false/missing/blank-version all rejected)
 
 ## M5 — Admin shell + Dashboard
 - [ ] `useAdminRoute.js` hash routing + SessionProvider boot hash read

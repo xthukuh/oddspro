@@ -173,6 +173,10 @@ export const signupSchema = z.object({
     phone_code: CODE,
     pin: PIN,
     pin_confirm: PIN,
+    // M4 consent gate: signup REQUIRES an explicit terms acceptance, and the
+    // client reports WHICH version it showed (persisted on the user row).
+    accepted_terms: z.literal(true, 'You must accept the Terms of Use and Privacy Policy'),
+    terms_version: z.string().trim().min(1).max(32),
 }).refine(d => d.pin === d.pin_confirm, { message: 'PINs do not match', path: ['pin_confirm'] });
 
 export const loginSchema = z.object({ phone: PHONE, pin: PIN });

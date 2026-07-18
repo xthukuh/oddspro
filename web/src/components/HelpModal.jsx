@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
 import CollapseSection from './CollapseSection.jsx';
+import LegalModal from './LegalModal.jsx';
 import { GLOSSARY } from '../glossary.js';
 
 // Help / About modal: what Odds Pro does, a betting-lingo glossary and an
@@ -38,6 +39,7 @@ function TermList({ terms }) {
 export default function HelpModal({ onClose }) {
     const embed = youtubeEmbed(DEMO_URL);
     const [pinned, setPinned] = useState(false);
+    const [legal, setLegal] = useState(null); // 'terms' | 'privacy' | null
 
     return (
         <Sheet onClose={onClose} className="max-w-2xl" dismissable={!pinned}>
@@ -97,9 +99,14 @@ export default function HelpModal({ onClose }) {
 
                     <p className="text-xs text-label-3 mt-4 pt-3 border-t border-separator">
                         Maintained by <a className="underline hover:text-label" href="https://github.com/xthukuh" target="_blank" rel="noreferrer">Martin Thuku</a>.
+                        <span className="mx-1.5">·</span>
+                        <button type="button" className="cursor-pointer underline hover:text-label" onClick={() => setLegal('terms')}>Terms of Use</button>
+                        <span className="mx-1.5">·</span>
+                        <button type="button" className="cursor-pointer underline hover:text-label" onClick={() => setLegal('privacy')}>Privacy Policy</button>
                     </p>
                 </div>
             </div>
+            {legal && <LegalModal doc={legal} onClose={() => setLegal(null)} />}
         </Sheet>
     );
 }

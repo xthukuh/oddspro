@@ -1,4 +1,6 @@
+import { useState } from 'react';
 import { OP_MARK } from '../components/Logo.jsx';
+import LegalModal from '../components/LegalModal.jsx';
 import { Z } from '../zLayers.js';
 
 // Full-screen scaffold for the auth views (sign in / sign up / verify /
@@ -6,7 +8,10 @@ import { Z } from '../zLayers.js';
 // ON TOP of the app (children stay mounted underneath, preserving table state)
 // A brand mark, centered card, token
 // palette. Shared control classes live here so the four views can't drift.
+// Every auth view gets the M4 legal links row under its footer for free.
 export default function AuthShell({ title, subtitle, children, footer }) {
+    const [legal, setLegal] = useState(null); // 'terms' | 'privacy' | null
+    const legalLink = 'cursor-pointer text-label-3 hover:text-label-2 hover:underline';
     return (
         <div className={`fixed inset-0 ${Z.modalScrim} bg-app overflow-y-auto [animation:op-fade_0.2s_ease]`}>
             <div className="min-h-full flex items-start sm:items-center justify-center px-6 py-10">
@@ -18,8 +23,14 @@ export default function AuthShell({ title, subtitle, children, footer }) {
                         <div className="mt-5 flex flex-col gap-3.5">{children}</div>
                     </div>
                     {footer && <div className="mt-5 text-center text-sm text-label-2">{footer}</div>}
+                    <div className="mt-4 text-center text-xs text-label-3">
+                        <button type="button" className={legalLink} onClick={() => setLegal('terms')}>Terms of Use</button>
+                        <span className="mx-1.5">·</span>
+                        <button type="button" className={legalLink} onClick={() => setLegal('privacy')}>Privacy Policy</button>
+                    </div>
                 </div>
             </div>
+            {legal && <LegalModal doc={legal} onClose={() => setLegal(null)} />}
         </div>
     );
 }

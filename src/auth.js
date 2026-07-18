@@ -50,6 +50,8 @@ export function publicUser(u) {
         must_change_pin: Boolean(u.must_change_pin),
         is_active: Boolean(u.is_active),
         last_login_at: u.last_login_at ?? null,
+        terms_version: u.terms_version ?? null,
+        terms_accepted_at: u.terms_accepted_at ?? null,
     };
 }
 
@@ -62,13 +64,16 @@ function otpMessage(code) {
 
 // --- Accounts ---------------------------------------------------------------
 
-export async function createUser({ name, phone, phone_region, phone_code, pin }) {
+export async function createUser({ name, phone, phone_region, phone_code, pin, terms_version = null }) {
     if (await userByPhone(phone)) throw new AuthError(409, 'That phone number is already registered');
     const pin_hash = await hashPinAsync(pin, { pepper: PEPPER() });
     try {
         const [id] = await withRetry(() => db('users').insert({
             name, role: 'normal', phone, phone_region, phone_code,
             phone_verified: 0, must_change_pin: 0, is_active: 1, pin_hash,
+            // M4 consent record: the schema gate guarantees accepted_terms was
+            // true, so a provided version stamps the acceptance time with it.
+            terms_version, terms_accepted_at: terms_version ? db.fn.now() : null,
         }), { isRetryable: isRetryableDbError });
         return userById(id);
     } catch (e) {
