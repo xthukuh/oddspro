@@ -1,0 +1,269 @@
+{
+    "info": {
+        "_postman_id": "d0b4d1a8-5f35-4d87-9d9c-0cdb5f9b9a11",
+        "name": "BongaSMS API",
+        "description": "Postman collection for BongaSMS API",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "event": [
+        {
+            "listen": "prerequest",
+            "script": {
+                "type": "text/javascript",
+                "exec": [
+                    "console.log('Executing request:', pm.info.requestName);"
+                ]
+            }
+        },
+        {
+            "listen": "test",
+            "script": {
+                "type": "text/javascript",
+                "exec": [
+                    "pm.test('Response status code is 200', function () {",
+                    "    pm.response.to.have.status(200);",
+                    "});",
+                    "",
+                    "pm.test('Response is JSON', function () {",
+                    "    pm.response.to.be.json;",
+                    "});"
+                ]
+            }
+        }
+    ],
+    "variable": [
+        {
+            "key": "apiClientID",
+            "value": "1461"
+        },
+        {
+            "key": "apiKey",
+            "value": "DnG1Muw0VHVf817"
+        },
+        {
+            "key": "apiSecret",
+            "value": "XYTdgS30TQBDIHBSItBSAzMuQzQ70r"
+        },
+        {
+            "key": "serviceID",
+            "value": "1"
+        },
+        {
+            "key": "phoneNumber",
+            "value": "254700000000"
+        },
+        {
+            "key": "message",
+            "value": "Hello from Postman test"
+        },
+        {
+            "key": "uniqueID",
+            "value": ""
+        },
+        {
+            "key": "destinationClientID",
+            "value": ""
+        },
+        {
+            "key": "credits",
+            "value": "1"
+        }
+    ],
+    "item": [
+        {
+            "name": "Send SMS",
+            "request": {
+                "method": "POST",
+                "header": [],
+                "body": {
+                    "mode": "formdata",
+                    "formdata": [
+                        {
+                            "key": "apiClientID",
+                            "value": "{{apiClientID}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "key",
+                            "value": "{{apiKey}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "secret",
+                            "value": "{{apiSecret}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "txtMessage",
+                            "value": "{{message}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "MSISDN",
+                            "value": "{{phoneNumber}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "serviceID",
+                            "value": "{{serviceID}}",
+                            "type": "text"
+                        }
+                    ]
+                },
+                "url": {
+                    "raw": "http://167.172.14.50:4002/v1/send-sms",
+                    "protocol": "http",
+                    "host": [
+                        "167",
+                        "172",
+                        "14",
+                        "50"
+                    ],
+                    "port": "4002",
+                    "path": [
+                        "v1",
+                        "send-sms"
+                    ]
+                },
+                "description": "Send SMS message"
+            },
+            "event": [
+                {
+                    "listen": "test",
+                    "script": {
+                        "type": "text/javascript",
+                        "exec": [
+                            "const jsonData = pm.response.json();",
+                            "",
+                            "pm.test('SMS request successful', function () {",
+                            "    pm.expect(jsonData.status).to.eql(222);",
+                            "});",
+                            "",
+                            "if (jsonData.unique_id) {",
+                            "    pm.environment.set('uniqueID', String(jsonData.unique_id));",
+                            "    console.log('Updated uniqueID:', jsonData.unique_id);",
+                            "}"
+                        ]
+                    }
+                }
+            ]
+        },
+        {
+            "name": "Check Balance",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "https://app.bongasms.co.ke/api/check-credits?apiClientID={{apiClientID}}&key={{apiKey}}",
+                    "protocol": "https",
+                    "host": [
+                        "app",
+                        "bongasms",
+                        "co",
+                        "ke"
+                    ],
+                    "path": [
+                        "api",
+                        "check-credits"
+                    ],
+                    "query": [
+                        {
+                            "key": "apiClientID",
+                            "value": "{{apiClientID}}"
+                        },
+                        {
+                            "key": "key",
+                            "value": "{{apiKey}}"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "Fetch Delivery Report",
+            "request": {
+                "method": "GET",
+                "header": [],
+                "url": {
+                    "raw": "https://app.bongasms.co.ke/api/fetch-delivery?apiClientID={{apiClientID}}&key={{apiKey}}&unique_id={{uniqueID}}",
+                    "protocol": "https",
+                    "host": [
+                        "app",
+                        "bongasms",
+                        "co",
+                        "ke"
+                    ],
+                    "path": [
+                        "api",
+                        "fetch-delivery"
+                    ],
+                    "query": [
+                        {
+                            "key": "apiClientID",
+                            "value": "{{apiClientID}}"
+                        },
+                        {
+                            "key": "key",
+                            "value": "{{apiKey}}"
+                        },
+                        {
+                            "key": "unique_id",
+                            "value": "{{uniqueID}}"
+                        }
+                    ]
+                }
+            }
+        },
+        {
+            "name": "Transfer Credits",
+            "request": {
+                "method": "POST",
+                "header": [
+                    {
+                        "key": "Content-Type",
+                        "value": "application/x-www-form-urlencoded"
+                    }
+                ],
+                "body": {
+                    "mode": "urlencoded",
+                    "urlencoded": [
+                        {
+                            "key": "apiClientID",
+                            "value": "{{apiClientID}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "key",
+                            "value": "{{apiKey}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "destinationClientID",
+                            "value": "{{destinationClientID}}",
+                            "type": "text"
+                        },
+                        {
+                            "key": "credits",
+                            "value": "{{credits}}",
+                            "type": "text"
+                        }
+                    ]
+                },
+                "url": {
+                    "raw": "https://app.bongasms.co.ke/api/transfer-credits",
+                    "protocol": "https",
+                    "host": [
+                        "app",
+                        "bongasms",
+                        "co",
+                        "ke"
+                    ],
+                    "path": [
+                        "api",
+                        "transfer-credits"
+                    ]
+                }
+            }
+        }
+    ]
+}

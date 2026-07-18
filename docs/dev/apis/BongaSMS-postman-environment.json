@@ -1,0 +1,54 @@
+{
+    "id": "ba0b4b09-7c5b-40ef-bb97-f4b6d7c95d91",
+    "name": "BongaSMS Environment",
+    "values": [
+        {
+            "key": "apiClientID",
+            "value": "1461",
+            "enabled": true
+        },
+        {
+            "key": "apiKey",
+            "value": "yYgGk29ilYA6u6w",
+            "enabled": true
+        },
+        {
+            "key": "apiSecret",
+            "value": "FPBfWWqxScuqxwrF7HRLlTCJJeF5kY",
+            "enabled": true
+        },
+        {
+            "key": "serviceID",
+            "value": "1",
+            "enabled": true
+        },
+        {
+            "key": "phoneNumber",
+            "value": "254724212034",
+            "enabled": true
+        },
+        {
+            "key": "message",
+            "value": "Hello from Postman",
+            "enabled": true
+        },
+        {
+            "key": "uniqueID",
+            "value": "",
+            "enabled": true
+        },
+        {
+            "key": "destinationClientID",
+            "value": "",
+            "enabled": true
+        },
+        {
+            "key": "credits",
+            "value": "1",
+            "enabled": true
+        }
+    ],
+    "_postman_variable_scope": "environment",
+    "_postman_exported_at": "2026-05-17T00:00:00.000Z",
+    "_postman_exported_using": "OpenAI ChatGPT"
+}
