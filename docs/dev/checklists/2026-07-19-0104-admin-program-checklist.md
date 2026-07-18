@@ -65,6 +65,14 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [ ] Rebuilt SettingsEditor (grouped, label+hint+unit+reset, type-aware widgets, regime warning, sticky dirty-only Save, restart badges, audit panel)
 - [ ] Verify: dirty semantics, all-or-nothing 400, reset, restart badge
 
+## M14 — Scheduled maintenance mode (added 2026-07-19 post-M4, user request; sequenced after M7)
+- [ ] Settings keys group `maintenance` (`MAINTENANCE_SCHEDULED`/`_START`/`_END`/`_MESSAGE`, live, pattern-validated, EnvSchema fallbacks)
+- [ ] Pure `src/db/maintenance-rules.js` + offline tests (window parse `+03:00`, state machine w/ past-end auto-expiry, notice render closed placeholders, `windowSignature`, retry-after)
+- [ ] Server 503 middleware (admin-session/bearer + `/api/auth/*` bypass; JSON body carries `maintenance` obj + `Retry-After`; static 503 HTML for page loads) + `GET /api/refresh` carries the schedule
+- [ ] Client: `oddspro.maintenance` cache; dismissible pre-window banner above the nav (per-`windowSignature` dismissal); own-clock auto-switch to full-screen maintenance (polls/fetches/tracking suspended, no reload); auto-recover at end + jitter; `api.js` maintenance-503 interception
+- [ ] Admin "Maintenance" card (Dashboard section): state chip, toggle, datetime range, template + live preview, +1h preset
+- [ ] Verify: short live window E2E (banner → dismiss persists → autonomous switch, network quiet → guest 503 / admin bypass → auto-recover); suite green
+
 ## M8 — User management
 - [ ] Pure `src/db/admin-rules.js` (patch schema incl. `phone_verified`, guards, temp PIN) + tests
 - [ ] Service `src/admin-users.js` (list/search/patch + audit)
