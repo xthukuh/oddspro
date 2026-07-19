@@ -80,15 +80,15 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] `UsersSection.jsx` (search + count, multi-select w/ "N selected" chip for M9, status/role chips, contextual actions w/ self-footguns hidden, typed confirms DISABLE/RESET/ADMIN/NORMAL, one-time temp-PIN reveal w/ copy, in-place row update from the PATCH response)
 - [x] Verify 2026-07-19 (live :3001, minted admin session): 401 unauth; self-disable/self-reset 400 w/ exact guard messages; CSRF 403; strict-schema 400 on `pin_hash`. Signup test user → disable → `active_sessions:0`, its session 401, login 403 "disabled" → re-enable. 3 wrong PINs → attempts 3 → unlock → 0/null. reset_pin → temp 5019, old PIN 401, temp login → `/api/prefs` 403 `pin_change_required` → profile PIN change BLOCKED unverified (`verify_required`) → **admin manual verify → PIN change OK → gate lifted 200** (the M8 rescue story end-to-end). Promote/demote roundtrip. Last-admin guard 400 both variants (service-level, non-admin actor). Audit ladder 7 rows changed-only attributed actor 1 (guard rejections left NO rows). Browser (#admin/users deep link): 4 users rendered, self row shows only Unverify, typed-confirm dialog (button disabled until DISABLE typed) → row live-updates to DISABLED/0 sessions, Reset PIN → reveal dialog (PIN 1997, verified by API login → `must_change_pin:true`), search "M8" → 1 of 4, multi-select chip, console clean. Suite 776/776; build clean (admin chunk 516.6 kB, guest untouched). Cleanup: test user deleted, verify sessions revoked, :3001 free, browser storage cleared
 
-## M13 — Email OTP fallback + critical-change auth
-- [ ] Mail seam (`src/mail/index.js` + `src/mail/smtp.js`, nodemailer pinned; MAIL_* zod; real creds in gitignored `.env` only)
-- [ ] Migration `users.email` (nullable, NOT unique) + `otp_codes.channel`/`email`
-- [ ] Resend → Bonga fetch-delivery check (`provider_msg_id`) → `{delivery_failed:true}`
-- [ ] VerifyPhoneView hidden email input + email-OTP resend path
-- [ ] Forgot PIN flow (SignIn → phone → OTP w/ email fallback → new PIN)
-- [ ] Profile PIN change OTP confirmation (`purpose='pin_change'`)
-- [ ] Pure rules + tests (delivery envelope, channel/purpose math, email zod)
-- [ ] Verify: live email OTP received; forced flows E2E
+## M13 — Email OTP fallback + critical-change auth ✅ (2026-07-19)
+- [x] Mail seam (`src/mail/index.js` + `src/mail/smtp.js`, nodemailer 9.0.3 exact-pinned; MAIL_* zod in config.js; creds `.env`-only, `.env.example` placeholders; catalog exposes only `MAIL_MAILER`, group `mail`)
+- [x] Migration `20260719000004_email_otp` (batch 18): `users.email` (nullable, NOT unique) + `otp_codes.channel`/`email`
+- [x] Resend → Bonga fetch-delivery check (`provider_msg_id` persisted on the row when the send verdict lands, `code_hash`-guarded) → `{delivery_failed:true}` **without rotating the code or the cooldown**
+- [x] VerifyPhoneView revealed email input + email-OTP resend path (emailed code completes phone verification)
+- [x] Forgot PIN flow (`ForgotPinView.jsx`, SignIn link, AuthGate view `forgot`; stored-email-only fallback; auto sign-in + full session revoke in one txn)
+- [x] Profile PIN change OTP confirmation (`purpose='pin_change'`, `POST /api/auth/pin-change-otp`, route-exempt from the must_change_pin gate)
+- [x] Pure rules + tests (`isDeliveryFailure`, `otpRowTarget`, channel-aware `otpIssueDecision`, `maskEmail`, `emailFallbackTarget`, resend/forgot/reset schemas + profileSchema otp_code refine) — suite **788/788**
+- [x] Verify E2E (serve, `SMS_ENABLED=0`/`MAIL_MAILER=log` console codes): email-channel resend → emailed code verified the phone + captured `users.email`; stale rotated SMS code rejected; PIN change 400s without `otp_code` and succeeds with it (new PIN logs in); forgot-PIN → reset → auto sign-in with the pre-reset session 401'd; stored-email reset shows the `t***@example.com` mask; unknown phone stays generic; `no_email` 400 when none on file. Browser: Forgot-PIN two-step + profile PIN-change code, console clean. **Live SMTP send still pending real `MAIL_*` creds (user-gated).**
 
 ## M9 — SMS templates + campaigns
 - [ ] Migrations: `users.sms_opt_out`; `sms_templates`; `sms_campaigns` + recipients

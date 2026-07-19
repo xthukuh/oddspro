@@ -4,6 +4,7 @@ import SignInView from './SignInView.jsx';
 import SignUpView from './SignUpView.jsx';
 import VerifyPhoneView from './VerifyPhoneView.jsx';
 import ProfileView from './ProfileView.jsx';
+import ForgotPinView from './ForgotPinView.jsx';
 
 // Lazy: the admin panel pulls recharts (~heavy) - keep it out of the guest
 // bundle; vite splits the dynamic import into its own chunk fetched on first
@@ -32,6 +33,7 @@ export default function AuthGate({ children }) {
             {forced === 'pin' && <ProfileView forced />}
             {!forced && s.view === 'signin' && <SignInView />}
             {!forced && s.view === 'signup' && <SignUpView />}
+            {!forced && s.view === 'forgot' && <ForgotPinView />}
             {!forced && s.view === 'profile' && <ProfileView />}
             {!forced && s.view === 'admin' && s.role === 'admin' && (
                 <Suspense fallback={<div className="fixed inset-0 z-[60] bg-app flex items-center justify-center text-label-2 text-sm">Loading admin…</div>}>

@@ -3,24 +3,61 @@ import { useSession } from './SessionProvider.jsx';
 import AuthShell, { inputCls, btnCls, linkCls, FormError, FormNotice } from './AuthShell.jsx';
 import Field from '../components/Field.jsx';
 import LegalModal from '../components/LegalModal.jsx';
+import useCooldown from './useCooldown.js';
 
 // Edit profile: display name + optional PIN change (current PIN required by
 // the server). Also serves the FORCED first-login PIN change (`forced`,
 // AuthGate): the seeded admin ships with must_change_pin=1 and the server
 // 403s everything else until a new PIN lands (H4) - so in forced mode the PIN
 // fields are the point, there's no close, and sign-out stays the escape hatch.
+// M13 critical-change auth: a PIN change additionally needs a texted (or, when
+// SMS can't deliver, emailed) confirmation code - "Send code" here requests it
+// (purpose='pin_change') and the save carries it as otp_code.
 export default function ProfileView({ forced = false }) {
-    const { user, updateProfile, logout, closeAuth } = useSession();
+    const { user, updateProfile, pinChangeOtp, logout, closeAuth } = useSession();
+    const cooldown = useCooldown();
     const [name, setName] = useState(user?.name ?? '');
     const [currentPin, setCurrentPin] = useState('');
     const [pin, setPin] = useState('');
     const [pinConfirm, setPinConfirm] = useState('');
+    const [otpCode, setOtpCode] = useState('');
+    const [otpRequested, setOtpRequested] = useState(false);
+    const [emailOffer, setEmailOffer] = useState(false);
+    const [email, setEmail] = useState(user?.email ?? '');
     const [busy, setBusy] = useState(false);
     const [error, setError] = useState(null);
     const [notice, setNotice] = useState(null);
     const [legal, setLegal] = useState(null); // 'terms' | 'privacy' | null
 
     const changingPin = forced || pin.length > 0 || pinConfirm.length > 0 || currentPin.length > 0;
+
+    async function sendOtp(emailAddr = null) {
+        if (busy || cooldown.active) return;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const r = await pinChangeOtp(emailAddr);
+            cooldown.start(r.retry_after_seconds);
+            setOtpRequested(true);
+            if (r.delivery_failed) {
+                setEmailOffer(true);
+                setError("Texts to your number aren't being delivered - get the code by email instead.");
+            } else if (r.sent === false && !r.reused) {
+                setEmailOffer(true);
+                setError("We couldn't send the code - try again in a moment.");
+            } else if (r.reused) {
+                setNotice('Your last code is still valid.');
+            } else {
+                setNotice(emailAddr ? `Code emailed to ${emailAddr}.` : 'Code sent to your phone.');
+            }
+        } catch (err) {
+            cooldown.start(err.body?.retry_after_seconds);
+            setError(err.message);
+        } finally {
+            setBusy(false);
+        }
+    }
 
     async function submit(e) {
         e.preventDefault();
@@ -34,6 +71,7 @@ export default function ProfileView({ forced = false }) {
             }
             patch.pin = pin;
             patch.current_pin = currentPin;
+            patch.otp_code = otpCode;
         }
         if (!Object.keys(patch).length) {
             if (!forced) closeAuth();
@@ -50,6 +88,8 @@ export default function ProfileView({ forced = false }) {
                 setCurrentPin('');
                 setPin('');
                 setPinConfirm('');
+                setOtpCode('');
+                setOtpRequested(false);
             }
         } catch (err) {
             setError(err.message);
@@ -101,10 +141,39 @@ export default function ProfileView({ forced = false }) {
                         />
                     </div>
                 </Field>
+                {changingPin && (
+                    <Field label="Confirmation code" htmlFor="profile-otp"
+                        hint="We send a code to confirm it's really you.">
+                        <div className="flex gap-2.5">
+                            <input
+                                id="profile-otp" type="text" inputMode="numeric" autoComplete="one-time-code"
+                                maxLength={10} placeholder="Code" className={pinRow} value={otpCode}
+                                onChange={e => setOtpCode(e.target.value.replace(/\D/g, ''))}
+                            />
+                            <button type="button" className={btnCls + ' w-auto shrink-0 px-4'}
+                                onClick={() => sendOtp()} disabled={busy || cooldown.active}>
+                                {cooldown.active ? `${cooldown.seconds}s` : otpRequested ? 'Resend' : 'Send code'}
+                            </button>
+                        </div>
+                    </Field>
+                )}
+                {changingPin && emailOffer && (
+                    <div className="flex gap-2.5">
+                        <input
+                            aria-label="Email for the code" type="email" inputMode="email" autoComplete="email"
+                            placeholder="you@example.com" className={pinRow} value={email}
+                            onChange={e => setEmail(e.target.value)}
+                        />
+                        <button type="button" className={btnCls + ' w-auto shrink-0 px-4'}
+                            onClick={() => sendOtp(email.trim())} disabled={busy || cooldown.active || !email.includes('@')}>
+                            Email it
+                        </button>
+                    </div>
+                )}
                 <FormError>{error}</FormError>
                 <FormNotice>{notice}</FormNotice>
                 <button type="submit" className={btnCls}
-                    disabled={busy || (changingPin && (currentPin.length !== 4 || pin.length !== 4 || pinConfirm.length !== 4))}>
+                    disabled={busy || (changingPin && (currentPin.length !== 4 || pin.length !== 4 || pinConfirm.length !== 4 || otpCode.length < 4))}>
                     {busy ? 'Saving…' : forced ? 'Set new PIN' : 'Save'}
                 </button>
             </form>

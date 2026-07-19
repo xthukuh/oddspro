@@ -5,7 +5,7 @@ import assert from 'node:assert/strict';
 import {
     isValidE164, toMsisdn, normalizePhone, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
     resendCooldownSeconds, canResend, otpIssueDecision, parseBongaSend, parseBongaBalance,
-    parseBongaDelivery, classifyBongaStatus, isCleartextUrl,
+    parseBongaDelivery, classifyBongaStatus, isCleartextUrl, isDeliveryFailure, otpRowTarget,
 } from '../src/db/sms-rules.js';
 
 test('isValidE164 accepts real numbers and rejects junk', () => {
@@ -226,4 +226,45 @@ test('isCleartextUrl flags non-loopback http:// (credential-in-cleartext guard)'
     assert.equal(isCleartextUrl('http://user:pass@127.0.0.1:8080/proxy'), false);  // userinfo, loopback
     assert.equal(isCleartextUrl('http://user:pass@sms.example.com/send'), true);   // userinfo, remote
     assert.equal(isCleartextUrl('http://[2001:db8::1]/send'), true);               // IPv6 remote
+});
+
+// --- M13: delivery-failure classifier + channel-aware OTP rows ---------------
+
+test('isDeliveryFailure: only DEFINITIVE failure descriptors count', () => {
+    // Definitive - the number cannot receive this message; offer the email fallback.
+    assert.equal(isDeliveryFailure('DeliveryImpossible'), true);
+    assert.equal(isDeliveryFailure('SenderName Blacklisted'), true);
+    assert.equal(isDeliveryFailure('Rejected'), true);
+    assert.equal(isDeliveryFailure('MessageExpired'), true);
+    assert.equal(isDeliveryFailure('Undeliverable'), true);
+    // Success / transient / unknown - never push the user off SMS on these.
+    assert.equal(isDeliveryFailure('DeliveredToTerminal'), false); // verified live 2026-07-19
+    assert.equal(isDeliveryFailure('DeliveredToNetwork'), false);
+    assert.equal(isDeliveryFailure('AbsentSubscriber'), false);    // phone off = transient
+    assert.equal(isDeliveryFailure('DeliveryUncertain'), false);
+    assert.equal(isDeliveryFailure(''), false);
+    assert.equal(isDeliveryFailure(null), false);
+    assert.equal(isDeliveryFailure(undefined), false);
+});
+
+test('otpRowTarget: sms rows target the phone, email rows the address', () => {
+    assert.equal(otpRowTarget({ channel: 'sms', phone: '+254700000001', email: null }), '+254700000001');
+    assert.equal(otpRowTarget({ channel: 'email', phone: '+254700000001', email: 'a@b.co' }), 'a@b.co');
+    // Legacy rows predate the channel column - they were SMS by construction.
+    assert.equal(otpRowTarget({ phone: '+254700000001' }), '+254700000001');
+    assert.equal(otpRowTarget(null), null);
+});
+
+test('otpIssueDecision: email-channel row reuses for the same address, rejects a different target', () => {
+    const now = Date.now();
+    const row = {
+        channel: 'email', email: 'a@b.co', phone: '+254700000001',
+        consumed_at: null, expires_at: now + 300_000,
+        last_sent_at: now - 10_000, resend_count: 0,
+    };
+    // Same email inside the cooldown: the emailed code still works - reuse.
+    assert.equal(otpIssueDecision(row, 'a@b.co', now, { base: 60, max: 5 }).action, 'reuse');
+    // A different target (the phone, or another email) inside the cooldown: reject.
+    assert.equal(otpIssueDecision(row, '+254700000001', now, { base: 60, max: 5 }).action, 'reject');
+    assert.equal(otpIssueDecision(row, 'x@y.z', now, { base: 60, max: 5 }).action, 'reject');
 });

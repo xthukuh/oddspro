@@ -95,19 +95,30 @@ export function canResend(nowMs, lastSentAt, resendCount, { base = 60, max = Inf
     return { ok: false, reason: 'cooldown', retryAfterSeconds: Math.ceil(required - elapsed) };
 }
 
+// Where did an OTP row's code actually go? SMS rows target the phone, email
+// rows (M13) the address; rows predating the channel column were SMS by
+// construction. The reuse decision below compares against THIS, so an email
+// code is never "reused" for a phone send (and vice versa).
+export function otpRowTarget(row) {
+    if (!row) return null;
+    return row.channel === 'email' ? row.email : row.phone;
+}
+
 // Should an issue request (signup / change-phone) send a fresh code? The
-// cooldown + cap are gated on the USER's active row, never on the target phone
-// - alternating two numbers must not reset the clock (the SMS-flood exploit).
+// cooldown + cap are gated on the USER's active row, never on the target
+// address - alternating two numbers must not reset the clock (the SMS-flood
+// exploit). `target` is the phone OR email (M13) the caller wants to send to.
 //   send   - no active row, or the cooldown has elapsed and the cap allows.
-//   reuse  - same phone, still-valid code, inside the cooldown: the code already
-//            on its way still works, so report the wait instead of spending SMS.
-//   reject - inside the cooldown for a different phone (or a dead code), or the
-//            hard resend cap is hit - the caller should answer 429.
-export function otpIssueDecision(existing, phone, nowMs, { base = 60, max = Infinity } = {}) {
+//   reuse  - same target, still-valid code, inside the cooldown: the code
+//            already on its way still works, so report the wait instead of
+//            spending another send.
+//   reject - inside the cooldown for a different target (or a dead code), or
+//            the hard resend cap is hit - the caller should answer 429.
+export function otpIssueDecision(existing, target, nowMs, { base = 60, max = Infinity } = {}) {
     if (!existing) return { action: 'send' };
     const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, { base, max });
     if (cr.ok) return { action: 'send' };
-    if (cr.reason === 'cooldown' && existing.phone === phone && shouldReuseOtp(existing, nowMs)) {
+    if (cr.reason === 'cooldown' && otpRowTarget(existing) === target && shouldReuseOtp(existing, nowMs)) {
         return { action: 'reuse', retryAfterSeconds: cr.retryAfterSeconds };
     }
     return { action: 'reject', reason: cr.reason, retryAfterSeconds: cr.retryAfterSeconds };
@@ -201,6 +212,16 @@ export function parseBongaDelivery(data) {
 // caller - a 666 must never be retried (it won't self-heal).
 export function classifyBongaStatus(status) {
     return Number(status) === 222 ? 'ok' : 'fatal';
+}
+
+// M13: is a fetch-delivery descriptor a DEFINITIVE failure - the number cannot
+// receive this message, so the email fallback should be offered? Deliberately
+// conservative: transient states (AbsentSubscriber = phone off,
+// DeliveryUncertain, still-in-flight) and null/unknown descriptors are NOT
+// failures - a flaky report must never push a reachable user off SMS.
+export function isDeliveryFailure(deliveryStatusDesc) {
+    if (typeof deliveryStatusDesc !== 'string' || !deliveryStatusDesc) return false;
+    return /impossible|blacklist|reject|expired|undeliver/i.test(deliveryStatusDesc);
 }
 
 // SECURITY: is an outbound URL cleartext HTTP to a NON-loopback host? Bonga's

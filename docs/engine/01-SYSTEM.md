@@ -104,6 +104,22 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
   `user.force_pin_change`/`user.reset_pin`) in that same transaction. Manual verify
   (`phone_verified: true`) is the SMS-failure fallback: it unblocks the verified-only
   routes (profile PIN change included) without an OTP.
+- **Email OTP fallback + critical-change auth (M13):** `users.email` (nullable, NOT
+  unique — phone stays the sole login identity) is captured the first time an email OTP
+  is requested on an authenticated flow. OTP rows carry `channel`/`email`; an SMS resend
+  first checks the previous send's Bonga delivery report (`provider_msg_id`, persisted on
+  the row once the send verdict lands) and a DEFINITIVE failure answers
+  `{delivery_failed:true}` WITHOUT rotating the code or restarting the cooldown, so the
+  revealed email input is immediately usable; the emailed code completes the SAME
+  verification. Self-service Forgot PIN (`purpose='pin_reset'`, unauthenticated): phone →
+  code → new PIN → auto sign-in with every prior session revoked; its email fallback
+  targets ONLY the account's STORED address (a typed inbox there would be an account
+  takeover) and unknown phones get a generic answer. Profile PIN changes now require a
+  confirmation code (`purpose='pin_change'`, requested via `POST /api/auth/pin-change-otp`)
+  on top of the current PIN — forced first-login changes included. Mail seam `src/mail/`
+  mirrors the SMS seam: `MAIL_MAILER=log` (default) prints emails to the server console,
+  `smtp` sends via the .env-only `MAIL_*` creds (fail-closed when the host is missing);
+  the admin settings editor exposes only the `MAIL_MAILER` switch (group `mail`).
 
 ---
 *Update this chapter when: a pipeline step is added/removed/reordered, a scheduler is

@@ -25,6 +25,7 @@ const GROUP_LABELS = {
     'auth-policy': 'Sign-in policy',
     otp: 'OTP policy',
     sms: 'SMS',
+    mail: 'Email',
     geo: 'Visitor geo',
     bot: 'Bot filter',
     logging: 'Logging',

@@ -155,9 +155,44 @@ const PIN_CHANGE_EXEMPT = new Set([
     'GET /api/auth/me',
     'POST /api/auth/verify-otp',
     'POST /api/auth/resend-otp',
+    // M13: the PIN change itself now needs a confirmation OTP - the forced
+    // flow must be able to request one, or must_change_pin would dead-end.
+    'POST /api/auth/pin-change-otp',
 ]);
 export function mustChangePinBlocks(method, path) {
     return !PIN_CHANGE_EXEMPT.has(`${String(method).toUpperCase()} ${path}`);
+}
+
+// --- Email fallback (M13, pure) ----------------------------------------------
+// Mask an email for responses that must hint at the stored address without
+// disclosing it (the unauthenticated forgot-PIN flow): first character of the
+// local part + the full domain. Anything that isn't shaped like an email
+// returns null - garbage must never leak back verbatim.
+export function maskEmail(email) {
+    if (typeof email !== 'string') return null;
+    const at = email.indexOf('@');
+    if (at < 1 || at === email.length - 1) return null;
+    return `${email[0]}***@${email.slice(at + 1)}`;
+}
+
+// Which address may an email-channel OTP go to? The decision is the security
+// boundary of the whole fallback:
+//   pin_reset    - UNAUTHENTICATED (forgot PIN): only the account's stored
+//                  email. Honoring a typed address here would let anyone reset
+//                  any account's PIN into their own inbox.
+//   phone_verify / pin_change - authenticated (session, and the PIN change
+//                  additionally proves the current PIN at commit): a typed
+//                  address is allowed and captured onto the account
+//                  (store:true) - this is where users.email gets populated.
+export function emailFallbackTarget(purpose, { storedEmail = null, typedEmail = null } = {}) {
+    if (purpose === 'pin_reset') {
+        return storedEmail ? { ok: true, email: storedEmail, store: false } : { ok: false, reason: 'no_email' };
+    }
+    if (purpose === 'phone_verify' || purpose === 'pin_change') {
+        if (typedEmail) return { ok: true, email: typedEmail, store: true };
+        return storedEmail ? { ok: true, email: storedEmail, store: false } : { ok: false, reason: 'no_email' };
+    }
+    return { ok: false, reason: 'purpose' };
 }
 
 // --- Request schemas (zod) --------------------------------------------------
@@ -165,6 +200,10 @@ const PIN = z.string().regex(/^\d{4}$/, 'PIN must be 4 digits');
 const PHONE = z.string().refine(isValidE164, 'Enter a valid phone number');
 const REGION = z.string().trim().length(2, 'Invalid region');
 const CODE = z.string().trim().min(1).max(8);
+const OTP_CODE = z.string().trim().regex(/^\d{4,10}$/, 'Enter the code');
+// Lowercased + trimmed before the format check so 'Me@X.co ' and 'me@x.co'
+// are one stored identity.
+const EMAIL = z.string().trim().toLowerCase().max(254).pipe(z.email('Enter a valid email address'));
 
 export const signupSchema = z.object({
     name: z.string().trim().min(1, 'Name is required').max(120),
@@ -180,10 +219,30 @@ export const signupSchema = z.object({
 }).refine(d => d.pin === d.pin_confirm, { message: 'PINs do not match', path: ['pin_confirm'] });
 
 export const loginSchema = z.object({ phone: PHONE, pin: PIN });
-export const verifyOtpSchema = z.object({ code: z.string().trim().regex(/^\d{4,10}$/, 'Enter the code') });
+export const verifyOtpSchema = z.object({ code: OTP_CODE });
 export const changePhoneSchema = z.object({ phone: PHONE, phone_region: REGION, phone_code: CODE });
 export const profileSchema = z.object({
     name: z.string().trim().min(1).max(120).optional(),
     pin: PIN.optional(),
     current_pin: PIN.optional(),
-}).refine(d => !d.pin || d.current_pin, { message: 'Enter your current PIN to change it', path: ['current_pin'] });
+    otp_code: OTP_CODE.optional(),
+}).refine(d => !d.pin || d.current_pin, { message: 'Enter your current PIN to change it', path: ['current_pin'] })
+    // M13 critical-change auth: a PIN change must carry the confirmation code
+    // (purpose='pin_change') on top of the current PIN.
+    .refine(d => !d.pin || d.otp_code, { message: 'Enter the confirmation code we sent you', path: ['otp_code'] });
+
+// M13: resend (and pin-change-otp) may request the email channel; the typed
+// address is optional - emailFallbackTarget decides whether it's honored.
+export const resendOtpSchema = z.object({ email: EMAIL.optional() });
+// Forgot PIN (unauthenticated): channel 'email' means "use my stored email" -
+// deliberately NO email field here (see emailFallbackTarget).
+export const forgotPinSchema = z.object({
+    phone: PHONE,
+    channel: z.enum(['sms', 'email']).default('sms'),
+});
+export const resetPinSchema = z.object({
+    phone: PHONE,
+    code: OTP_CODE,
+    pin: PIN,
+    pin_confirm: PIN,
+}).refine(d => d.pin === d.pin_confirm, { message: 'PINs do not match', path: ['pin_confirm'] });

@@ -167,9 +167,30 @@ export async function verifyOtp(code) {
     return _send('/api/auth/verify-otp', { code });
 }
 
-// -> { sent, retry_after_seconds? } (429 ApiError carries the corrected wait)
-export async function resendOtp() {
-    return _send('/api/auth/resend-otp');
+// -> { sent, retry_after_seconds? } (429 ApiError carries the corrected wait).
+// M13: pass an email to request the email channel; a plain SMS resend may
+// answer { sent:false, delivery_failed:true, email_hint } instead of sending.
+export async function resendOtp(email = null) {
+    return _send('/api/auth/resend-otp', email ? { email } : {});
+}
+
+// M13 critical-change auth: request the PIN-change confirmation code (same
+// response shape as resendOtp; consumed by updateProfile's otp_code).
+export async function pinChangeOtp(email = null) {
+    return _send('/api/auth/pin-change-otp', email ? { email } : {});
+}
+
+// M13 Forgot PIN: send/re-send the reset code. channel 'email' targets the
+// account's STORED address -> { ok, sent, retry_after_seconds?,
+// delivery_failed?, email_hint? }. Unknown phones answer { ok, sent:false }.
+export async function forgotPin(phone, channel = 'sms') {
+    return _send('/api/auth/forgot-pin', channel === 'email' ? { phone, channel } : { phone });
+}
+
+// data: { phone, code, pin, pin_confirm } -> { token, user } (auto sign-in;
+// every previous session is revoked server-side)
+export async function resetPin(data) {
+    return _send('/api/auth/reset-pin', data);
 }
 
 // data: { phone, phone_region, phone_code } (unverified accounts only)
@@ -187,7 +208,8 @@ export async function fetchMe() {
     return _get('/api/auth/me');
 }
 
-// data: { name?, pin?, current_pin? } (PIN change clears must_change_pin)
+// data: { name?, pin?, current_pin?, otp_code? } (PIN change clears
+// must_change_pin and requires the M13 confirmation code)
 export async function updateProfile(data) {
     return _send('/api/auth/profile', data, 'PUT');
 }

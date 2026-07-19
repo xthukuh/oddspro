@@ -116,7 +116,7 @@ test('settingsPutSchema pins the PUT body envelope (C2)', () => {
 
 test('M6 catalog completeness: every entry has label, hint, known group/type', () => {
     const GROUPS = new Set(['safe', 'refresh', 'pipeline', 'hotpick', 'tip', 'ai', 'ai-dark',
-        'auth-policy', 'otp', 'sms', 'geo', 'bot', 'logging', 'tracking', 'maintenance']);
+        'auth-policy', 'otp', 'sms', 'mail', 'geo', 'bot', 'logging', 'tracking', 'maintenance']);
     const TYPES = new Set(['string', 'int', 'number', 'boolean']);
     for (const e of SETTINGS_CATALOG) {
         assert.equal(typeof e.label === 'string' && e.label.length > 0, true, `${e.key} needs a label`);

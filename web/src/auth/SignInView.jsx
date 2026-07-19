@@ -56,6 +56,9 @@ export default function SignInView() {
                 <button type="submit" className={btnCls} disabled={busy || !phone || pin.length !== 4}>
                     {busy ? 'Signing in…' : 'Sign in'}
                 </button>
+                <div className="text-center text-sm">
+                    <button type="button" className={linkCls} onClick={() => openAuth('forgot')}>Forgot your PIN?</button>
+                </div>
             </form>
         </AuthShell>
     );

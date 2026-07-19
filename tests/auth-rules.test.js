@@ -8,6 +8,7 @@ import {
     newSessionToken, hashToken, hashOtpCode,
     registerFailedAttempt, isLocked, registerOtpAttempt, mustChangePinBlocks,
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
+    maskEmail, emailFallbackTarget, resendOtpSchema, forgotPinSchema, resetPinSchema,
 } from '../src/auth-rules.js';
 
 // Deterministic fake scrypt for fast, injected tests: xor the salt bytes into a
@@ -173,10 +174,10 @@ test('login / verify-otp / change-phone / profile schemas', () => {
     assert.equal(verifyOtpSchema.safeParse({ code: '123456' }).success, true);
     assert.equal(verifyOtpSchema.safeParse({ code: 'ab' }).success, false);
     assert.equal(changePhoneSchema.safeParse({ phone: '+254711111111', phone_region: 'KE', phone_code: '254' }).success, true);
-    // profile: changing the PIN requires the current PIN
+    // profile: changing the PIN requires the current PIN + the M13 confirmation code
     assert.equal(profileSchema.safeParse({ name: 'New Name' }).success, true);
-    assert.equal(profileSchema.safeParse({ pin: '5678', current_pin: '1234' }).success, true);
-    assert.equal(profileSchema.safeParse({ pin: '5678' }).success, false); // no current_pin
+    assert.equal(profileSchema.safeParse({ pin: '5678', current_pin: '1234', otp_code: '123456' }).success, true);
+    assert.equal(profileSchema.safeParse({ pin: '5678', otp_code: '123456' }).success, false); // no current_pin
 });
 
 test('mustChangePinBlocks: everything except PIN change, logout, me and the verify flow (H4)', () => {
@@ -196,4 +197,88 @@ test('mustChangePinBlocks: everything except PIN change, logout, me and the veri
     // Method matters: only the exempt (method, path) PAIRS pass.
     assert.equal(mustChangePinBlocks('GET', '/api/auth/profile'), true);
     assert.equal(mustChangePinBlocks('put', '/api/auth/profile'), false); // method case-insensitive
+});
+
+// --- M13: email fallback + critical-change auth ------------------------------
+
+test('maskEmail keeps the first character and the domain', () => {
+    assert.equal(maskEmail('oddspro@example.com'), 'o***@example.com');
+    assert.equal(maskEmail('a@b.co'), 'a***@b.co');
+    // Garbage never leaks back verbatim - null means "nothing to show".
+    assert.equal(maskEmail('not-an-email'), null);
+    assert.equal(maskEmail(''), null);
+    assert.equal(maskEmail(null), null);
+});
+
+test('emailFallbackTarget: pin_reset may ONLY use the stored email (unauthenticated flow)', () => {
+    // An unauthenticated caller supplying their own inbox would be an account
+    // takeover - the typed email must be ignored outright, not just deprioritized.
+    assert.deepEqual(
+        emailFallbackTarget('pin_reset', { storedEmail: 'me@x.co', typedEmail: 'evil@y.co' }),
+        { ok: true, email: 'me@x.co', store: false },
+    );
+    assert.deepEqual(
+        emailFallbackTarget('pin_reset', { storedEmail: null, typedEmail: 'evil@y.co' }),
+        { ok: false, reason: 'no_email' },
+    );
+});
+
+test('emailFallbackTarget: authenticated purposes prefer the typed email and capture it', () => {
+    for (const purpose of ['phone_verify', 'pin_change']) {
+        // Typed wins and is stored on the account (first email capture point).
+        assert.deepEqual(
+            emailFallbackTarget(purpose, { storedEmail: 'old@x.co', typedEmail: 'new@y.co' }),
+            { ok: true, email: 'new@y.co', store: true },
+        );
+        // No typed email: fall back to the stored one without rewriting it.
+        assert.deepEqual(
+            emailFallbackTarget(purpose, { storedEmail: 'old@x.co', typedEmail: null }),
+            { ok: true, email: 'old@x.co', store: false },
+        );
+        assert.deepEqual(
+            emailFallbackTarget(purpose, { storedEmail: null, typedEmail: null }),
+            { ok: false, reason: 'no_email' },
+        );
+    }
+});
+
+test('emailFallbackTarget rejects unknown purposes', () => {
+    assert.equal(emailFallbackTarget('login', { storedEmail: 'a@b.co', typedEmail: null }).ok, false);
+});
+
+test('resendOtpSchema: optional email is trimmed + lowercased; junk rejects', () => {
+    assert.deepEqual(resendOtpSchema.parse({}), {});
+    assert.equal(resendOtpSchema.parse({ email: '  Me@Example.COM ' }).email, 'me@example.com');
+    assert.throws(() => resendOtpSchema.parse({ email: 'nope' }));
+});
+
+test('forgotPinSchema: phone required, channel defaults to sms', () => {
+    const d = forgotPinSchema.parse({ phone: '+254700000001' });
+    assert.equal(d.phone, '+254700000001');
+    assert.equal(d.channel, 'sms');
+    assert.equal(forgotPinSchema.parse({ phone: '+254700000001', channel: 'email' }).channel, 'email');
+    assert.throws(() => forgotPinSchema.parse({ phone: '0700000001' })); // not E.164
+    assert.throws(() => forgotPinSchema.parse({ phone: '+254700000001', channel: 'carrier-pigeon' }));
+});
+
+test('resetPinSchema: code + matching new PINs', () => {
+    const good = { phone: '+254700000001', code: '123456', pin: '1234', pin_confirm: '1234' };
+    assert.equal(resetPinSchema.parse(good).pin, '1234');
+    assert.throws(() => resetPinSchema.parse({ ...good, pin_confirm: '9999' }), /do not match/);
+    assert.throws(() => resetPinSchema.parse({ ...good, code: '' }));
+    assert.throws(() => resetPinSchema.parse({ ...good, pin: '12a4' }));
+});
+
+test('profileSchema: a PIN change now requires the confirmation code (M13 critical-change auth)', () => {
+    // Name-only edits stay OTP-free.
+    assert.equal(profileSchema.parse({ name: 'Thuku' }).name, 'Thuku');
+    // PIN change without otp_code rejects...
+    assert.throws(() => profileSchema.parse({ pin: '1234', current_pin: '0000' }), /confirmation code/i);
+    // ...and passes with it.
+    const d = profileSchema.parse({ pin: '1234', current_pin: '0000', otp_code: '123456' });
+    assert.equal(d.otp_code, '123456');
+});
+
+test('mustChangePinBlocks exempts the pin-change OTP route (forced flow needs its code)', () => {
+    assert.equal(mustChangePinBlocks('POST', '/api/auth/pin-change-otp'), false);
 });

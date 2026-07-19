@@ -137,6 +137,8 @@ export const SETTINGS_CATALOG = [
     { key: 'SMS_ENABLED', type: 'boolean', group: 'sms', public: false, live: true, label: 'SMS sending', hint: 'Off = zero network; OTP codes log to the server console instead (dev mode).' },
     { key: 'SMS_DEFAULT_REGION', type: 'string', group: 'sms', public: false, live: true, pattern: '^[A-Z]{2}$', patternHint: 'two-letter ISO country, e.g. KE', label: 'Default phone region', hint: 'ISO country used to parse local phone-number formats into E.164.' },
     { key: 'BONGA_SERVICE_ID', type: 'int', group: 'sms', public: false, live: true, label: 'Bonga service ID', hint: 'Vendor service/sender id attached to SMS sends.' },
+    // ---- Email (M13; SMTP creds stay .env-only).
+    { key: 'MAIL_MAILER', type: 'string', group: 'mail', public: false, live: true, pattern: '^(smtp|log)$', patternHint: 'smtp or log', label: 'Email sending', hint: 'log = emails print to the server console (dev mode); smtp sends for real via the MAIL_* creds in .env.' },
     // ---- Visitor geo backfill. The sweep INTERVAL is read once at scheduler
     // start -> restart; the per-sweep batch size/URL are late-read -> live.
     { key: 'GEO_RESOLVE_ENABLED', type: 'boolean', group: 'geo', public: false, live: false, label: 'Geo backfill', hint: 'Resolve visitor IPs to country/region in a background sweep. Restart to apply.' },

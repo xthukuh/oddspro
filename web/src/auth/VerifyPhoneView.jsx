@@ -9,7 +9,10 @@ import useCooldown from './useCooldown.js';
 // texted code; resend rides the server's 60·n cooldown (a premature call 429s
 // with the corrected wait, which re-seeds the countdown); "Wrong number?"
 // swaps the phone (unverified accounts only - the server re-sends to the new
-// one). Sign out is always available so the gate is never a trap.
+// one). M13: when SMS verifiably can't reach the number (delivery_failed) or a
+// send fails outright, an email input is revealed - the emailed code completes
+// the SAME verification. Sign out is always available so the gate is never a
+// trap.
 export default function VerifyPhoneView() {
     const { user, verifyOtp, resendOtp, changePhone, logout, otpHint } = useSession();
     const cooldown = useCooldown();
@@ -20,6 +23,8 @@ export default function VerifyPhoneView() {
     const [changing, setChanging] = useState(false);
     const [newPhone, setNewPhone] = useState('');
     const [newRegion, setNewRegion] = useState('KE');
+    const [emailOffer, setEmailOffer] = useState(false);
+    const [email, setEmail] = useState(user?.email ?? '');
     const seededRef = useRef(false);
 
     // Seed the countdown + notice from the send that got us here (signup /
@@ -30,6 +35,7 @@ export default function VerifyPhoneView() {
         if (otpHint?.retry_after_seconds) cooldown.start(otpHint.retry_after_seconds);
         if (otpHint && otpHint.sent === false && !otpHint.reused) {
             setError("We couldn't send the code - tap Resend to try again.");
+            setEmailOffer(true);
         }
         // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
@@ -57,8 +63,35 @@ export default function VerifyPhoneView() {
         try {
             const r = await resendOtp();
             cooldown.start(r.retry_after_seconds);
-            if (r.sent === false && !r.reused) setError("We couldn't send the code - try again in a moment.");
-            else setNotice(r.reused ? 'Your last code is still valid - check your messages.' : 'Code sent.');
+            if (r.delivery_failed) {
+                // The carrier reports the SMS can't be delivered - no code was
+                // (re)sent; steer to the email fallback immediately.
+                setEmailOffer(true);
+                setError("Texts to your number aren't being delivered - get the code by email instead.");
+            } else if (r.sent === false && !r.reused) {
+                setEmailOffer(true);
+                setError("We couldn't send the code - try again in a moment.");
+            } else {
+                setNotice(r.reused ? 'Your last code is still valid - check your messages.' : 'Code sent.');
+            }
+        } catch (err) {
+            cooldown.start(err.body?.retry_after_seconds);
+            setError(err.message);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    async function sendEmail() {
+        if (busy || cooldown.active || !email) return;
+        setBusy(true);
+        setError(null);
+        setNotice(null);
+        try {
+            const r = await resendOtp(email.trim());
+            cooldown.start(r.retry_after_seconds);
+            if (r.sent === false && !r.reused) setError("We couldn't send the email - check the address and try again.");
+            else setNotice(r.reused ? 'Your last code is still valid.' : `Code emailed to ${email.trim()}.`);
         } catch (err) {
             cooldown.start(err.body?.retry_after_seconds);
             setError(err.message);
@@ -117,6 +150,22 @@ export default function VerifyPhoneView() {
                             Wrong number?
                         </button>
                     </div>
+                    {emailOffer && (
+                        <div className="pt-3 border-t border-separator flex flex-col gap-2">
+                            <div className="text-[13px] text-label-2">Get the code by email instead:</div>
+                            <div className="flex gap-2">
+                                <input
+                                    type="email" inputMode="email" autoComplete="email" placeholder="you@example.com"
+                                    className={inputCls + ' flex-1 min-w-0'} value={email}
+                                    onChange={e => setEmail(e.target.value)}
+                                />
+                                <button type="button" className={btnCls + ' w-auto shrink-0 px-4'}
+                                    onClick={sendEmail} disabled={busy || cooldown.active || !email.includes('@')}>
+                                    Email it
+                                </button>
+                            </div>
+                        </div>
+                    )}
                 </form>
             ) : (
                 <form onSubmit={submitPhone} className="flex flex-col gap-3.5">

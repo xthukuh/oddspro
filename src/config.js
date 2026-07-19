@@ -260,6 +260,20 @@ const EnvSchema = z.object({
     OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
     OTP_RESEND_BASE_SECONDS: z.coerce.number().int().min(1).default(60),
     OTP_MAX_RESENDS: z.coerce.number().int().min(1).default(5),
+    // --- Email (M13; src/mail/*) ---------------------------------------------
+    // Laravel-style MAIL_* names (the DB_* precedent). MAIL_MAILER 'log' is the
+    // dev default: the email is logged to the server console, zero network -
+    // mirroring SMS_ENABLED=0. 'smtp' sends for real; creds stay .env-only
+    // (checked at send time, fail-closed when the host is missing).
+    MAIL_MAILER: z.enum(['smtp', 'log']).default('log'),
+    MAIL_SCHEME: optionalStr(z.enum(['smtp', 'smtps']).optional()), // smtps = implicit TLS
+    MAIL_HOST: optionalStr(z.string().min(1).optional()),
+    MAIL_PORT: z.coerce.number().int().min(1).default(587),
+    MAIL_USERNAME: optionalStr(z.string().min(1).optional()),
+    MAIL_PASSWORD: optionalStr(z.string().min(1).optional()),
+    MAIL_ENCRYPTION: optionalStr(z.enum(['tls', 'ssl']).optional()), // tls = STARTTLS, ssl = implicit
+    MAIL_FROM_ADDRESS: optionalStr(z.string().min(1).optional()),
+    MAIL_FROM_NAME: z.string().default('Odds Pro'),
     // --- Tracking v2 (M2/M6; src/track.js) -----------------------------------
     // Prune visit_events older than this during the light pass; 0 = keep
     // forever (the default - behavior data accumulates, spec decision 13).

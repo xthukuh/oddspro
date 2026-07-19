@@ -22,9 +22,11 @@ import { startAiWorker, stopAiWorker } from './ai-worker.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
+    forgotPinStart, resetPinWithOtp,
 } from './auth.js';
 import {
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema, mustChangePinBlocks,
+    resendOtpSchema, forgotPinSchema, resetPinSchema,
 } from './auth-rules.js';
 import { slidingWindowAllow } from './authlimit-rules.js';
 import { normalizePhone } from './db/sms-rules.js';
@@ -301,9 +303,64 @@ if (config.AUTH_ENABLED) {
         } catch (e) { authErr(e, res, next); }
     });
 
+    // M13: an optional { email } requests the email channel (typed addresses
+    // are captured onto the account - pure emailFallbackTarget). A plain SMS
+    // resend may answer { delivery_failed:true } instead of sending, steering
+    // the client to the email input.
     app.post('/api/auth/resend-otp', requireAuth, authJson, async (req, res, next) => {
         if (!csrfOk(req, res)) return;
-        try { res.json(await resendOtp(req.user, {})); } catch (e) { authErr(e, res, next); }
+        try {
+            const { email } = resendOtpSchema.parse(req.body ?? {});
+            res.json(await resendOtp(req.user, { email }));
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    // M13 critical-change auth: request the PIN-change confirmation code
+    // (purpose='pin_change'; consumed by PUT /api/auth/profile). requireAuth,
+    // not requireVerified - the forced-PIN-change rescue path may carry an
+    // admin-manually-verified phone, but a plain unverified user hits the
+    // verify gate before ProfileView anyway. resendOtp owns issue-vs-resend.
+    app.post('/api/auth/pin-change-otp', requireAuth, authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            // User-keyed burst limit (session-derived, unspoofable) on top of
+            // the DB-authoritative cooldown - same belt as change-phone.
+            const rl = rateLimit(`pinotp:${req.user.id}`, { windowMs: 900_000, max: 8 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many code requests - try again later.', retry_after_seconds: rl.retryAfterSeconds });
+            const { email } = resendOtpSchema.parse(req.body ?? {});
+            res.json(await resendOtp(req.user, { purpose: 'pin_change', email }));
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    // M13 Forgot PIN (unauthenticated): send/re-send the reset code. Answers
+    // stay generic for unknown phones (no cheap existence oracle); the email
+    // channel targets ONLY the account's stored address.
+    app.post('/api/auth/forgot-pin', authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const ip = req.ip || null;
+            const rlIp = rateLimit(`forgot:ip:${ip}`, { windowMs: 3_600_000, max: 15 });
+            if (!rlIp.allowed) return res.status(429).json({ error: 'Too many reset requests - try again later.', retry_after_seconds: rlIp.retryAfterSeconds });
+            const normalized = normalizePhone(req.body?.phone, { region: effective('SMS_DEFAULT_REGION') });
+            const data = forgotPinSchema.parse({ ...req.body, phone: normalized ?? req.body?.phone });
+            const rl = rateLimit(`forgot:${data.phone}`, { windowMs: 900_000, max: 6 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many reset requests - try again later.', retry_after_seconds: rl.retryAfterSeconds });
+            res.json(await forgotPinStart(data));
+        } catch (e) { authErr(e, res, next); }
+    });
+
+    // M13 Forgot PIN completion: code + new PIN -> fresh session (auto
+    // sign-in; every prior session is revoked in the service transaction).
+    app.post('/api/auth/reset-pin', authJson, async (req, res, next) => {
+        if (!csrfOk(req, res)) return;
+        try {
+            const ip = req.ip || null;
+            const rl = rateLimit(`resetpin:${ip}`, { windowMs: 900_000, max: 10 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many attempts - try again later.', retry_after_seconds: rl.retryAfterSeconds });
+            const normalized = normalizePhone(req.body?.phone, { region: effective('SMS_DEFAULT_REGION') });
+            const data = resetPinSchema.parse({ ...req.body, phone: normalized ?? req.body?.phone });
+            res.json(await resetPinWithOtp(data, { userAgent: req.get('user-agent'), ip }));
+        } catch (e) { authErr(e, res, next); }
     });
 
     app.post('/api/auth/change-phone', requireAuth, authJson, async (req, res, next) => {

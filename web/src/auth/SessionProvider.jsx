@@ -1,5 +1,8 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { signup, login, verifyOtp, resendOtp, changePhone, logout as apiLogout, fetchMe, updateProfile } from '../api.js';
+import {
+    signup, login, verifyOtp, resendOtp, changePhone, logout as apiLogout, fetchMe, updateProfile,
+    forgotPin as apiForgotPin, resetPin as apiResetPin, pinChangeOtp as apiPinChangeOtp,
+} from '../api.js';
 import { getSessionToken, setSessionToken, clearSessionToken } from './sessionToken.js';
 import { syncOnLogin, pushPrefs, syncNow, clearCursor, startAutoSync } from './prefsSync.js';
 import { parseAdminHash } from '../admin/useAdminRoute.js';
@@ -118,11 +121,25 @@ export default function SessionProvider({ children }) {
             syncOnLogin(u.id);
             return u;
         },
-        resendOtp: async () => {
-            const res = await resendOtp();
+        // M13: pass an email to request the email channel; a plain resend may
+        // come back { delivery_failed:true } (the view reveals the email input).
+        resendOtp: async (email = null) => {
+            const res = await resendOtp(email);
             setOtpHint(res);
             return res;
         },
+        // M13 Forgot PIN (unauthenticated): send the reset code / complete the
+        // reset. resetPin adopts the fresh auto-sign-in session.
+        forgotPin: async (phone, channel = 'sms') => apiForgotPin(phone, channel),
+        resetPin: async data => {
+            const res = await apiResetPin(data);
+            adopt(res);
+            setView(null);
+            syncOnLogin(res.user.id);
+            return res.user;
+        },
+        // M13 critical-change auth: the PIN-change confirmation code.
+        pinChangeOtp: async (email = null) => apiPinChangeOtp(email),
         changePhone: async data => {
             const res = await changePhone(data);
             setOtpHint(res.otp ?? null);
