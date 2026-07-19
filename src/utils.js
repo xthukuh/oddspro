@@ -1,10 +1,11 @@
 // Shared helpers used by all fetchers (extracted from betpawa.js/betika.js).
-import { config } from './config.js';
+import { effective } from './settings.js';
 
-// Verbose timestamped logging, no-op unless DEBUG=1 (.env) - the primary
+// Verbose timestamped logging, no-op unless DEBUG is on (.env default or the
+// admin settings override - late-read per call, M6) - the primary
 // diagnostic channel on hosts with no SSH/live tailing (e.g. cPanel cron).
 export function debugLog(...args) {
-    if (!config.DEBUG) return;
+    if (!effective('DEBUG')) return;
     const t = new Date().toISOString().substring(11, 23); // HH:mm:ss.sss
     console.debug(`[dbg ${t}]`, ...args);
 }

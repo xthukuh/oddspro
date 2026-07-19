@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_THRESHOLDS, LINE_THRESHOLDS, impliedProbability, teamGoalsAggregates, pairedTeamGoalsAggregates,
-    h2hGoalsAggregates, apiPredictionSignal, scoreOver25, scoreOverLine,
+    h2hGoalsAggregates, apiPredictionSignal, scoreOver25, scoreOverLine, parseLinesCsv,
 } from '../src/db/goals-rules.js';
 
 // The fixture under analysis: team 1 hosts team 2
@@ -339,4 +339,19 @@ test('pairedTeamGoalsAggregates zeroes both sides when one has no history', () =
     assert.equal(home.n, 0);
     assert.equal(away.n, 0);
     assert.equal(home.avgTotal, null);
+});
+
+// M6: ONE lines-CSV definition - config.js's HOTPICK_LINES zod transform and
+// the hotpicks.js admin-override path both parse through parseLinesCsv, so
+// the two layers can never disagree (the parity the M6 checklist demands).
+test('parseLinesCsv: CSV strings, array passthrough, dedupe, junk dropped', () => {
+    assert.deepEqual(parseLinesCsv('2.5'), [2.5]);
+    assert.deepEqual(parseLinesCsv('1.5, 2.5'), [1.5, 2.5]);
+    assert.deepEqual(parseLinesCsv('2.5,2.5, 3.5'), [2.5, 3.5]);      // dedupe
+    assert.deepEqual(parseLinesCsv('abc, 2.5, -1, 0'), [2.5]);        // junk/non-positive dropped
+    assert.deepEqual(parseLinesCsv(''), []);
+    assert.deepEqual(parseLinesCsv(null), []);
+    // effective() may hand back the ALREADY-PARSED config default array.
+    assert.deepEqual(parseLinesCsv([2.5, 1.5]), [2.5, 1.5]);
+    assert.deepEqual(parseLinesCsv([2.5, 2.5, NaN]), [2.5]);
 });

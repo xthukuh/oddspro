@@ -1,4 +1,4 @@
-import { config } from './config.js';
+import { effective } from './settings.js';
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import { computePrematch } from './db/prematch-calc.js';
@@ -58,8 +58,8 @@ export async function updatePrematchSnapshots() {
             fixturesByTeam,
             homeStanding: standing.get(`${f.league_id}:${f.season}:${f.home_team_id}`),
             awayStanding: standing.get(`${f.league_id}:${f.season}:${f.away_team_id}`),
-            teamWindow: config.PREMATCH_TEAM_WINDOW,
-            h2hWindow: config.PREMATCH_H2H_WINDOW,
+            teamWindow: effective('PREMATCH_TEAM_WINDOW'),
+            h2hWindow: effective('PREMATCH_H2H_WINDOW'),
         }),
         computed_at: db.fn.now(),
     }));

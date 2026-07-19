@@ -50,15 +50,15 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] `GET /admin` → 302 `/#admin` (curl + browser follow-through verified); `/api/visits/summary` → requireAdminDual (ADMIN_TOKEN bearer 200 AND admin session 200); `requireAdmin` dropped, `adminBearerOk` retained
 - [x] Verify 2026-07-19: suite 736/736; build clean — recharts (`CartesianGrid`) zero hits in the guest bundle, admin chunk lazy at 415.6 kB; guest `#admin` → sign-in view; admin deep-link reload → `#admin/dashboard` with live tiles+charts (real M2/M3 beacon data); `#admin/settings` reload keeps Settings active; nav click → `#admin/lab`, back button → dashboard; × close → clean URL; `/admin` lands in the panel; zero console errors; track summary 401 unauth AND 401 on ADMIN_TOKEN bearer (session-only confirmed)
 
-## M6 — Settings catalog + audit + wiring
-- [ ] Catalog metadata (`label/hint/unit/regime/pattern`) on ALL entries
-- [ ] ~35 new keys (pipeline/hotpick/tip/ai/ai-dark/auth-policy/otp/sms/geo/bot/logging/tracking)
-- [ ] Migration `admin_audit` + in-txn audit writes + `GET /api/admin/settings/audit`
-- [ ] Late-read wiring per consumer table (hotpicks, ai-worker, adjudicators/enrich, auth, server bot lists, bonga, utils, auto-refresh, geo, link, apisports, prematch)
-- [ ] `parseLinesCsv` shared pure helper
-- [ ] `src/index.js` `loadOverrides()` pre-dispatch
-- [ ] Tests: catalog completeness (label+hint present), regime flags, pattern validation, parseLinesCsv parity, audit builder
-- [ ] Verify: TIP_MIN_PRICE override takes effect without restart; audit row with old/new; public subset unchanged
+## M6 — Settings catalog + audit + wiring — COMPLETED 2026-07-19 (live-verified)
+- [x] Catalog metadata (`label/hint/unit/regime/pattern`) on ALL 74 entries (patterns as regex SOURCE strings so entries JSON-serialize to the M7 editor; `patternHint` names the format in the 400)
+- [x] 44 new keys (pipeline 4 / hotpick 7 / tip 6 / ai +4 / ai-dark 4 / auth-policy 3 / otp 5 / sms 2 / geo 3 / bot 2 / logging 3 / tracking 1); `features` group dissolved into sms/geo/bot; SAFE_STRATEGY gained the real STRATEGIES enum; AUTH_ENABLED deliberately EXCLUDED (an in-session flip would saw off the branch the settings UI sits on); regime:true = TIP_*/HOTPICK_*/SAFE_* wildcard + ai-dark, HOTPICK_AI_CONCURRENCY exempt (mechanical); TRACK_EVENTS_RETENTION_DAYS added to EnvSchema (default 0 keep-forever) + `pruneTrackEvents()` in the light pass beside purgeExpiredAuth
+- [x] Migration `20260719000003_admin_audit` (batch 17; actor FK SET NULL) + pure changed-only `buildAuditRows` + in-txn writes in `setOverrides`/`resetOverride` (stored-values SELECT ... FOR UPDATE inside the txn) + `GET /api/admin/settings/audit` (requireAdminRole session-ONLY)
+- [x] Late-read wiring: hotpicks (gates/tip floors/lines/book guards/h2h window), ai-worker (caps+windows via per-drain `effectiveAiConfig()` snapshot), adjudicators (`aiModelTag(cfg)`/`_preambleActive(cfg)`/prompt+tag share ONE cfg so preamble bytes and #p version can't diverge; `effectiveAiConfig` MOVED to settings.js, enrich re-exports — avoids the adjudicators→enrich→hotpicks cycle), auth (OTP_*/PIN_*/SESSION_TTL), server (bot extra/allow lists per request after the enabled check; SMS_DEFAULT_REGION), bonga (BONGA_SERVICE_ID), utils (DEBUG), auto-refresh (AUTO_LOG*), geo (batch/url live; GEO_INTERVAL stays restart with in-code comment), link, apisports (quota floor + history depth), prematch
+- [x] `parseLinesCsv` in goals-rules (array passthrough + CSV; config.js HOTPICK_LINES transform DELEGATES to it — parity by construction)
+- [x] `src/index.js` awaits `loadOverrides()` pre-dispatch (decision 5 — CLI sweeps share serve's effective gates)
+- [x] Tests: catalog completeness (label+hint+group+type+pattern-compiles, ≥70 keys), exact regime-flag predicate, pattern accept/reject matrix, SAFE_STRATEGY enum, range spot-checks, secrets/boot exclusion, public subset EXACTLY the 8 SAFE_*, audit builder changed-only/reset; parseLinesCsv cases in goals-rules suite — suite 746/746
+- [x] Verify 2026-07-19 (live :3001): `/api/settings` public subset unchanged (8 SAFE_* keys); PUT TIP_MIN_PRICE 1.3 → effective 1.3 same process no restart (then 1.32, then DELETE reset → 1.35 default); HOTPICK_LINES 'abc' → 400 with patternHint message; admin_audit ladder null→1.3, 1.3→1.32, 1.32→null (changed-only, actor null for bearer writes); audit route 401 on ADMIN_TOKEN bearer AND 200 with minted admin session (revoked after); CLI `performance` ran under pre-dispatch loadOverrides; docs updated same-commit (engine 01/06, QUICK-REFERENCE warnings/definitions, memory-bank regime-log preamble, CLAUDE.md DARK/catalog claims)
 
 ## M7 — Settings editor redesign
 - [ ] Pure `normalizeForCompare` + `settingsDiff` + tests (blank==default, bool norm, revert=clean)

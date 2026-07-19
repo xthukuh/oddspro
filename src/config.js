@@ -1,6 +1,6 @@
 import 'dotenv/config';
 import { z } from 'zod';
-import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS } from './db/goals-rules.js'; // zero-import module - no cycle
+import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS, parseLinesCsv } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
@@ -45,11 +45,12 @@ const EnvSchema = z.object({
     // O/U lines the hot-pick evaluator scores per fixture (M3, scoreOverLine).
     // A line only actually fires hot when it ALSO has a LINE_THRESHOLDS entry
     // (src/db/goals-rules.js - today only 2.5) - non-2.5 lines here are inert
-    // until Task 10's backtest tunes and adds their thresholds. Simple CSV ->
-    // number-array parse (mirrors the _uaList idiom in server.js).
-    HOTPICK_LINES: z.string().default('2.5').transform(v =>
-        [...new Set(v.split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0))]
-    ).refine(a => a.length > 0, 'HOTPICK_LINES must list at least one O/U line')
+    // until Task 10's backtest tunes and adds their thresholds. The CSV parse
+    // is the shared pure parseLinesCsv (M6) - the admin-override path in
+    // src/hotpicks.js parses through the SAME helper, so the two layers can
+    // never disagree on what a lines list means.
+    HOTPICK_LINES: z.string().default('2.5').transform(parseLinesCsv)
+        .refine(a => a.length > 0, 'HOTPICK_LINES must list at least one O/U line')
         .refine(a => a.some(l => l in LINE_THRESHOLDS), 'HOTPICK_LINES must include at least one line with a LINE_THRESHOLDS entry'),
     // "Tip" column: safest bettable outcome floors (see src/db/tip-rules.js)
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
@@ -103,10 +104,12 @@ const EnvSchema = z.object({
     // instantly instead of burning a 60s timeout per remaining call.
     AI_RUN_MAX_MINUTES: z.coerce.number().min(0).default(0),
     AI_BREAKER_AFTER: z.coerce.number().int().min(0).default(5),
-    // T10 DARK switches - deliberately .env-only (NOT in the settings
-    // catalog): flipping either is a POLICY-REGIME change (prompt/tag bump =
-    // one bounded re-adjudication wave + a dataset split) and requires an
-    // explicit go + a dated note in docs/memory-bank.md first.
+    // T10 DARK switches. Flipping either is a POLICY-REGIME change (prompt/
+    // tag bump = one bounded re-adjudication wave + a dataset split). Since
+    // M6 (admin-program spec decision 3) they ARE settings-catalog entries
+    // (group ai-dark, regime:true): the editor's regime warning + the dated
+    // admin_audit old->new trail replaced the manual memory-bank-note
+    // discipline. These env lines remain the fallback default layer.
     // Preamble: prepend the injection guard to GROUNDED prompts (adjudicator
     // protocol + enrichment facts); bumps #p3->#p4 and #e2->#e3 while on.
     AI_INJECTION_PREAMBLE: boolStr('0'),
@@ -256,6 +259,10 @@ const EnvSchema = z.object({
     OTP_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),
     OTP_RESEND_BASE_SECONDS: z.coerce.number().int().min(1).default(60),
     OTP_MAX_RESENDS: z.coerce.number().int().min(1).default(5),
+    // --- Tracking v2 (M2/M6; src/track.js) -----------------------------------
+    // Prune visit_events older than this during the light pass; 0 = keep
+    // forever (the default - behavior data accumulates, spec decision 13).
+    TRACK_EVENTS_RETENTION_DAYS: z.coerce.number().int().min(0).default(0),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app

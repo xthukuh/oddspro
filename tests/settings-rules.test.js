@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
     SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, validateSettings,
     mergeOverrides, publicSubset, isMissingTableError, settingsPutSchema,
+    buildAuditRows, AUDIT_SETTINGS_SET, AUDIT_SETTINGS_RESET,
 } from '../src/db/settings-rules.js';
 
 test('catalog excludes secrets/creds/build vars by construction', () => {
@@ -108,4 +109,124 @@ test('settingsPutSchema pins the PUT body envelope (C2)', () => {
     assert.equal(settingsPutSchema.safeParse({}).success, false);          // neither form
     assert.equal(settingsPutSchema.safeParse({ key: '' }).success, false); // blank key
     assert.equal(settingsPutSchema.safeParse({ value: 4 }).success, false); // value without key
+});
+
+// ---- M6: catalog metadata, regime flags, patterns, audit builder ----------
+
+test('M6 catalog completeness: every entry has label, hint, known group/type', () => {
+    const GROUPS = new Set(['safe', 'refresh', 'pipeline', 'hotpick', 'tip', 'ai', 'ai-dark',
+        'auth-policy', 'otp', 'sms', 'geo', 'bot', 'logging', 'tracking']);
+    const TYPES = new Set(['string', 'int', 'number', 'boolean']);
+    for (const e of SETTINGS_CATALOG) {
+        assert.equal(typeof e.label === 'string' && e.label.length > 0, true, `${e.key} needs a label`);
+        assert.equal(typeof e.hint === 'string' && e.hint.length > 0, true, `${e.key} needs a hint`);
+        assert.equal(GROUPS.has(e.group), true, `${e.key} has unknown group ${e.group}`);
+        assert.equal(TYPES.has(e.type), true, `${e.key} has unknown type ${e.type}`);
+        assert.equal(typeof e.public, 'boolean', `${e.key} needs an explicit public flag`);
+        assert.equal(typeof e.live, 'boolean', `${e.key} needs an explicit live flag`);
+        if (e.pattern) assert.doesNotThrow(() => new RegExp(e.pattern), `${e.key} pattern must compile`);
+    }
+    // The M6 expansion actually landed (~74 keys, was 30).
+    assert.equal(SETTINGS_CATALOG.length >= 70, true, `catalog unexpectedly small: ${SETTINGS_CATALOG.length}`);
+});
+
+test('M6 regime flags: TIP_*/HOTPICK_*/SAFE_* + DARK switches, concurrency exempt', () => {
+    for (const e of SETTINGS_CATALOG) {
+        const wildcard = /^(TIP_|HOTPICK_|SAFE_)/.test(e.key) && e.key !== 'HOTPICK_AI_CONCURRENCY';
+        const dark = e.group === 'ai-dark';
+        assert.equal(Boolean(e.regime), wildcard || dark,
+            `${e.key} regime flag should be ${wildcard || dark}`);
+    }
+    // Spot checks for the flags the plan names explicitly.
+    assert.equal(catalogEntry('TIP_MIN_PRICE').regime, true);
+    assert.equal(catalogEntry('TIP_AI_MIN_CONFIDENCE').regime, true);
+    assert.equal(catalogEntry('AI_INJECTION_PREAMBLE').regime, true);
+    assert.equal(catalogEntry('HOTPICK_AI_CONCURRENCY').regime ?? false, false); // mechanical throughput
+    assert.equal(catalogEntry('OTP_TTL_MINUTES').regime ?? false, false);
+});
+
+test('M6 pattern validation accepts the real formats and rejects junk', () => {
+    // HOTPICK_LINES: numbers CSV
+    assert.equal(validateSetting('HOTPICK_LINES', '2.5').ok, true);
+    assert.equal(validateSetting('HOTPICK_LINES', '1.5, 2.5').ok, true);
+    assert.equal(validateSetting('HOTPICK_LINES', 'abc').ok, false);
+    assert.equal(validateSetting('HOTPICK_LINES', '2.5;3.5').ok, false);
+    assert.equal(validateSetting('HOTPICK_LINES', '').ok, false);
+    // AUTO_FULL_AT: HH:mm / off / blank
+    assert.equal(validateSetting('AUTO_FULL_AT', '06:00').ok, true);
+    assert.equal(validateSetting('AUTO_FULL_AT', '6:00').ok, true);
+    assert.equal(validateSetting('AUTO_FULL_AT', 'off').ok, true);
+    assert.equal(validateSetting('AUTO_FULL_AT', '').ok, true);
+    assert.equal(validateSetting('AUTO_FULL_AT', '25:00').ok, false);
+    assert.equal(validateSetting('AUTO_FULL_AT', 'noon').ok, false);
+    // ODDS_REFRESH_TIERS: upTo:maxAge CSV with * catch-all
+    assert.equal(validateSetting('ODDS_REFRESH_TIERS', '90:0,360:30,1440:120,*:360').ok, true);
+    assert.equal(validateSetting('ODDS_REFRESH_TIERS', 'off').ok, true);
+    assert.equal(validateSetting('ODDS_REFRESH_TIERS', '90-0').ok, false);
+    // SMS_DEFAULT_REGION: two-letter ISO
+    assert.equal(validateSetting('SMS_DEFAULT_REGION', 'KE').ok, true);
+    assert.equal(validateSetting('SMS_DEFAULT_REGION', 'kenya').ok, false);
+    // GEO_API_BATCH_URL: http(s) URL
+    assert.equal(validateSetting('GEO_API_BATCH_URL', 'http://ip-api.com/batch').ok, true);
+    assert.equal(validateSetting('GEO_API_BATCH_URL', 'ftp://x').ok, false);
+    // AI consensus CSVs (blank = off is always valid)
+    assert.equal(validateSetting('AI_CONSENSUS_TASKS', '').ok, true);
+    assert.equal(validateSetting('AI_CONSENSUS_TASKS', 'adjudicate').ok, true);
+    assert.equal(validateSetting('AI_CONSENSUS_TASKS', 'Bad Task!').ok, false);
+    assert.equal(validateSetting('AI_CONSENSUS_MODELS', '').ok, true);
+    assert.equal(validateSetting('AI_CONSENSUS_MODELS', 'gemini:gemini-2.5-pro,openrouter:openai/gpt-5.6-terra').ok, true);
+    assert.equal(validateSetting('AI_CONSENSUS_MODELS', 'no-colon-model').ok, false);
+});
+
+test('M6 SAFE_STRATEGY enum comes from the real STRATEGIES registry', () => {
+    assert.equal(validateSetting('SAFE_STRATEGY', 'sure').ok, true);
+    assert.equal(validateSetting('SAFE_STRATEGY', 'market').ok, true);
+    assert.equal(validateSetting('SAFE_STRATEGY', 'not-a-strategy').ok, false);
+});
+
+test('M6 new-key validation: ranges enforced like the originals', () => {
+    assert.deepEqual(validateSetting('TIP_MIN_PRICE', '1.3'), { ok: true, value: 1.3 });
+    assert.equal(validateSetting('TIP_MIN_PRICE', '0.9').ok, false);   // < min 1
+    assert.equal(validateSetting('OTP_LENGTH', '3').ok, false);        // < min 4
+    assert.equal(validateSetting('GEO_BATCH_LIMIT', '101').ok, false); // > ip-api cap
+    assert.equal(validateSetting('HOTPICK_TEAM_WINDOW', '9').ok, false); // > backfill depth 8
+    assert.equal(validateSetting('AI_CONSENSUS_MIN_AGREE', '1').ok, false); // < 2
+});
+
+test('M6 secrets/boot switches stay OUT of the catalog by construction', () => {
+    const keys = new Set(SETTINGS_CATALOG.map(e => e.key));
+    for (const forbidden of ['GEMINI_API_KEY', 'BONGA_API_CLIENT_ID', 'BONGA_API_KEY',
+        'BONGA_API_SECRET', 'BONGA_API_URL_SEND', 'AUTH_ENABLED', 'ADMIN_SEED_PIN',
+        'MIGRATE_ON_BOOT', 'API_HOST', 'API_PORT']) {
+        assert.equal(keys.has(forbidden), false, `${forbidden} must NOT be admin-editable`);
+    }
+});
+
+test('M6 public subset is EXACTLY the SAFE_* keys (no new key leaked public)', () => {
+    const pub = SETTINGS_CATALOG.filter(e => e.public).map(e => e.key).sort();
+    assert.deepEqual(pub, ['SAFE_MAX_PER_DAY', 'SAFE_MAX_PRICE', 'SAFE_MIN_AGREEMENT',
+        'SAFE_MIN_H2H', 'SAFE_MIN_MARKET_SETTLED', 'SAFE_MIN_PARTS', 'SAFE_MIN_SAMPLES',
+        'SAFE_STRATEGY']);
+});
+
+test('buildAuditRows: changed-only trail with old/new values', () => {
+    const rows = buildAuditRows(
+        [['TIP_MIN_PRICE', 1.3], ['SAFE_MAX_PER_DAY', '3'], ['SMS_ENABLED', '1']],
+        { TIP_MIN_PRICE: '1.2', SAFE_MAX_PER_DAY: '3' }, // SAFE unchanged -> no row
+        { actorId: 7 });
+    assert.deepEqual(rows, [
+        { actor_id: 7, action: AUDIT_SETTINGS_SET, target: 'TIP_MIN_PRICE', old_value: '1.2', new_value: '1.3' },
+        { actor_id: 7, action: AUDIT_SETTINGS_SET, target: 'SMS_ENABLED', old_value: null, new_value: '1' },
+    ]);
+});
+
+test('buildAuditRows: reset rows and the never-overridden no-op', () => {
+    // Reset of a stored override -> old value recorded, new null.
+    assert.deepEqual(buildAuditRows([['TIP_MIN_PRICE', null]], { TIP_MIN_PRICE: '1.35' },
+        { actorId: null, action: AUDIT_SETTINGS_RESET }), [
+        { actor_id: null, action: AUDIT_SETTINGS_RESET, target: 'TIP_MIN_PRICE', old_value: '1.35', new_value: null },
+    ]);
+    // Resetting a key that was never overridden changes nothing -> no trail.
+    assert.deepEqual(buildAuditRows([['TIP_MIN_PRICE', null]], {},
+        { action: AUDIT_SETTINGS_RESET }), []);
 });

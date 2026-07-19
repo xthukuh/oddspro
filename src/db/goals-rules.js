@@ -31,6 +31,16 @@ export const DEFAULT_THRESHOLDS = {
 // hot - other lines are added ONLY by the Task 10 backtest re-run.
 export const LINE_THRESHOLDS = { 2.5: DEFAULT_THRESHOLDS };
 
+// Parse an O/U lines CSV ('2.5' / '1.5, 2.5') to unique positive finite
+// numbers. ONE definition (M6): config.js's HOTPICK_LINES zod transform
+// delegates here AND src/hotpicks.js parses the admin-override value through
+// it - an already-parsed array (the config default reaching effective())
+// passes through so callers never care which layer produced the value.
+export function parseLinesCsv(v) {
+    if (Array.isArray(v)) return [...new Set(v.map(Number).filter(n => Number.isFinite(n) && n > 0))];
+    return [...new Set(String(v ?? '').split(',').map(s => Number(s.trim())).filter(n => Number.isFinite(n) && n > 0))];
+}
+
 // Full-time total-goals lines (mirrors markets.js/tip-rules.js OU_LINES).
 const OU_LINES = [0.5, 1.5, 2.5, 3.5, 4.5, 5.5, 6.5];
 

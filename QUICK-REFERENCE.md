@@ -147,9 +147,9 @@ idempotently tags `v<version>` at HEAD and pushes the tag (existing tag not at H
 | Never edit an applied migration | forward-only; add a new one |
 | Never rotate `PIN_PEPPER` casually | invalidates every stored PIN (deliberate global reset only) |
 | Releases/tags from `main` only | `package:deploy` enforces; versions bump root + web in lockstep |
-| Never move a live generation knob (`TIP_MIN_PRICE`, `SAFE_*`) mid-experiment without a dated `docs/memory-bank.md` note | it partitions the measurement ledger (the 2026-07-10 lesson) |
+| Never move a live generation knob (`TIP_MIN_PRICE`, `SAFE_*`) mid-experiment undated — change it via Admin → Settings so `admin_audit` dates it (M6); a raw `.env` move still needs a dated `docs/memory-bank.md` note | it partitions the measurement ledger (the 2026-07-10 lesson) |
 | Never touch `DEFAULT_SAFE` without a fresh `analyze-safe-tips.js` run | the gates are LODO-tuned, not opinions |
-| DARK switches (`AI_INJECTION_PREAMBLE`, `AI_CONSENSUS_*`) need an explicit go + dated memory-bank note BEFORE flipping | AI regime changes must be attributable |
+| DARK switches (`AI_INJECTION_PREAMBLE`, `AI_CONSENSUS_*`) need an explicit user go BEFORE flipping; flip them in Admin → Settings (group `ai-dark`) so `admin_audit` dates the change (M6 — replaced the manual memory-bank note) | AI regime changes must be attributable |
 | `scripts/reset-users.js` is DESTRUCTIVE | wipes all users/sessions/prefs |
 | Frozen ledger / fetch-once: never rewrite settled rows or refetch immutable data | the scoreboard is honest by construction — `docs/engine/02-DATA-PIPELINE.md` |
 | Odds market identity = `type_name`, never `type_id` | Betika reuses ids across different markets |
@@ -220,7 +220,7 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | Fetch-once | immutable API detail fetched at most once per fixture (`*_fetched_at` flags) | `docs/engine/02-DATA-PIPELINE.md` |
 | Stale odds | vanished market kept flagged with its last-seen price (it IS the historical price) | `src/db/odds-diff.js` |
 | Alias | learned provider→canonical team/league name mapping — the linking fast-path | `src/link.js` |
-| DARK switch | shipped-but-off AI regime knob; flipping needs an explicit go + dated memory-bank note | `AGENTS.md` |
+| DARK switch | shipped-but-off AI regime knob; flipping needs an explicit go, dated by `admin_audit` (M6) | `AGENTS.md` |
 | Model tag (`#pN`) | model+grounding+prompt-version identity keying AI-verdict reuse | `src/ai/adjudicators.js` |
 | `AiGuardOpen` | the AI run guard tripped (wall-clock budget / breaker) — remaining calls refuse instantly | `src/ai/harness.js` |
 | `.HALT` | kill-switch file: presence stops a running serve and blocks boot | `src/halt.js` |

@@ -9,7 +9,7 @@ Per-file architecture lives in `CLAUDE.md` (authoritative); this chapter explain
 
 | Mode | Entry | What runs |
 |---|---|---|
-| CLI one-shot | `node src/index.js <action>` (`src/index.js`) | One idempotent action (scrape, link, stats, hotpicks, …), then the knex pool closes. No action / `start` / a bare number = the full sweep below. |
+| CLI one-shot | `node src/index.js <action>` (`src/index.js`) | One idempotent action (scrape, link, stats, hotpicks, …), then the knex pool closes. No action / `start` / a bare number = the full sweep below. Settings overrides load BEFORE dispatch (M6) — CLI sweeps run under the same effective gates as serve. |
 | serve | `npm run serve` (`src/server.js`) | Express API on :3001 + four in-process schedulers: auto-refresh (light/full), geo backfill, AI worker (60s tick), catalog warm. The production-resident process. |
 | cron | Task Scheduler `oddspro-pipeline` daily 08:00 (`scripts/pipeline-task.cmd`) / cPanel `scripts/pipeline-cron.sh` | The full sweep as an *optional backup* to serve's in-process scheduler — schedule it ≥ 1h away from `AUTO_FULL_AT`. |
 

@@ -1,9 +1,8 @@
-import { config } from './config.js';
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import {
     pairedTeamGoalsAggregates, h2hGoalsAggregates, impliedProbability,
-    apiPredictionSignal, scoreOverLine, LINE_THRESHOLDS,
+    apiPredictionSignal, scoreOverLine, LINE_THRESHOLDS, parseLinesCsv,
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
@@ -61,9 +60,9 @@ async function _loadMarkets(fixtureIds, namesById) {
     const books = new Map();
     for (const [fixture_id, fixtureRows] of byFixture) {
         books.set(fixture_id, buildTipBooks(fixtureRows, namesById?.get(fixture_id) ?? {}, {
-            minOverround: config.TIP_MIN_OVERROUND,
-            maxOverround: config.TIP_MAX_OVERROUND,
-            maxBookDivergence: config.TIP_MAX_BOOK_DIVERGENCE,
+            minOverround: effective('TIP_MIN_OVERROUND'),
+            maxOverround: effective('TIP_MAX_OVERROUND'),
+            maxBookDivergence: effective('TIP_MAX_BOOK_DIVERGENCE'),
         }));
     }
     return books;
@@ -191,14 +190,20 @@ export async function updateHotPicks() {
         .map(p => [p.fixture_id, p]));
     const tLoad = Date.now();
 
+    // Late-read (M6): admin overrides of the gates apply on the NEXT sweep
+    // without a restart - every one is a regime knob, dated by admin_audit.
     const thresholds = {
-        teamWindow: config.HOTPICK_TEAM_WINDOW,
-        minGames: config.HOTPICK_MIN_GAMES,
-        minOverRate: config.HOTPICK_MIN_OVER_RATE,
-        minAvgTotal: config.HOTPICK_MIN_AVG_TOTAL,
-        minImpliedOver: config.HOTPICK_MIN_IMPLIED_OVER,
-        h2hMinOverRate: config.HOTPICK_H2H_MIN_OVER_RATE,
+        teamWindow: effective('HOTPICK_TEAM_WINDOW'),
+        minGames: effective('HOTPICK_MIN_GAMES'),
+        minOverRate: effective('HOTPICK_MIN_OVER_RATE'),
+        minAvgTotal: effective('HOTPICK_MIN_AVG_TOTAL'),
+        minImpliedOver: effective('HOTPICK_MIN_IMPLIED_OVER'),
+        h2hMinOverRate: effective('HOTPICK_H2H_MIN_OVER_RATE'),
     };
+    const h2hWindow = effective('PREMATCH_H2H_WINDOW');
+    // effective() hands back either the admin's CSV string or the config
+    // default (already an array) - parseLinesCsv normalizes both (M6).
+    const hotLines = parseLinesCsv(effective('HOTPICK_LINES'));
 
     const rows = [];
     for (const f of targets) {
@@ -212,7 +217,7 @@ export async function updateHotPicks() {
         // at the smaller side's qualifying count (see goals-rules).
         const pair = pairedTeamGoalsAggregates(homeRows, awayRows,
             f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow);
-        const h2h = h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW);
+        const h2h = h2hGoalsAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, h2hWindow);
 
         // Over/under hot-pick evaluation (M3, scoreOverLine): the row's
         // ledger baseline is ALWAYS the 2.5 evaluation, exactly as before M3
@@ -226,7 +231,7 @@ export async function updateHotPicks() {
         const baseApi = apiPredictionSignal(apiPred);
         const baseOut = scoreOverLine({ home: pair.home, away: pair.away, h2h, market: baseMarket, api: baseApi }, 2.5, thresholds);
         let best = { line: 2.5, p: baseP, market: baseMarket, api: baseApi, out: baseOut };
-        for (const line of config.HOTPICK_LINES) {
+        for (const line of hotLines) {
             if (line === 2.5 || !(line in LINE_THRESHOLDS)) continue;
             const lp = groups.ou[line] ?? null;
             if (!lp) continue; // no full O/U pair at this line - nothing to evaluate
@@ -263,14 +268,14 @@ export async function updateHotPicks() {
                 ...groups,
                 ...pairedTeamOutcomeAggregates(homeRows, awayRows,
                     f.home_team_id, f.away_team_id, cutoff, thresholds.teamWindow),
-                h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW),
+                h2h: h2hOutcomeAggregates(homeRows, f.home_team_id, f.away_team_id, cutoff, h2hWindow),
                 apiPercents: apiPct,
             }, {
                 teamWindow: thresholds.teamWindow,
                 minGames: thresholds.minGames,
-                minPrice: config.TIP_MIN_PRICE,
-                minConfidence: config.TIP_MIN_CONFIDENCE,
-                minUnderLine: config.TIP_MIN_UNDER_LINE,
+                minPrice: effective('TIP_MIN_PRICE'),
+                minConfidence: effective('TIP_MIN_CONFIDENCE'),
+                minUnderLine: effective('TIP_MIN_UNDER_LINE'),
             });
         }
         const row = {
@@ -322,7 +327,7 @@ export async function updateHotPicks() {
         for (const row of rows) {
             const merged = { ...existing.get(row.fixture_id), ...row };
             if (hotReviewPending(merged, tag)) pending_reviews.hot++;
-            if (tipReviewPending(merged, tag, { minConfidence: config.TIP_AI_MIN_CONFIDENCE, priceTol: tol })) {
+            if (tipReviewPending(merged, tag, { minConfidence: effective('TIP_AI_MIN_CONFIDENCE'), priceTol: tol })) {
                 pending_reviews.tips++;
             }
         }
@@ -396,7 +401,7 @@ export async function hotpicksSummary() {
                 'p.tip_ai_verdict', 'p.tip_ai_model', 'p.tip_ai_review');
         for (const r of reviewable) {
             if (hotReviewPending(r, tag)) pending_reviews.hot++;
-            if (tipReviewPending(r, tag, { minConfidence: config.TIP_AI_MIN_CONFIDENCE, priceTol: tol })) {
+            if (tipReviewPending(r, tag, { minConfidence: effective('TIP_AI_MIN_CONFIDENCE'), priceTol: tol })) {
                 pending_reviews.tips++;
             }
         }

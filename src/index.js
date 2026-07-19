@@ -12,6 +12,7 @@ import { backfillGeo } from './geo.js';
 import { sendSms, smsBalance, smsDelivery } from './sms/index.js';
 import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
+import { loadOverrides } from './settings.js';
 import { _date, _dtime } from './utils.js';
 
 (async () => {
@@ -19,6 +20,13 @@ import { _date, _dtime } from './utils.js';
     const script = String(args[1] ?? '').split(/[\\\/]/g).pop();
     if (!script) throw new TypeError('Failed to get process script name!');
     const action = args[2], value = args[3];
+
+    // M6 (spec decision 5): CLI actions must run under the SAME effective
+    // gates as the serve process - a cron sweep ignoring an admin override of
+    // TIP_MIN_PRICE would silently split the tip ledger into two populations
+    // (the policy-regime trap). Never rejects; pre-migration DBs get an empty
+    // override set and env defaults apply.
+    await loadOverrides();
 
     // Default (`npm run start`): full pipeline, today + 3 days ahead.
     // `start [days]` or a bare number (`npm run start -- 5`) overrides the sweep.

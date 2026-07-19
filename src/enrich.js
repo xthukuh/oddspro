@@ -1,6 +1,5 @@
 import { db } from './db/connection.js';
-import { config } from './config.js';
-import { effective, effectiveConfig } from './settings.js';
+import { effective, effectiveAiConfig } from './settings.js';
 import { getProvider } from './ai/index.js';
 import { callStructured } from './ai/harness.js';
 import { newRunGuard, injectionPreamble } from './db/ai-guard-rules.js';
@@ -305,27 +304,13 @@ function _factsPrompt({ fixture, kickoff, league }, cfg = config) {
     ].join('\n');
 }
 
-// FINAL REVIEW finding 3 (dead settings control): OPENROUTER_MODEL /
-// AI_BLIND_MODEL / AI_ANCHORED_MODEL are SETTINGS_CATALOG entries flagged
-// live:true, but resolveTask/callModel used to always read the raw immutable
-// `config` object - src/settings.js's admin-override cache was NEVER
-// consulted, so an admin edit to any of the three was a PERMANENT no-op (not
-// even a restart applied it: config.js reads process.env once at import and
-// never again). This builds the cfg object resolveTask/callModel actually
-// use: config defaults with every catalog override layered on top, via the
-// SAME mergeOverrides() settings.effectiveConfig() already uses for every
-// other admin-editable knob (SAFE_*, refresh cadences, ...) - one definition
-// of "effective", not two.
-//
-// `overridesFn` is injected (same DI idiom as buildTargetsQuery's `knex`
-// param above) so the wiring itself - "does the built cfg actually reflect
-// an override" - is assertable OFFLINE without priming settings.js's real
-// DB-backed cache (calling the real effectiveConfig() is ALSO offline-safe
-// when the cache is unloaded - it just returns catalog defaults - but a test
-// should not depend on that module's private state to prove this).
-export function effectiveAiConfig(overridesFn = effectiveConfig) {
-    return { ...config, ...overridesFn() };
-}
+// FINAL REVIEW finding 3 (dead settings control): the cfg object
+// resolveTask/callModel actually consume - config defaults with every
+// catalog override layered on top. MOVED to src/settings.js in M6 so
+// src/ai/adjudicators.js can share it without forming the adjudicators ->
+// enrich -> hotpicks -> adjudicators cycle; re-exported here because this
+// module's callers (ai-worker.js) and tests imported it from enrich first.
+export { effectiveAiConfig } from './settings.js';
 
 // FINAL REVIEW finding 4 (no API-key preflight): with AI_ENRICH_ENABLED on
 // and one provider's key missing, every fixture used to bill the (expensive)

@@ -1,5 +1,4 @@
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { config } from './config.js';
 import { runStartPipeline } from './pipeline.js';
 import { settleApisportsResults } from './apisports.js';
 import { fetchBetpawaGames } from './betpawa.js';
@@ -9,6 +8,7 @@ import { db } from './db/connection.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
 import { purgeExpiredAuth } from './auth.js';
+import { pruneTrackEvents } from './track.js';
 import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
@@ -198,6 +198,14 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     } catch (e) {
         console.error('[light] auth purge failed:', e?.message ?? e);
     }
+    // Tracking retention (M6): same best-effort idiom; a no-op while
+    // TRACK_EVENTS_RETENTION_DAYS is 0 (the keep-forever default).
+    try {
+        const pruned = await pruneTrackEvents();
+        if (pruned) summary.track_events_pruned = pruned;
+    } catch (e) {
+        console.error('[light] track prune failed:', e?.message ?? e);
+    }
     return summary;
 }
 
@@ -275,11 +283,11 @@ export function stopAutoRefresh() {
 // AUTO_LOG_MAX_KB (the production host has no log rotation and tight disk
 // quotas). Logging must never break a job - failures degrade to console.
 function _log(line) {
-    if (!config.AUTO_LOG) return;
+    if (!effective('AUTO_LOG')) return;
     const file = 'logs/auto-refresh.log';
     try {
         mkdirSync('logs', { recursive: true });
-        const maxBytes = config.AUTO_LOG_MAX_KB * 1024;
+        const maxBytes = effective('AUTO_LOG_MAX_KB') * 1024;
         try {
             if (statSync(file).size > maxBytes) {
                 writeFileSync(file, trimLogTail(readFileSync(file, 'utf8'), maxBytes));

@@ -19,7 +19,7 @@ async function resolveViaApi(publicIps) {
     const body = publicIps.map(ip => ({ query: ip, fields: 'status,country,regionName,query' }));
     let arr;
     try {
-        const res = await fetch(config.GEO_API_BATCH_URL, {
+        const res = await fetch(effective('GEO_API_BATCH_URL'), {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify(body),
@@ -42,7 +42,7 @@ async function resolveViaApi(publicIps) {
 
 // One backfill pass. Idempotent + safe to run concurrently-ish (ip_geo inserts
 // ignore conflicts; the visits UPDATE only touches pending rows).
-export async function backfillGeo({ limit = config.GEO_BATCH_LIMIT } = {}) {
+export async function backfillGeo({ limit = effective('GEO_BATCH_LIMIT') } = {}) {
     // Rows with no IP can never be resolved - mark them so they're skipped.
     await db('visits').whereNull('ip').whereNull('geo_status').update({ geo_status: 'unresolvable' });
     await db('visit_sessions').whereNull('ip').whereNull('geo_status').update({ geo_status: 'unresolvable' });
@@ -135,9 +135,11 @@ export function startGeoScheduler() {
     if (timer || !effective('GEO_RESOLVE_ENABLED')) return false;
     firstRun = setTimeout(tick, 15_000);
     firstRun.unref?.();
+    // Deliberately config, not effective(): the interval is read ONCE here at
+    // scheduler start (its catalog entry is live:false - restart to apply).
     timer = setInterval(tick, config.GEO_INTERVAL_MINUTES * 60_000);
     timer.unref?.();
-    console.debug(`[geo] resolver on - every ${config.GEO_INTERVAL_MINUTES}m (provider ${config.GEO_API_BATCH_URL})`);
+    console.debug(`[geo] resolver on - every ${config.GEO_INTERVAL_MINUTES}m (provider ${effective('GEO_API_BATCH_URL')})`);
     return true;
 }
 

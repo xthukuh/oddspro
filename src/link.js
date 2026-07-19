@@ -1,5 +1,5 @@
 import { db } from './db/connection.js';
-import { config } from './config.js';
+import { effective } from './settings.js';
 
 // Correlation order matters: betpawa first (richer identifiers), betika last so
 // it can additionally score against betpawa records already linked to a fixture.
@@ -168,7 +168,7 @@ async function _linkProvider(provider) {
                     second = conf;
                 }
             }
-            if (best && best.conf >= config.LINK_MIN_CONFIDENCE && (best.conf - second) >= MIN_MARGIN) {
+            if (best && best.conf >= effective('LINK_MIN_CONFIDENCE') && (best.conf - second) >= MIN_MARGIN) {
                 hit = best.c;
             } else if (best && best.conf >= 0.5) {
                 console.debug(`[link] ${provider} near-miss (${best.conf.toFixed(3)}): `

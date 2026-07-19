@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { db } from './db/connection.js';
+import { effective } from './settings.js';
 import { parseUserAgent } from './db/visit-rules.js';
 import { sanitizeEvents, sessionResumeAllowed, computeDuration, durationHistogram } from './db/track-rules.js';
 
@@ -120,6 +121,19 @@ export async function checkout(sid, key) {
         duration_seconds: computeDuration(s.started_at, s.last_active_at, now),
     });
     return { ok: true };
+}
+
+// Retention prune (M6, spec decision 13): drop visit_events older than the
+// TRACK_EVENTS_RETENTION_DAYS window. 0 (the default) = keep forever - the
+// user wants behavior data to ACCUMULATE; this knob exists for the day disk
+// says otherwise. Called by the light pass next to purgeExpiredAuth (same
+// best-effort housekeeping idiom). Sessions/visitors are never pruned.
+export async function pruneTrackEvents() {
+    const days = Number(effective('TRACK_EVENTS_RETENTION_DAYS'));
+    if (!Number.isFinite(days) || days <= 0) return 0;
+    return db('visit_events')
+        .where('occurred_at', '<', db.raw('NOW() - INTERVAL ? DAY', [days]))
+        .del();
 }
 
 // A "person" is a user account when the visitor row is linked, else the

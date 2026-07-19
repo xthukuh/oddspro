@@ -11,6 +11,7 @@ import {
 } from './db/sms-rules.js';
 import { normalizeIp } from './db/visit-rules.js'; // sessions.ip must store the same format visits.ip does
 import { sendSms } from './sms/index.js';
+import { effective } from './settings.js';
 
 // Auth service: thin knex orchestration over the pure rules (auth-rules.js) and
 // the SMS seam (sms/). Same loader idiom as magic.js/hotpicks.js. Contended
@@ -59,7 +60,7 @@ const userById = id => db('users').where('id', id).first();
 const userByPhone = phone => db('users').where('phone', phone).first();
 
 function otpMessage(code) {
-    return `Your Odds Pro verification code is ${code}. It expires in ${config.OTP_TTL_MINUTES} minutes.`;
+    return `Your Odds Pro verification code is ${code}. It expires in ${effective('OTP_TTL_MINUTES')} minutes.`;
 }
 
 // --- Accounts ---------------------------------------------------------------
@@ -102,21 +103,21 @@ export async function authenticate({ phone, pin }) {
         return userById(user.id);
     }
     const { attempts, lockedUntil } = registerFailedAttempt(baseAttempts, nowMs, {
-        max: config.PIN_MAX_ATTEMPTS, lockoutMs: config.PIN_LOCKOUT_MINUTES * 60_000,
+        max: effective('PIN_MAX_ATTEMPTS'), lockoutMs: effective('PIN_LOCKOUT_MINUTES') * 60_000,
     });
     await db('users').where('id', user.id).update({
         pin_attempts: attempts, locked_until: lockedUntil ? new Date(lockedUntil) : null,
     });
     throw new AuthError(lockedUntil ? 423 : 401, lockedUntil
         ? 'Too many wrong PINs - account locked for a while' : 'Invalid phone number or PIN',
-        lockedUntil ? { locked: true, retry_after_seconds: config.PIN_LOCKOUT_MINUTES * 60 } : {});
+        lockedUntil ? { locked: true, retry_after_seconds: effective('PIN_LOCKOUT_MINUTES') * 60 } : {});
 }
 
 // --- Sessions ---------------------------------------------------------------
 
 export async function mintSession(user, { userAgent = null, ip = null } = {}) {
     const { token, tokenHash } = newSessionToken();
-    const expiresAt = new Date(Date.now() + config.SESSION_TTL_DAYS * 86_400_000);
+    const expiresAt = new Date(Date.now() + effective('SESSION_TTL_DAYS') * 86_400_000);
     // normalizeIp (visit-rules, C1): strip ::ffff: prefixes / :port the same way
     // the visits log does, so the two tables agree on a client's IP format.
     const normIp = normalizeIp(ip);
@@ -160,7 +161,7 @@ const activeOtp = (userId, purpose) =>
 // the target phone - alternating numbers must not reset the clock (SMS flood).
 // Decision logic is pure (sms-rules otpIssueDecision, offline-tested).
 const otpGate = (existing, phone, nowMs) => otpIssueDecision(existing, phone, nowMs, {
-    base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
+    base: effective('OTP_RESEND_BASE_SECONDS'), max: effective('OTP_MAX_RESENDS'),
 });
 function throwOtpRejected(gate) {
     throw new AuthError(429, gate.reason === 'max'
@@ -213,9 +214,9 @@ export async function issueOtp(user, { purpose = 'phone_verify', phone } = {}) {
         return { sent: false, reused: true, retry_after_seconds: gate.retryAfterSeconds };
     }
     if (gate.action === 'reject') throwOtpRejected(gate);
-    const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
+    const code = generateOtp(effective('OTP_LENGTH'), crypto.randomInt);
     const codeHash = hashOtpCode(code, PEPPER());
-    const expiresAt = new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES));
+    const expiresAt = new Date(otpExpiry(nowMs, effective('OTP_TTL_MINUTES')));
     // Every rotate-send counts against the cap and grows the backoff - a
     // change-phone send must never stay at count 0 (the 60·n schedule and
     // OTP_MAX_RESENDS were dead letters without this).
@@ -232,7 +233,7 @@ export async function issueOtp(user, { purpose = 'phone_verify', phone } = {}) {
         });
     }
     return sendOtpSms(phone, code, {
-        retry_after_seconds: resendCooldownSeconds(resendCount, config.OTP_RESEND_BASE_SECONDS),
+        retry_after_seconds: resendCooldownSeconds(resendCount, effective('OTP_RESEND_BASE_SECONDS')),
     });
 }
 
@@ -243,24 +244,24 @@ export async function resendOtp(user, { purpose = 'phone_verify' } = {}) {
     if (!existing) return issueOtp(user, { purpose });
     const nowMs = Date.now();
     const cr = canResend(nowMs, existing.last_sent_at, existing.resend_count, {
-        base: config.OTP_RESEND_BASE_SECONDS, max: config.OTP_MAX_RESENDS,
+        base: effective('OTP_RESEND_BASE_SECONDS'), max: effective('OTP_MAX_RESENDS'),
     });
     if (!cr.ok) {
         throw new AuthError(429, cr.reason === 'max' ? 'Too many resend attempts - try again later' : 'Please wait before resending',
             { retry_after_seconds: cr.retryAfterSeconds, reason: cr.reason });
     }
-    const code = generateOtp(config.OTP_LENGTH, crypto.randomInt);
+    const code = generateOtp(effective('OTP_LENGTH'), crypto.randomInt);
     const newCount = existing.resend_count + 1;
     // A resend always targets the account's CURRENT phone (and re-anchors the
     // row to it) - a stale row phone must never receive another code.
     await db('otp_codes').where('id', existing.id).update({
         phone: user.phone,
-        code_hash: hashOtpCode(code, PEPPER()), expires_at: new Date(otpExpiry(nowMs, config.OTP_TTL_MINUTES)),
+        code_hash: hashOtpCode(code, PEPPER()), expires_at: new Date(otpExpiry(nowMs, effective('OTP_TTL_MINUTES'))),
         attempts: 0, resend_count: newCount, last_sent_at: db.fn.now(),
     });
     return sendOtpSms(user.phone, code, {
         resend_count: newCount,
-        retry_after_seconds: resendCooldownSeconds(newCount, config.OTP_RESEND_BASE_SECONDS),
+        retry_after_seconds: resendCooldownSeconds(newCount, effective('OTP_RESEND_BASE_SECONDS')),
     });
 }
 
@@ -275,14 +276,14 @@ export async function verifyOtp(user, { code, purpose = 'phone_verify' }) {
     if (existing.phone !== user.phone) {
         throw new AuthError(409, 'Your phone number changed since this code was sent - request a new one', { reason: 'phone_changed' });
     }
-    if (existing.attempts >= config.OTP_MAX_ATTEMPTS) {
+    if (existing.attempts >= effective('OTP_MAX_ATTEMPTS')) {
         throw new AuthError(429, 'Too many attempts - request a new code', { reason: 'exhausted' });
     }
     if (existing.code_hash !== hashOtpCode(code, PEPPER())) {
-        const { attempts, exhausted } = registerOtpAttempt(existing.attempts, { max: config.OTP_MAX_ATTEMPTS });
+        const { attempts, exhausted } = registerOtpAttempt(existing.attempts, { max: effective('OTP_MAX_ATTEMPTS') });
         await db('otp_codes').where('id', existing.id).update({ attempts });
         throw new AuthError(400, 'Incorrect code', {
-            reason: 'mismatch', attempts_left: Math.max(0, config.OTP_MAX_ATTEMPTS - attempts), exhausted,
+            reason: 'mismatch', attempts_left: Math.max(0, effective('OTP_MAX_ATTEMPTS') - attempts), exhausted,
         });
     }
     await db.transaction(async trx => {

@@ -1,5 +1,6 @@
 import axios from 'axios';
 import { config } from '../config.js';
+import { effective } from '../settings.js';
 import { toMsisdn, parseBongaSend, parseBongaBalance, parseBongaDelivery } from '../db/sms-rules.js';
 
 // Bonga SMS provider (https://app.bongasms.co.ke). Send is a form POST to the
@@ -34,7 +35,7 @@ export async function send({ to, text }) {
         secret,
         txtMessage: text,
         MSISDN: toMsisdn(to),
-        serviceID: String(config.BONGA_SERVICE_ID),
+        serviceID: String(effective('BONGA_SERVICE_ID')),
     });
     const res = await axios.post(config.BONGA_API_URL_SEND, body, {
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },

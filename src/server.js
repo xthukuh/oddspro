@@ -31,7 +31,7 @@ import { normalizePhone } from './db/sms-rules.js';
 import { validatePrefsPut } from './db/prefs-rules.js';
 import { accessFromUser, guestDateAllowed } from './db/access-rules.js';
 import { getUserPrefs, saveUserPrefs } from './prefs.js';
-import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride } from './settings.js';
+import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride, auditTrail } from './settings.js';
 import { settingsPutSchema } from './db/settings-rules.js';
 import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
@@ -56,18 +56,19 @@ app.set('trust proxy', true);
 // via BOT_UA_EXTRA (add) / BOT_UA_ALLOW (exempt). See src/bot-rules.js.
 // Always registered; the flag is late-read per request so the admin override
 // applies live (H3) - a disabled filter costs one Map lookup per request.
+// The extra/allow lists are ALSO late-read (M6) - computed only after the
+// enabled check passes, so an admin edit applies live and a disabled filter
+// still costs just the one effective() lookup per request.
 const _uaList = s => String(s || '').split(',').map(x => x.trim()).filter(Boolean);
-{
-    const extra = _uaList(config.BOT_UA_EXTRA);
-    const allow = _uaList(config.BOT_UA_ALLOW);
-    app.use((req, res, next) => {
-        if (!effective('BOT_UA_FILTER_ENABLED')) return next();
-        if (isBlockedUserAgent(req.get('user-agent') || '', { extra, allow })) {
-            return res.status(403).type('text/plain').send('Forbidden');
-        }
-        next();
-    });
-}
+app.use((req, res, next) => {
+    if (!effective('BOT_UA_FILTER_ENABLED')) return next();
+    const extra = _uaList(effective('BOT_UA_EXTRA'));
+    const allow = _uaList(effective('BOT_UA_ALLOW'));
+    if (isBlockedUserAgent(req.get('user-agent') || '', { extra, allow })) {
+        return res.status(403).type('text/plain').send('Forbidden');
+    }
+    next();
+});
 // AI-crawler robots.txt (always served): politely disallows LLM crawlers + /api;
 // the impolite ones that ignore it are caught by the UA blocklist above.
 app.get('/robots.txt', (req, res) => res.type('text/plain').send(AI_ROBOTS_TXT));
@@ -219,7 +220,7 @@ if (config.AUTH_ENABLED) {
             // BEFORE the schema gate, so the rate limiter and the users.phone
             // comparison always see the one canonical form. A phone that can't
             // be normalized passes through unchanged and fails loudly in zod.
-            const normalized = normalizePhone(req.body?.phone, { region: config.SMS_DEFAULT_REGION });
+            const normalized = normalizePhone(req.body?.phone, { region: effective('SMS_DEFAULT_REGION') });
             const { phone, pin } = loginSchema.parse({ ...req.body, phone: normalized ?? req.body?.phone });
             const rl = rateLimit(`login:${phone}`, { windowMs: 900_000, max: 10 });
             if (!rl.allowed) return res.status(429).json({ error: 'Too many attempts - try again later.', retry_after_seconds: rl.retryAfterSeconds });
@@ -557,9 +558,20 @@ app.put('/api/admin/settings', requireAdminDual, express.json({ limit: '8kb' }),
 app.delete('/api/admin/settings/:key', requireAdminDual, async (req, res, next) => {
     if (!csrfOk(req, res)) return;
     try {
-        res.json({ ok: true, ...(await resetOverride(req.params.key)) });
+        res.json({ ok: true, ...(await resetOverride(req.params.key, req.user?.id ?? null)) });
     } catch (e) {
         if (e?.status === 400) return res.status(400).json({ error: e.message });
+        next(e);
+    }
+});
+
+// GET /api/admin/settings/audit - recent dated old->new settings changes (M6).
+// Session-only like every NEW admin route (spec guards note) - the legacy
+// ADMIN_TOKEN bearer deliberately does not unlock the trail.
+app.get('/api/admin/settings/audit', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ audit: await auditTrail({ limit: req.query.limit }) });
+    } catch (e) {
         next(e);
     }
 });

@@ -1,4 +1,3 @@
-import { config } from './config.js';
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
 import { aiEnabled, aiModelTag, adjudicateHotPick, reviewTip } from './ai/adjudicators.js';
@@ -125,14 +124,14 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
         const rows = await _loadPending();
         const hotPend = rows.filter(r => hotReviewPending(r, tag));
         const tipPend = rows.filter(r => tipReviewPending(r, tag,
-            { minConfidence: config.TIP_AI_MIN_CONFIDENCE, priceTol: tol }));
+            { minConfidence: cfg.TIP_AI_MIN_CONFIDENCE, priceTol: tol }));
 
         const summary = {
             day: state.day,
             pending: { hot: hotPend.length, tips: tipPend.length },
             hot: { billed: 0, confirmed: 0, vetoed: 0, errors: 0, skipped: 0 },
             tips: { billed: 0, confirmed: 0, vetoed: 0, errors: 0, skipped: 0 },
-            budget_left: Math.max(0, config.TIP_AI_DAILY_CAP - state.billed_tips),
+            budget_left: Math.max(0, cfg.TIP_AI_DAILY_CAP - state.billed_tips),
             ms: 0, latency: null, aborted: null,
         };
         if (!hotPend.length && !tipPend.length) {
@@ -193,8 +192,8 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
             const homeRows = fixturesByTeam.get(r.home_team_id) ?? [];
             const awayRows = fixturesByTeam.get(r.away_team_id) ?? [];
             const pair = pairedTeamGoalsAggregates(homeRows, awayRows,
-                r.home_team_id, r.away_team_id, cutoff, config.HOTPICK_TEAM_WINDOW);
-            const h2h = h2hGoalsAggregates(homeRows, r.home_team_id, r.away_team_id, cutoff, config.PREMATCH_H2H_WINDOW);
+                r.home_team_id, r.away_team_id, cutoff, cfg.HOTPICK_TEAM_WINDOW);
+            const h2h = h2hGoalsAggregates(homeRows, r.home_team_id, r.away_team_id, cutoff, cfg.PREMATCH_H2H_WINDOW);
             const line = marketLine(r.market) ?? 2.5;
             const market = r.over_price == null ? null : {
                 over: Number(r.over_price),
@@ -219,7 +218,7 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
             });
         }, _progress('[ai-worker] hot adjudication'));
 
-        const budget = Math.max(0, config.TIP_AI_DAILY_CAP - state.billed_tips);
+        const budget = Math.max(0, cfg.TIP_AI_DAILY_CAP - state.billed_tips);
         const { billable, skipped } = selectTipReviews(tipPend.map(r => ({ ...r, reusable: false })), budget);
         summary.tips.skipped += skipped.length;
         await _phase(billable, 'tips', r => reviewTip({
@@ -236,7 +235,7 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
 
         summary.aborted = consecErrors >= MAX_CONSEC_ERRORS ? 'consecutive-errors'
             : (stop() ? 'stop-requested' : null);
-        summary.budget_left = Math.max(0, config.TIP_AI_DAILY_CAP - state.billed_tips);
+        summary.budget_left = Math.max(0, cfg.TIP_AI_DAILY_CAP - state.billed_tips);
         summary.ms = Date.now() - startedMs;
         summary.latency = latencyStats(latencies);
         state.last = summary;

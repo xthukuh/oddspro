@@ -1,6 +1,7 @@
 import axios from 'axios';
 import { z } from 'zod';
 import { config } from './config.js';
+import { effective } from './settings.js';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
@@ -84,9 +85,9 @@ const _sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
 // when a burst still slips through as an errors.rateLimit response.
 async function _getPage(path, params) {
     for (let attempt = 0; ; attempt++) {
-        if (_remaining <= config.APISPORTS_MIN_REMAINING) {
+        if (_remaining <= effective('APISPORTS_MIN_REMAINING')) {
             throw new Error(
-                `api-sports quota floor reached (${_remaining} requests remaining <= ${config.APISPORTS_MIN_REMAINING}). `
+                `api-sports quota floor reached (${_remaining} requests remaining <= ${effective('APISPORTS_MIN_REMAINING')}). `
                 + 'Run halted; progress so far is saved.'
             );
         }
@@ -444,7 +445,7 @@ export async function fetchApisportsHistory() {
     console.debug(`API-Football - ${targets.length} upcoming correlated fixtures need team history...`);
     // Fetch a buffer beyond the vs-others window: pair meetings are discarded
     // from it, and the H2H window is served by the headtohead call anyway.
-    const last = config.PREMATCH_TEAM_WINDOW + config.PREMATCH_H2H_WINDOW;
+    const last = effective('PREMATCH_TEAM_WINDOW') + effective('PREMATCH_H2H_WINDOW');
     const counts = { fixtures: targets.length, saved: 0 };
     const fetchedTeams = new Set(); // a team with several upcoming fixtures costs one call
     const tick = _progress('API-Football - team history');

@@ -1,4 +1,4 @@
-import { config } from '../config.js';
+import { effectiveAiConfig } from '../settings.js';
 import { Verdict } from '../ai-parse.js';
 import { tipMarketLabel } from '../db/magic-rules.js';
 import { injectionPreamble, consensusFor } from '../db/ai-guard-rules.js';
@@ -50,21 +50,25 @@ const PROMPT_VERSION = 3;
 // T10a (DARK by default): the injection preamble applies to GROUNDED prompts
 // only - an ungrounded call retrieves nothing, so there is nothing to guard
 // and no reason to perturb its bytes (a bumped tag on an unchanged prompt
-// would re-bill for nothing).
-const _preambleActive = () => Boolean(config.AI_INJECTION_PREAMBLE && config.HOTPICK_AI_WEB);
+// would re-bill for nothing). Reads the EFFECTIVE config (M6): the DARK
+// switches and grounding are admin-editable now, and the tag must flip with
+// them or reuse would serve stale-regime verdicts.
+const _preambleActive = cfg => Boolean(cfg.AI_INJECTION_PREAMBLE && cfg.HOTPICK_AI_WEB);
 
 // Tag stored in ai_model/tip_ai_model - verdict reuse is keyed on it, so
 // switching model, grounding, prompt version, the injection preamble (T10a:
 // #p3 -> #p4, a prompt-byte change) or a consensus panel (T10b: the ensemble
 // replaces the single-model identity) re-adjudicates automatically. The
 // ensemble base comes from the harness's OWN ensembleTag so the persisted
-// verdict tag and this pending-predicate tag can never drift.
-export function aiModelTag() {
-    const pv = _preambleActive() ? PROMPT_VERSION + 1 : PROMPT_VERSION;
-    const panel = consensusFor('adjudicate', config);
+// verdict tag and this pending-predicate tag can never drift. `cfg` defaults
+// to the effective (admin-override-aware) view; the worker passes its
+// per-drain snapshot so tag and prompt can't drift mid-run.
+export function aiModelTag(cfg = effectiveAiConfig()) {
+    const pv = _preambleActive(cfg) ? PROMPT_VERSION + 1 : PROMPT_VERSION;
+    const panel = consensusFor('adjudicate', cfg);
     const base = panel
         ? ensembleTag(panel.models, panel.minAgree)
-        : config.HOTPICK_AI_MODEL + (config.HOTPICK_AI_WEB ? '+search' : '');
+        : cfg.HOTPICK_AI_MODEL + (cfg.HOTPICK_AI_WEB ? '+search' : '');
     return `${base}#p${pv}`;
 }
 
@@ -79,10 +83,10 @@ const _breakEven = price => Math.round((1 / Number(price)) * 100) / 100;
 // T10a: when the (dark-by-default) injection preamble is active, it prepends
 // here - both adjudicator prompts embed _protocol, so one insertion point
 // covers them, and aiModelTag()'s #p bump above rides the same predicate.
-function _protocol({ outcome, breakEven }) {
+function _protocol({ outcome, breakEven, cfg }) {
     const floor = Math.round((breakEven - VETO_MARGIN) * 100) / 100;
     return [
-        ...(_preambleActive() ? [...injectionPreamble(), ''] : []),
+        ...(_preambleActive(cfg) ? [...injectionPreamble(), ''] : []),
         'Review protocol - work through these steps in order:',
         '1. CONTEXT - what kind of match is this really? Preseason or club friendly,',
         '   youth/reserve sides, a cup dead rubber, end-of-season nothing-at-stake,',
@@ -121,12 +125,12 @@ function _protocol({ outcome, breakEven }) {
 // provider's retried complete() (T3); the run guard (opts.guard) is the T9
 // addition - a refusal throws and resolves to an 'error' verdict like any
 // other failure.
-async function _adjudicate(prompt, { guard = null, cfg = config } = {}) {
+async function _adjudicate(prompt, { guard = null, cfg }) {
     const { data, sources } = await callStructured({ task: 'adjudicate', prompt, schema: Verdict, cfg, guard });
     return {
         verdict: data.verdict,
         reason: data.reason.substring(0, 512),
-        model: aiModelTag(),
+        model: aiModelTag(cfg),
         review: { probability: data.probability, checks: data.checks, sources },
     };
 }
@@ -136,6 +140,9 @@ async function _adjudicate(prompt, { guard = null, cfg = config } = {}) {
 //   home/away: teamGoalsAggregates() results; h2h: h2hGoalsAggregates()
 //   opts: { guard, cfg } - see _adjudicate.
 export async function adjudicateHotPick({ fixture, kickoff, league, home, away, h2h, market, api }, opts = {}) {
+    // ONE cfg for prompt bytes AND tag (M6): resolved here so the preamble
+    // the prompt embeds and the #p version the tag carries cannot diverge.
+    const cfg = opts.cfg ?? effectiveAiConfig();
     const team = (label, t) =>
         `${label}: last ${t.n} games - avg total ${t.avgTotal}, over-2.5 rate ${t.overRate},`
         + ` scored ${t.gfAvg}/game, conceded ${t.gaAvg}/game, both-teams-scored rate ${t.bttsRate}`;
@@ -157,9 +164,9 @@ export async function adjudicateHotPick({ fixture, kickoff, league, home, away, 
         + ` (vig-removed P(over) = ${market?.impliedOver ?? 'n/a'}; break-even P = ${breakEven})`,
         `API-Football prediction: ${api ?? 'no signal'}`,
         '',
-        ..._protocol({ outcome: 'over 2.5 goals', breakEven }),
+        ..._protocol({ outcome: 'over 2.5 goals', breakEven, cfg }),
     ].join('\n');
-    return _adjudicate(prompt, opts);
+    return _adjudicate(prompt, { ...opts, cfg });
 }
 
 // Human meaning of a canonical tip market key, for the review prompt. Result
@@ -190,6 +197,7 @@ function _tipLabel(market, home, away) {
 //   { fixture, kickoff, league, tip } - tip is the bestTip() return
 //   opts: { guard, cfg } - see _adjudicate.
 export async function reviewTip({ fixture, kickoff, league, tip }, opts = {}) {
+    const cfg = opts.cfg ?? effectiveAiConfig();
     const pct = v => (v == null ? 'n/a' : `${Math.round(v * 100)}%`);
     const [home, away] = String(fixture).split(' - ');
     const label = _tipLabel(tip.market, home, away);
@@ -215,7 +223,7 @@ export async function reviewTip({ fixture, kickoff, league, tip }, opts = {}) {
         `outcome ("${label}"). A factor that makes that outcome MORE likely supports`,
         'confirmation, not a veto.',
         '',
-        ..._protocol({ outcome: `the tipped outcome: ${label}`, breakEven }),
+        ..._protocol({ outcome: `the tipped outcome: ${label}`, breakEven, cfg }),
     ].join('\n');
-    return _adjudicate(prompt, opts);
+    return _adjudicate(prompt, { ...opts, cfg });
 }
