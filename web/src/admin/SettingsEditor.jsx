@@ -29,6 +29,7 @@ const GROUP_LABELS = {
     bot: 'Bot filter',
     logging: 'Logging',
     tracking: 'Tracking',
+    maintenance: 'Maintenance window',
 };
 
 const REGIME_TIP = 'Policy-regime knob: changing it changes which picks/verdicts get GENERATED, '
@@ -50,7 +51,8 @@ function RegimeChip() {
 }
 
 // iOS-style switch for boolean knobs (44px-wide tap target incl. padding).
-function Switch({ checked, onChange, disabled }) {
+// Exported for the Dashboard's Maintenance card (M14) - same admin chunk.
+export function Switch({ checked, onChange, disabled }) {
     return (
         <button type="button" role="switch" aria-checked={checked} disabled={disabled}
             onClick={() => onChange(!checked)}

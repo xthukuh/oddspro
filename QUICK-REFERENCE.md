@@ -134,6 +134,7 @@ idempotently tags `v<version>` at HEAD and pushes the tag (existing tag not at H
 | Daily sweep | in-process (serve); optional cron backup ≥ 1h from `AUTO_FULL_AT` — Windows task `oddspro-pipeline` 08:00 / `scripts/pipeline-cron.sh` |
 | Cron-only host | run `node src/index.js aireview` after each sweep (else AI verdicts stop) |
 | Emergency stop | create `.HALT` in the app root — running serve exits ≤ ~30s, boot refused; delete to resume |
+| Scheduled maintenance window | Admin → Dashboard "Maintenance" card (or Admin → Settings group `maintenance`): toggle + EAT start/end + message. Guests: banner pre-window, full-screen notice + API 503 during; admins/bearers bypass; auto-expires at end (M14) |
 | DB backup | `node scripts/db-export.js [--container <name>]` → `backups/` (**mariadb-dump, never mysqldump**; phpMyAdmin-ready) |
 | Changed-pepper recovery | `node scripts/reset-users.js --yes` (**DESTRUCTIVE** — wipes all users; dry-run without `--yes`) |
 | Rollback | `docs/DEPLOYMENT.md` §5 |

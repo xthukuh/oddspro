@@ -30,6 +30,17 @@ export function authHeaders() {
 }
 const _authHeaders = authHeaders;
 
+// M14: any maintenance-503 response body re-enters the client's maintenance
+// mode (decision 17 - this catches a client clock BEHIND the server's, where
+// the own-clock switch hasn't fired yet). Broadcast as a DOM event so App can
+// listen without an api.js <-> App import cycle; the ApiError still throws so
+// call sites keep their normal failure handling.
+const _noteMaintenance = body => {
+    if (body?.maintenance && body.error === 'maintenance') {
+        window.dispatchEvent(new CustomEvent('oddspro:maintenance', { detail: body.maintenance }));
+    }
+};
+
 async function _get(path, params = {}) {
     const search = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) {
@@ -38,7 +49,10 @@ async function _get(path, params = {}) {
     const qs = search.toString();
     const res = await fetch(qs ? `${path}?${qs}` : path, { headers: _authHeaders() });
     const body = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError(res.status, body, res.statusText);
+    if (!res.ok) {
+        if (res.status === 503) _noteMaintenance(body);
+        throw new ApiError(res.status, body, res.statusText);
+    }
     return body;
 }
 
@@ -51,7 +65,10 @@ async function _send(path, body = {}, method = 'POST') {
         body: JSON.stringify(body),
     });
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new ApiError(res.status, data, res.statusText);
+    if (!res.ok) {
+        if (res.status === 503) _noteMaintenance(data);
+        throw new ApiError(res.status, data, res.statusText);
+    }
     return data;
 }
 
@@ -113,6 +130,7 @@ export async function startRefresh(date) {
         headers: { 'X-Requested-With': 'fetch', ..._authHeaders() }, // CSRF guard (see server.js)
     });
     const body = await res.json().catch(() => ({}));
+    if (res.status === 503) _noteMaintenance(body);
     if (!res.ok && res.status !== 409) throw new Error(body?.error ?? `${res.status} ${res.statusText}`);
     return body;
 }

@@ -5,6 +5,7 @@ import {
 import { getTrackSummary, fetchPerformance, fetchMagicSort } from '../api.js';
 import { seriesColor, pct } from './labPalette.js';
 import useDark from './useDark.js';
+import MaintenanceCard from './MaintenanceCard.jsx';
 
 // Admin Dashboard (M5): today tiles + traffic charts over the pre-binned
 // /api/admin/track/summary payload, plus an engine KPI strip from the public
@@ -142,6 +143,8 @@ export default function DashboardSection() {
                 <Tile label="Events today" value={t.events} sub="feature interactions" />
                 <Tile label="New visitors today" value={t.new_visitors} sub="first ever check-in" />
             </div>
+
+            <MaintenanceCard />
 
             <Card title="Engine" note="Flat-stake windows from /api/performance - every rate carries its n; no EV claims.">
                 <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">

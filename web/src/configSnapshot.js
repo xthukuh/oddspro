@@ -16,7 +16,8 @@ const PREFIX = 'oddspro.';
 // The prefs-sync cursor (oddspro.prefs.sync, v1.1.0 Phase 7) is likewise this
 // device's own sync clock: exporting it is noise, importing another device's
 // would corrupt sync state. Exported for the offline exclusion tests.
-export const isTransient = key => key.startsWith('oddspro.select.d.') || key === 'oddspro.prefs.sync';
+export const isTransient = key => key.startsWith('oddspro.select.d.') || key === 'oddspro.prefs.sync'
+    || key === 'oddspro.maintenance'; // M14 schedule cache - server state, not config
 // Per-device credentials (the session + human-verification tokens) are
 // secrets, not preferences: they must never leave the device in an export,
 // and an import must neither install another device's tokens nor wipe this

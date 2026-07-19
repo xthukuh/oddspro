@@ -82,6 +82,18 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
 - **Access tiers:** guests get no future dates and server-side-redacted tip reasoning; any
   session gets full detail. Server-authoritative, tier-keyed cache slots — see
   `src/db/access-rules.js` notes in `CLAUDE.md`.
+- **Scheduled maintenance (M14):** the window lives in settings-catalog group
+  `maintenance` (`MAINTENANCE_SCHEDULED/_START/_END/_MESSAGE`, all live; edited from the
+  admin Dashboard card or Admin → Settings — every change is audit-dated). While ACTIVE,
+  a pre-route gate answers 503 + `Retry-After` (JSON with the schedule on `/api/*`, a
+  static notice page on document loads) UNLESS the request is an admin session, an
+  `ADMIN_TOKEN`/`API_TOKEN` bearer, or `/api/auth/*` (admins can sign in mid-window). The
+  schedule rides `GET /api/refresh` + every 503 body; clients cache it, warn with a
+  dismissible banner pre-window, switch to a full-screen overlay on their own clock at
+  start (polls/fetches/tracking suspend — network goes quiet), and recover with 5–30 s
+  jitter after end. A past-end window auto-expires to off — a forgotten toggle can never
+  hold a stale 503. Pure state machine: `src/db/maintenance-rules.js` (shared verbatim
+  with the web).
 
 ---
 *Update this chapter when: a pipeline step is added/removed/reordered, a scheduler is

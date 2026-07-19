@@ -1,8 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
-import { startTracking, track } from './track.js';
+import { startTracking, track, setTrackingSuspended } from './track.js';
 import { EV, onOff } from './trackEvents.js';
 import { shouldReloadForJob } from './freshness.js';
+import { loadMaintenance, saveMaintenance } from './maintenance.js';
+import { maintenanceStateAt } from '../../src/db/maintenance-rules.js';
+import MaintenanceOverlay from './MaintenanceOverlay.jsx';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
@@ -309,6 +312,76 @@ export default function App() {
     // current date for interval callbacks (they must not re-subscribe per date).
     const lastVersionRef = useRef(null);
     const silentRef = useRef(false);
+    // ---- M14 maintenance mode -------------------------------------------------
+    // Schedule cached from the refresh poll / 503 bodies ({ info, dismissedSig });
+    // maintNow is the OWN-CLOCK observation the pure state machine re-evaluates
+    // against (bumped by the start/end timers below).
+    const [maint, setMaint] = useState(() => loadMaintenance());
+    const [maintNow, setMaintNow] = useState(() => Date.now());
+    // Adopt a schedule payload (refresh poll or a 503 body). Dismissal survives
+    // adoption while the window signature is unchanged; an edited window gets a
+    // fresh signature and re-surfaces the banner (spec decision 18).
+    const adoptMaintenance = useCallback(info => {
+        if (!info || typeof info !== 'object') return;
+        setMaint(prev => {
+            const next = info.state === 'off'
+                ? (prev?.dismissedSig ? { info: null, dismissedSig: prev.dismissedSig } : null)
+                : { info, dismissedSig: prev?.dismissedSig ?? null };
+            saveMaintenance(next);
+            return next;
+        });
+        setMaintNow(Date.now());
+    }, []);
+    // api.js broadcasts any maintenance-503 body as a DOM event (covers a
+    // client clock behind the server's - the own-clock switch hasn't fired,
+    // but the server gate already answers 503).
+    useEffect(() => {
+        const onMaint = e => adoptMaintenance(e.detail);
+        window.addEventListener('oddspro:maintenance', onMaint);
+        return () => window.removeEventListener('oddspro:maintenance', onMaint);
+    }, [adoptMaintenance]);
+    const isAdmin = session?.user?.role === 'admin';
+    const maintInfo = maint?.info ?? null;
+    // Client state re-derived through the SAME pure state machine the server
+    // gate uses (shared module) - past-end folds to 'off' on its own.
+    const maintState = maintInfo
+        ? maintenanceStateAt(maintInfo.start_ms, maintInfo.end_ms, maintNow) : 'off';
+    // Admins are exempt from the client switch (decision 17 - no admin lockout:
+    // their API calls bypass the server gate, so the app stays usable for the
+    // people running the maintenance). Everyone else suspends below.
+    const maintActive = maintState === 'active' && !isAdmin;
+    // Own-clock timers: switch at start, recover a random 5-30s after end
+    // (jitter against a reconnect stampede + small clock skew). Recovery =
+    // silent records reload + one immediate status poll; if the window was
+    // extended server-side, the poll's payload (or its 503 body via the event
+    // above) re-enters the mode with the new bounds.
+    useEffect(() => {
+        if (!maintInfo) return;
+        const now = Date.now();
+        const timers = [];
+        const arm = (delay, fn) => { if (delay > 0 && delay < 2 ** 31 - 1) timers.push(setTimeout(fn, delay)); };
+        arm(maintInfo.start_ms - now + 250, () => setMaintNow(Date.now()));
+        arm(maintInfo.end_ms - now + 5_000 + Math.random() * 25_000, () => {
+            setMaintNow(Date.now());
+            silentRef.current = true;
+            setRefreshTick(t => t + 1);
+            fetchRefreshStatus().then(st => {
+                if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
+                setRefresh(st);
+                adoptMaintenance(st.maintenance);
+            }).catch(() => { /* still down - the 503 event re-entered the mode */ });
+        });
+        return () => timers.forEach(clearTimeout);
+    }, [maintInfo, adoptMaintenance]);
+    // The beacon pauses while the overlay is up (the API answers 503 anyway).
+    useEffect(() => { setTrackingSuspended(maintActive); }, [maintActive]);
+    const dismissMaintBanner = () => {
+        setMaint(prev => {
+            const next = { ...(prev ?? {}), dismissedSig: prev?.info?.signature ?? null };
+            saveMaintenance(next);
+            return next;
+        });
+    };
     // Last serialized records query actually fetched - the records effect skips a
     // re-run whose query is byte-identical (an unstable-reference dep would
     // otherwise refetch every render; see the effect's note).
@@ -335,12 +408,13 @@ export default function App() {
     // lightly (every 2 min) so it stays current; failures are silent - the badge
     // just doesn't render.
     useEffect(() => {
+        if (maintActive) return; // M14: badge poll pauses with everything else
         let alive = true;
         const load = () => fetchDailyVisitors().then(v => { if (alive) setVisitors(v); }).catch(() => {});
         load();
         const id = setInterval(load, 120000);
         return () => { alive = false; clearInterval(id); };
-    }, []);
+    }, [maintActive]);
     // Visitor-tracking v2 beacon (M2): check-in + feature-event queue. Module-
     // level singleton - startTracking is idempotent, so StrictMode double-mount
     // is harmless and it deliberately never stops on unmount (checkout fires on
@@ -553,6 +627,10 @@ export default function App() {
     // setState, and on a failing request that becomes an infinite refetch loop.
     const serverFiltersKey = JSON.stringify(serverFilters);
     useEffect(() => {
+        // M14: records fetches suspend while the maintenance overlay is up (the
+        // server would 503 them); recovery bumps refreshTick, so the re-run
+        // after this dep flips is a changed query - it fetches, never skips.
+        if (maintActive) return;
         // Only constrain providers when a strict subset is chosen
         const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
         // The exact query this fetch represents. `lastQueryRef` doubles as the
@@ -583,7 +661,7 @@ export default function App() {
                 else setError(String(e.message ?? e));
             })
             .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
-    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token]);
+    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, maintActive]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).
     // A new error resets the timer; clearing on unmount avoids a stray setState.
@@ -640,8 +718,11 @@ export default function App() {
     // Slow freshness poll (always on): the in-process scheduler refreshes
     // data server-side on its own cadence - this is how every connected
     // client learns about it. Also adopts a refresh already in flight on
-    // mount (e.g. page reloaded mid-refresh).
+    // mount (e.g. page reloaded mid-refresh). The M14 maintenance schedule
+    // rides the same payload; while the overlay is up the poll SUSPENDS
+    // (network quiet) and the recovery timer resumes it by flipping the dep.
     useEffect(() => {
+        if (maintActive) return;
         let stale = false;
         const poll = async () => {
             try {
@@ -649,6 +730,7 @@ export default function App() {
                 if (stale) return;
                 setRefresh(st);
                 maybeReload(st);
+                adoptMaintenance(st.maintenance);
             } catch {
                 // transient poll failure - next interval retries
             }
@@ -656,7 +738,7 @@ export default function App() {
         poll();
         const id = setInterval(poll, 60_000);
         return () => { stale = true; clearInterval(id); };
-    }, [maybeReload]);
+    }, [maybeReload, adoptMaintenance, maintActive]);
 
     // Fast poll while a job runs (manual or scheduled - the ⟳ button spins
     // for both). Manual completions reload unconditionally (the user asked;
@@ -664,11 +746,12 @@ export default function App() {
     // auto completions go through the silent freshness gate - their failures
     // belong to logs/auto-refresh.log, not the UI.
     useEffect(() => {
-        if (!refresh?.running) return;
+        if (!refresh?.running || maintActive) return;
         const id = setInterval(async () => {
             try {
                 const st = await fetchRefreshStatus();
                 setRefresh(st);
+                adoptMaintenance(st.maintenance);
                 if (!st.running) {
                     if (st.mode === 'manual') {
                         if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
@@ -686,7 +769,7 @@ export default function App() {
             }
         }, 2000);
         return () => clearInterval(id);
-    }, [refresh?.running, maybeReload]);
+    }, [refresh?.running, maybeReload, adoptMaintenance, maintActive]);
 
     const onRefresh = async () => {
         track(EV.REFRESH_CLICK);
@@ -1001,6 +1084,25 @@ export default function App() {
 
     return (
         <div className="h-[100dvh] flex flex-col bg-app text-label overflow-hidden">
+            {/* M14 full-screen maintenance switch: covers the whole app (which
+                stays mounted - table state survives the window) until the
+                own-clock recovery timer brings it back. Admins never see it. */}
+            {maintActive && maintInfo && <MaintenanceOverlay info={maintInfo} />}
+            {/* M14 pre-window warning banner ABOVE the nav (decision 18):
+                dismissible per window signature - an edited window re-surfaces
+                it. Admins bypassing an ACTIVE window get a reminder strip. */}
+            {maintState === 'scheduled' && maintInfo && maint?.dismissedSig !== maintInfo.signature && (
+                <div className="shrink-0 flex items-start gap-2 px-3.5 py-1.5 bg-hot/10 border-b border-hot/40 text-hot text-[13px]" role="status">
+                    <span className="grow py-0.5">⚠ {maintInfo.message}</span>
+                    <button onClick={dismissMaintBanner} aria-label="Dismiss maintenance notice" title="Dismiss"
+                        className="cursor-pointer shrink-0 text-hot/70 hover:text-hot text-lg leading-none px-1">&times;</button>
+                </div>
+            )}
+            {maintState === 'active' && isAdmin && (
+                <div className="shrink-0 px-3.5 py-1.5 bg-hot/10 border-b border-hot/40 text-hot text-[13px]" role="status">
+                    🔧 Maintenance mode is active - you are bypassing it as admin; visitors see the downtime screen.
+                </div>
+            )}
             {/* iPadOS nav bar: a distinct surface (own bg + hairline + shadow +
                 blur) so it reads as its own bar, separated from the content.
                 3 zones: logo (home->today) · date nav+calendar · actions

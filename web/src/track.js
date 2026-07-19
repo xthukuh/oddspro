@@ -23,6 +23,7 @@ let _session = null;      // { sid, key }
 let _queue = [];
 let _timer = null;
 let _started = false;
+let _suspended = false;   // M14: no new events + no flushes during maintenance
 let _checkinPromise = null;
 
 function _anonId() {
@@ -77,7 +78,7 @@ function _ensureCheckin() {
 }
 
 async function _flush({ keepalive = false } = {}) {
-    if (!_queue.length) return;
+    if (_suspended || !_queue.length) return;
     const events = _queue.splice(0, _queue.length);
     try {
         const s = _session ?? await _ensureCheckin();
@@ -96,9 +97,16 @@ async function _flush({ keepalive = false } = {}) {
 // Queue a feature event. Names follow the closed grammar in
 // src/db/track-rules.js (lowercase snake/dotted); values are short scalars.
 export function track(name, value = null) {
-    if (!_started) return;
+    if (!_started || _suspended) return;
     _queue.push(value == null ? { name } : { name, value });
     if (_queue.length >= FLUSH_AT) _flush();
+}
+
+// M14: pause the beacon while the maintenance overlay is up (the API would
+// 503 anyway - keep the network quiet); resuming lets the interval timer
+// flush whatever queued before the switch.
+export function setTrackingSuspended(v) {
+    _suspended = Boolean(v);
 }
 
 // Start once from App mount. Deferred ~2s so it never competes with the

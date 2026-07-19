@@ -37,6 +37,7 @@ import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
 import { queryCacheKey } from './db/cache-rules.js';
+import { maintenanceInfo, retryAfterSeconds } from './db/maintenance-rules.js';
 import { _dtime } from './utils.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -90,6 +91,66 @@ app.use((req, res, next) => {
 // clients before their route's own check runs. One list, both gates - never a
 // per-path allow-list (H2). bearerMatches skips unset entries.
 const MACHINE_BEARERS = [config.API_TOKEN, config.ADMIN_TOKEN];
+
+// ============================================================================
+// Scheduled maintenance gate (M14, spec decision 17). The settings-catalog
+// window (group `maintenance`, all live) is read per request; while the state
+// is 'active' every request answers 503 UNLESS it is an admin session, a
+// machine bearer, or /api/auth/* (an admin must be able to sign in mid-window).
+// /api/* gets the JSON body + Retry-After the client's 503 interception feeds
+// on; page loads get a self-contained static notice (dev/Express topology only
+// - prod Apache serves the SPA regardless, where the CLIENT-side switch is the
+// real surface). Cost while off: one effective() Map lookup (bot-filter idiom);
+// past-end auto-expiry lives in the pure state machine, never here.
+// ============================================================================
+const maintenanceNow = () => maintenanceInfo({
+    scheduled: effective('MAINTENANCE_SCHEDULED'),
+    start: effective('MAINTENANCE_START'),
+    end: effective('MAINTENANCE_END'),
+    message: effective('MAINTENANCE_MESSAGE'),
+}, Date.now());
+
+// Self-contained 503 page: rendered notice + window, meta-refresh so a parked
+// tab recovers on its own shortly after the window ends. No external assets -
+// the SPA (and its theme tokens) is exactly what may be mid-deploy.
+const maintenanceHtml = info => `<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="refresh" content="60">
+<title>Odds Pro - scheduled maintenance</title>
+<style>
+  body{margin:0;min-height:100vh;display:flex;align-items:center;justify-content:center;
+    font:15px/1.5 -apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;
+    background:#1A191D;color:#EDEBE8;text-align:center}
+  main{max-width:26rem;padding:2rem}
+  h1{font-size:1.15rem;margin:0 0 .75rem}
+  p{margin:.4rem 0;color:#B6B3AE}
+  .w{color:#17C9BA;font-weight:600}
+</style></head><body><main>
+<h1>Scheduled maintenance</h1>
+<p>${info.message}</p>
+<p class="w">Back by ${info.end} EAT</p>
+<p>This page retries automatically.</p>
+</main></body></html>`;
+
+app.use(async (req, res, next) => {
+    if (!effective('MAINTENANCE_SCHEDULED')) return next(); // one Map lookup while off
+    const info = maintenanceNow();
+    if (info.state !== 'active') return next();
+    if (req.path.startsWith('/api/auth/')) return next();
+    if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return next();
+    try {
+        if (config.AUTH_ENABLED) {
+            const ctx = await resolveSession(bearerToken(req));
+            if (ctx?.user?.role === 'admin') { req.user = ctx.user; req.session = ctx.session; return next(); }
+        }
+    } catch { /* resolve failure -> treat as guest, fall through to 503 */ }
+    res.set('Retry-After', String(retryAfterSeconds(info.end_ms, Date.now())));
+    if (req.path.startsWith('/api/')) {
+        return res.status(503).json({ error: 'maintenance', maintenance: info });
+    }
+    res.status(503).type('html').send(maintenanceHtml(info));
+});
 
 // Same-origin CSRF guard shared by every state-changing route: custom headers
 // force a CORS preflight cross-origin, which this server never approves - only
@@ -690,8 +751,11 @@ app.post('/api/refresh/cancel', (req, res) => {
 
 // GET /api/refresh - poll the refresh job state + freshness signal
 // (data_version bumps on every successful run; last_success carries its
-// mode/dates so clients reload only when their loaded date is in scope)
-app.get('/api/refresh', (req, res) => res.json(refreshStatus()));
+// mode/dates so clients reload only when their loaded date is in scope).
+// M14: the maintenance schedule rides this existing 60s poll (decision 17 -
+// no new endpoint); clients cache it in oddspro.maintenance and switch on
+// their own clock at the window's start.
+app.get('/api/refresh', (req, res) => res.json({ ...refreshStatus(), maintenance: maintenanceNow() }));
 
 // Legacy admin dashboard URL -> the SPA admin area (M5, spec decision 14).
 // Registered before the static/SPA fallback so /admin doesn't resolve to the

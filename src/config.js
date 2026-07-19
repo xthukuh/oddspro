@@ -5,6 +5,7 @@ import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycl
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
+import { DEFAULT_MAINTENANCE_MESSAGE } from './db/maintenance-rules.js'; // zero-import module - no cycle
 
 // A committed-but-blank .env line (`KEY=`, the .env.example shape) reaches zod
 // as '' - treat that as unset for optional strings, else `.min(1).optional()`
@@ -263,6 +264,15 @@ const EnvSchema = z.object({
     // Prune visit_events older than this during the light pass; 0 = keep
     // forever (the default - behavior data accumulates, spec decision 13).
     TRACK_EVENTS_RETENTION_DAYS: z.coerce.number().int().min(0).default(0),
+    // --- M14 scheduled maintenance (settings-catalog group `maintenance`) ----
+    // These env lines are only the fallback default layer (decision 4) - the
+    // admin edits the live window via Admin -> Settings / the Dashboard card.
+    // Window bounds are EAT 'YYYY-MM-DD HH:mm'; junk parses to "no window"
+    // (fail-safe off) in src/db/maintenance-rules.js, so no pattern here.
+    MAINTENANCE_SCHEDULED: boolStr('0'),
+    MAINTENANCE_START: z.string().default(''),
+    MAINTENANCE_END: z.string().default(''),
+    MAINTENANCE_MESSAGE: z.string().default(DEFAULT_MAINTENANCE_MESSAGE),
 });
 
 // PORT is the convention Passenger/most Node PaaS hosts use to hand the app

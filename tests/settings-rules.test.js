@@ -116,7 +116,7 @@ test('settingsPutSchema pins the PUT body envelope (C2)', () => {
 
 test('M6 catalog completeness: every entry has label, hint, known group/type', () => {
     const GROUPS = new Set(['safe', 'refresh', 'pipeline', 'hotpick', 'tip', 'ai', 'ai-dark',
-        'auth-policy', 'otp', 'sms', 'geo', 'bot', 'logging', 'tracking']);
+        'auth-policy', 'otp', 'sms', 'geo', 'bot', 'logging', 'tracking', 'maintenance']);
     const TYPES = new Set(['string', 'int', 'number', 'boolean']);
     for (const e of SETTINGS_CATALOG) {
         assert.equal(typeof e.label === 'string' && e.label.length > 0, true, `${e.key} needs a label`);
@@ -177,6 +177,14 @@ test('M6 pattern validation accepts the real formats and rejects junk', () => {
     assert.equal(validateSetting('AI_CONSENSUS_MODELS', '').ok, true);
     assert.equal(validateSetting('AI_CONSENSUS_MODELS', 'gemini:gemini-2.5-pro,openrouter:openai/gpt-5.6-terra').ok, true);
     assert.equal(validateSetting('AI_CONSENSUS_MODELS', 'no-colon-model').ok, false);
+    // M14 maintenance window: EAT datetime bounds + closed-placeholder message
+    assert.equal(validateSetting('MAINTENANCE_START', '2026-07-19 22:00').ok, true);
+    assert.equal(validateSetting('MAINTENANCE_START', '').ok, true);            // blank = unset
+    assert.equal(validateSetting('MAINTENANCE_START', '2026-07-19T22:00').ok, false);
+    assert.equal(validateSetting('MAINTENANCE_END', 'tomorrow').ok, false);
+    assert.equal(validateSetting('MAINTENANCE_MESSAGE', 'Down from ${downtime_start} to ${downtime_end}').ok, true);
+    assert.equal(validateSetting('MAINTENANCE_MESSAGE', '').ok, true);          // blank = default wording
+    assert.equal(validateSetting('MAINTENANCE_MESSAGE', 'Hi ${name}').ok, false); // unknown placeholder
 });
 
 test('M6 SAFE_STRATEGY enum comes from the real STRATEGIES registry', () => {

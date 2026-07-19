@@ -31,6 +31,7 @@
 
 import { z } from 'zod';
 import { STRATEGIES } from './magic-rules.js'; // pure (perf-rules only) - same import config.js already makes
+import { MAINT_DT_PATTERN, MAINT_MSG_PATTERN } from './maintenance-rules.js'; // zero-import - no cycle
 
 // PUT /api/admin/settings body envelope (C2 - external data through zod like
 // the sibling auth routes): either { key, value } or { overrides: {...} }.
@@ -152,6 +153,16 @@ export const SETTINGS_CATALOG = [
     { key: 'AUTO_LOG_MAX_KB', type: 'int', group: 'logging', public: false, live: true, min: 16, unit: 'KB', label: 'Auto-refresh log cap', hint: 'Self-truncating tail size of the job log (the host has no rotation).' },
     // ---- Tracking (M2 beacon warehouse).
     { key: 'TRACK_EVENTS_RETENTION_DAYS', type: 'int', group: 'tracking', public: false, live: true, min: 0, unit: 'days', label: 'Event retention', hint: 'Prune visit_events older than this in the light pass; 0 = keep forever (default - behavior data accumulates).' },
+    // ---- Scheduled maintenance (M14, spec decisions 16-18). No table: the
+    // window lives HERE so the existing override/audit machinery dates every
+    // change. A past-end window auto-expires to off (maintenance-rules), so a
+    // forgotten toggle can never leave a stale 503. NOT public: clients learn
+    // the schedule via GET /api/refresh + every maintenance-503 body instead
+    // (decision 17 - no new poll, and the public subset stays exactly SAFE_*).
+    { key: 'MAINTENANCE_SCHEDULED', type: 'boolean', group: 'maintenance', public: false, live: true, label: 'Maintenance window', hint: 'Master toggle - with a valid window set, visitors get a warning banner, then a downtime screen (API 503) between start and end.' },
+    { key: 'MAINTENANCE_START', type: 'string', group: 'maintenance', public: false, live: true, pattern: MAINT_DT_PATTERN, patternHint: 'YYYY-MM-DD HH:mm (EAT) or blank', label: 'Downtime starts', hint: 'EAT wall-clock start of the window.' },
+    { key: 'MAINTENANCE_END', type: 'string', group: 'maintenance', public: false, live: true, pattern: MAINT_DT_PATTERN, patternHint: 'YYYY-MM-DD HH:mm (EAT) or blank', label: 'Downtime ends', hint: 'EAT wall-clock end of the window; once it passes, maintenance mode expires to off on its own.' },
+    { key: 'MAINTENANCE_MESSAGE', type: 'string', group: 'maintenance', public: false, live: true, pattern: MAINT_MSG_PATTERN, patternHint: 'text with only ${downtime_start} / ${downtime_end} placeholders', label: 'Notice message', hint: 'Shown on the banner and downtime screen; ${downtime_start} / ${downtime_end} render the window. Blank = default wording.' },
 ];
 
 const BY_KEY = new Map(SETTINGS_CATALOG.map(e => [e.key, e]));

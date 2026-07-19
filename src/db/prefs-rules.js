@@ -12,9 +12,10 @@
 // Per-device state that must NEVER sync: the session token ('oddspro.human'
 // is the retired proof-of-work token - kept so legacy devices still exclude it)
 // (secrets - syncing one device's token would clone/clobber sessions), the
-// transient per-date row selections (data, not config), and the sync cursor
-// itself (each device's own clock - syncing it would be circular).
-const DEVICE_EXACT = new Set(['oddspro.session', 'oddspro.human', 'oddspro.prefs.sync']);
+// transient per-date row selections (data, not config), the sync cursor
+// itself (each device's own clock - syncing it would be circular), and the
+// M14 maintenance-schedule cache (server state - every device polls its own).
+const DEVICE_EXACT = new Set(['oddspro.session', 'oddspro.human', 'oddspro.prefs.sync', 'oddspro.maintenance']);
 const DEVICE_PREFIXES = ['oddspro.select.d.'];
 
 export function isDeviceKey(key) {
