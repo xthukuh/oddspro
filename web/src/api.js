@@ -213,6 +213,14 @@ export async function deleteAdminSetting(key) {
     return _send(`/api/admin/settings/${encodeURIComponent(key)}`, {}, 'DELETE');
 }
 
+// Recent settings changes, newest first: [{id, actor_id, actor_phone, action,
+// target, old_value, new_value, created_at}]. Admin SESSION only (M6) - the
+// legacy ADMIN_TOKEN bearer 401s here, which the editor renders as a note.
+export async function getAdminAudit(limit = 25) {
+    const { audit } = await _get(`/api/admin/settings/audit?limit=${limit}`);
+    return audit;
+}
+
 // Data-viz lab catalogs: { features, outcomes, defaults } (admin session only).
 export async function getLabFeatures() {
     return _get('/api/admin/lab/features');

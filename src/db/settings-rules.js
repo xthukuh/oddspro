@@ -233,6 +233,57 @@ export function publicSubset(effective, catalog = SETTINGS_CATALOG) {
     return out;
 }
 
+// ---- M7: semantic dirty-state for the settings editor -----------------------
+// normalizeForCompare turns a raw editor input into the canonical comparable
+// value for an entry's type, so '1.60' == 1.6 and 'true' == true. Blank is
+// type-sensitive: a blank NUMERIC means "no value" (null) while a blank STRING
+// stays '' - a real value for pattern knobs like AUTO_FULL_AT where blank
+// means "off", not "back to default". Numeric junk is returned raw so it
+// compares dirty and the server's validateSettings answers the 400 (the client
+// never silently swallows a bad edit).
+export function normalizeForCompare(entry, raw) {
+    if (entry?.type === 'boolean') {
+        return raw === true || ['1', 'true', 'yes'].includes(String(raw).trim().toLowerCase());
+    }
+    if (raw == null) return null;
+    const s = String(raw).trim();
+    if (entry?.type === 'int' || entry?.type === 'number') {
+        if (s === '') return null;
+        const n = Number(s);
+        return Number.isFinite(n) ? n : s;
+    }
+    return s;
+}
+
+// Diff local edits against the fetched admin rows -> the minimal write batch
+// { set: {key: value}, reset: [keys], count }. Semantic, not textual: typing
+// the shown value back (revert) is clean, a blanked numeric equals "use the
+// default" (clean without an override, a RESET when one exists). Comparison is
+// against `effective` - typing the config default over a live override IS a
+// change (the running value moves). Unknown keys are dropped (a stale edit
+// held across a catalog change must not 400 the whole batch). Shared verbatim
+// with web/src/admin/SettingsEditor.jsx so the sticky Save bar and the PUT
+// body can never disagree about what is dirty.
+export function settingsDiff(rows, edits) {
+    const byKey = new Map((rows ?? []).map(r => [r.key, r]));
+    const set = {};
+    const reset = [];
+    let count = 0;
+    for (const [key, raw] of Object.entries(edits ?? {})) {
+        const row = byKey.get(key);
+        if (!row) continue;
+        const value = normalizeForCompare(row, raw);
+        if (value == null) {
+            if (row.override != null) { reset.push(key); count += 1; }
+            continue;
+        }
+        if (value === normalizeForCompare(row, row.effective)) continue;
+        set[key] = value;
+        count += 1;
+    }
+    return { set, reset, count };
+}
+
 // ---- admin_audit rows (M6) --------------------------------------------------
 export const AUDIT_SETTINGS_SET = 'settings.set';
 export const AUDIT_SETTINGS_RESET = 'settings.reset';

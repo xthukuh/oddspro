@@ -6,6 +6,7 @@ import {
     SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, validateSettings,
     mergeOverrides, publicSubset, isMissingTableError, settingsPutSchema,
     buildAuditRows, AUDIT_SETTINGS_SET, AUDIT_SETTINGS_RESET,
+    normalizeForCompare, settingsDiff,
 } from '../src/db/settings-rules.js';
 
 test('catalog excludes secrets/creds/build vars by construction', () => {
@@ -218,6 +219,65 @@ test('buildAuditRows: changed-only trail with old/new values', () => {
         { actor_id: 7, action: AUDIT_SETTINGS_SET, target: 'TIP_MIN_PRICE', old_value: '1.2', new_value: '1.3' },
         { actor_id: 7, action: AUDIT_SETTINGS_SET, target: 'SMS_ENABLED', old_value: null, new_value: '1' },
     ]);
+});
+
+// ---- M7: semantic dirty-state (normalizeForCompare + settingsDiff) --------
+
+test('normalizeForCompare: numbers, blanks, booleans, strings', () => {
+    const num = { type: 'number' };
+    assert.equal(normalizeForCompare(num, '1.60'), 1.6);  // textual != semantic
+    assert.equal(normalizeForCompare(num, 1.6), 1.6);
+    assert.equal(normalizeForCompare(num, ''), null);     // blank numeric = no value
+    assert.equal(normalizeForCompare(num, '  '), null);
+    assert.equal(normalizeForCompare(num, null), null);
+    assert.equal(normalizeForCompare(num, 'abc'), 'abc'); // junk stays raw -> dirty -> server 400s
+    const bool = { type: 'boolean' };
+    assert.equal(normalizeForCompare(bool, true), true);
+    assert.equal(normalizeForCompare(bool, 'true'), true);
+    assert.equal(normalizeForCompare(bool, '1'), true);
+    assert.equal(normalizeForCompare(bool, false), false);
+    assert.equal(normalizeForCompare(bool, '0'), false);
+    const str = { type: 'string' };
+    assert.equal(normalizeForCompare(str, '  market '), 'market');
+    // Blank STRING stays a value - AUTO_FULL_AT '' means "sweep off", which is
+    // NOT the same as resetting to the default time.
+    assert.equal(normalizeForCompare(str, ''), '');
+});
+
+test('settingsDiff: revert=clean, bool norm, changed values only', () => {
+    const rows = [
+        { key: 'SAFE_MAX_PRICE', type: 'number', override: null, default: 1.6, effective: 1.6 },
+        { key: 'SMS_ENABLED', type: 'boolean', override: null, default: false, effective: false },
+        { key: 'SAFE_STRATEGY', type: 'string', override: null, default: 'market', effective: 'market' },
+    ];
+    assert.equal(settingsDiff(rows, {}).count, 0);
+    // Typing the shown value back (or a textual variant of it) is clean.
+    assert.equal(settingsDiff(rows, { SAFE_MAX_PRICE: '1.60' }).count, 0);
+    assert.equal(settingsDiff(rows, { SMS_ENABLED: false }).count, 0);
+    assert.equal(settingsDiff(rows, { SAFE_STRATEGY: 'market' }).count, 0);
+    // Real changes land in set, coerced.
+    const d = settingsDiff(rows, { SAFE_MAX_PRICE: '1.8', SMS_ENABLED: true, SAFE_STRATEGY: 'sure' });
+    assert.equal(d.count, 3);
+    assert.deepEqual(d.set, { SAFE_MAX_PRICE: 1.8, SMS_ENABLED: true, SAFE_STRATEGY: 'sure' });
+    assert.deepEqual(d.reset, []);
+    // Unknown keys are ignored (stale local edit vs a changed catalog).
+    assert.equal(settingsDiff(rows, { NOPE: '1' }).count, 0);
+});
+
+test('settingsDiff: blank numeric == default; reset when overridden', () => {
+    const clean = { key: 'SAFE_MAX_PER_DAY', type: 'int', override: null, default: 3, effective: 3 };
+    const overridden = { key: 'SAFE_MAX_PRICE', type: 'number', override: 1.8, default: 1.6, effective: 1.8 };
+    // Blank on a non-overridden numeric = "use the default" -> clean.
+    assert.equal(settingsDiff([clean], { SAFE_MAX_PER_DAY: '' }).count, 0);
+    // Blank on an OVERRIDDEN numeric = clear the override -> a reset entry.
+    const d = settingsDiff([overridden], { SAFE_MAX_PRICE: '' });
+    assert.deepEqual(d.reset, ['SAFE_MAX_PRICE']);
+    assert.deepEqual(d.set, {});
+    assert.equal(d.count, 1);
+    // Typing the override value back is clean; typing the DEFAULT over an
+    // override is a real change (the running value moves 1.8 -> 1.6).
+    assert.equal(settingsDiff([overridden], { SAFE_MAX_PRICE: '1.8' }).count, 0);
+    assert.deepEqual(settingsDiff([overridden], { SAFE_MAX_PRICE: '1.6' }).set, { SAFE_MAX_PRICE: 1.6 });
 });
 
 test('buildAuditRows: reset rows and the never-overridden no-op', () => {
