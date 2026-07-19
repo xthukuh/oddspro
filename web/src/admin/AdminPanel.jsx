@@ -6,6 +6,7 @@ import { useAdminRoute, ADMIN_SECTIONS } from './useAdminRoute.js';
 import SettingsEditor from './SettingsEditor.jsx';
 import DataLab from './DataLab.jsx';
 import DashboardSection from './DashboardSection.jsx';
+import UsersSection from './UsersSection.jsx';
 
 // Admin panel (M5 shell): a full-page overlay in the AuthShell idiom (App
 // stays mounted underneath - table state/scroll survive), opened from
@@ -44,7 +45,7 @@ const SECTION_BODY = {
     dashboard: <DashboardSection />,
     settings: <SettingsEditor />,
     lab: <DataLab />,
-    users: <Pending label="User management" milestone="M8" />,
+    users: <UsersSection />,
     messaging: <Pending label="SMS templates & campaigns" milestone="M9" />,
     performance: <Pending label="Engine performance visualizations" milestone="M11" />,
     database: <Pending label="Database tools" milestone="M10" />,

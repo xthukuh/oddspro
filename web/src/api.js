@@ -244,6 +244,21 @@ export async function getLabFeatures() {
     return _get('/api/admin/lab/features');
 }
 
+// --- Admin user management (M8) ----------------------------------------------
+
+// All users + live-session counts: { users: [adminUserView...], total }.
+// Admin SESSION only (like the audit trail - no machine-bearer path).
+export async function getAdminUsers(q) {
+    return _get('/api/admin/users', { q });
+}
+
+// Guarded patch: { is_active?, role?, phone_verified?, unlock?,
+// force_pin_change?, reset_pin? } -> { ok, user } (+ temp_pin, shown ONCE,
+// after a reset_pin). Guard violations surface as 400 ApiErrors.
+export async function patchAdminUser(id, patch) {
+    return _send(`/api/admin/users/${encodeURIComponent(id)}`, patch, 'PATCH');
+}
+
 // Pre-binned lab aggregates: { x, y, color, outcome, cells, rows_used,
 // rows_skipped, rows_loaded, min_count }. filters: [{key, op, value}].
 export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount, topCategories }) {

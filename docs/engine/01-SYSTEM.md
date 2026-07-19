@@ -94,6 +94,16 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
   jitter after end. A past-end window auto-expires to off — a forgotten toggle can never
   hold a stale 503. Pure state machine: `src/db/maintenance-rules.js` (shared verbatim
   with the web).
+- **User management (M8):** Admin → Users drives GET/PATCH `/api/admin/users[/:id]`
+  (admin SESSION only). Patchable: active/role/phone_verified + one-way unlock,
+  force-PIN-change and reset-PIN (4-digit temp PIN shown ONCE in the response — its hash
+  is stored, plaintext never persisted or logged). Pure guards (`src/db/admin-rules.js`)
+  reject self-disable/demote, self PIN actions and removing the last active admin.
+  Disable and PIN reset revoke every session in the same transaction as the row change;
+  every mutation lands changed-only `admin_audit` rows (`user.patch`/`user.unlock`/
+  `user.force_pin_change`/`user.reset_pin`) in that same transaction. Manual verify
+  (`phone_verified: true`) is the SMS-failure fallback: it unblocks the verified-only
+  routes (profile PIN change included) without an OTP.
 
 ---
 *Update this chapter when: a pipeline step is added/removed/reordered, a scheduler is

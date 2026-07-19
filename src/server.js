@@ -35,6 +35,8 @@ import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, 
 import { settingsPutSchema } from './db/settings-rules.js';
 import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
+import { listUsers, getAdminUser, patchUser } from './admin-users.js';
+import { userPatchSchema } from './db/admin-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
 import { queryCacheKey } from './db/cache-rules.js';
 import { maintenanceInfo, retryAfterSeconds } from './db/maintenance-rules.js';
@@ -679,6 +681,34 @@ app.get('/api/admin/track/summary', requireAdminRole, async (req, res, next) => 
     } catch (e) {
         next(e);
     }
+});
+
+// User management (M8, admin SESSION only like every new admin route). The
+// pure guards (src/db/admin-rules.js) reject self-disable/demote, self PIN
+// actions, and removing the last active admin; a reset_pin response carries
+// the one-time temp PIN (never stored or logged in plaintext).
+
+// GET /api/admin/users[?q=&limit=] - all users + live-session counts.
+app.get('/api/admin/users', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json(await listUsers({ q: req.query.q, limit: req.query.limit }));
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.get('/api/admin/users/:id', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ user: await getAdminUser(req.params.id) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// PATCH /api/admin/users/:id - guarded field changes + one-way actions
+// (unlock / force_pin_change / reset_pin). Same-transaction admin_audit rows.
+app.patch('/api/admin/users/:id', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const patch = userPatchSchema.parse(req.body ?? {});
+        res.json({ ok: true, ...(await patchUser(req.params.id, patch, req.user)) });
+    } catch (e) { authErr(e, res, next); }
 });
 
 // Single-slot refresh job state lives in src/auto-refresh.js - one shared
