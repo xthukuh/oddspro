@@ -120,6 +120,25 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
   mirrors the SMS seam: `MAIL_MAILER=log` (default) prints emails to the server console,
   `smtp` sends via the .env-only `MAIL_*` creds (fail-closed when the host is missing);
   the admin settings editor exposes only the `MAIL_MAILER` switch (group `mail`).
+- **SMS templates + broadcast campaigns (M9):** Admin → Messaging drives
+  `/api/admin/sms/*` (admin SESSION only). A campaign freezes its rendered message and
+  audience at creation, then sends through a **single-slot background job** — one campaign
+  at a time, same one-job-at-a-time discipline as the refresh slot, with live progress on
+  `GET /api/admin/sms/job` and a consecutive-failure breaker (5) that stops a run when the
+  provider/credits die rather than burning the ledger into failures. **Consent is
+  structural:** `audienceCriteria` emits `excludeOptOut: true` unconditionally and the
+  `.strict()` audience schemas have no key that can turn it off, so an opted-out user is
+  excluded even from an explicit admin hand-selection (transactional OTPs don't route
+  through campaigns at all). Sending needs a typed `confirm:'SEND'` **plus** the
+  `expected_count` the admin saw; the server re-counts and applies `countDriftVerdict` —
+  **any growth is refused 409** (those recipients were never previewed and bill beyond the
+  approved estimate), shrink proceeds (opt-out/disable/un-verify only remove someone
+  already approved). Nothing is written until that check passes, so a refusal leaves no
+  partial state; the `(campaign_id, user_id)` unique index makes ledger materialization
+  idempotent, and a terminal campaign is FROZEN (recovery from a partial send is a NEW
+  campaign over the remainder, never a re-send). `SMS_ENABLED=0` makes the whole path a
+  dry run that touches no network. Transactional auth texts go out wrapped in the
+  configured auth-default template (`wrapAuthText`, fail-open).
 
 ---
 *Update this chapter when: a pipeline step is added/removed/reordered, a scheduler is

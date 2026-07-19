@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getAdminUsers, patchAdminUser } from '../api.js';
+import { stageSelection } from './campaignHandoff.js';
+import { adminHash } from './useAdminRoute.js';
 import { useSession } from '../auth/SessionProvider.jsx';
 import { Z } from '../zLayers.js';
 
@@ -153,6 +155,15 @@ export default function UsersSection() {
         return next;
     });
 
+    // Hand the picked ids to the Messaging section (M9) and navigate there.
+    // The hash write is what drives useAdminRoute - no prop drilling needed,
+    // and it leaves a real history entry so Back returns to the user list.
+    const messageSelected = () => {
+        const ids = [...selected];
+        stageSelection(ids, users.filter(u => selected.has(u.id)).map(u => u.name));
+        window.location.hash = adminHash('messaging');
+    };
+
     async function apply(user, patch) {
         setBusyId(user.id);
         setError(null);
@@ -206,11 +217,18 @@ export default function UsersSection() {
                     className="bg-surface border border-separator text-label rounded-lg h-9 px-2.5 text-[13px] outline-none focus:border-accent w-56" />
                 <span className="text-label-3 text-[12px]">{shown.length} of {total} user{total === 1 ? '' : 's'}</span>
                 {selected.size > 0 && (
-                    <span className="text-[11px] text-accent bg-accent/10 rounded px-2 py-0.5"
-                        title="Selection feeds the SMS campaign audience (Messaging, M9)">
-                        {selected.size} selected
-                        <button className="ml-1.5 cursor-pointer" onClick={() => setSelected(new Set())} title="Clear selection">×</button>
-                    </span>
+                    <>
+                        <span className="text-[11px] text-accent bg-accent/10 rounded px-2 py-0.5"
+                            title="Selection feeds the SMS campaign audience (Messaging, M9)">
+                            {selected.size} selected
+                            <button className="ml-1.5 cursor-pointer" onClick={() => setSelected(new Set())} title="Clear selection">×</button>
+                        </span>
+                        <button onClick={messageSelected}
+                            title="Open Messaging with these users as the campaign audience"
+                            className="cursor-pointer h-7 px-2.5 rounded-lg text-[12px] bg-fill hover:bg-fill-hover text-label-2">
+                            Message selected →
+                        </button>
+                    </>
                 )}
                 <button onClick={load} disabled={busyId != null}
                     className="ml-auto cursor-pointer h-9 px-3 rounded-lg text-[12px] bg-fill hover:bg-fill-hover text-label-2 disabled:opacity-40">Reload</button>

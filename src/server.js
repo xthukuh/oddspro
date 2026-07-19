@@ -39,6 +39,12 @@ import { labData, LAB_DEFAULTS } from './lab.js';
 import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
 import { listUsers, getAdminUser, patchUser } from './admin-users.js';
 import { userPatchSchema } from './db/admin-rules.js';
+import { listTemplates, saveTemplate, deleteTemplate } from './sms/templates.js';
+import {
+    previewCampaign, createCampaign, listCampaigns, getCampaign, getCampaignRecipients,
+    sendCampaign, cancelCampaign, campaignJobStatus,
+} from './campaigns.js';
+import { templateSchema, campaignCreateSchema, campaignSendSchema } from './db/campaign-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
 import { queryCacheKey } from './db/cache-rules.js';
 import { maintenanceInfo, retryAfterSeconds } from './db/maintenance-rules.js';
@@ -766,6 +772,90 @@ app.patch('/api/admin/users/:id', requireAdminRole, authJson, async (req, res, n
         const patch = userPatchSchema.parse(req.body ?? {});
         res.json({ ok: true, ...(await patchUser(req.params.id, patch, req.user)) });
     } catch (e) { authErr(e, res, next); }
+});
+
+// --- M9: SMS templates + broadcast campaigns --------------------------------
+// Admin SESSION only (never the machine bearer): these spend real credits and
+// message real people, so the actor must be an identified human whose action
+// the audit trail can name. Mutations additionally require csrfOk.
+
+app.get('/api/admin/sms/templates', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ templates: await listTemplates() });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// Express 5 (path-to-regexp v8) dropped the `:id?` optional-parameter form;
+// `{/:id}` is its replacement and matches both create (no id) and update.
+app.put('/api/admin/sms/templates{/:id}', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = templateSchema.parse(req.body ?? {});
+        const template = await saveTemplate({ id: req.params.id ?? null, ...body }, req.user?.id ?? null);
+        res.json({ ok: true, template });
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.delete('/api/admin/sms/templates/:id', requireAdminRole, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        res.json({ ok: true, ...(await deleteTemplate(req.params.id)) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// Preview is a POST because the audience is a structured body, not because it
+// mutates - it is read-only and safe to call on every keystroke-debounce.
+app.post('/api/admin/sms/preview', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        // Same envelope as create (so preview can never validate looser than
+        // the real thing); the name is irrelevant here and stubbed.
+        const body = campaignCreateSchema.parse({ name: 'preview', ...(req.body ?? {}) });
+        res.json(await previewCampaign(body));
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.get('/api/admin/sms/campaigns', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ ...(await listCampaigns({ limit: req.query.limit })), job: campaignJobStatus() });
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.get('/api/admin/sms/campaigns/:id', requireAdminRole, async (req, res, next) => {
+    try {
+        const campaign = await getCampaign(req.params.id);
+        res.json({ campaign, ...(await getCampaignRecipients(req.params.id)), job: campaignJobStatus() });
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.post('/api/admin/sms/campaigns', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = campaignCreateSchema.parse(req.body ?? {});
+        res.status(201).json({ ok: true, campaign: await createCampaign(body, req.user) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// The billable step: typed confirmation + the count the admin approved, which
+// the service re-counts server-side and refuses on drift (409).
+app.post('/api/admin/sms/campaigns/:id/send', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = campaignSendSchema.parse(req.body ?? {});
+        res.json({ ok: true, ...(await sendCampaign(req.params.id, body, req.user)) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+app.post('/api/admin/sms/campaigns/:id/cancel', requireAdminRole, authJson, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        res.json({ ok: true, ...(await cancelCampaign(req.params.id)) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// Live progress for the send in flight (the web polls this while sending).
+app.get('/api/admin/sms/job', requireAdminRole, (req, res) => {
+    res.json(campaignJobStatus());
 });
 
 // Single-slot refresh job state lives in src/auto-refresh.js - one shared

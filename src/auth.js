@@ -12,6 +12,7 @@ import {
 } from './db/sms-rules.js';
 import { normalizeIp } from './db/visit-rules.js'; // sessions.ip must store the same format visits.ip does
 import { sendSms, smsDelivery, smsEnabled } from './sms/index.js';
+import { wrapAuthText } from './sms/templates.js';  // M9 auth-default template wrap (fail-open)
 import { sendMail } from './mail/index.js';
 import { effective } from './settings.js';
 
@@ -53,6 +54,7 @@ export function publicUser(u) {
         email: u.email ?? null,
         must_change_pin: Boolean(u.must_change_pin),
         is_active: Boolean(u.is_active),
+        sms_opt_out: Boolean(u.sms_opt_out),
         last_login_at: u.last_login_at ?? null,
         terms_version: u.terms_version ?? null,
         terms_accepted_at: u.terms_accepted_at ?? null,
@@ -215,7 +217,11 @@ async function sendOtpSms({ rowId, codeHash, phone, code }, extra) {
         console.error(`[auth] OTP SMS to ${phone} failed: ${detail}`);
         return { sent: false, error: 'send_failed', ...extra };
     };
-    const send = sendSms({ to: phone, text: otpMessage(code) }).then(
+    // M9: transactional text goes out through the configured auth template
+    // (e.g. "[OP] ${message}"). Inside the promise chain so the wrap's DB read
+    // rides the same _capped response-wait budget as the send itself;
+    // wrapAuthText is fail-open, so no template (or no table) sends raw text.
+    const send = wrapAuthText(otpMessage(code)).then(text => sendSms({ to: phone, text })).then(
         sms => {
             if (sms.ok === false) {
                 return fail([sms.status, sms.message ?? 'provider error'].filter(x => x != null).join(' '));
@@ -488,9 +494,10 @@ export async function purgeExpiredAuth() {
     return { sessions, otps };
 }
 
-export async function updateProfile(user, { name, pin, current_pin, otp_code }) {
+export async function updateProfile(user, { name, pin, current_pin, otp_code, sms_opt_out }) {
     const patch = {};
     if (name != null) patch.name = name;
+    if (sms_opt_out != null) patch.sms_opt_out = sms_opt_out ? 1 : 0;
     let otpRow = null;
     if (pin) {
         if (!(await verifyPinAsync(current_pin, user.pin_hash, { pepper: PEPPER() }))) {

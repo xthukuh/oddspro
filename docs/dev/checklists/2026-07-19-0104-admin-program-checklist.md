@@ -91,13 +91,15 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] Verify E2E (serve, `SMS_ENABLED=0`/`MAIL_MAILER=log` console codes): email-channel resend → emailed code verified the phone + captured `users.email`; stale rotated SMS code rejected; PIN change 400s without `otp_code` and succeeds with it (new PIN logs in); forgot-PIN → reset → auto sign-in with the pre-reset session 401'd; stored-email reset shows the `t***@example.com` mask; unknown phone stays generic; `no_email` 400 when none on file. Browser: Forgot-PIN two-step + profile PIN-change code, console clean. **Live SMTP send still pending real `MAIL_*` creds (user-gated).**
 
 ## M9 — SMS templates + campaigns
-- [ ] Migrations: `users.sms_opt_out`; `sms_templates`; `sms_campaigns` + recipients
-- [ ] Pure `campaign-rules` + tests (renderTemplate, audience union + hardcoded opt-out, segments, batch plan, transitions)
-- [ ] Auth default template applied in `sendOtpSms`
-- [ ] Service `src/campaigns.js` (CRUD, preview+balance, single-slot job, cancel)
-- [ ] Routes (templates CRUD; campaigns create/get/send/cancel with re-count guard)
-- [ ] `MessagingSection.jsx` + UsersSection selection handoff + ProfileView opt-out
-- [ ] Verify: dev dry-run; live 1-recipient send confirmed; opt-out excluded
+- [x] Migrations `20260719000005_sms_templates_campaigns` (batch 19): `users.sms_opt_out`; `sms_templates`; `sms_campaigns` + `sms_campaign_recipients` (unique `(campaign_id, user_id)` — makes ledger materialization idempotent)
+- [x] Pure `campaign-rules` + tests (renderTemplate one-pass/total, GSM-7 + UCS-2 segment counting incl. the escape table, audience discriminated union + **hardcoded opt-out**, batch plan, send breaker, status machine)
+- [x] Auth default template applied in `sendOtpSms` (`wrapAuthText`, fail-open — no template/no table sends raw text)
+- [x] Service `src/campaigns.js` (CRUD, preview+balance, single-slot job, cancel)
+- [x] Routes (templates CRUD; campaigns preview/create/get/send/cancel with the re-count guard; `GET /api/admin/sms/job` progress)
+- [x] `countDriftVerdict` drift policy — **asymmetric**: refuse ANY growth (extra recipients were never previewed and bill beyond the approved estimate), proceed on shrink (opt-out/disable/un-verify only ever remove someone already approved, so the send stays a subset). Total: client-supplied `expected` coerces instead of throwing. Suite **828/828**
+- [x] `MessagingSection.jsx` + UsersSection selection handoff + ProfileView opt-out
+- [x] Verify E2E (serve, `SMS_ENABLED=0` dry run): preview 3 = eligible users, `cost_estimate` 3; **drift growth (expected 2, actual 3) → 409**, **drift shrink (expected 5, actual 3) → 200**; send completed 3/3 sent 0 failed with a full recipient ledger; **opt-out excluded from a filter audience (3→2) AND from an explicit admin selection (2 ids → 1 recipient)** — consent holds by construction; re-send of a completed campaign → 409 frozen; untyped `confirm` → 400; unauthenticated → 401. Cleanup: test campaigns purged, opt-out reset, verify session revoked, :3001 free.
+- [ ] **Live 1-recipient send — user-gated** (needs `SMS_ENABLED=1` + real Bonga credits; dry-run path proven above)
 
 ## M10 — Database section
 - [ ] `GET /api/admin/db/overview` + `/health`; pure `migrationStatus` + tests

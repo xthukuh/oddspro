@@ -77,6 +77,7 @@ export default function ProfileView({ forced = false }) {
             if (!forced) closeAuth();
             return;
         }
+
         setBusy(true);
         setError(null);
         try {
@@ -91,6 +92,22 @@ export default function ProfileView({ forced = false }) {
                 setOtpCode('');
                 setOtpRequested(false);
             }
+        } catch (err) {
+            setError(err.message);
+        } finally {
+            setBusy(false);
+        }
+    }
+
+    // M9: consent saves immediately on toggle rather than waiting for the Save
+    // button - an opt-out the user believes they made must not be lost by
+    // navigating away.
+    async function optOut(next) {
+        setBusy(true);
+        setError(null);
+        try {
+            await updateProfile({ sms_opt_out: next });
+            setNotice(next ? 'You will no longer receive promotional SMS.' : 'Promotional SMS re-enabled.');
         } catch (err) {
             setError(err.message);
         } finally {
@@ -177,6 +194,29 @@ export default function ProfileView({ forced = false }) {
                     {busy ? 'Saving…' : forced ? 'Set new PIN' : 'Save'}
                 </button>
             </form>
+            {/* M9 SMS consent. Saves on toggle (no Save press): withdrawing
+                consent must never be harder than giving it. Verification and
+                sign-in codes are unaffected - those are requested, not broadcast. */}
+            {!forced && (
+                <div className="mt-1 pt-3 border-t border-separator text-[13px] flex items-start justify-between gap-3">
+                    <span className="text-label-3">
+                        Promotional SMS
+                        <span className="block text-[12px] mt-0.5">
+                            {user?.sms_opt_out
+                                ? 'Off — you will not receive announcements.'
+                                : 'On — occasional announcements. Verification codes are always sent.'}
+                        </span>
+                    </span>
+                    <label className="shrink-0 flex items-center gap-1.5 text-label-2 cursor-pointer">
+                        <input
+                            type="checkbox" className="accent-accent h-4 w-4 cursor-pointer"
+                            checked={!user?.sms_opt_out} disabled={busy}
+                            onChange={e => optOut(!e.target.checked)}
+                        />
+                        Receive
+                    </label>
+                </div>
+            )}
             {/* M4 Legal row: the docs, plus the recorded acceptance for accounts
                 that signed up under the consent gate (older accounts show none). */}
             {!forced && (

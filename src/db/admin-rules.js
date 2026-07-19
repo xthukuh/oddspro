@@ -130,6 +130,7 @@ export function adminUserView(u, { activeSessions = 0 } = {}) {
         phone_carrier: u.phone_carrier ?? null,
         phone_verified: Boolean(u.phone_verified),
         is_active: Boolean(u.is_active),
+        sms_opt_out: Boolean(u.sms_opt_out),   // M9: excluded from every broadcast
         must_change_pin: Boolean(u.must_change_pin),
         pin_attempts: u.pin_attempts ?? 0,
         locked_until: u.locked_until ?? null,

@@ -226,6 +226,10 @@ export const profileSchema = z.object({
     pin: PIN.optional(),
     current_pin: PIN.optional(),
     otp_code: OTP_CODE.optional(),
+    // M9 marketing-SMS consent. Deliberately NOT gated behind the current PIN:
+    // withdrawing consent must be as frictionless as possible. It never affects
+    // transactional sends (OTPs) - those are requested by the user, not broadcast.
+    sms_opt_out: z.boolean().optional(),
 }).refine(d => !d.pin || d.current_pin, { message: 'Enter your current PIN to change it', path: ['current_pin'] })
     // M13 critical-change auth: a PIN change must carry the confirmation code
     // (purpose='pin_change') on top of the current PIN.

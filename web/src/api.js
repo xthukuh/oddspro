@@ -281,6 +281,61 @@ export async function patchAdminUser(id, patch) {
     return _send(`/api/admin/users/${encodeURIComponent(id)}`, patch, 'PATCH');
 }
 
+// --- Admin SMS templates + campaigns (M9) ------------------------------------
+
+// { templates: [{id, name, body, is_auth_default, ...}] }
+export async function getSmsTemplates() {
+    const { templates } = await _get('/api/admin/sms/templates');
+    return templates;
+}
+
+// Create (id null) or update one template -> { ok, template }. The body must
+// carry ${message}; unknown ${...} placeholders are rejected server-side.
+export async function saveSmsTemplate(id, { name, body, is_auth_default }) {
+    return _send(`/api/admin/sms/templates/${id ? encodeURIComponent(id) : ''}`,
+        { name, body, is_auth_default }, 'PUT');
+}
+
+export async function deleteSmsTemplate(id) {
+    return _send(`/api/admin/sms/templates/${encodeURIComponent(id)}`, {}, 'DELETE');
+}
+
+// Read-only audience/cost preview -> { text, count, segments, cost_estimate,
+// audience_label, balance, sms_enabled }.
+export async function previewSmsCampaign({ message, template_id, audience }) {
+    return _send('/api/admin/sms/preview', { message, template_id, audience });
+}
+
+// { campaigns: [...], job }
+export async function getSmsCampaigns(limit) {
+    return _get('/api/admin/sms/campaigns', { limit });
+}
+
+// { campaign, recipients, totals, job }
+export async function getSmsCampaign(id) {
+    return _get(`/api/admin/sms/campaigns/${encodeURIComponent(id)}`);
+}
+
+export async function createSmsCampaign({ name, message, template_id, audience }) {
+    return _send('/api/admin/sms/campaigns', { name, message, template_id, audience });
+}
+
+// The billable step. `expected_count` is the number the admin approved; the
+// server re-counts and answers 409 when the audience drifted.
+export async function sendSmsCampaign(id, expectedCount) {
+    return _send(`/api/admin/sms/campaigns/${encodeURIComponent(id)}/send`,
+        { confirm: 'SEND', expected_count: expectedCount });
+}
+
+export async function cancelSmsCampaign(id) {
+    return _send(`/api/admin/sms/campaigns/${encodeURIComponent(id)}/cancel`, {});
+}
+
+// Live send progress (polled while a campaign is sending).
+export async function getSmsJob() {
+    return _get('/api/admin/sms/job');
+}
+
 // Pre-binned lab aggregates: { x, y, color, outcome, cells, rows_used,
 // rows_skipped, rows_loaded, min_count }. filters: [{key, op, value}].
 export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount, topCategories }) {

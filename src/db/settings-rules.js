@@ -137,6 +137,9 @@ export const SETTINGS_CATALOG = [
     { key: 'SMS_ENABLED', type: 'boolean', group: 'sms', public: false, live: true, label: 'SMS sending', hint: 'Off = zero network; OTP codes log to the server console instead (dev mode).' },
     { key: 'SMS_DEFAULT_REGION', type: 'string', group: 'sms', public: false, live: true, pattern: '^[A-Z]{2}$', patternHint: 'two-letter ISO country, e.g. KE', label: 'Default phone region', hint: 'ISO country used to parse local phone-number formats into E.164.' },
     { key: 'BONGA_SERVICE_ID', type: 'int', group: 'sms', public: false, live: true, label: 'Bonga service ID', hint: 'Vendor service/sender id attached to SMS sends.' },
+    { key: 'SMS_BATCH_SIZE', type: 'int', group: 'sms', public: false, live: true, min: 1, max: 500, unit: 'messages', label: 'Campaign batch size', hint: 'Broadcast recipients sent per batch before pausing.' },
+    { key: 'SMS_BATCH_DELAY_MS', type: 'int', group: 'sms', public: false, live: true, min: 0, max: 60000, unit: 'ms', label: 'Campaign batch delay', hint: 'Pause between broadcast batches - paces sends so a big audience is not one burst.' },
+    { key: 'SMS_BREAKER_AFTER', type: 'int', group: 'sms', public: false, live: true, min: 1, max: 100, unit: 'failures', label: 'Campaign circuit breaker', hint: 'Consecutive send failures before the rest of a broadcast is abandoned (provider/credits outage).' },
     // ---- Email (M13; SMTP creds stay .env-only).
     { key: 'MAIL_MAILER', type: 'string', group: 'mail', public: false, live: true, pattern: '^(smtp|log)$', patternHint: 'smtp or log', label: 'Email sending', hint: 'log = emails print to the server console (dev mode); smtp sends for real via the MAIL_* creds in .env.' },
     // ---- Visitor geo backfill. The sweep INTERVAL is read once at scheduler

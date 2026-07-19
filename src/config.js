@@ -242,6 +242,12 @@ const EnvSchema = z.object({
     // server console, so signup/verify works in dev without a provider account.
     SMS_ENABLED: boolStr('0'),
     SMS_DEFAULT_REGION: z.string().default('KE'),   // ISO region for phone parsing (web input)
+    // M9 campaign pacing (spec decision 13): broadcasts walk the recipient
+    // ledger in batches with a delay BETWEEN them, so a large audience never
+    // becomes one provider-throttling burst. Admin-editable (settings catalog).
+    SMS_BATCH_SIZE: z.coerce.number().int().min(1).max(500).default(20),
+    SMS_BATCH_DELAY_MS: z.coerce.number().int().min(0).max(60_000).default(2000),
+    SMS_BREAKER_AFTER: z.coerce.number().int().min(1).max(100).default(5),
     // Bonga SMS (https://app.bongasms.co.ke). The send host is plain HTTP, so
     // its URL is z.string() (NOT .url() https). Creds are optional at parse time
     // and checked at send time (fail-closed with a clear message when SMS_ENABLED
