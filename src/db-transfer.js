@@ -20,7 +20,7 @@
 // columns via a server-side DATE_FORMAT cast, so the NDJSON captures the
 // exact wall-clock string MySQL itself sees - portable across hosts/timezones
 // and safe to re-insert verbatim on import.
-import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs';
+import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync, renameSync } from 'node:fs';
 import { createGzip, gunzipSync } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -34,6 +34,7 @@ import {
     exportStamp, stampToIso, chunkFileName, chunkSizeFor, isIntegerPkType,
     ndjsonLine, buildExportListing, parseManifest,
     buildUploadPlan, buildFkDeps, fkSafeOrder, nextCursor,
+    shouldSkipSafetyExport,
 } from './db/transfer-rules.js';
 import { AuthError } from './auth.js';
 
@@ -308,8 +309,18 @@ function _readProgress(dir) {
         return []; // corrupt ledger - safer to redo (upserts are idempotent) than to guess
     }
 }
+// Atomic write (fix pass 2, LOW finding): write to a `.tmp` sibling then
+// `renameSync` over the real path. A plain writeFileSync truncates-then-
+// writes in place, so a kill mid-write leaves a torn (partial-JSON) ledger -
+// harmless (it degrades to [] via _readProgress's catch, a safe-but-wasteful
+// full re-apply) but avoidable. rename is atomic on the same filesystem, so a
+// kill leaves either the OLD complete file or the NEW complete file, never a
+// torn one.
 function _writeProgress(dir, done) {
-    writeFileSync(path.join(dir, 'progress.json'), JSON.stringify(done));
+    const target = path.join(dir, 'progress.json');
+    const tmp = `${target}.tmp`;
+    writeFileSync(tmp, JSON.stringify(done));
+    renameSync(tmp, target);
 }
 
 // Reads one gzip NDJSON chunk file back into row objects. Bounded to ONE
@@ -449,13 +460,39 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
     // DEFAULT policy) rather than reusing whatever `excluded` list the
     // ORIGINAL export used - the safety net's job is to protect what's about
     // to be at risk on THIS host, not to mirror a remote export's choices.
-    _step(onStep, shouldCancel, 'safety export: starting');
-    await runExport({
-        excluded: [],
-        stamp: `${safeStamp}-pre-import`,
-        onStep: s => _step(onStep, shouldCancel, `safety export: ${s}`),
-        shouldCancel,
-    });
+    //
+    // ONLY on the FIRST apply attempt for this stamp (fix pass 2, MEDIUM
+    // finding): runImportApply re-runs from the top on a RESUMED apply too,
+    // and the safety export always targets the same
+    // `<stamp>-pre-import/` dir. Without this guard, a resume would take a
+    // SECOND safety export capturing the now-partially-imported DB and
+    // overwrite the manifest + overlapping chunks of the FIRST, pristine
+    // snapshot - destroying the rollback backup in exactly the
+    // killed-then-resumed scenario where it's needed most. `runExport`'s
+    // `mkdirSync(dir,{recursive:true})` never clears an existing dir, so
+    // simply skipping the call (rather than changing runExport itself)
+    // leaves the pristine snapshot untouched. `shouldSkipSafetyExport` only
+    // says yes when a VALID manifest is already there - a missing, torn, or
+    // otherwise malformed prior snapshot (first run, or a previous safety
+    // export that itself got killed mid-write) still takes a fresh one, so
+    // requirement (b) - a valid pristine backup always exists before any
+    // write - keeps holding.
+    const preImportDir = path.join(EXPORT_ROOT, `${safeStamp}-pre-import`);
+    const preImportManifestPath = path.join(preImportDir, 'manifest.json');
+    const preImportManifestRaw = existsSync(preImportManifestPath)
+        ? readFileSync(preImportManifestPath, 'utf8')
+        : null;
+    if (shouldSkipSafetyExport(preImportManifestRaw)) {
+        _step(onStep, shouldCancel, 'safety export: reusing existing pre-import snapshot');
+    } else {
+        _step(onStep, shouldCancel, 'safety export: starting');
+        await runExport({
+            excluded: [],
+            stamp: `${safeStamp}-pre-import`,
+            onStep: s => _step(onStep, shouldCancel, `safety export: ${s}`),
+            shouldCancel,
+        });
+    }
 
     // Re-verify schema_head from the STAGED manifest - the upload-time guard
     // (startImportManifest) is not enough on its own, since a migration can
@@ -523,12 +560,31 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
             }
         }
     } finally {
+        // Restore FK checks before the connection goes anywhere near the
+        // pool again. On the (near-impossible - only an already-dead
+        // connection) chance this throws, DESTROY the connection instead of
+        // releasing it: a plain `releaseConnection` would hand a possibly
+        // still-FK-checks-off connection back to the pool, where a LATER,
+        // unrelated query could silently inherit checks-off. `destroyRawConnection`
+        // is knex's own eviction primitive - the mysql2 client's (inherited
+        // from the mysql dialect, node_modules/knex/lib/dialects/mysql/index.js
+        // ~line 95) `connection.end()` wrapper, the exact method knex's own
+        // tarn pool wiring calls internally to retire a dead connection
+        // (node_modules/knex/lib/client.js ~line 364-368) - so a bad-state
+        // connection is closed outright and can never re-enter the pool.
+        // The happy path (restore succeeded) still releases normally.
+        let restored = false;
         try {
             await db.raw('SET FOREIGN_KEY_CHECKS=1').connection(conn);
+            restored = true;
         } catch (e) {
             console.error('db-transfer: failed to restore FOREIGN_KEY_CHECKS on the import connection:', e?.message ?? e);
         }
-        await db.client.releaseConnection(conn);
+        if (restored) {
+            await db.client.releaseConnection(conn);
+        } else {
+            await db.client.destroyRawConnection(conn);
+        }
     }
 
     return { stamp: safeStamp, applied_chunks: done.length, tables: order.length };

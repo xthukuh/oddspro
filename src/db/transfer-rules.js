@@ -398,3 +398,25 @@ export const importApplySchema = z.object({
     stamp: z.string().min(1),
     confirm: z.string().min(1),
 });
+
+// --- Safety-export-on-resume guard (fix pass 2, MEDIUM finding) ------------
+// runImportApply (src/db-transfer.js) re-runs from the top on EVERY apply
+// invocation, including a resume after a kill - and its safety export always
+// targets the SAME dir (`var/exports/<stamp>-pre-import/`). Without this
+// guard, a resumed apply would take a SECOND safety export that captures the
+// now-PARTIALLY-IMPORTED database and overwrites the manifest + overlapping
+// chunks of the FIRST, pristine snapshot - destroying the one backup an
+// operator most needs in exactly the killed-then-resumed scenario.
+//
+// `preImportManifestRawOrNull` is whatever the caller read off disk at
+// `var/exports/<stamp>-pre-import/manifest.json` (raw file text) - or `null`
+// when that file doesn't exist yet. Skip the safety export iff a VALID
+// manifest is already there (the pristine snapshot from a prior run); a
+// missing, torn, or otherwise malformed prior manifest must NOT skip it -
+// that's either a genuine first run or a snapshot that never finished, and
+// requirement (b) ("a valid pristine backup always exists before any write")
+// only holds if a fresh attempt is made.
+export function shouldSkipSafetyExport(preImportManifestRawOrNull) {
+    if (preImportManifestRawOrNull == null) return false;
+    return parseManifest(preImportManifestRawOrNull).ok === true;
+}

@@ -23,6 +23,7 @@ import {
     buildFkDeps,
     importConfirmPhrase, matchesImportConfirm,
     importApplySchema,
+    shouldSkipSafetyExport,
 } from '../src/db/transfer-rules.js';
 
 // --- manifest ------------------------------------------------------------
@@ -572,4 +573,37 @@ test('importApplySchema rejects a missing/empty stamp or confirm, or wrong types
     assert.throws(() => importApplySchema.parse({ stamp: '', confirm: 'IMPORT oddspro' }));
     assert.throws(() => importApplySchema.parse({ stamp: '20260720_101500', confirm: '' }));
     assert.throws(() => importApplySchema.parse({ stamp: 42, confirm: 'IMPORT oddspro' }));
+});
+
+// --- shouldSkipSafetyExport (fix pass 2, MEDIUM finding) --------------------
+// Gates whether runImportApply's safety export re-runs on a resumed apply.
+// Skip iff a VALID pre-import manifest is already on disk (the pristine
+// snapshot from a prior attempt); never skip on a missing or malformed one -
+// that's either a genuine first run or a torn snapshot, and either way a
+// fresh safety export is required before any row is written.
+
+test('shouldSkipSafetyExport returns true for a valid manifest passed as a raw JSON string (the on-disk case)', () => {
+    assert.equal(shouldSkipSafetyExport(JSON.stringify(validManifest)), true);
+});
+
+test('shouldSkipSafetyExport returns true for a valid manifest passed as an already-parsed object', () => {
+    assert.equal(shouldSkipSafetyExport(validManifest), true);
+});
+
+test('shouldSkipSafetyExport returns false when there is no prior snapshot (null/missing)', () => {
+    assert.equal(shouldSkipSafetyExport(null), false);
+    assert.equal(shouldSkipSafetyExport(undefined), false);
+});
+
+test('shouldSkipSafetyExport returns false on a malformed/torn manifest string (never throws)', () => {
+    assert.doesNotThrow(() => shouldSkipSafetyExport('{"version":1,'));
+    assert.equal(shouldSkipSafetyExport('{"version":1,'), false);
+    assert.equal(shouldSkipSafetyExport(''), false);
+    assert.equal(shouldSkipSafetyExport('not json at all'), false);
+});
+
+test('shouldSkipSafetyExport returns false on a well-formed-JSON-but-wrong-shape manifest', () => {
+    assert.equal(shouldSkipSafetyExport('{}'), false);
+    assert.equal(shouldSkipSafetyExport('null'), false);
+    assert.equal(shouldSkipSafetyExport(JSON.stringify({ ...validManifest, tables: [{ name: 'leagues' }] })), false);
 });
