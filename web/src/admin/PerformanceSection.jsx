@@ -296,7 +296,7 @@ function EdgeBuckets({ perf, dark }) {
             </ResponsiveContainer>
             <div className="flex flex-wrap gap-x-4 gap-y-1 mt-1 text-[11px] text-label-3">
                 {rows.map(r => (
-                    <span key={r.bucket}>{r.bucket}: tips <Nn n={r.tipsN} /> · hot <Nn n={r.hotN} /></span>
+                    <span key={r.bucket}>{r.bucket}: tips <Nn n={r.tipsN} /><Under n={r.tipsN} /> · hot <Nn n={r.hotN} /><Under n={r.hotN} /></span>
                 ))}
             </div>
             <p className="text-[11px] text-label-3 mt-2">
