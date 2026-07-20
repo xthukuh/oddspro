@@ -27,3 +27,22 @@ export function describeMigrationResult(result) {
     if (files.length === 0) return 'schema already up to date (no migrations to run)';
     return `ran ${files.length} migration(s) in batch ${batchNo}: ${files.join(', ')}`;
 }
+
+// M10: the admin DB-overview's migration status - `head` (the newest applied
+// migration, also the export manifest's `schema_head` compatibility guard),
+// `pending` (disk files not yet applied), and `up_to_date`. TOTAL - fed from a
+// DB read (knex_migrations) and a directory listing, so a bad/empty/missing
+// input must resolve to a well-formed empty result rather than throwing.
+//
+// Migration filenames are timestamp-prefixed, so a lexicographic sort is a
+// chronological sort - `head` is computed from a sorted copy rather than
+// trusting the caller's row order.
+export function migrationStatus(appliedNames, diskFiles) {
+    const applied = Array.isArray(appliedNames) ? appliedNames.filter(n => typeof n === 'string' && n) : [];
+    const disk = Array.isArray(diskFiles) ? diskFiles.filter(n => typeof n === 'string' && n) : [];
+    const appliedSet = new Set(applied);
+    const sortedApplied = [...applied].sort();
+    const head = sortedApplied.length ? sortedApplied[sortedApplied.length - 1] : null;
+    const pending = disk.filter(f => !appliedSet.has(f)).sort();
+    return { head, applied, pending, up_to_date: pending.length === 0 };
+}
