@@ -1,6 +1,6 @@
 import express from 'express';
 import compression from 'compression';
-import { existsSync } from 'node:fs';
+import { existsSync, createReadStream, statSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
@@ -12,6 +12,8 @@ import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
+import { startExport, listExports, deleteExport, EXPORT_ROOT } from './db-transfer.js';
+import { safeExportFilename, exportRequestSchema } from './db/transfer-rules.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit, pickIp } from './db/visit-rules.js';
@@ -796,6 +798,61 @@ app.get('/api/admin/db/health', requireAdminRole, async (req, res, next) => {
     try {
         res.json(await dbHealth());
     } catch (e) { next(e); }
+});
+
+// --- M10: DB export (Task 3 - chunked NDJSON+gzip dump; Task 4 adds import).
+// Rides the SAME single-slot job as /api/refresh (src/auto-refresh.js) - an
+// export can never overlap a data refresh (or vice versa): delete+insert
+// gap-lock safety, spec decision 11. Job state is the plain refreshStatus()
+// object every /api/refresh poller already understands - no second shape to
+// learn.
+
+// POST /api/admin/db/export - body {excluded?: string[]}. 409 (not queued)
+// when a refresh/export/import job already holds the slot.
+app.post('/api/admin/db/export', requireAdminRole, express.json({ limit: '8kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = exportRequestSchema.parse(req.body ?? {});
+        const { started } = startExport({ excluded: body.excluded ?? [] });
+        if (!started) return res.status(409).json(refreshStatus());
+        res.status(202).json(refreshStatus());
+    } catch (e) { authErr(e, res, next); }
+});
+
+// GET /api/admin/db/exports - every export on disk (newest first, manifest
+// validated) + the shared job state (the web polls this while an export
+// runs, same idiom as campaign routes embedding campaignJobStatus()).
+app.get('/api/admin/db/exports', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ exports: await listExports(), job: refreshStatus() });
+    } catch (e) { next(e); }
+});
+
+// GET /api/admin/db/exports/:stamp/:file - stream one chunk/manifest file.
+// BOTH path params go through safeExportFilename BEFORE any filesystem
+// access - a rejection is 400, not 404, and the handler returns before ever
+// touching disk (the path-traversal gate; src/db/transfer-rules.js).
+app.get('/api/admin/db/exports/:stamp/:file', requireAdminRole, (req, res) => {
+    const stamp = safeExportFilename(req.params.stamp);
+    const file = safeExportFilename(req.params.file);
+    if (!stamp || !file) return res.status(400).json({ error: 'Invalid export path' });
+    const filePath = path.join(EXPORT_ROOT, stamp, file);
+    if (!existsSync(filePath)) return res.status(404).json({ error: 'Export file not found' });
+    res.set('Content-Type', file.endsWith('.json') ? 'application/json' : 'application/gzip');
+    res.set('Content-Disposition', `attachment; filename="${file}"`);
+    res.set('Content-Length', String(statSync(filePath).size));
+    createReadStream(filePath).on('error', () => res.destroy()).pipe(res);
+});
+
+// DELETE /api/admin/db/exports/:stamp - remove one export directory. Same
+// path-traversal gate as the download route above (one param here).
+app.delete('/api/admin/db/exports/:stamp', requireAdminRole, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    const stamp = safeExportFilename(req.params.stamp);
+    if (!stamp) return res.status(400).json({ error: 'Invalid export name' });
+    try {
+        res.json({ ok: true, ...(await deleteExport(stamp)) });
+    } catch (e) { authErr(e, res, next); }
 });
 
 // --- M9: SMS templates + broadcast campaigns --------------------------------

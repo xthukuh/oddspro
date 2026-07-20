@@ -12,6 +12,13 @@ import {
     safeExportFilename,
     fkSafeOrder,
     nextCursor,
+    exportStamp, stampToIso,
+    chunkFileName, chunkSizeFor,
+    isIntegerPkType,
+    ndjsonLine,
+    formatBytes,
+    buildExportListing,
+    exportRequestSchema,
 } from '../src/db/transfer-rules.js';
 
 // --- manifest ------------------------------------------------------------
@@ -269,4 +276,154 @@ test('nextCursor is total against a malformed manifest/done pair', () => {
     assert.equal(nextCursor({}, undefined), null);
     assert.equal(nextCursor({ tables: 'nope' }, []), null);
     assert.deepEqual(nextCursor(cursorManifest, null), { table: 'leagues', chunk: 0 });
+});
+
+// --- export stamp ----------------------------------------------------------
+
+test('exportStamp derives YYYYMMDD_HHMMSS from an ISO instant', () => {
+    assert.equal(exportStamp(new Date('2026-07-20T15:04:05.123Z')), '20260720_150405');
+    assert.equal(exportStamp(new Date('2026-01-02T00:00:00.000Z')), '20260102_000000');
+});
+
+test('stampToIso reverses exportStamp (round trip, seconds precision)', () => {
+    const d = new Date('2026-07-20T15:04:05.000Z');
+    assert.equal(stampToIso(exportStamp(d)), d.toISOString());
+});
+
+test('stampToIso parses the leading stamp of a suffixed name (Task 4 pre-import dirs)', () => {
+    assert.equal(stampToIso('20260720_150405-pre-import'), '2026-07-20T15:04:05.000Z');
+});
+
+test('stampToIso returns null on anything that doesn\'t start with the expected shape', () => {
+    for (const bad of [null, undefined, 42, '', 'not-a-stamp', '2026-07-20', '20260720']) {
+        assert.equal(stampToIso(bad), null);
+    }
+});
+
+// --- chunk file naming -------------------------------------------------------
+
+test('chunkFileName zero-pads the index to 4 digits', () => {
+    assert.equal(chunkFileName('matches', 0), 'matches.0000.ndjson.gz');
+    assert.equal(chunkFileName('odds_markets', 444), 'odds_markets.0444.ndjson.gz');
+    assert.equal(chunkFileName('teams', 12), 'teams.0012.ndjson.gz');
+});
+
+test('chunkFileName throws on a bad table or index (programmer error)', () => {
+    assert.throws(() => chunkFileName('', 0), TypeError);
+    assert.throws(() => chunkFileName(null, 0), TypeError);
+    assert.throws(() => chunkFileName('teams', -1), TypeError);
+    assert.throws(() => chunkFileName('teams', 1.5), TypeError);
+    assert.throws(() => chunkFileName('teams', 'x'), TypeError);
+});
+
+// --- per-table chunk size -----------------------------------------------------
+
+test('chunkSizeFor pins matches to 500 and everything else to 5000', () => {
+    assert.equal(chunkSizeFor('matches'), 500);
+    assert.equal(chunkSizeFor('odds_markets'), 5000);
+    assert.equal(chunkSizeFor('teams'), 5000);
+    assert.equal(chunkSizeFor('fixture_ai_insights'), 5000);
+});
+
+// --- PK type classification ---------------------------------------------------
+
+test('isIntegerPkType accepts the live schema\'s integer PK types (case-insensitive)', () => {
+    for (const t of ['int', 'bigint', 'mediumint', 'smallint', 'tinyint', 'INT', 'BIGINT']) {
+        assert.equal(isIntegerPkType(t), true, `expected ${t} to be integer-like`);
+    }
+});
+
+test('isIntegerPkType rejects the live schema\'s non-integer PK types', () => {
+    // ip_geo.ip and settings.key are both varchar single-column PKs.
+    for (const t of ['varchar', 'enum', 'decimal', 'char', 'text', '', null, undefined, 42]) {
+        assert.equal(isIntegerPkType(t), false, `expected ${JSON.stringify(t)} to be rejected`);
+    }
+});
+
+// --- NDJSON row serialization -------------------------------------------------
+
+test('ndjsonLine serializes one JSON object per line, newline-terminated', () => {
+    assert.equal(ndjsonLine({ id: 1, name: 'Arsenal' }), '{"id":1,"name":"Arsenal"}\n');
+    assert.equal(ndjsonLine({ id: 2, note: null }), '{"id":2,"note":null}\n');
+});
+
+// --- byte formatting -----------------------------------------------------
+
+test('formatBytes formats sub-KB sizes with no decimal', () => {
+    assert.equal(formatBytes(0), '0 B');
+    assert.equal(formatBytes(500), '500 B');
+    assert.equal(formatBytes(1023), '1023 B');
+});
+
+test('formatBytes crosses unit boundaries at exact powers of 1024 without drift', () => {
+    assert.equal(formatBytes(1024), '1.0 KB');
+    assert.equal(formatBytes(1024 * 1024), '1.0 MB');
+    assert.equal(formatBytes(1024 * 1024 * 1024), '1.0 GB');
+    assert.equal(formatBytes(1024 * 1024 * 1024 * 1024), '1.0 TB');
+});
+
+test('formatBytes formats a realistic export size with one decimal', () => {
+    assert.equal(formatBytes(1_500_000), '1.4 MB');
+});
+
+test('formatBytes is total against negative/NaN/non-numeric input', () => {
+    assert.equal(formatBytes(-5), '0 B');
+    assert.equal(formatBytes(NaN), '0 B');
+    assert.equal(formatBytes(undefined), '0 B');
+    assert.equal(formatBytes('nope'), '0 B');
+});
+
+// --- export listing mapper -----------------------------------------------
+
+test('buildExportListing sums file bytes and validates the manifest', () => {
+    const r = buildExportListing([{
+        stamp: '20260720_100000',
+        created_at: '2026-07-20T10:00:00.000Z',
+        files: [{ name: 'manifest.json', bytes: 500 }, { name: 'teams.0000.ndjson.gz', bytes: 1500 }],
+        manifest: validManifest,
+    }]);
+    assert.equal(r.length, 1);
+    assert.equal(r[0].bytes, 2000);
+    assert.equal(r[0].manifest_ok, true);
+    assert.equal(r[0].created_at, '2026-07-20T10:00:00.000Z');
+});
+
+test('buildExportListing flags manifest_ok false for a missing or invalid manifest', () => {
+    const r = buildExportListing([
+        { stamp: '20260720_100000', files: [], manifest: null },
+        { stamp: '20260719_100000', files: [], manifest: { version: 1 } },
+    ]);
+    assert.equal(r[0].manifest_ok, false);
+    assert.equal(r[1].manifest_ok, false);
+});
+
+test('buildExportListing sorts newest stamp first', () => {
+    const r = buildExportListing([
+        { stamp: '20260601_000000', files: [] },
+        { stamp: '20260720_120000', files: [] },
+        { stamp: '20260715_083000', files: [] },
+    ]);
+    assert.deepEqual(r.map(e => e.stamp), ['20260720_120000', '20260715_083000', '20260601_000000']);
+});
+
+test('buildExportListing is total against a non-array or malformed entries', () => {
+    assert.deepEqual(buildExportListing(null), []);
+    assert.deepEqual(buildExportListing(undefined), []);
+    const r = buildExportListing([{}]);
+    assert.equal(r.length, 1);
+    assert.deepEqual(r[0].files, []);
+    assert.equal(r[0].bytes, 0);
+    assert.equal(r[0].manifest_ok, false);
+});
+
+// --- export request schema ----------------------------------------------
+
+test('exportRequestSchema accepts an empty body and an excluded list', () => {
+    assert.deepEqual(exportRequestSchema.parse({}), {});
+    assert.deepEqual(exportRequestSchema.parse({ excluded: ['ip_geo'] }), { excluded: ['ip_geo'] });
+});
+
+test('exportRequestSchema rejects a non-array/non-string excluded field', () => {
+    assert.throws(() => exportRequestSchema.parse({ excluded: 'ip_geo' }));
+    assert.throws(() => exportRequestSchema.parse({ excluded: [42] }));
 });

@@ -166,12 +166,134 @@ export function fkSafeOrder(tables, deps) {
 export function nextCursor(manifest, done) {
     const tables = Array.isArray(manifest?.tables) ? manifest.tables : [];
     const doneList = Array.isArray(done) ? done : [];
-    const doneSet = new Set(doneList.map(d => `${d?.table} ${d?.chunk}`));
+    const doneSet = new Set(doneList.map(d => `${d?.table} ${d?.chunk}`));
     for (const t of tables) {
         const total = Number(t?.chunks) || 0;
         for (let chunk = 0; chunk < total; chunk++) {
-            if (!doneSet.has(`${t?.name} ${chunk}`)) return { table: t?.name, chunk };
+            if (!doneSet.has(`${t?.name} ${chunk}`)) return { table: t?.name, chunk };
         }
     }
     return null;
 }
+
+// --- Export stamp --------------------------------------------------------
+// YYYYMMDD_HHMMSS derived from an ISO instant - the EXACT formula already
+// used by scripts/db-export.js's CLI entry, reused verbatim so both DB-dump
+// paths (the phpMyAdmin gzip dump and this NDJSON exporter) name directories
+// the same way. src/db-transfer.js calls this with `new Date()`; a fixed Date
+// is passed here so the derivation itself stays pure/offline-testable.
+export function exportStamp(d = new Date()) {
+    return d.toISOString().replace(/[-:]/g, '').replace(/\..+/, '').replace('T', '_');
+}
+
+// Reverses exportStamp back to an ISO instant (seconds precision). The stamp
+// ALREADY encodes creation time, so the exports list derives created_at from
+// the directory NAME rather than a filesystem mtime (which a copy/rsync/zip
+// can rewrite) - this is that parser. Accepts a suffixed stamp too (the
+// Task 4 safety-export idiom names its dir `<stamp>-pre-import`) since the
+// leading YYYYMMDD_HHMMSS is always what matters. Returns null on anything
+// that doesn't start with the expected shape - never throws (stamps
+// ultimately come from a directory listing, i.e. external input).
+const STAMP_RX = /^(\d{4})(\d{2})(\d{2})_(\d{2})(\d{2})(\d{2})/;
+export function stampToIso(stamp) {
+    const m = typeof stamp === 'string' ? STAMP_RX.exec(stamp) : null;
+    if (!m) return null;
+    const [, y, mo, d, h, mi, s] = m;
+    const iso = `${y}-${mo}-${d}T${h}:${mi}:${s}.000Z`;
+    return Number.isFinite(Date.parse(iso)) ? iso : null;
+}
+
+// --- Chunk file naming -----------------------------------------------------
+// <table>.<NNNN>.ndjson.gz - zero-padded to 4 digits. The largest live table
+// (odds_markets, ~2.2M rows / chunkSize 5000) is ~445 chunks, comfortably
+// inside the 9999 budget this format allows.
+export function chunkFileName(table, index) {
+    if (typeof table !== 'string' || !table) {
+        throw new TypeError(`chunkFileName: table must be a non-empty string, got ${JSON.stringify(table)}`);
+    }
+    if (!Number.isInteger(index) || index < 0) {
+        throw new TypeError(`chunkFileName: index must be a non-negative integer, got ${JSON.stringify(index)}`);
+    }
+    return `${table}.${String(index).padStart(4, '0')}.ndjson.gz`;
+}
+
+// --- Per-table chunk size ------------------------------------------------
+// Spec-pinned: 5000 rows/chunk, except `matches` at 500 - its `metadata`
+// column holds ~39 KB/row of raw provider JSON (src/db/store.js), so 5000
+// rows would balloon a single chunk file's in-flight memory ~8x over every
+// other table.
+const CHUNK_SIZE_DEFAULT = 5000;
+const CHUNK_SIZE_MATCHES = 500;
+export function chunkSizeFor(table) {
+    return table === 'matches' ? CHUNK_SIZE_MATCHES : CHUNK_SIZE_DEFAULT;
+}
+
+// --- PK type classification --------------------------------------------------
+// Only a SINGLE integer-typed PK column supports numeric min/max range
+// chunking (chunkPlan + `WHERE pk BETWEEN`); every other shape - a composite
+// PK (fixture_ai_insights: fixture_id,kind,provider) or a non-integer single
+// PK (ip_geo.ip, settings.key, both VARCHAR) - falls back to an ORDER BY +
+// LIMIT/OFFSET pagination in src/db-transfer.js. Verified against the live
+// 33-table schema (2026-07-20): every other table has a single int/bigint PK.
+const INTEGER_PK_TYPES = new Set(['int', 'bigint', 'mediumint', 'smallint', 'tinyint']);
+export function isIntegerPkType(dataType) {
+    return typeof dataType === 'string' && INTEGER_PK_TYPES.has(dataType.toLowerCase());
+}
+
+// --- NDJSON row serialization -------------------------------------------------
+// One JSON object per line - what the exporter writes into each gzip chunk
+// file and the importer (Task 4) parses back. A row that can't JSON.stringify
+// (a BigInt/circular value from the driver) is a genuine bug worth throwing
+// on, not something to swallow mid-export.
+export function ndjsonLine(row) {
+    return `${JSON.stringify(row)}\n`;
+}
+
+// --- Byte formatting -----------------------------------------------------
+// Human-readable size for the exports list UI. Iterative division rather
+// than a log-based formula - Math.log(n)/Math.log(1024) is vulnerable to
+// floating-point drift landing just under an exact power-of-1024 boundary
+// (e.g. mis-classifying exactly 1 MB as "1024.0 KB").
+const BYTE_UNITS = ['B', 'KB', 'MB', 'GB', 'TB'];
+export function formatBytes(bytes) {
+    const n = Number(bytes);
+    if (!Number.isFinite(n) || n <= 0) return '0 B';
+    let value = n;
+    let unit = 0;
+    while (value >= 1024 && unit < BYTE_UNITS.length - 1) {
+        value /= 1024;
+        unit += 1;
+    }
+    return `${unit === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[unit]}`;
+}
+
+// --- Export listing mapper -----------------------------------------------
+// Turns raw per-directory filesystem facts (already read by the caller -
+// src/db-transfer.js's listExports - this function stays pure/offline) into
+// the shape GET /api/admin/db/exports returns. Newest first: stamps sort
+// lexicographically == chronologically (YYYYMMDD_HHMMSS).
+export function buildExportListing(entries) {
+    const list = Array.isArray(entries) ? entries : [];
+    return list.map(e => {
+        const files = Array.isArray(e?.files)
+            ? e.files.map(f => ({ name: f?.name ?? null, bytes: Number(f?.bytes) || 0 }))
+            : [];
+        const bytes = files.reduce((sum, f) => sum + f.bytes, 0);
+        const manifest_ok = e?.manifest != null && parseManifest(e.manifest).ok === true;
+        return {
+            stamp: e?.stamp ?? null,
+            files,
+            bytes,
+            created_at: e?.created_at ?? null,
+            manifest_ok,
+        };
+    }).sort((a, b) => (a.stamp < b.stamp ? 1 : a.stamp > b.stamp ? -1 : 0));
+}
+
+// --- Export request body -------------------------------------------------
+// POST /api/admin/db/export's body. `excluded` is ADDITIVE on top of
+// resolveExcluded's own defaults (see above) - there is no way to un-exclude
+// a default or the always-excluded migration tables through this schema.
+export const exportRequestSchema = z.object({
+    excluded: z.array(z.string()).max(64).optional(),
+});

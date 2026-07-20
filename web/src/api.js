@@ -361,6 +361,48 @@ export async function getDbHealth() {
     return _get('/api/admin/db/health');
 }
 
+// --- Admin DB export (M10 Task 3) ---------------------------------------------
+
+// Start a chunked NDJSON+gzip export -> {started}. 409 (thrown as ApiError)
+// when a refresh/export/import job already holds the shared slot.
+export async function startDbExport(excluded = []) {
+    return _send('/api/admin/db/export', { excluded });
+}
+
+// { exports: [{stamp, files, bytes, created_at, manifest_ok}], job } - job is
+// the same shape GET /api/refresh returns (the export rides that slot).
+export async function getDbExports() {
+    return _get('/api/admin/db/exports');
+}
+
+// Download one export file (a .ndjson.gz chunk or manifest.json) through the
+// authenticated fetch path - the route is admin-session-guarded, so a bare
+// <a href> would send no Authorization header and just 401. Triggers a
+// client-side object-URL download and revokes it once the click is queued.
+export async function downloadDbExportFile(stamp, file) {
+    const res = await fetch(`/api/admin/db/exports/${encodeURIComponent(stamp)}/${encodeURIComponent(file)}`,
+        { headers: _authHeaders() });
+    if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new ApiError(res.status, body, res.statusText);
+    }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = file;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+// Delete one export directory (irreversible - the UI gates this behind a
+// typed confirm like UsersSection's DISABLE/RESET actions).
+export async function deleteDbExport(stamp) {
+    return _send(`/api/admin/db/exports/${encodeURIComponent(stamp)}`, {}, 'DELETE');
+}
+
 // NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
 // 2026-07-16 along with the rest of that feature - deprecated as irrelevant at
 // this stage.

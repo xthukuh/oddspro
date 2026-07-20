@@ -60,6 +60,10 @@ experiments/
 backups/
 release/
 
+# DB export/import staging (src/db-transfer.js: chunked NDJSON+gzip dumps in
+# var/exports/, resumable-import chunk uploads in var/imports/ - M10)
+var/
+
 # Custom
 **.xx*
 .playwright-mcp/
