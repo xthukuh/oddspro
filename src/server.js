@@ -838,10 +838,27 @@ app.get('/api/admin/db/exports/:stamp/:file', requireAdminRole, (req, res) => {
     if (!stamp || !file) return res.status(400).json({ error: 'Invalid export path' });
     const filePath = path.join(EXPORT_ROOT, stamp, file);
     if (!existsSync(filePath)) return res.status(404).json({ error: 'Export file not found' });
+    // A concurrent DELETE between the existsSync check above and here would
+    // otherwise make statSync/createReadStream throw synchronously -> a
+    // generic 500 instead of the honest 404 the file's actual absence
+    // deserves (TOCTOU). Any OTHER stat failure still propagates (throw ->
+    // Express 5's built-in sync-handler catch -> the JSON error middleware).
+    let size;
+    try {
+        size = statSync(filePath).size;
+    } catch (e) {
+        if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Export file not found' });
+        throw e;
+    }
     res.set('Content-Type', file.endsWith('.json') ? 'application/json' : 'application/gzip');
     res.set('Content-Disposition', `attachment; filename="${file}"`);
-    res.set('Content-Length', String(statSync(filePath).size));
-    createReadStream(filePath).on('error', () => res.destroy()).pipe(res);
+    res.set('Content-Length', String(size));
+    createReadStream(filePath)
+        .on('error', e => {
+            if (e?.code === 'ENOENT' && !res.headersSent) return res.status(404).json({ error: 'Export file not found' });
+            res.destroy();
+        })
+        .pipe(res);
 });
 
 // DELETE /api/admin/db/exports/:stamp - remove one export directory. Same

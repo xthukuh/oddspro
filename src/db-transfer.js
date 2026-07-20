@@ -38,10 +38,6 @@ import { AuthError } from './auth.js';
 
 export const EXPORT_ROOT = path.join('var', 'exports');
 
-// Matches knexfile.js's `migrations.directory` - same relative-to-cwd
-// convention db-info.js already uses for the same read.
-const MIGRATIONS_DIR = path.join('src', 'db', 'migrations');
-
 // --- Schema introspection -----------------------------------------------------
 // One query per table: every column (name, type, ordinal position) LEFT
 // JOINed against whether it's part of the PRIMARY KEY (and at what position
@@ -90,9 +86,12 @@ async function tableList() {
 }
 
 async function schemaHead() {
+    // migrationStatus's `head` is derived purely from the APPLIED list
+    // (sorted, last one) - `disk` only feeds `pending`, which this caller
+    // never reads. Passing [] skips a wasted readdirSync of MIGRATIONS_DIR
+    // without changing `head` at all.
     const appliedRows = await db('knex_migrations').select('name').orderBy('id');
-    const disk = readdirSync(MIGRATIONS_DIR).filter(f => f.endsWith('.js'));
-    return migrationStatus(appliedRows.map(r => r.name), disk).head;
+    return migrationStatus(appliedRows.map(r => r.name), []).head;
 }
 
 // --- Chunk file writing --------------------------------------------------

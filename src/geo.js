@@ -2,6 +2,7 @@ import { config } from './config.js';
 import { effective } from './settings.js';
 import { db } from './db/connection.js';
 import { parseGeoResult, planGeoBatch } from './db/geo-rules.js';
+import { refreshJob } from './auto-refresh.js';
 
 // Background visitor-geo backfill. Each sweep discovers visitor IPs not yet in
 // the ip_geo cache, resolves the public ones via the geo provider (private/
@@ -110,7 +111,14 @@ let firstRun = null;
 let running = false;
 
 async function tick() {
-    if (running) return;
+    // Skip while a refresh/export/import job holds the shared slot (same
+    // check src/ai-worker.js's startAiWorker does against refreshJob before
+    // calling drainAiReviews) - ip_geo is paginated via ORDER BY+LIMIT/OFFSET
+    // (non-integer PK), which is only row-accurate if the table is static
+    // during the scan; an export mid-backfill would shift the OFFSET window
+    // and silently skip/duplicate a row across chunk files. A skipped tick is
+    // harmless - the next interval retries.
+    if (running || refreshJob.running) return;
     running = true;
     try {
         const c = await backfillGeo();
