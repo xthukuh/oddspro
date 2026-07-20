@@ -346,6 +346,21 @@ export async function getLabData({ x, y, color, outcome, filters, days, sample, 
     });
 }
 
+// --- Admin DB overview + health (M10) -----------------------------------------
+
+// { database, server_version, tables: [{name, rows_estimate, data_bytes,
+// index_bytes, total_bytes}], totals, migrations: {head, applied, pending,
+// up_to_date}, pool }. rows_estimate is an InnoDB engine estimate, not exact.
+export async function getDbOverview() {
+    return _get('/api/admin/db/overview');
+}
+
+// { ok, latency_ms, uptime_s, threads_connected, checked_at } - or
+// { ok: false, error, checked_at } on failure (never throws server-side).
+export async function getDbHealth() {
+    return _get('/api/admin/db/health');
+}
+
 // NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
 // 2026-07-16 along with the rest of that feature - deprecated as irrelevant at
 // this stage.

@@ -11,6 +11,7 @@ import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, 
 import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
+import { dbOverview, dbHealth } from './db-info.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit, pickIp } from './db/visit-rules.js';
@@ -772,6 +773,29 @@ app.patch('/api/admin/users/:id', requireAdminRole, authJson, async (req, res, n
         const patch = userPatchSchema.parse(req.body ?? {});
         res.json({ ok: true, ...(await patchUser(req.params.id, patch, req.user)) });
     } catch (e) { authErr(e, res, next); }
+});
+
+// --- M10: DB overview + health (admin SESSION only like every new admin
+// route). Both are read-only GETs, so no csrfOk. Modelled on src/db-info.js's
+// header note: nothing else in the codebase queries information_schema or
+// knex_migrations, so both loaders go through db.raw().
+
+// GET /api/admin/db/overview - server version, per-table sizes (rows_estimate
+// is an InnoDB engine ESTIMATE, never exact - see src/db-info.js), migration
+// head/pending, knex pool gauges.
+app.get('/api/admin/db/overview', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json(await dbOverview());
+    } catch (e) { next(e); }
+});
+
+// GET /api/admin/db/health - SELECT 1 latency + SHOW GLOBAL STATUS uptime/
+// threads_connected. dbHealth() itself never throws (a failed check resolves
+// to {ok:false, error} so the admin gets a reason instead of a 500).
+app.get('/api/admin/db/health', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json(await dbHealth());
+    } catch (e) { next(e); }
 });
 
 // --- M9: SMS templates + broadcast campaigns --------------------------------
