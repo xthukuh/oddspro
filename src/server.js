@@ -12,6 +12,7 @@ import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
+import { scorecardSummary } from './scorecard.js';
 import {
     startExport, listExports, deleteExport, EXPORT_ROOT,
     startImportManifest, saveImportChunk, importStagingState, startImport,
@@ -937,6 +938,23 @@ app.post('/api/admin/db/import/apply', requireAdminRole, express.json({ limit: '
         if (!started) return res.status(409).json(refreshStatus());
         res.status(202).json(refreshStatus());
     } catch (e) { authErr(e, res, next); }
+});
+
+// --- M11 Task 7: AI scorecard endpoint ---------------------------------------
+// The same S1-S5 structured data `node scripts/ai-scorecard.js` prints
+// (src/scorecard.js's scorecardSummary()), for the admin PerformanceSection.
+// Cached in a DEDICATED 60s memo - NOT the shared apiCache (whose key space
+// and data_version invalidation belong to the public /api/records-family
+// reads) and NOT sendJson (which recomputes every request; this is a heavy
+// full-ledger scan over fixture_predictions x fixture_ai_insights that has no
+// reason to re-run more than once a minute for an admin dashboard).
+const perfCache = makeJsonCache({ max: 2, ttlMs: 60_000, version: () => 0 });
+
+// GET /api/admin/perf/scorecard - admin session only, read-only (no csrfOk).
+app.get('/api/admin/perf/scorecard', requireAdminRole, async (req, res, next) => {
+    try {
+        await perfCache.send(req, res, '/api/admin/perf/scorecard', () => scorecardSummary());
+    } catch (e) { next(e); }
 });
 
 // --- M9: SMS templates + broadcast campaigns --------------------------------

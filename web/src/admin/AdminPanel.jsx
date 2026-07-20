@@ -9,24 +9,16 @@ import DashboardSection from './DashboardSection.jsx';
 import UsersSection from './UsersSection.jsx';
 import MessagingSection from './MessagingSection.jsx';
 import DatabaseSection from './DatabaseSection.jsx';
+import PerformanceSection from './PerformanceSection.jsx';
 
 // Admin panel (M5 shell): a full-page overlay in the AuthShell idiom (App
 // stays mounted underneath - table state/scroll survive), opened from
 // AvatarMenu/OverflowMenu -> Admin or an `#admin/<section>` deep link, and
 // lazy-loaded from AuthGate so recharts never rides the guest bundle.
-// Section nav: sidebar rail on md+, horizontal pill row below. Existing
-// editors (Settings, Data lab) mount unchanged; sections still in flight
-// render a placeholder naming their milestone. The server stays
-// authoritative - every API this drives re-checks the admin session.
-
-function Pending({ label, milestone }) {
-    return (
-        <div className="border border-dashed border-separator rounded-xl p-10 text-center">
-            <div className="text-label font-medium text-sm">{label}</div>
-            <div className="text-label-2 text-[12px] mt-1">Coming in {milestone} of the admin program.</div>
-        </div>
-    );
-}
+// Section nav: sidebar rail on md+, horizontal pill row below. As of M11 every
+// ADMIN_SECTIONS entry has a real component (M12 is cleanup/E2E/docs/merge,
+// not another section). The server stays authoritative - every API this
+// drives re-checks the admin session.
 
 function AboutSection() {
     return (
@@ -49,7 +41,7 @@ const SECTION_BODY = {
     lab: <DataLab />,
     users: <UsersSection />,
     messaging: <MessagingSection />,
-    performance: <Pending label="Engine performance visualizations" milestone="M11" />,
+    performance: <PerformanceSection />,
     database: <DatabaseSection />,
     about: <AboutSection />,
 };

@@ -473,6 +473,18 @@ export async function applyDbImport(stamp, confirm) {
     return _send('/api/admin/db/import/apply', { stamp, confirm });
 }
 
+// --- Admin performance scorecard (M11 Task 7) ---------------------------------
+
+// AI-scorecard S1-S5: hot-pick adjudicator + tip reviewer per model tag
+// (confirm/veto rates, units saved by following vetoes), blind reasoner Brier/
+// reliability bins, error verdicts per day, verdict coverage per day - the
+// same structured data `node scripts/ai-scorecard.js` prints. Admin session
+// only; cached 60s server-side (its own dedicated cache, not the public
+// apiCache/data_version invalidation).
+export async function getPerfScorecard() {
+    return _get('/api/admin/perf/scorecard');
+}
+
 // NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
 // 2026-07-16 along with the rest of that feature - deprecated as irrelevant at
 // this stage.
