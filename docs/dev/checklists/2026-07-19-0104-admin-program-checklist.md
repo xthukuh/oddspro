@@ -101,23 +101,25 @@ Stamp `2026-07-19-0104`. Plan: `docs/dev/plans/2026-07-19-0104-admin-program.md`
 - [x] Verify E2E (serve, `SMS_ENABLED=0` dry run): preview 3 = eligible users, `cost_estimate` 3; **drift growth (expected 2, actual 3) → 409**, **drift shrink (expected 5, actual 3) → 200**; send completed 3/3 sent 0 failed with a full recipient ledger; **opt-out excluded from a filter audience (3→2) AND from an explicit admin selection (2 ids → 1 recipient)** — consent holds by construction; re-send of a completed campaign → 409 frozen; untyped `confirm` → 400; unauthenticated → 401. Cleanup: test campaigns purged, opt-out reset, verify session revoked, :3001 free.
 - [ ] **Live 1-recipient send — user-gated** (needs `SMS_ENABLED=1` + real Bonga credits; dry-run path proven above)
 
-## M10 — Database section
-- [ ] `GET /api/admin/db/overview` + `/health`; pure `migrationStatus` + tests
-- [ ] Pure `transfer-rules` + tests (manifest, chunkPlan, cursor, filename safety, FK order)
-- [ ] `src/db-transfer.js` export job (NDJSON+gzip chunks, manifest, excludes)
-- [ ] Download/delete endpoints + import (manifest, 32MB raw chunks, apply job w/ safety export + schema_head guard + resume)
-- [ ] `DatabaseSection.jsx` (overview/health/export/import wizard)
-- [ ] Verify: roundtrip idempotence; mid-run kill resume; refresh 409 during import
+## M10 — Database section — COMPLETED 2026-07-21 (controller live-verified)
+- [x] `GET /api/admin/db/overview` + `/health`; pure `migrationStatus` + tests (Task 1-2, bea5526/1227a65; live: 33 tables, dbHealth ok)
+- [x] Pure `transfer-rules` + tests (manifest, chunkPlan, cursor, filename safety, FK order) (Task 1, bea5526)
+- [x] `src/db-transfer.js` export job (NDJSON+gzip chunks, manifest, excludes) (Task 3, 6a1cf6a+f68fdc2; live: 8-table export incl composite/varchar PK)
+- [x] Download/delete endpoints + import (manifest, 32MB raw chunks, apply job w/ safety export + schema_head guard + resume) (Task 4, 9ad70cd+0284711; OPUS-reviewed, all 6 safety guarantees verified)
+- [x] `DatabaseSection.jsx` (overview/health/export/import wizard) (Task 5, cb3570e)
+- [x] Verify: roundtrip idempotence (checksums identical), mid-run kill resume (already_complete), schema_head guard fires at apply — controller live roundtrip PASSED
 
-## M11 — Performance visualizations
-- [ ] `src/scorecard.js` + pure `scorecard-rules` + CLI parity test
-- [ ] `GET /api/admin/perf/scorecard` (60s cache)
-- [ ] `PerformanceSection.jsx` (7 widgets, n-badges)
-- [ ] Verify: endpoint parity vs `node scripts/ai-scorecard.js`
+## M11 — Performance visualizations — COMPLETED 2026-07-21 (controller live-verified)
+- [x] `src/scorecard.js` + pure `scorecard-rules` + CLI parity test (Task 6, 2386b68; byte-identical CLI output vs independent baseline; settle→tipHitSafe equivalence proven)
+- [x] `GET /api/admin/perf/scorecard` (60s dedicated cache) (Task 7, 3b49de3)
+- [x] `PerformanceSection.jsx` (7 widgets, n-badges + underpowered badges, no +edge framing) (Task 7, 3b49de3+14fcedf)
+- [x] Verify: scorecardSummary S1-S5 matches CLI — controller live-verified
 
-## M12 — Cleanup + E2E + docs + merge
-- [ ] `.env.example` + `.env.production` minimal rewrite; local `.env` trim checklist
-- [ ] Delete `src/admin-dashboard.js` (post-parity)
+## M12 — Cleanup + E2E + docs + merge (IN PROGRESS)
+- [x] Delete `src/admin-dashboard.js` (post-parity: DashboardSection covers traffic+country via M2 tracking; /admin already redirects; zero imports) (6dddcb1)
+- [ ] `.env.example` minimal rewrite (creds/endpoints/boot/VITE_* only; runtime knobs → Admin→Settings) + local `.env` trim checklist in DEPLOYMENT — PENDING AI-economy findings
+- [ ] **NEW (user ask 2026-07-21): performance optimization** — pipeline (`npm run start`) + web app speed (3 investigations running)
+- [ ] **NEW (user ask 2026-07-21): AI-spend economy** — tighten Gemini budget, prefer free OpenRouter models (investigation running)
 - [ ] Full chrome-devtools E2E pass (per plan list)
 - [ ] Docs: QUICK-REFERENCE, engine chapters, memory-bank dated notes, CLAUDE.md, DEPLOYMENT
-- [ ] Suite green; guest bundle compared; merge to `main`
+- [ ] Suite green; guest bundle compared; version bump decision (1.2.1 vs 1.3.0 — RAISE with user); merge to `main`
