@@ -21,7 +21,7 @@
 // exact wall-clock string MySQL itself sees - portable across hosts/timezones
 // and safe to re-insert verbatim on import.
 import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync } from 'node:fs';
-import { createGzip } from 'node:zlib';
+import { createGzip, gunzipSync } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import path from 'node:path';
@@ -32,11 +32,13 @@ import { migrationStatus } from './db/migrate-rules.js';
 import {
     MANIFEST_SCHEMA, chunkPlan, resolveExcluded, safeExportFilename,
     exportStamp, stampToIso, chunkFileName, chunkSizeFor, isIntegerPkType,
-    ndjsonLine, buildExportListing,
+    ndjsonLine, buildExportListing, parseManifest,
+    buildUploadPlan, buildFkDeps, fkSafeOrder, nextCursor,
 } from './db/transfer-rules.js';
 import { AuthError } from './auth.js';
 
 export const EXPORT_ROOT = path.join('var', 'exports');
+export const IMPORT_ROOT = path.join('var', 'imports');
 
 // --- Schema introspection -----------------------------------------------------
 // One query per table: every column (name, type, ordinal position) LEFT
@@ -120,8 +122,14 @@ function _step(onStep, shouldCancel, label) {
 // a "safety export first" step from inside its OWN run() - it already holds
 // the shared job slot at that point, so going through startJob again would
 // just get refused.
-export async function runExport({ excluded = [], onStep = null, shouldCancel = null } = {}) {
-    const stamp = exportStamp(new Date());
+//
+// `stamp` lets a caller pin the export directory's name instead of minting a
+// fresh one - Task 4's safety export uses this to land in
+// `var/exports/<import-stamp>-pre-import/` (obviously tied to the import it's
+// insuring) rather than an unrelated timestamp. Every other caller (manual
+// export, startExport) omits it and gets the normal fresh-timestamp dir.
+export async function runExport({ excluded = [], onStep = null, shouldCancel = null, stamp: stampOverride = null } = {}) {
+    const stamp = stampOverride || exportStamp(new Date());
     const dir = path.join(EXPORT_ROOT, stamp);
     mkdirSync(dir, { recursive: true });
 
@@ -244,12 +252,20 @@ export async function listExports() {
             const st = statSync(path.join(dirPath, name));
             return { name, bytes: st.size };
         });
+        // parseManifest is now string-tolerant (Task 4 fold-in fix) - it takes
+        // the raw file TEXT directly, so this no longer needs its own guarded
+        // JSON.parse (a malformed manifest can't throw past parseManifest
+        // anymore). The try/catch stays around the readFileSync itself - a
+        // concurrent delete between the readdirSync above and here (or any
+        // other read failure) still degrades to manifest:null rather than
+        // aborting the whole listing, same as before.
         let manifest = null;
         if (files.some(f => f.name === 'manifest.json')) {
             try {
-                manifest = JSON.parse(readFileSync(path.join(dirPath, 'manifest.json'), 'utf8'));
+                const parsed = parseManifest(readFileSync(path.join(dirPath, 'manifest.json'), 'utf8'));
+                manifest = parsed.ok ? parsed.manifest : null;
             } catch {
-                manifest = null; // corrupt/partial write -> manifest_ok:false via buildExportListing
+                manifest = null;
             }
         }
         return { stamp, files, manifest, created_at: stampToIso(stamp) ?? manifest?.created_at ?? null };
@@ -267,4 +283,266 @@ export async function deleteExport(stamp) {
     if (!existsSync(dir)) throw new AuthError(404, 'Export not found');
     rmSync(dir, { recursive: true, force: true });
     return { deleted: true, stamp: safe };
+}
+
+// ===========================================================================
+// Task 4 - Import: three-phase upload (manifest -> chunks -> apply), sized
+// for the cPanel/Passenger host (spec decision 11). The apply phase is the
+// DESTRUCTIVE half of this module - it writes rows into the live warehouse.
+// ===========================================================================
+
+// --- Progress cursor (var/imports/<stamp>/progress.json) -------------------
+// The applied-chunk ledger nextCursor() (transfer-rules.js) walks to find
+// where a killed apply should resume. Written after EVERY chunk (not just at
+// the end) - that's what makes resume possible: each chunk's upsert commits
+// independently on the dedicated connection (no wrapping transaction, see
+// runImportApply below), so whatever the ledger says is "done" really is done
+// in the DB, even if the process was killed a moment later.
+function _readProgress(dir) {
+    const p = path.join(dir, 'progress.json');
+    if (!existsSync(p)) return [];
+    try {
+        const data = JSON.parse(readFileSync(p, 'utf8'));
+        return Array.isArray(data) ? data : [];
+    } catch {
+        return []; // corrupt ledger - safer to redo (upserts are idempotent) than to guess
+    }
+}
+function _writeProgress(dir, done) {
+    writeFileSync(path.join(dir, 'progress.json'), JSON.stringify(done));
+}
+
+// Reads one gzip NDJSON chunk file back into row objects. Bounded to ONE
+// chunk's worth of rows at a time (<=5000, or <=500 for `matches` - the same
+// per-table sizes the export used to write it), matching the export side's
+// memory discipline: nothing here ever holds more than one chunk in memory.
+function _readChunkRows(filePath) {
+    const text = gunzipSync(readFileSync(filePath)).toString('utf8');
+    return text.split('\n').filter(line => line.length > 0).map(line => JSON.parse(line));
+}
+
+// --- Phase 1: manifest upload -----------------------------------------------
+// POST /api/admin/db/import/manifest. `rawBody` is the parsed JSON request
+// body (express.json already ran) - parseManifest still runs it through
+// MANIFEST_SCHEMA (a client can POST anything). The schema_head guard fires
+// HERE, at upload time, and again at apply time (runImportApply below) -
+// migrations can run in the gap between the two.
+export async function startImportManifest(rawBody) {
+    const parsed = parseManifest(rawBody);
+    if (!parsed.ok) throw new AuthError(400, `Invalid manifest: ${parsed.error}`);
+    const manifest = parsed.manifest;
+
+    const localHead = await schemaHead();
+    if (manifest.schema_head !== localHead) {
+        throw new AuthError(409, 'This manifest was exported from a different migration state - importing it would corrupt the warehouse', {
+            manifest_schema_head: manifest.schema_head,
+            local_schema_head: localHead,
+        });
+    }
+
+    const stamp = exportStamp(new Date());
+    const dir = path.join(IMPORT_ROOT, stamp);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+
+    return {
+        stamp,
+        schema_head: manifest.schema_head,
+        tables: manifest.tables.length,
+        rows: manifest.tables.reduce((sum, t) => sum + t.rows, 0),
+        upload_plan: buildUploadPlan(manifest),
+    };
+}
+
+// --- Phase 2: chunk upload --------------------------------------------------
+// POST /api/admin/db/import/chunk?stamp=&file=. Both params are validated by
+// the route via safeExportFilename BEFORE express.raw's body even matters
+// (400, never touches disk) - re-validated here too as defense-in-depth, the
+// same idiom as deleteExport above. Idempotent: writeFileSync overwrites, so
+// re-uploading the same chunk (a retried request) is safe.
+export async function saveImportChunk(stamp, file, buffer) {
+    const safeStamp = safeExportFilename(stamp);
+    const safeFile = safeExportFilename(file);
+    if (!safeStamp || !safeFile) throw new AuthError(400, 'Invalid import chunk path');
+    const dir = path.join(IMPORT_ROOT, safeStamp);
+    if (!existsSync(dir)) throw new AuthError(404, 'Import staging not found - upload the manifest first');
+    if (!Buffer.isBuffer(buffer) || buffer.length === 0) throw new AuthError(400, 'Empty chunk upload');
+    writeFileSync(path.join(dir, safeFile), buffer);
+    return { ok: true, stamp: safeStamp, file: safeFile, bytes: buffer.length };
+}
+
+// --- Phase 4 (route order): staging + job state for the UI poll ------------
+// GET /api/admin/db/import/:stamp. Reads the staged manifest + which planned
+// chunk files have actually arrived + the resumable-apply cursor - everything
+// the wizard needs to know whether it's still uploading, ready to apply, or
+// (after a resume) partway through applying.
+export async function importStagingState(stamp) {
+    const safe = safeExportFilename(stamp);
+    if (!safe) throw new AuthError(400, 'Invalid import stamp');
+    const dir = path.join(IMPORT_ROOT, safe);
+    if (!existsSync(dir)) throw new AuthError(404, 'Import staging not found');
+
+    const manifestPath = path.join(dir, 'manifest.json');
+    let manifest = null;
+    if (existsSync(manifestPath)) {
+        const parsed = parseManifest(readFileSync(manifestPath, 'utf8'));
+        manifest = parsed.ok ? parsed.manifest : null;
+    }
+    const uploadPlan = manifest ? buildUploadPlan(manifest) : [];
+    const onDisk = new Set(readdirSync(dir).filter(n => n !== 'manifest.json' && n !== 'progress.json'));
+    const missing = uploadPlan.filter(p => !onDisk.has(p.file)).map(p => p.file);
+    const done = _readProgress(dir);
+    const cursor = manifest ? nextCursor(manifest, done) : null;
+
+    return {
+        stamp: safe,
+        manifest_ok: manifest != null,
+        schema_head: manifest?.schema_head ?? null,
+        upload_plan: uploadPlan,
+        total_files: uploadPlan.length,
+        uploaded_files: uploadPlan.length - missing.length,
+        missing_files: missing,
+        ready_to_apply: manifest != null && missing.length === 0,
+        applied_chunks: done.length,
+        apply_complete: manifest != null && cursor == null && done.length > 0,
+    };
+}
+
+// --- Phase 3: apply ----------------------------------------------------------
+// POST /api/admin/db/import/apply's job body, run under the shared single-slot
+// job (startImport below) exactly like the export. This is the destructive
+// step - everything before it (manifest validation, chunk upload) only wrote
+// to var/imports/, never touched a real table.
+//
+// Single dedicated connection: db.client.acquireConnection() pulls ONE
+// connection out of the pool for the whole apply; every upsert below runs
+// pinned to it via knex's `.connection(conn)` (query-builder method - NOT a
+// db.transaction, deliberately: see the resume note below). SET
+// FOREIGN_KEY_CHECKS=0/1 are plain statements on that SAME connection (not a
+// session variable set once and hoped-for on whatever connection a later
+// query happens to draw from the pool) - the finally block restores it and
+// releases the connection back to the pool no matter how the loop exits.
+//
+// Why NOT a wrapping transaction: a killed process rolls back an uncommitted
+// transaction when its connection drops, which would silently undo every
+// chunk applied so far - exactly the opposite of resumability. Each chunk's
+// insert().onConflict().merge() runs and commits on its own (MySQL
+// autocommit, no explicit transaction) BEFORE progress.json is updated for
+// that chunk - so a kill mid-run leaves the DB and the progress ledger
+// mutually consistent, and nextCursor() picks up exactly where the DB
+// actually is.
+export async function runImportApply({ stamp, onStep = null, shouldCancel = null } = {}) {
+    const safeStamp = safeExportFilename(stamp);
+    if (!safeStamp) throw new Error('db-transfer: invalid import stamp');
+    const dir = path.join(IMPORT_ROOT, safeStamp);
+    if (!existsSync(dir)) throw new Error(`db-transfer: import staging "${safeStamp}" not found`);
+
+    const manifestPath = path.join(dir, 'manifest.json');
+    if (!existsSync(manifestPath)) throw new Error('db-transfer: staged manifest.json is missing');
+    const staged = parseManifest(readFileSync(manifestPath, 'utf8'));
+    if (!staged.ok) throw new Error(`db-transfer: staged manifest is invalid - ${staged.error}`);
+    const manifest = staged.manifest;
+
+    // Safety export FIRST - before a single row of the import is written. If
+    // this throws, the whole import aborts here: nothing below has run yet,
+    // so there is nothing to roll back. Deliberately excluded:[] (the
+    // DEFAULT policy) rather than reusing whatever `excluded` list the
+    // ORIGINAL export used - the safety net's job is to protect what's about
+    // to be at risk on THIS host, not to mirror a remote export's choices.
+    _step(onStep, shouldCancel, 'safety export: starting');
+    await runExport({
+        excluded: [],
+        stamp: `${safeStamp}-pre-import`,
+        onStep: s => _step(onStep, shouldCancel, `safety export: ${s}`),
+        shouldCancel,
+    });
+
+    // Re-verify schema_head from the STAGED manifest - the upload-time guard
+    // (startImportManifest) is not enough on its own, since a migration can
+    // run in the gap between upload and apply.
+    _step(onStep, shouldCancel, 'verifying schema');
+    const localHead = await schemaHead();
+    if (manifest.schema_head !== localHead) {
+        throw new Error(`db-transfer: schema_head mismatch at apply time (manifest=${manifest.schema_head}, local=${localHead}) - refusing to import`);
+    }
+
+    // FK-safe apply order, derived LIVE from information_schema (never
+    // hardcoded - a hand-maintained dep map drifts the moment a migration
+    // adds a new FK). Filtered to only the tables this manifest actually
+    // carries (buildFkDeps drops edges to e.g. `users`, default-excluded).
+    _step(onStep, shouldCancel, 'computing apply order');
+    const tableNames = manifest.tables.map(t => t.name);
+    const [fkRows] = await db.raw(
+        `SELECT TABLE_NAME AS child, REFERENCED_TABLE_NAME AS parent
+         FROM information_schema.KEY_COLUMN_USAGE
+         WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME IS NOT NULL`
+    );
+    const deps = buildFkDeps(fkRows, tableNames);
+    let order;
+    try {
+        order = fkSafeOrder(tableNames, deps);
+    } catch (e) {
+        // A cycle means FK checks must stay off and order can't be
+        // guaranteed - report it rather than guessing an order that could
+        // corrupt data. Nothing has been applied yet (order is computed
+        // before the apply loop below), so this is a clean abort.
+        throw new Error(`db-transfer: cannot determine a safe apply order - ${e.message}`);
+    }
+    const byName = new Map(manifest.tables.map(t => [t.name, t]));
+    const orderedManifest = { ...manifest, tables: order.map(n => byName.get(n)) };
+
+    // Resume from the persisted cursor instead of redoing applied chunks.
+    const done = _readProgress(dir);
+    const cursor = nextCursor(orderedManifest, done);
+    if (cursor == null) {
+        return { stamp: safeStamp, applied_chunks: done.length, already_complete: true };
+    }
+    const startTableIdx = order.indexOf(cursor.table);
+
+    const conn = await db.client.acquireConnection();
+    try {
+        await db.raw('SET FOREIGN_KEY_CHECKS=0').connection(conn);
+        for (let ti = startTableIdx; ti < order.length; ti++) {
+            const tableEntry = byName.get(order[ti]);
+            const table = tableEntry.name;
+            const totalChunks = Number(tableEntry.chunks) || 0;
+            const fromChunk = table === cursor.table ? cursor.chunk : 0;
+            const pkCols = String(tableEntry.pk).split(',').map(s => s.trim()).filter(Boolean);
+
+            for (let chunk = fromChunk; chunk < totalChunks; chunk++) {
+                _step(onStep, shouldCancel, `${table} chunk ${chunk + 1}/${totalChunks}`);
+                const rows = _readChunkRows(path.join(dir, chunkFileName(table, chunk)));
+                if (rows.length > 0) {
+                    // Concurrency 1 - one chunk applied at a time, sequentially,
+                    // on the SAME pinned connection (the codebase's parallel
+                    // delete+insert deadlock rule, src/utils.js's _batch note).
+                    await db(table).insert(rows).onConflict(pkCols).merge().connection(conn);
+                }
+                done.push({ table, chunk });
+                _writeProgress(dir, done);
+            }
+        }
+    } finally {
+        try {
+            await db.raw('SET FOREIGN_KEY_CHECKS=1').connection(conn);
+        } catch (e) {
+            console.error('db-transfer: failed to restore FOREIGN_KEY_CHECKS on the import connection:', e?.message ?? e);
+        }
+        await db.client.releaseConnection(conn);
+    }
+
+    return { stamp: safeStamp, applied_chunks: done.length, tables: order.length };
+}
+
+// Claim the shared job slot and run the apply without awaiting - same
+// start-and-poll idiom as startExport. Returns {started:false} when a
+// refresh/export/import already holds the slot (409 upstream, never queued).
+export function startImport({ stamp, onDone = null } = {}) {
+    const started = startJob({
+        mode: 'db-import',
+        dates: [],
+        run: (onStep, shouldCancel) => runImportApply({ stamp, onStep, shouldCancel }),
+        onFinish: onDone,
+    });
+    return { started };
 }

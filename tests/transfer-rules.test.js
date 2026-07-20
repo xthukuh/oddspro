@@ -19,6 +19,10 @@ import {
     formatBytes,
     buildExportListing,
     exportRequestSchema,
+    buildUploadPlan,
+    buildFkDeps,
+    importConfirmPhrase, matchesImportConfirm,
+    importApplySchema,
 } from '../src/db/transfer-rules.js';
 
 // --- manifest ------------------------------------------------------------
@@ -67,6 +71,42 @@ test('parseManifest coerces numeric-looking strings for rows/chunks (tolerant of
 
 test('MANIFEST_SCHEMA is exported and usable directly', () => {
     assert.equal(typeof MANIFEST_SCHEMA.safeParse, 'function');
+});
+
+// --- parseManifest string-tolerance (Task 4 fold-in fix) --------------------
+// parseManifest previously required an ALREADY-PARSED object despite the
+// `raw` param name and the "hand-edited manifest is external data / never
+// throws" intent - the apply-time staged-file re-read needs to hand it the
+// raw file TEXT. These prove the string path round-trips and never throws.
+
+test('parseManifest accepts a manifest passed as a JSON STRING (the staged manifest.json file text)', () => {
+    const r = parseManifest(JSON.stringify(validManifest));
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.manifest, validManifest);
+});
+
+test('parseManifest NEVER THROWS on a malformed JSON string - reports ok:false with a human-readable error', () => {
+    for (const bad of ['{not valid json', '', '   ', '[1,2,', 'undefined', '{"a":}']) {
+        assert.doesNotThrow(() => parseManifest(bad));
+        const r = parseManifest(bad);
+        assert.equal(r.ok, false);
+        assert.equal(typeof r.error, 'string');
+        assert.ok(r.error.length > 0);
+    }
+});
+
+test('parseManifest treats a well-formed-JSON-but-wrong-shape string the same as the object case', () => {
+    // '42' and '"nope"' are both valid JSON that parse to a non-object -
+    // schema validation (not JSON.parse) is what rejects these.
+    assert.equal(parseManifest('42').ok, false);
+    assert.equal(parseManifest('"nope"').ok, false);
+    assert.equal(parseManifest('null').ok, false);
+});
+
+test('parseManifest still validates an already-parsed OBJECT directly (unchanged prior behavior)', () => {
+    const r = parseManifest(validManifest);
+    assert.equal(r.ok, true);
+    assert.deepEqual(r.manifest, validManifest);
 });
 
 // --- chunk planning --------------------------------------------------------
@@ -426,4 +466,110 @@ test('exportRequestSchema accepts an empty body and an excluded list', () => {
 test('exportRequestSchema rejects a non-array/non-string excluded field', () => {
     assert.throws(() => exportRequestSchema.parse({ excluded: 'ip_geo' }));
     assert.throws(() => exportRequestSchema.parse({ excluded: [42] }));
+});
+
+// ===========================================================================
+// Task 4 - import
+// ===========================================================================
+
+// --- upload plan -------------------------------------------------------------
+
+test('buildUploadPlan lists every chunk file in manifest.tables order, using chunkFileName', () => {
+    const plan = buildUploadPlan(cursorManifest);
+    assert.deepEqual(plan, [
+        { table: 'leagues', chunk: 0, file: 'leagues.0000.ndjson.gz' },
+        { table: 'leagues', chunk: 1, file: 'leagues.0001.ndjson.gz' },
+        { table: 'teams', chunk: 0, file: 'teams.0000.ndjson.gz' },
+        { table: 'teams', chunk: 1, file: 'teams.0001.ndjson.gz' },
+        { table: 'teams', chunk: 2, file: 'teams.0002.ndjson.gz' },
+        // 'standings' has 0 chunks (empty table) - contributes nothing.
+    ]);
+});
+
+test('buildUploadPlan is total against a malformed/empty manifest (never throws)', () => {
+    assert.deepEqual(buildUploadPlan(null), []);
+    assert.deepEqual(buildUploadPlan(undefined), []);
+    assert.deepEqual(buildUploadPlan({}), []);
+    assert.deepEqual(buildUploadPlan({ tables: 'nope' }), []);
+    assert.deepEqual(buildUploadPlan({ tables: [{ name: '', chunks: 3 }] }), []);
+    assert.deepEqual(buildUploadPlan({ tables: [{ chunks: 3 }] }), []);
+});
+
+// --- FK dependency map -------------------------------------------------------
+
+test('buildFkDeps builds a {child:[parents]} map from information_schema-shaped rows', () => {
+    const rows = [
+        { child: 'b', parent: 'a' },
+        { child: 'c', parent: 'a' },
+        { child: 'd', parent: 'b' },
+        { child: 'd', parent: 'c' },
+    ];
+    assert.deepEqual(buildFkDeps(rows, ['a', 'b', 'c', 'd']), { b: ['a'], c: ['a'], d: ['b', 'c'] });
+});
+
+test('buildFkDeps drops an edge referencing a table OUTSIDE the given set (e.g. a default-excluded parent like users)', () => {
+    const rows = [
+        { child: 'admin_audit', parent: 'users' }, // users is not part of this import
+        { child: 'teams', parent: 'leagues' },
+    ];
+    const deps = buildFkDeps(rows, ['admin_audit', 'teams', 'leagues']);
+    assert.deepEqual(deps, { teams: ['leagues'] });
+    assert.equal(deps.admin_audit, undefined);
+});
+
+test('buildFkDeps dedups repeated (child,parent) pairs (a composite FK repeats once per column)', () => {
+    const rows = [
+        { child: 'fixtures', parent: 'teams' },
+        { child: 'fixtures', parent: 'teams' },
+        { child: 'fixtures', parent: 'leagues' },
+    ];
+    assert.deepEqual(buildFkDeps(rows, ['fixtures', 'teams', 'leagues']), { fixtures: ['teams', 'leagues'] });
+});
+
+test('buildFkDeps ignores self-referencing rows and accepts a Set or an array for tableSet', () => {
+    assert.deepEqual(buildFkDeps([{ child: 'a', parent: 'a' }], ['a']), {});
+    assert.deepEqual(buildFkDeps([{ child: 'b', parent: 'a' }], new Set(['a', 'b'])), { b: ['a'] });
+});
+
+test('buildFkDeps is total against malformed rows/tableSet (never throws)', () => {
+    assert.deepEqual(buildFkDeps(null, ['a']), {});
+    assert.deepEqual(buildFkDeps(undefined, ['a']), {});
+    assert.deepEqual(buildFkDeps([{}, { child: 1, parent: 2 }, { child: 'a' }], ['a']), {});
+    assert.deepEqual(buildFkDeps([{ child: 'b', parent: 'a' }], null), {});
+});
+
+// --- destructive-action confirm ---------------------------------------------
+
+test('importConfirmPhrase embeds the live database name', () => {
+    assert.equal(importConfirmPhrase('oddspro'), 'IMPORT oddspro');
+    assert.equal(importConfirmPhrase(''), 'IMPORT ');
+    assert.equal(importConfirmPhrase(undefined), 'IMPORT ');
+});
+
+test('matchesImportConfirm requires an EXACT (case/whitespace-sensitive) match', () => {
+    assert.equal(matchesImportConfirm('IMPORT oddspro', 'oddspro'), true);
+    assert.equal(matchesImportConfirm('import oddspro', 'oddspro'), false);
+    assert.equal(matchesImportConfirm('IMPORT oddspro ', 'oddspro'), false);
+    assert.equal(matchesImportConfirm(' IMPORT oddspro', 'oddspro'), false);
+    assert.equal(matchesImportConfirm('IMPORT other_db', 'oddspro'), false);
+    assert.equal(matchesImportConfirm('', 'oddspro'), false);
+    assert.equal(matchesImportConfirm(null, 'oddspro'), false);
+    assert.equal(matchesImportConfirm(undefined, 'oddspro'), false);
+    assert.equal(matchesImportConfirm(42, 'oddspro'), false);
+});
+
+// --- apply request schema -----------------------------------------------------
+
+test('importApplySchema accepts a well-formed {stamp, confirm} body', () => {
+    const r = importApplySchema.parse({ stamp: '20260720_101500', confirm: 'IMPORT oddspro' });
+    assert.deepEqual(r, { stamp: '20260720_101500', confirm: 'IMPORT oddspro' });
+});
+
+test('importApplySchema rejects a missing/empty stamp or confirm, or wrong types', () => {
+    assert.throws(() => importApplySchema.parse({}));
+    assert.throws(() => importApplySchema.parse({ stamp: '20260720_101500' }));
+    assert.throws(() => importApplySchema.parse({ confirm: 'IMPORT oddspro' }));
+    assert.throws(() => importApplySchema.parse({ stamp: '', confirm: 'IMPORT oddspro' }));
+    assert.throws(() => importApplySchema.parse({ stamp: '20260720_101500', confirm: '' }));
+    assert.throws(() => importApplySchema.parse({ stamp: 42, confirm: 'IMPORT oddspro' }));
 });

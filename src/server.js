@@ -12,8 +12,14 @@ import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
-import { startExport, listExports, deleteExport, EXPORT_ROOT } from './db-transfer.js';
-import { safeExportFilename, exportRequestSchema } from './db/transfer-rules.js';
+import {
+    startExport, listExports, deleteExport, EXPORT_ROOT,
+    startImportManifest, saveImportChunk, importStagingState, startImport,
+} from './db-transfer.js';
+import {
+    safeExportFilename, exportRequestSchema,
+    importApplySchema, matchesImportConfirm, importConfirmPhrase,
+} from './db/transfer-rules.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit, pickIp } from './db/visit-rules.js';
@@ -869,6 +875,67 @@ app.delete('/api/admin/db/exports/:stamp', requireAdminRole, async (req, res, ne
     if (!stamp) return res.status(400).json({ error: 'Invalid export name' });
     try {
         res.json({ ok: true, ...(await deleteExport(stamp)) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// --- M10 Task 4: DB import (upload manifest -> upload chunks -> apply) ------
+// Three-phase, sized for the cPanel/Passenger host (spec decision 11). The
+// apply phase is the destructive half - it rides the SAME shared job slot as
+// export/refresh (never overlaps one).
+
+// POST /api/admin/db/import/manifest - body IS the manifest object.
+// startImportManifest validates it (parseManifest) and hard-409s a
+// schema_head mismatch (both values in the body - the import compatibility
+// guard, spec decision 11) BEFORE creating the staging dir.
+app.post('/api/admin/db/import/manifest', requireAdminRole, express.json({ limit: '256kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        res.json(await startImportManifest(req.body));
+    } catch (e) { authErr(e, res, next); }
+});
+
+// POST /api/admin/db/import/chunk?stamp=&file= - raw gzip body, capped at the
+// plan's 32 MB per-chunk bound (Passenger buffers the whole request body).
+// BOTH query params go through safeExportFilename before this handler ever
+// touches the filesystem - a rejection is 400, never a disk access.
+app.post('/api/admin/db/import/chunk', requireAdminRole, express.raw({ type: 'application/gzip', limit: '32mb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    const stamp = safeExportFilename(req.query.stamp);
+    const file = safeExportFilename(req.query.file);
+    if (!stamp || !file) return res.status(400).json({ error: 'Invalid import chunk path' });
+    try {
+        res.json(await saveImportChunk(stamp, file, req.body));
+    } catch (e) { authErr(e, res, next); }
+});
+
+// GET /api/admin/db/import/:stamp - staging state (manifest/upload progress/
+// resumable-apply cursor) + the shared job state, for the wizard's poll.
+app.get('/api/admin/db/import/:stamp', requireAdminRole, async (req, res, next) => {
+    const stamp = safeExportFilename(req.params.stamp);
+    if (!stamp) return res.status(400).json({ error: 'Invalid import stamp' });
+    try {
+        res.json({ ...(await importStagingState(stamp)), job: refreshStatus() });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// POST /api/admin/db/import/apply - body {stamp, confirm}. `confirm` must be
+// EXACTLY "IMPORT <database-name>" (importConfirmPhrase/matchesImportConfirm,
+// src/db/transfer-rules.js) - the same typed-confirmation idiom M9's campaign
+// send uses (campaignSendSchema's `confirm: z.literal('SEND')`), except the
+// phrase is dynamic (embeds config.DB_DATABASE) so it can't be a zod literal.
+// Anything else is a 400, checked BEFORE the job is ever started.
+app.post('/api/admin/db/import/apply', requireAdminRole, express.json({ limit: '4kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = importApplySchema.parse(req.body ?? {});
+        const stamp = safeExportFilename(body.stamp);
+        if (!stamp) return res.status(400).json({ error: 'Invalid import stamp' });
+        if (!matchesImportConfirm(body.confirm, config.DB_DATABASE)) {
+            return res.status(400).json({ error: `Type "${importConfirmPhrase(config.DB_DATABASE)}" exactly to confirm` });
+        }
+        const { started } = startImport({ stamp });
+        if (!started) return res.status(409).json(refreshStatus());
+        res.status(202).json(refreshStatus());
     } catch (e) { authErr(e, res, next); }
 });
 

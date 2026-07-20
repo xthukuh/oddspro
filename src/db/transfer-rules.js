@@ -37,8 +37,26 @@ export const MANIFEST_SCHEMA = z.object({
 // safeParse wrapper - NEVER throws. A hand-edited manifest.json (or a client
 // POSTing garbage to /api/admin/db/import/manifest) is external data; the
 // caller gets a human-readable reason instead of an uncaught ZodError.
+//
+// STRING-TOLERANT (Task 4 fold-in fix): `raw` may be the manifest object
+// itself (the export writer's own callers, the parsed JSON body of the
+// upload route) OR the raw file text (re-reading manifest.json off disk at
+// apply time, a hand-edited file). A string is JSON.parse'd first, inside its
+// own try/catch - a malformed string is exactly the "hand-edited manifest"
+// case this function exists for, so it returns {ok:false, error} rather than
+// throwing a SyntaxError past this function's contract. Anything already an
+// object (including non-string junk like numbers/arrays) skips straight to
+// the schema, unchanged from before.
 export function parseManifest(raw) {
-    const p = MANIFEST_SCHEMA.safeParse(raw);
+    let obj = raw;
+    if (typeof raw === 'string') {
+        try {
+            obj = JSON.parse(raw);
+        } catch (e) {
+            return { ok: false, error: `invalid JSON: ${e?.message ?? 'parse error'}` };
+        }
+    }
+    const p = MANIFEST_SCHEMA.safeParse(obj);
     if (p.success) return { ok: true, manifest: p.data };
     const first = p.error.issues[0];
     const path = first?.path?.length ? first.path.join('.') : '(root)';
@@ -296,4 +314,87 @@ export function buildExportListing(entries) {
 // a default or the always-excluded migration tables through this schema.
 export const exportRequestSchema = z.object({
     excluded: z.array(z.string()).max(64).optional(),
+});
+
+// ===========================================================================
+// Task 4 - import (upload plan, FK-dependency map, destructive-confirm
+// matcher, apply request shape). src/db-transfer.js orchestrates the actual
+// upload/apply against the filesystem + DB; everything decidable without
+// either stays here, pure and offline-tested.
+// ===========================================================================
+
+// --- Upload plan -----------------------------------------------------------
+// Turns a validated manifest into the flat, ordered list of chunk filenames
+// the client must upload (POST /api/admin/db/import/manifest's response) -
+// reuses chunkFileName so the plan and the actual on-disk chunk names can
+// NEVER drift apart. One entry per (table, chunk index) in manifest.tables
+// order; a table with 0 chunks (empty table) contributes nothing. Total:
+// tolerant of a malformed manifest/table entry (skips it) rather than
+// throwing chunkFileName's programmer-error TypeError from what is, here,
+// externally-sourced data.
+export function buildUploadPlan(manifest) {
+    const tables = Array.isArray(manifest?.tables) ? manifest.tables : [];
+    const files = [];
+    for (const t of tables) {
+        const name = t?.name;
+        if (typeof name !== 'string' || !name) continue;
+        const total = Number(t?.chunks) || 0;
+        for (let chunk = 0; chunk < total; chunk++) {
+            files.push({ table: name, chunk, file: chunkFileName(name, chunk) });
+        }
+    }
+    return files;
+}
+
+// --- FK dependency map -------------------------------------------------------
+// Turns raw {child, parent} rows - read live at apply time from
+// information_schema.KEY_COLUMN_USAGE (never hardcoded; see src/db-transfer.js)
+// - into the {child: [parents]} shape fkSafeOrder expects. `tableSet` is the
+// set of tables actually being imported (the manifest's own table list): an
+// FK edge pointing at a table OUTSIDE that set - most commonly a
+// default-excluded table like `users` (spec decision 12; e.g.
+// admin_audit -> users, settings -> users) - is dropped rather than blocking
+// the child from ever becoming "ready", since that parent's rows are never
+// part of this import to begin with. Composite FKs repeat the same
+// (child,parent) pair once per column; deduped here so fkSafeOrder never sees
+// a duplicate. Total against malformed rows (a bad row is skipped, not
+// thrown on) - these rows come from a live DB read, not programmer input.
+export function buildFkDeps(rows, tableSet) {
+    const set = tableSet instanceof Set ? tableSet : new Set(Array.isArray(tableSet) ? tableSet : []);
+    const deps = {};
+    for (const r of (Array.isArray(rows) ? rows : [])) {
+        const child = r?.child;
+        const parent = r?.parent;
+        if (typeof child !== 'string' || typeof parent !== 'string') continue;
+        if (child === parent) continue;
+        if (!set.has(child) || !set.has(parent)) continue;
+        if (!deps[child]) deps[child] = [];
+        if (!deps[child].includes(parent)) deps[child].push(parent);
+    }
+    return deps;
+}
+
+// --- Destructive-action confirm ---------------------------------------------
+// The apply route (POST /api/admin/db/import/apply) requires the admin to
+// type this exact phrase before a single row is written - the same
+// typed-confirmation idiom M9's campaign send uses (campaign-rules.js
+// campaignSendSchema: `confirm: z.literal('SEND')`). Here the expected string
+// is DYNAMIC (it embeds the live database name, config.DB_DATABASE), so it
+// can't be a zod literal - these two functions are the runtime equivalent,
+// shared by the server route and (eventually) the web wizard so the phrase
+// shown to the admin and the phrase the server accepts can never drift.
+export function importConfirmPhrase(database) {
+    return `IMPORT ${typeof database === 'string' ? database : ''}`;
+}
+export function matchesImportConfirm(confirm, database) {
+    return typeof confirm === 'string' && confirm === importConfirmPhrase(database);
+}
+
+// --- Apply request body ----------------------------------------------------
+// POST /api/admin/db/import/apply's body shape. The confirm-PHRASE equality
+// check itself (matchesImportConfirm, above) happens in the route after this
+// parses - it needs the live database name, which zod can't see here.
+export const importApplySchema = z.object({
+    stamp: z.string().min(1),
+    confirm: z.string().min(1),
 });

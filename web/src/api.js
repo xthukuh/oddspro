@@ -403,6 +403,76 @@ export async function deleteDbExport(stamp) {
     return _send(`/api/admin/db/exports/${encodeURIComponent(stamp)}`, {}, 'DELETE');
 }
 
+// --- Admin DB import (M10 Task 4) ----------------------------------------------
+// Three phases: upload the manifest -> upload each planned chunk file
+// sequentially -> apply (a typed "IMPORT <db>" confirm, destructive).
+
+// Phase 1: POST the manifest OBJECT itself as the body (not wrapped) ->
+// {stamp, schema_head, tables, rows, upload_plan}. A schema_head mismatch
+// against this server's migration state comes back as a 409 ApiError with
+// {manifest_schema_head, local_schema_head} both in body - surface it as a
+// clear, non-dismissible error (it means the export came from a different
+// migration state and importing it would corrupt this warehouse).
+export async function uploadDbImportManifest(manifest) {
+    return _send('/api/admin/db/import/manifest', manifest);
+}
+
+// Phase 2: one chunk. `blob` is the raw .ndjson.gz file content (a File/Blob
+// from the manifest's own export directory) - sent as the whole raw request
+// body (Content-Type: application/gzip), not JSON. Idempotent server-side:
+// re-uploading the same (stamp, file) overwrites.
+export async function uploadDbImportChunk(stamp, file, blob) {
+    const res = await fetch(
+        `/api/admin/db/import/chunk?stamp=${encodeURIComponent(stamp)}&file=${encodeURIComponent(file)}`,
+        {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/gzip', 'X-Requested-With': 'fetch', ..._authHeaders() },
+            body: blob,
+        },
+    );
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        if (res.status === 503) _noteMaintenance(body);
+        throw new ApiError(res.status, body, res.statusText);
+    }
+    return body;
+}
+
+// Phase 2, sequenced: uploads every file in `uploadPlan` (the manifest
+// response's upload_plan, [{table,chunk,file}, ...]) ONE AT A TIME - a
+// parallel uploader would defeat both the 32 MB per-request bound and the
+// memory discipline the whole plan is sized around (Passenger buffers whole
+// request bodies). `fileFor(plannedFile)` resolves a planned filename to its
+// local File/Blob (the admin's selected export directory); `onProgress`
+// fires after each chunk lands so the wizard can show a progress bar.
+export async function uploadDbImportChunksSequential(stamp, uploadPlan, fileFor, onProgress = null) {
+    const total = uploadPlan.length;
+    for (let i = 0; i < total; i++) {
+        const { file } = uploadPlan[i];
+        const blob = fileFor(file);
+        if (!blob) throw new Error(`Missing local file for chunk "${file}"`);
+        await uploadDbImportChunk(stamp, file, blob);
+        if (typeof onProgress === 'function') onProgress({ done: i + 1, total, file });
+    }
+    return { uploaded: total };
+}
+
+// Phase 4: staging state (manifest_ok, upload_plan, missing_files,
+// ready_to_apply, applied_chunks, apply_complete) + job (the same shape
+// GET /api/refresh returns) - what the wizard polls while chunks land and
+// while the apply job runs.
+export async function getDbImportStatus(stamp) {
+    return _get(`/api/admin/db/import/${encodeURIComponent(stamp)}`);
+}
+
+// Phase 3: apply. `confirm` must be EXACTLY "IMPORT <db-name>" (the db name
+// comes from getDbOverview().database) - anything else is a 400 before the
+// job is ever started. 409 (thrown as ApiError) when a refresh/export/import
+// job already holds the shared slot.
+export async function applyDbImport(stamp, confirm) {
+    return _send('/api/admin/db/import/apply', { stamp, confirm });
+}
+
 // NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
 // 2026-07-16 along with the rest of that feature - deprecated as irrelevant at
 // this stage.
