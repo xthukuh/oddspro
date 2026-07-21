@@ -195,3 +195,23 @@ The committed `.env.example` is now the authoritative template: it lists only th
 4. Restart and confirm the values you care about in Admin → Settings.
 
 **A stale line is harmless but misleading** — the zod schema strips unknown keys, and a known-but-now-catalogued key is simply outranked by any DB override. The risk is human: someone edits a `.env` line that the DB is overriding and concludes the setting is broken. Leftover `HUMAN_*` / `VITE_HUMAN_POW` lines (§8.1) fall in the same category — dead weight, safe to delete.
+
+## 10. DB export / import from the admin UI (M10)
+
+**Admin → Database** exports and imports the warehouse over `/api/admin/db/*` (admin session only) as chunked NDJSON+gzip. This is the ongoing local↔host data path; the one-time `scripts/db-export.js` + phpMyAdmin route in §3 is still how you seed a brand-new host.
+
+**What it will not do, by construction:**
+
+- **`knex_migrations` / `knex_migrations_lock` are excluded unconditionally.** No combination of options can include them — a foreign bookkeeping row would make the destination believe a migration ran that never did. Schema still moves by migration, never by transfer.
+- **Auth and analytics tables are excluded by default** (`users`, `sessions`, `otp_codes`, `user_prefs`, and the visit/visitor tables). Moving credentials between environments risks both leakage and PK collisions. You can opt them in, but the default is off deliberately.
+- **Export and import ride the same single-slot job as data refreshes**, so they can never overlap a refresh or each other. A busy slot answers **409** — the UI surfaces it rather than queueing. Do not start one during a full sweep.
+
+**Import runbook:**
+
+1. Export on the source, then download the chunk files + manifest.
+2. On the destination, upload the manifest, then the chunks (sequential; the cursor is resumable, so an interrupted upload continues rather than restarting).
+3. Apply. This requires typing the exact phrase **`IMPORT <database-name>`** — the live destination database name, so applying to the wrong environment cannot be a mis-click.
+4. **⚠ Cost caveat: the apply step takes a full safety export of the destination FIRST — the entire warehouse (~1.7 GB live), every apply.** Budget the disk and the wall-clock before running it on the host, and clear old exports afterwards (Admin → Database lists them with sizes and a delete action). A resumed apply skips the safety export if a usable one already exists for that run.
+5. Verify with Admin → Database → Overview (row counts + per-table sizes) and Health.
+
+**Schema mismatch:** transfer moves ROWS, not schema. Migrate the destination to the same batch first (§5) — otherwise the apply fails on unknown columns.
