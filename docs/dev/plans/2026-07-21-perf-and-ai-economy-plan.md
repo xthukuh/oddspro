@@ -6,8 +6,28 @@ possible, prefer free OpenRouter models" (financial pressure). Three read-only
 investigations were run; their actionable findings + the user's decisions are captured
 here so implementation can proceed in a fresh session without re-running the research.
 
-**Status: PLANNED, not yet implemented.** M10 + M11 of the admin program are DONE and
-committed (through `6dddcb1`); this is additional M12-adjacent work to land before merge.
+**Status (updated 2026-07-21, session 10): A1 DONE (`a50e978`), section B DONE (`428704a`).**
+Section C (pipeline) NOT started — blocked on a local Docker/WSL failure, see below.
+Sections A2 (user-gated live `.env`), D and E remain open. M10 + M11 of the admin program
+are DONE and committed (through `6dddcb1`).
+
+**Session-10 progress detail:**
+- **A1 done** — `src/config.js` `OPENROUTER_MODEL` → `nvidia/nemotron-3-super-120b-a12b:free`,
+  `AI_ENRICH_CAP` 200 → 40, dated policy-regime entry in `docs/memory-bank.md`. The
+  `.env.example` AI-block rewrite was deliberately LEFT to section D's full trim (one edit,
+  not two). **A2 was PRESENTED to the user; not applied (theirs to apply).**
+- **B done** — all three landed in one commit. Measured guest entry **636 KB → 389 KB raw,
+  187 KB → 123 KB gzip (−34%)**; `PhoneField` is now its own 200 KB on-demand chunk.
+  B2 needed one change beyond the plan: `saveSelection` had to accept an updater and
+  `toggleSelect` derive from `prev`, because deferring the commit makes a closed-over
+  `selection` one commit stale (a fast double-click would drop the first toggle).
+  Browser-verified against the built dist (app paints, sign-in overlay resolves through the
+  Suspense fallback with PhoneField intact, Help opens, no unexpected console errors).
+  **NOT yet verified: B2's actual click behaviour** — needs real rows, so it is now an
+  explicit E2E checklist item (see section D).
+- **C blocked** — Docker daemon down (WSL integration failure; user restarting the machine).
+  C2 must not be committed without the live `EXPLAIN` confirming the optimizer picks the
+  candidate indexes, and the migration is forward-only, so guessing the shape is not an option.
 
 ---
 
@@ -174,10 +194,11 @@ query instead of importing `hotpicks.js`'s exported `loadTeamHistory` — cleanu
   probe-value-edge,validate-precursor-boosters}.js` (Task 6 canonicalized only ai-scorecard).
 
 ## Suggested execution order (fresh session)
-1. AI-economy A1 (config defaults + memory-bank policy-regime note) — small, user's priority.
-2. Web B1/B2/B3 (lazy-loads + startTransition) — low-risk, measurable guest-bundle win.
+1. ~~AI-economy A1~~ **DONE `a50e978`.**
+2. ~~Web B1/B2/B3~~ **DONE `428704a`.**
 3. Pipeline C1 probe → maybe change; C2 EXPLAIN → migration; C3 instrumentation only.
+   **NEEDS Docker/MySQL up (C2) — resume here.**
 4. `.env.example` full trim (D) folding in A1.
-5. Docs sweep (D) + E2E (D).
+5. Docs sweep (D) + E2E (D) — **add B2 row-selection click behaviour to the E2E list.**
 6. Version decision + final review + merge.
 Each substantive change → suite green + a task-scoped review before moving on (SDD flow).
