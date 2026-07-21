@@ -109,15 +109,15 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
 
 ## Batch C — settings / maintenance
 
-- [ ] **C1 (T1) Persist the VALIDATED value, not the raw one.** `src/settings.js:115-116` writes
+- [x] **C1 (T1) Persist the VALIDATED value, not the raw one.** `src/settings.js:115-116` writes
       `String(value)` from `entries`, ignoring `batch.values`. `{"SAFE_MAX_PRICE": true}`
       validates (coerced to 1), stores `'true'`, and `effective()` thereafter returns `NaN` —
       a live regime knob silently corrupted past every catalog range check.
-- [ ] **C2 (T1, user decision 2) Quiesce AI + geo during an active maintenance window.**
+- [x] **C2 (T1, user decision 2) Quiesce AI + geo during an active maintenance window.**
       Shared `maintenanceActive()` helper, early-return in the AI-worker tick
       (`src/ai-worker.js:270`) and the geo tick (`src/geo.js`). The auto-refresh light pass
       DELIBERATELY keeps running (warehouse stays current). Document the split.
-- [ ] **C3 (T2) `maxLength` on catalog string entries** (`BOT_UA_EXTRA`, `MAINTENANCE_MESSAGE`,
+- [x] **C3 (T2) `maxLength` on catalog string entries** (`BOT_UA_EXTRA`, `MAINTENANCE_MESSAGE`,
       `AI_CONSENSUS_MODELS`).
 
 ## Batch D — DB transfer (M10)

@@ -57,7 +57,8 @@ import {
 import { templateSchema, campaignCreateSchema, campaignSendSchema } from './db/campaign-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
 import { queryCacheKey } from './db/cache-rules.js';
-import { maintenanceInfo, retryAfterSeconds } from './db/maintenance-rules.js';
+import { retryAfterSeconds } from './db/maintenance-rules.js';
+import { maintenanceNow } from './maintenance.js';
 import { _dtime } from './utils.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -128,12 +129,8 @@ const MACHINE_BEARERS = [config.API_TOKEN, config.ADMIN_TOKEN];
 // real surface). Cost while off: one effective() Map lookup (bot-filter idiom);
 // past-end auto-expiry lives in the pure state machine, never here.
 // ============================================================================
-const maintenanceNow = () => maintenanceInfo({
-    scheduled: effective('MAINTENANCE_SCHEDULED'),
-    start: effective('MAINTENANCE_START'),
-    end: effective('MAINTENANCE_END'),
-    message: effective('MAINTENANCE_MESSAGE'),
-}, Date.now());
+// maintenanceNow now lives in src/maintenance.js so the schedulers can share
+// the same definition (the quiesce policy is documented there).
 
 // HTML-escape anything admin-authored before it reaches this page. The
 // maintenance message is free text validated only by MAINT_MSG_PATTERN, which

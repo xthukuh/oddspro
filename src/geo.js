@@ -3,6 +3,7 @@ import { effective } from './settings.js';
 import { db } from './db/connection.js';
 import { parseGeoResult, planGeoBatch } from './db/geo-rules.js';
 import { refreshJob } from './auto-refresh.js';
+import { maintenanceActive } from './maintenance.js';
 
 // Background visitor-geo backfill. Each sweep discovers visitor IPs not yet in
 // the ip_geo cache, resolves the public ones via the geo provider (private/
@@ -119,6 +120,11 @@ async function tick() {
     // and silently skip/duplicate a row across chunk files. A skipped tick is
     // harmless - the next interval retries.
     if (running || refreshJob.running) return;
+    // Quiesce during a declared maintenance window - no third-party calls while
+    // the site says it is down (src/maintenance.js documents the policy). Geo
+    // is pure catch-up work keyed on unresolved rows, so a skipped tick costs
+    // nothing but a later resolution.
+    if (maintenanceActive()) return;
     running = true;
     try {
         const c = await backfillGeo();

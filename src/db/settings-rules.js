@@ -191,6 +191,11 @@ export function coerceValue(type, raw) {
 }
 
 // Validate a proposed override -> { ok, value } | { ok:false, error }.
+// Default ceiling for any admin-editable string setting (per-entry maxLength
+// overrides it). Generous enough for a CSV of bot UAs or a maintenance notice,
+// far below anything that could bloat a per-request read.
+export const STRING_MAX = 500;
+
 export function validateSetting(key, raw, catalog = SETTINGS_CATALOG) {
     const e = catalogEntry(key, catalog);
     if (!e) return { ok: false, error: `Unknown or non-editable setting: ${key}` };
@@ -200,6 +205,17 @@ export function validateSetting(key, raw, catalog = SETTINGS_CATALOG) {
         if (e.type === 'int' && !Number.isInteger(value)) return { ok: false, error: `${key} must be a whole number` };
         if (e.min != null && value < e.min) return { ok: false, error: `${key} must be >= ${e.min}` };
         if (e.max != null && value > e.max) return { ok: false, error: `${key} must be <= ${e.max}` };
+    }
+    // Bound every stored string. Without a ceiling the only limits are the
+    // request body cap and the `settings.value` column - so a key like
+    // MAINTENANCE_MESSAGE (rendered to every visitor) or BOT_UA_EXTRA (split
+    // and matched per request) could hold kilobytes. STRING_MAX is the default;
+    // an entry may tighten it with its own maxLength.
+    if (e.type === 'string') {
+        const max = e.maxLength ?? STRING_MAX;
+        if (String(value).length > max) {
+            return { ok: false, error: `${key} must be at most ${max} characters` };
+        }
     }
     if (e.pattern && e.type === 'string' && !new RegExp(e.pattern).test(value)) {
         return { ok: false, error: `${key} must be ${e.patternHint || `matching ${e.pattern}`}` };

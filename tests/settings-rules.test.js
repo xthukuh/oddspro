@@ -6,7 +6,7 @@ import {
     SETTINGS_CATALOG, catalogEntry, coerceValue, validateSetting, validateSettings,
     mergeOverrides, publicSubset, isMissingTableError, settingsPutSchema,
     buildAuditRows, AUDIT_SETTINGS_SET, AUDIT_SETTINGS_RESET,
-    normalizeForCompare, settingsDiff,
+    normalizeForCompare, settingsDiff, STRING_MAX,
 } from '../src/db/settings-rules.js';
 
 test('catalog excludes secrets/creds/build vars by construction', () => {
@@ -297,4 +297,60 @@ test('buildAuditRows: reset rows and the never-overridden no-op', () => {
     // Resetting a key that was never overridden changes nothing -> no trail.
     assert.deepEqual(buildAuditRows([['TIP_MIN_PRICE', null]], {},
         { action: AUDIT_SETTINGS_RESET }), []);
+});
+
+// The store-time round trip. validateSetting COERCES before it range-checks, so
+// the value that passed validation is not always the value the caller sent -
+// and settings are persisted as strings, then decoded again by effective().
+// Unless the VALIDATED value is what gets written, a request can pass every
+// catalog check and still leave a live knob holding NaN. Regression guard for
+// setOverrides persisting batch.values rather than the raw entries.
+test('a validated value survives String() -> coerceValue unchanged', () => {
+    const cases = [
+        ['SAFE_MAX_PRICE', true],      // Number(true) === 1, inside min:1
+        ['SAFE_MAX_PRICE', '1.6'],
+        ['AUTO_LIGHT_MINUTES', []],    // Number([]) === 0
+        ['AUTO_LIGHT_MINUTES', '15'],
+        ['SMS_ENABLED', '0'],
+        ['SMS_ENABLED', true],
+        ['SMS_DAILY_CAP', '250'],
+    ];
+    for (const [key, raw] of cases) {
+        const v = validateSetting(key, raw);
+        if (!v.ok) continue;                       // rejected inputs are not this test's business
+        const type = catalogEntry(key).type;
+        const stored = String(v.value);            // exactly what setOverrides writes
+        const decoded = coerceValue(type, stored); // exactly what effective() reads back
+        assert.deepEqual(decoded, v.value,
+            `${key}=${JSON.stringify(raw)}: validated ${JSON.stringify(v.value)} but decoded ${JSON.stringify(decoded)}`);
+        if (type === 'int' || type === 'number') {
+            assert.ok(Number.isFinite(decoded), `${key}=${JSON.stringify(raw)} decoded to a non-finite number`);
+        }
+    }
+});
+
+// The specific bug: storing the RAW value instead of the validated one put NaN
+// behind a live policy knob. Pin the shape that caused it.
+test('storing the RAW value would have produced NaN (the bug this guards)', () => {
+    const v = validateSetting('SAFE_MAX_PRICE', true);
+    assert.equal(v.ok, true);
+    assert.equal(v.value, 1);                                  // coerced, in range
+    assert.ok(Number.isNaN(coerceValue('number', String(true)))); // raw path -> NaN
+    assert.equal(coerceValue('number', String(v.value)), 1);      // validated path -> 1
+});
+
+// C3: every admin-editable string is length-bounded. MAINTENANCE_MESSAGE is
+// rendered to every visitor during a window and BOT_UA_EXTRA is split and
+// matched on each request, so neither may hold unbounded text.
+test('string settings are length-capped (STRING_MAX, or a tighter per-entry maxLength)', () => {
+    const long = 'x'.repeat(STRING_MAX + 1);
+    assert.equal(validateSetting('MAINTENANCE_MESSAGE', long).ok, false);
+    assert.match(validateSetting('MAINTENANCE_MESSAGE', long).error, /at most/);
+    // A reasonable message still passes (and keeps satisfying its placeholder pattern).
+    assert.equal(validateSetting('MAINTENANCE_MESSAGE', 'Back by ${downtime_end}.').ok, true);
+    // Applies to string entries generally, not just the one key.
+    for (const e of SETTINGS_CATALOG.filter(x => x.type === 'string')) {
+        const over = 'y'.repeat((e.maxLength ?? STRING_MAX) + 1);
+        assert.equal(validateSetting(e.key, over).ok, false, `${e.key} accepted an oversized value`);
+    }
 });

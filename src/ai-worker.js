@@ -10,6 +10,7 @@ import {
 } from './db/adjudicate-rules.js';
 import { eatDateKey } from './db/auto-rules.js';
 import { KICKOFF_SQL_EXPR } from './db/ai-rules.js';
+import { maintenanceActive } from './maintenance.js';
 import { refreshJob } from './auto-refresh.js';
 import { _batch, _progress, debugLog } from './utils.js';
 
@@ -268,6 +269,12 @@ export function startAiWorker() {
     }
     timer = setInterval(() => {
         if (refreshJob.running || state.running) return;
+        // Quiesce during a declared maintenance window: billing Gemini while
+        // visitors are being served a 503 is a surprise nobody wants on the
+        // invoice. Work is a DERIVED predicate (upcoming + verdict missing or
+        // stale), so a skipped tick resumes by construction - nothing to catch
+        // up on, no cursor to keep. See src/maintenance.js for the full policy.
+        if (maintenanceActive()) return;
         drainAiReviews().catch(e => console.warn(`[ai-worker] drain failed: ${e?.message ?? e}`));
     }, 60_000);
     timer.unref?.();

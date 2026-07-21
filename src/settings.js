@@ -106,20 +106,28 @@ export function adminSettings() {
 export async function setOverrides(entries, userId = null) {
     const batch = validateSettings(entries);
     if (!batch.ok) { const err = new Error(batch.errors.join('; ')); err.status = 400; throw err; }
+    // Persist the VALIDATED value, never the caller's raw one. validateSetting
+    // COERCES before it range-checks, so the two can disagree: a JSON `true`
+    // for SAFE_MAX_PRICE coerces to 1, passes min:1, and used to be stored as
+    // the string 'true' - which effective() then decodes back as NaN, leaving a
+    // live policy knob in a state no catalog range check would ever have
+    // allowed (and an audit row recording 'true'). Writing batch.values makes
+    // validate-time and store-time the same operation by construction.
+    const pairs = batch.values.map(v => [v.key, v.value]);
     await db.transaction(async trx => {
-        const keys = entries.map(([key]) => key);
+        const keys = pairs.map(([key]) => key);
         const stored = await trx('settings').whereIn('key', keys).select('key', 'value').forUpdate();
         const previous = Object.fromEntries(stored.map(r => [r.key, r.value]));
-        for (const [key, value] of entries) {
+        for (const [key, value] of pairs) {
             await trx('settings')
                 .insert({ key, value: String(value), updated_by: userId })
                 .onConflict('key').merge({ value: String(value), updated_by: userId });
         }
-        const audit = buildAuditRows(entries, previous, { actorId: userId, action: AUDIT_SETTINGS_SET });
+        const audit = buildAuditRows(pairs, previous, { actorId: userId, action: AUDIT_SETTINGS_SET });
         if (audit.length) await trx('admin_audit').insert(audit);
     });
     await loadOverrides();
-    return entries.map(([key]) => ({ key, effective: effective(key), restart_required: !catalogEntry(key).live }));
+    return pairs.map(([key]) => ({ key, effective: effective(key), restart_required: !catalogEntry(key).live }));
 }
 
 export async function resetOverride(key, userId = null) {
