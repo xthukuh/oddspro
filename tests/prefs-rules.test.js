@@ -12,6 +12,13 @@ test('isDeviceKey: per-device state, exact keys + prefixes only', () => {
     assert.equal(isDeviceKey('oddspro.human'), true);        // human-pow token
     assert.equal(isDeviceKey('oddspro.prefs.sync'), true);   // this device's sync cursor
     assert.equal(isDeviceKey('oddspro.select.d.2026-07-15'), true); // per-date row selections
+    assert.equal(isDeviceKey('oddspro.maintenance'), true);   // M14 schedule cache (server state)
+    // The anonymous analytics id. It lives in the oddspro.* namespace this
+    // machinery treats as preferences by DEFAULT, so without an explicit
+    // exclusion it synced: two devices of one account converge on one
+    // visitors.anon_id, silently conflating the unique/repeat-visitor metrics
+    // the tracking exists to produce.
+    assert.equal(isDeviceKey('oddspro.visitor'), true);
     assert.equal(isDeviceKey('oddspro.theme'), false);
     assert.equal(isDeviceKey('oddspro.sort'), false);
     assert.equal(isDeviceKey('oddspro.session.other'), false); // exact keys stay exact

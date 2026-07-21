@@ -15,7 +15,16 @@
 // transient per-date row selections (data, not config), the sync cursor
 // itself (each device's own clock - syncing it would be circular), and the
 // M14 maintenance-schedule cache (server state - every device polls its own).
-const DEVICE_EXACT = new Set(['oddspro.session', 'oddspro.human', 'oddspro.prefs.sync', 'oddspro.maintenance']);
+// 'oddspro.visitor' is the anonymous analytics id (web/src/track.js). It sits
+// in the oddspro.* namespace this machinery treats as preferences BY DEFAULT,
+// so it synced silently: two devices of one account converged on a single
+// visitors.anon_id, conflating the unique- and repeat-visitor metrics the
+// tracking exists to produce - and uploading it to /api/prefs contradicts the
+// privacy policy's claim that the identifier is not linked to the account.
+const DEVICE_EXACT = new Set([
+    'oddspro.session', 'oddspro.human', 'oddspro.prefs.sync',
+    'oddspro.maintenance', 'oddspro.visitor',
+]);
 const DEVICE_PREFIXES = ['oddspro.select.d.'];
 
 export function isDeviceKey(key) {

@@ -278,7 +278,11 @@ async function _enrichOne(f, tags, fixturesByTeam, cfg, guard) {
 
 // T10a insertion point: the ONLY grounded prompt in the enrichment set. The
 // preamble prepends when active (dark by default) - see _preambleOn above.
-function _factsPrompt({ fixture, kickoff, league }, cfg = config) {
+// No default for `cfg`: the old `= config` referenced an identifier this module
+// no longer imports, so any future call without the second argument would have
+// been an immediate ReferenceError inside an AI path. The sole caller always
+// passes it, so requiring it is both correct and free.
+function _factsPrompt({ fixture, kickoff, league }, cfg) {
     return [
         ...(_preambleOn(cfg) ? [...injectionPreamble(), ''] : []),
         'Research this football fixture and report ONLY verified facts.',

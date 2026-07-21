@@ -167,7 +167,7 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
 
 ## Batch F — web + cross-cutting
 
-- [ ] **F1 (T1) Exclude `oddspro.visitor` from prefs sync and config snapshots.**
+- [x] **F1 (T1) Exclude `oddspro.visitor` from prefs sync and config snapshots.**
       `web/src/track.js:17` chose a key inside the `oddspro.*` namespace the sync machinery
       treats as preferences by default, and it is in NONE of the three deny-lists
       (`prefs-rules.js:18`, `configSnapshot.js:19,26`). Consequences: two devices of one
@@ -176,16 +176,16 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
       and it contradicts the privacy policy shipped in this same branch.
       **Also extend the exclusion tests** — they exist but were never extended to
       `oddspro.maintenance` either, which is why this slipped.
-- [ ] **F2 (T1) `src/enrich.js:281` dangling `config`.** `cfg = config` default arg, but
+- [x] **F2 (T1) `src/enrich.js:281` dangling `config`.** `cfg = config` default arg, but
       `config` is no longer imported ⇒ free undeclared identifier, latent `ReferenceError`
       in an AI path.
-- [ ] **F3 (T2) `SettingsEditor.save()` partial-failure honesty.**
+- [x] **F3 (T2) `SettingsEditor.save()` partial-failure honesty.**
       `web/src/admin/SettingsEditor.jsx:132-154` — the DELETE loop runs AFTER the PUT commits;
       a throw leaves overrides half-applied while the UI still shows them pending.
-- [ ] **F4 (T2) `.HALT` boot check in `src/index.js`.** `.HALT` stops serve but NOT a cron
+- [x] **F4 (T2) `.HALT` boot check in `src/index.js`.** `.HALT` stops serve but NOT a cron
       writer ⇒ exactly the second-concurrent-writer configuration the slot design exists to
       prevent, during an emergency stop.
-- [ ] **F5 (T2) CLAUDE.md drift.** Still documents the deleted `src/admin-dashboard.js`; the
+- [x] **F5 (T2) CLAUDE.md drift.** Still documents the deleted `src/admin-dashboard.js`; the
       new `src/track.js` / `src/db/track-rules.js` have no module entry; `dailyUniqueVisitors`
       → `dailyUniqueSessions`.
 

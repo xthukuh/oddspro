@@ -133,22 +133,50 @@ export default function SettingsEditor() {
         setBusy(true);
         setError(null);
         setNotice(null);
+        // The server's all-or-nothing guarantee covers the PUT batch only; the
+        // blank-value resets are a separate DELETE per key that necessarily
+        // runs AFTER it. So a failure partway (network blip, session expiry)
+        // leaves the overrides half-applied. What must not ALSO happen is the
+        // UI lying about it: previously a throw skipped setEdits({}) wholesale,
+        // so every edit still looked pending even though the PUT had committed.
+        // Track what actually landed and clear exactly that, then name the keys
+        // that did not.
+        const restartKeys = [];
+        const applied = [];
+        const failed = [];
         try {
-            const restartKeys = [];
             if (Object.keys(diff.set).length) {
                 const res = await putAdminSettings(diff.set);
                 restartKeys.push(...(res.restart_required ?? []));
+                applied.push(...Object.keys(diff.set));
             }
             for (const key of diff.reset) {
-                const res = await deleteAdminSetting(key);
-                if (res.restart_required) restartKeys.push(key);
+                try {
+                    const res = await deleteAdminSetting(key);
+                    if (res.restart_required) restartKeys.push(key);
+                    applied.push(key);
+                } catch (e) {
+                    failed.push(`${key} (${e.message})`);
+                }
             }
-            setEdits({});
+            // Drop only the edits that really landed, so anything still shown
+            // as pending genuinely is.
+            setEdits(prev => {
+                const next = { ...prev };
+                for (const k of applied) delete next[k];
+                return next;
+            });
             await Promise.all([load(), loadAudit()]);
-            setNotice(restartKeys.length
-                ? `Saved. Restart required for: ${restartKeys.join(', ')}`
-                : 'Saved - changes are live.');
+            if (failed.length) {
+                setError(`Partly saved. These were NOT reset: ${failed.join('; ')}`);
+            } else {
+                setNotice(restartKeys.length
+                    ? `Saved. Restart required for: ${restartKeys.join(', ')}`
+                    : 'Saved - changes are live.');
+            }
         } catch (e) {
+            // The PUT itself failed: nothing was written (server-side
+            // all-or-nothing), so every edit correctly stays pending.
             setError(e.message);
         } finally {
             setBusy(false);

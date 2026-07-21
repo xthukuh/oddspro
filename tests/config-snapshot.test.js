@@ -74,6 +74,10 @@ test('migrateEnvelope is identity for the current version', () => {
 test('isTransient excludes per-date selections and the prefs-sync cursor', () => {
     assert.equal(isTransient('oddspro.select.d.2026-07-15'), true); // per-date row selection
     assert.equal(isTransient('oddspro.prefs.sync'), true);          // device sync cursor (Phase 7)
+    assert.equal(isTransient('oddspro.maintenance'), true);          // M14 schedule cache
+    // Device identity, not configuration: exporting it puts a tracking id in a
+    // shareable file and importing one clones another device's visitor identity.
+    assert.equal(isTransient('oddspro.visitor'), true);
     assert.equal(isTransient('oddspro.theme'), false);
     assert.equal(isTransient('oddspro.selection'), false);          // prefix must match fully
 });

@@ -14,12 +14,26 @@ import { runStartPipeline } from './pipeline.js';
 import { closeDb } from './db/connection.js';
 import { loadOverrides } from './settings.js';
 import { _date, _dtime } from './utils.js';
+import { haltRequested, HALT_FILE } from './halt.js';
 
 (async () => {
     const args = 'undefined' !== typeof process && Array.isArray(process.argv) ? process.argv : [];
     const script = String(args[1] ?? '').split(/[\\\/]/g).pop();
     if (!script) throw new TypeError('Failed to get process script name!');
     const action = args[2], value = args[3];
+
+    // The .HALT kill-switch must stop CRON writers too, not just serve.
+    // Otherwise dropping the file - the documented emergency lever, used
+    // precisely when cPanel's Stop button fails - takes the serve process down
+    // while a configured pipeline or `aireview` cron keeps opening a SECOND
+    // writer against the same database. That is exactly the concurrent-writer
+    // configuration the single-slot job design exists to prevent, now with the
+    // in-process guard gone. Refuse the same way the server boot does.
+    if (haltRequested()) {
+        console.error(`[halt] ${HALT_FILE} present - refusing to run. Delete it to resume.`);
+        process.exitCode = 1;
+        return;
+    }
 
     // M6 (spec decision 5): CLI actions must run under the SAME effective
     // gates as the serve process - a cron sweep ignoring an admin override of
