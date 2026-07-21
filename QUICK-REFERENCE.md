@@ -100,17 +100,30 @@ Produces `release/oddspro-app_<ts>.zip` + `oddspro-web_<ts>.zip`; refuses off-`m
 idempotently tags `v<version>` at HEAD and pushes the tag (existing tag not at HEAD = loud
 "bump the version" warning).
 
-### 2.3 Production config (host `.env`)
+### 2.3 Production config — `.env` vs Admin → Settings
+
+**Precedence: `settings` table (Admin → Settings) → `.env` → code defaults.** 82 of the 121 config keys are admin-editable and audited in `admin_audit`; only the other 39 (credentials, endpoints, pre-DB boot infra) belong in `.env`. `.env.example` is the authoritative template of what stays. Full split + trim runbook: `docs/DEPLOYMENT.md` §9.
+
+**Host `.env` (not admin-editable):**
 
 | Knob | Setting |
 |---|---|
 | `MIGRATE_ON_BOOT=1` | Restart self-runs migrations, fail-fast (the no-SSH migration path) |
 | `PIN_PEPPER` | Set BEFORE the first migrate/restart; **NEVER rotate** (invalidates every PIN) |
-| `API_HOST=127.0.0.1`, `DB_POOL_MAX=3`, `DEBUG=0` | shared-host posture |
-| `AUTO_FULL_AT` (EAT), `AUTO_LIGHT_MINUTES` | in-process refresh cadence |
-| `SMS_ENABLED=1` + `BONGA_*` | required for real sign-ups (off = codes log server-side) |
-| `VITE_SHOW_DETAILS=0` | build-time: hides tip internals in the prod bundle |
-| Bot protection (opt-in) | `docs/DEPLOYMENT.md` §8 |
+| `API_HOST=127.0.0.1`, `DB_POOL_MAX=3` | shared-host posture |
+| `BONGA_*` creds, `MAIL_*` creds, `GEMINI_API_KEY`, `OPENROUTER_API_KEY` | secrets; `.env` only, never the catalog |
+| `AUTH_ENABLED` | gates the admin UI itself, so it cannot be admin-owned |
+| `VITE_SHOW_DETAILS=0` | **build-time**: hides tip internals in the prod bundle (rebuild `web/dist`, not a server setting) |
+
+**Admin → Settings (editing `.env` for these is outranked by any DB override):**
+
+| Knob | Group |
+|---|---|
+| `AUTO_FULL_AT` (EAT), `AUTO_LIGHT_MINUTES` — refresh cadence | `refresh` (both restart-required) |
+| `SMS_ENABLED=1` — required for real sign-ups (off = codes log server-side) | `sms` |
+| `DEBUG=0` — shared-host posture | `logging` |
+| AI caps/models (`TIP_AI_DAILY_CAP`, `AI_ENRICH_CAP`, `OPENROUTER_MODEL`, …) | `ai`, `ai-dark` |
+| Bot protection (opt-in) — `docs/DEPLOYMENT.md` §8 | `bot` |
 
 ### 2.4 Deploy — in this order (detail: `docs/DEPLOYMENT.md` §4–5)
 
