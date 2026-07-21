@@ -1,4 +1,5 @@
 import { db } from './connection.js';
+import { debugLog } from '../utils.js';
 import { diffOddsRows } from './odds-diff.js';
 import { withRetry } from './retry-rules.js';
 import { oddsRefreshDue } from './odds-refresh-rules.js';
@@ -114,11 +115,22 @@ export async function saveMatches(games) {
     const counts = { inserted: 0, updated: 0, skipped: 0, markets: 0 };
     if (!Array.isArray(games) || !games.length) return counts;
     const provider = games[0].provider;
+    // DEBUG-gated phase timing only (no logic change). This exists to answer one
+    // question with numbers before anyone refactors: the per-match `existingOdds`
+    // SELECT below is an N+1 (~1700 sequential round trips on a busy Betika day),
+    // but bulk-prefetching it would move the read OUTSIDE the transaction and widen
+    // the staleness window that `withRetry` exists to handle. Measure first - if
+    // `select-odds` is a small share of `loop`, the risky refactor buys nothing.
+    // Accumulators count every attempt, including retried ones, since wall clock is
+    // what the pipeline actually pays.
+    const t0 = Date.now();
+    const timing = { upsert: 0, selectOdds: 0, diffWrite: 0 };
     const existing = await db('matches')
         .select('id', 'provider_match_id', 'completed_at')
         .where('provider', provider)
         .whereIn('provider_match_id', games.map(g => g.match_id));
     const byPid = new Map(existing.map(r => [Number(r.provider_match_id), r]));
+    const tPrefetch = Date.now();
     for (const g of games) {
         const found = byPid.get(Number(g.match_id));
         if (found?.completed_at) {
@@ -136,6 +148,7 @@ export async function saveMatches(games) {
             inserted = updated = false;
             markets = 0;
             let match_id;
+            const tUpsert = Date.now();
             if (found) {
                 match_id = found.id;
                 // metadata (raw ~39KB provider JSON) is insert-only: written at
@@ -152,17 +165,27 @@ export async function saveMatches(games) {
                 inserted = true;
             }
             const rows = _marketRows(match_id, g.markets);
+            const tSelect = Date.now();
+            timing.upsert += tSelect - tUpsert;
             const existingOdds = await trx('odds_markets').where('match_id', match_id)
                 .select('id', 'type_name', 'name', 'handicap', 'is_stale');
+            const tDiff = Date.now();
+            timing.selectOdds += tDiff - tSelect;
             const { staleIds, deleteIds } = diffOddsRows(existingOdds, rows);
             if (staleIds.length) await trx('odds_markets').whereIn('id', staleIds).update({ is_stale: true });
             if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
             if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
+            timing.diffWrite += Date.now() - tDiff;
             markets = rows.length;
         }));
         if (inserted) counts.inserted++;
         if (updated) counts.updated++;
         counts.markets += markets;
     }
+    debugLog(`store.saveMatches ${provider}: prefetch ${tPrefetch - t0}ms, `
+        + `loop ${Date.now() - tPrefetch}ms (upsert ${timing.upsert}ms, `
+        + `select-odds ${timing.selectOdds}ms, diff-write ${timing.diffWrite}ms) `
+        + `- ${games.length} games (${counts.inserted} ins, ${counts.updated} upd, `
+        + `${counts.skipped} skip, ${counts.markets} markets)`);
     return counts;
 }

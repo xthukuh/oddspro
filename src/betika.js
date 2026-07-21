@@ -103,7 +103,14 @@ function parseBetikaGame(game) {
 // `exclude_` (optional Set of provider match ids) skips already-completed
 // matches before their per-game detail requests - fewer server hits.
 export async function fetchBetikaGames(date_=null, exclude_=null) {
-    const date = _date(date_), dt = _dtime(date).substring(0, 10), sub_type_id = 1, limit = 10;
+    // `limit` drives the list-page count: a 1694-game day is 34 pages at 50 vs 170 at 10,
+    // each page separated by a 50ms sleep. Probed live 2026-07-21: the API honours 50 and
+    // 100 exactly (identical response shape/keys, and a limit=100 walk returned the same
+    // 116 unique parent_match_ids as a limit=10 walk, no overlap or gaps). Kept at 50
+    // rather than 100 because the loop terminates on `len < limit` - if the server ever
+    // silently caps page size below the requested value the day is truncated with no error,
+    // and 50 captures most of the win while staying well inside the verified ceiling.
+    const date = _date(date_), dt = _dtime(date).substring(0, 10), sub_type_id = 1, limit = 50;
     const dates = Object.fromEntries([...Array(8)].map((_, i) => [new Date(new Date().setDate(new Date().getDate() + i)).toISOString().substring(0, 10), i?i:-1]));
     const period = dates[dt];
     if (!period) {
