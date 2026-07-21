@@ -169,7 +169,29 @@ This gate (`HUMAN_POW_ENABLED`, `VITE_HUMAN_POW`, `HUMAN_TOKEN_SECRET`, `HUMAN_P
 
 ### 8.3 Verifying after you enable it
 
-- Load `/` in a browser → a brief "Verifying you're human" screen → the app. Reload → **no** gate (check-once token in localStorage). 
-- `GET /api/records` with no `X-Human-Token` → `401 {human_required:true}`; the SPA attaches the token automatically once verified.
+- Load `/` in a browser → the app renders immediately. **There is no human-verification interstitial** — if you see one, you are running a pre-2026-07-16 build (see §8.1).
 - `curl -A 'GPTBot' https://<domain>/` → `403`; a real browser UA → `200`.
+- `curl -A 'Googlebot' https://<domain>/` → `200` (search engines are deliberately exempt).
 - `GET /robots.txt` lists the AI `Disallow` rules.
+
+## 9. Runtime configuration: Admin → Settings vs `.env`
+
+Since v1.1.0 (M6) the runtime knobs are **not** configured through `.env` any more. Getting this split right is the difference between a change that takes effect and one that silently does nothing.
+
+**Precedence (highest first):** `settings` table overrides (Admin → Settings) → `.env` → code defaults in `src/config.js`.
+
+- **82 keys are admin-editable** — every AI, hot-pick, tip, safe-pool, refresh, geo, bot, OTP, SMS, maintenance and logging knob. Edit them at **Admin → Settings**. Most apply immediately; the few read once at boot are badged *restart required* in the editor. Every change is written to `admin_audit` with a timestamp and the admin who made it — an untracked `.env` edit gives you none of that, which is why policy-regime changes (AI model swaps, `TIP_MIN_PRICE`, the dark switches) must go through the editor.
+- **Both entrypoints load the overrides** (`src/index.js` for CLI, `src/server.js` for serve), so an Admin → Settings value also applies to `npm run start` cron runs.
+- **39 keys are NOT admin-editable and must stay in `.env`:** DB credentials, API endpoints, `API_PORT`/`API_HOST`, `API_TOKEN`/`ADMIN_TOKEN`, `DB_POOL_*`, `MIGRATE_ON_BOOT`, `PIN_PEPPER`, `ADMIN_SEED_PIN`, `AUTH_ENABLED`, the Gemini/OpenRouter/Bonga/SMTP credentials and endpoints. These are secrets, or are read before the DB exists, or (in `AUTH_ENABLED`'s case) gate the admin UI itself and so cannot be owned by it.
+- **`VITE_*` are build-time**, baked into `web/dist` by `npm run build:web`. Changing one requires a **rebuild and redeploy of `web/dist`** — it is not a server setting.
+
+### 9.1 Trimming an existing deployed `.env`
+
+The committed `.env.example` is now the authoritative template: it lists only the keys that still belong in `.env`. A `.env` from before v1.1.0 will carry ~60 knobs that are now owned by Admin → Settings.
+
+1. **Back up the live `.env` first** (it is gitignored and not in any release zip — there is no other copy).
+2. Bring up the app and open **Admin → Settings**. For every tuning knob your `.env` overrides, set the same value there *before* removing the line, so behaviour does not change at restart.
+3. Delete the now-duplicated lines, using `.env.example` as the checklist of what to keep.
+4. Restart and confirm the values you care about in Admin → Settings.
+
+**A stale line is harmless but misleading** — the zod schema strips unknown keys, and a known-but-now-catalogued key is simply outranked by any DB override. The risk is human: someone edits a `.env` line that the DB is overriding and concludes the setting is broken. Leftover `HUMAN_*` / `VITE_HUMAN_POW` lines (§8.1) fall in the same category — dead weight, safe to delete.
