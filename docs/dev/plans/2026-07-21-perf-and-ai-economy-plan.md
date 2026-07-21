@@ -251,10 +251,96 @@ query instead of importing `hotpicks.js`'s exported `loadTeamHistory` — cleanu
   batch 11 holds three migrations, offsetting every later ordinal by 2 — verified against
   `knex_migrations`). memory-bank gained resolved issues #25/#26.
 
-### E2E checklist (the one remaining item before final review)
-Needs `npm run build:web` + `npm run serve` (`AUTO_REFRESH_ENABLED=0`) + chrome-devtools:
-guest bundle, signup+consent, admin deep-links, settings, users, campaigns dry-run,
-maintenance window, DB overview/export/import roundtrip, performance parity, dashboard
-beacons, **and B2's row-selection click behaviour** (only build-verified so far — it needs
-real rows, and the DB now has today's 116 Betika games loaded).
-Each substantive change → suite green + a task-scoped review before moving on (SDD flow).
+### E2E checklist — **DONE 2026-07-21 (session 12). All items PASS.**
+Harness: `npm run build:web` + serve with **every outward-billing seam neutered**
+(`AUTO_REFRESH_ENABLED=0 SMS_ENABLED=0 GEMINI_API_KEY= MAIL_MAILER=log`) — the live `.env`
+has `SMS_ENABLED=1` and a Gemini key, so an unguarded serve bills real SMS + a 60s AI drain.
+Log confirmed `[ai-worker] disabled`. Reuse the blank MCP tab; `taskkill /T` + re-probe after.
+
+- **Guest bundle (B1/B3 proven live):** only the 389 KB `index` chunk loads; AdminPanel
+  (574 KB), PhoneField (200 KB) and HelpModal stay unfetched. PhoneField arrives **only**
+  on the Create-account click — the ~17-20% guest-chunk win B1 targeted, confirmed at runtime.
+- **Guest tier:** future date → 403 `auth_required`; next-chevron disabled. Over all 58
+  tipped rows every "why" field (`tip_breakdown`, `hot_review`, `hot_signals`,
+  `tip_ai_review`, `tip_ai_reason`, `hot_reason`) is null, confidence quantized to 0.05
+  (0.6/0.65/0.7/0.75), market+price kept. Redaction is real, not key-presence theatre.
+- **B2 row selection:** real clicks select, badge `1/58`→`2/58`, persists to
+  `oddspro.select.d.<date>`. `startTransition` did not break selection.
+- **Signup + consent:** submit stays disabled with the form fully filled and consent
+  unticked → enabled on tick. Consent is **persisted**, not just gated
+  (`terms_version 2026-07-19` + `terms_accepted_at`). OTP logged to console, zero network.
+- **Admin:** route is `#admin`, **not** `#/admin` (regex `^#admin(?:\/([a-z-]*))?$`), and a
+  hash-only change doesn't remount — needs a reload. All 10 admin endpoints 200.
+  **Boundary: anonymous → 401 everywhere, normal user → 403 on every admin route.**
+- **Settings (M7 all-or-nothing):** mixed valid+invalid batch → 400 naming the bad key and
+  **zero** overrides written (the valid one did not leak); all-valid → 200. `settings.set`
+  /`settings.reset` audit rows carry old→new; the rejected batch wrote **no** audit row.
+  NB the editor's "default" means "value with no DB override" — it shows `.env`, which is
+  why `SAFE_MIN_PARTS` reads 3 (local `.env`), not the code default 2. Not a drift.
+- **Maintenance (M14):** anon → 503 + `Retry-After` exactly the seconds to window end,
+  placeholders rendered, admin bypasses 200, page load → static notice. Moving the window
+  into the past reports `state: off` **with `MAINTENANCE_SCHEDULED` still true** — the
+  stale-503 footgun is genuinely closed. All four overrides reset after.
+- **Campaigns (M9) dry-run:** hand-selecting both users gives `audience_label
+  "2 selected users"` but `count: 1` — **an opted-out user is dropped despite an explicit
+  admin pick**; `excludeOptOut:false` → 400 `Unrecognized key`. Drift verdict asymmetric as
+  designed: growth 0→1 **409 refused**, shrink 5→1 proceeds. Terminal campaign re-send →
+  409. `sms_enabled:false` throughout — no network.
+- **DB transfer (M10):** export rode the shared refresh slot; manifest exclusions = user
+  list ∪ auth defaults ∪ the non-negotiable `knex_migrations` pair. Traversal gate solid
+  under `curl --path-as-is` (`<stamp>/..` → 400) — **a plain `fetch` shows a false 200
+  because it normalizes the URL into the list route; verify with `--path-as-is`.**
+  Tampered `schema_head` → 409. 40/40 chunks staged+applied, `apply_complete`, row counts
+  identical to the manifest (idempotent upsert). Wrong confirm phrase → 400.
+  **Doc correction: the pre-import safety export is 137 MB ON DISK, not the "~1.7 GB"
+  DEPLOYMENT §10 implies — 1.79 GB is the raw data size; gzip compresses it ~13×.**
+- **Performance parity (M11):** `/api/admin/perf/scorecard` matches
+  `scripts/ai-scorecard.js` figure-for-figure (51/66.7%/err 1; 28/60.7% + veto 7/71.4%/
+  saved −0.36; 49/69.4% + veto 1/100%/err 8). One `scorecardSummary()`; script only formats.
+- **Users (M8):** self-disable/self-demote/self-reset-PIN all 400; `unlock:false` → 400
+  "expected true" (the `z.literal(true)` mass-unlock guard); valid patch on another user 200.
+- **Beacons:** `POST /api/visit/checkin` on load; `help_open` written live at 19:40:41.
+
+**Cleanup done:** test user + campaign + minted `verify` sessions deleted, all settings
+overrides cleared, `var/exports`+`var/imports` emptied, serve killed, port 3001 free, no
+orphaned node processes, tab returned to `about:blank`.
+
+**Bug found + fixed during this pass (`ad54878`)** — see section F.
+
+---
+
+## F. Bug found during the E2E pass — results fallback (FIXED `ad54878`)
+
+Prompted by a user request to double-check stale past-date status handling. **Pre-existing,
+NOT a branch regression** (`src/apisports.js` fallback untouched since `c892206`, 2026-07-02;
+this branch only swapped `config.X` → `effective('X')` there).
+
+**Defect.** The 4h completion fallback read:
+```sql
+UPDATE matches SET completed_at = NOW()
+WHERE completed_at IS NULL AND start_time < NOW() - INTERVAL 4 HOUR
+```
+Its comment said "**unlinked** matches", but the SQL never restricted to unlinked — so it
+judged LINKED matches on `matches.start_time`, which is bookmaker-provided and goes stale on
+a reschedule, in a codebase whose core invariant is that API-Football fixtures are canonical.
+
+**Impact (live evidence, 11 rows).** 2 rows were a game at HALF-TIME (`status HT`,
+`elapsed 45`) completed because the bookmaker start_time was 24h adrift → odds frozen
+mid-match. The other 9 were postponed-then-rescheduled matches (kickoffs to 2026-10-07)
+completed off their OLD start_time. **`completed_at` is a one-way door — nothing ever clears
+it — so those games lost odds coverage permanently**; one had been dead 17 days. CLAUDE.md's
+"a reschedule moves kickoff forward and re-enters naturally" holds for the FIXTURE poll set,
+never for match completion. Scores still settled correctly (`COALESCE(m.completed_at, NOW())`
+keeps the stamp but writes scores), so no data corruption — the loss is odds coverage.
+
+**Fix.** Cut on `COALESCE(f.kickoff, m.start_time)` via a LEFT JOIN. A plain
+`fixture_id IS NULL` guard (what the comment literally said) was **rejected**: the 78 retired
+NS/PST zombies would then never complete and would be re-scraped forever.
+
+**Verification (empirical — the offline suite has no DB).** Repaired the 11 rows, then
+re-ran `results`: `0 fallback-completed`, 0 re-broken, 0 stale-uncompleted left behind —
+both invariants hold simultaneously. Suite 914/914. Docs updated in the same commit
+(CLAUDE.md fetch-throttling invariant + `docs/engine/02-DATA-PIPELINE.md`).
+
+**Standing lesson:** canonicality applies to *cutoffs*, not just to values. Any rule keyed on
+a bookmaker-supplied time needs the same `COALESCE(canonical, provider)` treatment.
