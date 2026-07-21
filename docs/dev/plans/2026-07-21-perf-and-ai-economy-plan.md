@@ -227,7 +227,34 @@ query instead of importing `hotpicks.js`'s exported `loadTeamHistory` — cleanu
 1. ~~AI-economy A1~~ **DONE `a50e978`.**
 2. ~~Web B1/B2/B3~~ **DONE `428704a`.**
 3. ~~Pipeline C1/C2/C3~~ **DONE `38e4278`** — C1 shipped, C2 refuted, C3 refactor rejected.
-4. `.env.example` full trim (D) folding in A1. **← RESUME HERE**
-5. Docs sweep (D) + E2E (D) — **add B2 row-selection click behaviour to the E2E list.**
-6. Version decision + final review + merge.
+4. ~~`.env.example` full trim~~ **DONE `fab61a9`** (+ DEPLOYMENT §9).
+5. ~~Docs sweep~~ **DONE `acfd8a8`, `8a7ac54`, `838cd00`.** E2E still OPEN — **← RESUME HERE.**
+6. ~~Version decision~~ **DONE: 1.3.0, confirmed with the user, bumped in `61a769d`.**
+   Final whole-branch review + merge still open.
+
+### Session-11 detail for steps 4-6
+- **`.env.example` trimmed data-driven, not by eye** (`fab61a9`): the config zod schema has
+  121 keys, `SETTINGS_CATALOG` has 82 → exactly **39 non-admin-editable keys** belong in
+  `.env`. Verified post-trim that all 39 are still documented and that the only
+  admin-editable keys left are the two deliberate local-dev conveniences
+  (`AUTO_REFRESH_ENABLED`, `DEBUG`). `docs/DEPLOYMENT.md` §9 records precedence
+  (settings table → `.env` → code defaults) + the trim runbook; §8.3 was also fixed (it
+  still told operators to expect the proof-of-work gate §8.1 records as removed).
+- **Docs sweep** (`acfd8a8`, `8a7ac54`, `838cd00`): CLAUDE.md gained the M10/M11 module
+  bullets + the full admin-section roster; QUICK-REFERENCE §2.3 split into `.env` vs
+  Admin → Settings (it listed `AUTO_FULL_AT`/`SMS_ENABLED`/`DEBUG` as host `.env` config
+  that a DB override silently outranks); `06-AI.md` gained the free-tier cap trap;
+  `DEPLOYMENT.md` §10 is the new DB export/import runbook incl. the ~1.7 GB
+  safety-export-per-apply caveat. A claim-verification pass fixed 4 real drifts
+  (`SAFE_STRATEGY` `market`→`sure` was the HIGH one) — **and rejected 4 false positives**
+  about migration batch numbers (knex batches are per-`migrate:latest`, not per file;
+  batch 11 holds three migrations, offsetting every later ordinal by 2 — verified against
+  `knex_migrations`). memory-bank gained resolved issues #25/#26.
+
+### E2E checklist (the one remaining item before final review)
+Needs `npm run build:web` + `npm run serve` (`AUTO_REFRESH_ENABLED=0`) + chrome-devtools:
+guest bundle, signup+consent, admin deep-links, settings, users, campaigns dry-run,
+maintenance window, DB overview/export/import roundtrip, performance parity, dashboard
+beacons, **and B2's row-selection click behaviour** (only build-verified so far — it needs
+real rows, and the DB now has today's 116 Betika games loaded).
 Each substantive change → suite green + a task-scoped review before moving on (SDD flow).
