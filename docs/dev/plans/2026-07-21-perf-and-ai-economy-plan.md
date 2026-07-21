@@ -6,10 +6,40 @@ possible, prefer free OpenRouter models" (financial pressure). Three read-only
 investigations were run; their actionable findings + the user's decisions are captured
 here so implementation can proceed in a fresh session without re-running the research.
 
-**Status (updated 2026-07-21, session 10): A1 DONE (`a50e978`), section B DONE (`428704a`).**
-Section C (pipeline) NOT started — blocked on a local Docker/WSL failure, see below.
-Sections A2 (user-gated live `.env`), D and E remain open. M10 + M11 of the admin program
-are DONE and committed (through `6dddcb1`).
+**Status (updated 2026-07-21, session 11): A1 DONE (`a50e978`), section B DONE (`428704a`),
+section C RESOLVED (`38e4278`) — C1 shipped, C2 REFUTED (not shipped), C3 measured and its
+refactor REJECTED.** Sections A2 (user-gated live `.env`), D and E remain open. M10 + M11 of
+the admin program are DONE and committed (through `6dddcb1`).
+
+**Session-11 progress detail (section C — every item's "measure first" gate fired):**
+- **C1 DONE** — `src/betika.js` `limit` 10 → 50. Probe before change: the API honours
+  `limit=50` and `limit=100` exactly (identical response shape + keys), and a `limit=100`
+  walk returned the SAME 116 unique `parent_match_id`s as a `limit=10` walk (0 overlap,
+  0 missing, 0 extra) — so pagination is genuinely limit-based, not a fixed internal page.
+  Chose 50 over 100 deliberately: the walk terminates on `len < limit`, so if the server
+  ever caps page size below the requested value the day truncates SILENTLY with no error;
+  50 takes most of the win (170 → 34 pages on a 1694-game day) well inside the verified
+  ceiling. Verified live: 116 games in 3 pages instead of 12.
+- **C2 REFUTED — do not retry this shape.** The plan's premise was inverted. It assumed
+  `status` was non-selective so the `fetched_at` columns must be selective; measurement says
+  BOTH are non-selective — `stats_fetched_at IS NULL` matches **94.8%** of rows
+  (35,476 / 37,413). Creating the three candidate indexes and re-running EXPLAIN: the
+  optimizer **still chose `type=ALL`** and ignored them. Forcing them proves the predicted
+  plan is reachable (`Using union(probe_stats, probe_lineups, probe_events)`) but it
+  estimates **65,292 rows on a 37,413-row table** and runs **57.2ms vs 16.4ms** — 3.5×
+  SLOWER. An index whose range scan returns 95% of the table loses to a sequential read.
+  The real selectivity is the CONJUNCTION (final ∧ correlated ∧ missing-flag → 410 rows),
+  which no single-column index expresses. Also: the **508ms that motivated C2 was a
+  cold-cache artifact** — warm baseline is 18.6ms. There was never a bottleneck here.
+  Probe indexes dropped; `fixtures` is back to its original 6 indexes; no migration written.
+- **C3 measured → refactor REJECTED, instrumentation KEPT.** DEBUG-gated per-phase timing
+  added to `saveMatches` (no logic change). Live run: `prefetch 17ms, loop 2713ms (upsert
+  360ms, select-odds 151ms, diff-write 1864ms)` over 116 games / 22,077 market rows. The
+  per-match `existingOdds` N+1 the plan suspected is **151ms = 5.6% of the loop**; the real
+  cost is **diff-write at 1864ms = 69%** (writing the market rows). The bulk-prefetch would
+  save ≤6% while moving the read outside the transaction and widening the exact staleness
+  window `withRetry` exists to absorb. Not worth it. The timing stays as the durable
+  evidence channel for when the table grows.
 
 **Session-10 progress detail:**
 - **A1 done** — `src/config.js` `OPENROUTER_MODEL` → `nvidia/nemotron-3-super-120b-a12b:free`,
@@ -196,9 +226,8 @@ query instead of importing `hotpicks.js`'s exported `loadTeamHistory` — cleanu
 ## Suggested execution order (fresh session)
 1. ~~AI-economy A1~~ **DONE `a50e978`.**
 2. ~~Web B1/B2/B3~~ **DONE `428704a`.**
-3. Pipeline C1 probe → maybe change; C2 EXPLAIN → migration; C3 instrumentation only.
-   **NEEDS Docker/MySQL up (C2) — resume here.**
-4. `.env.example` full trim (D) folding in A1.
+3. ~~Pipeline C1/C2/C3~~ **DONE `38e4278`** — C1 shipped, C2 refuted, C3 refactor rejected.
+4. `.env.example` full trim (D) folding in A1. **← RESUME HERE**
 5. Docs sweep (D) + E2E (D) — **add B2 row-selection click behaviour to the E2E list.**
 6. Version decision + final review + merge.
 Each substantive change → suite green + a task-scoped review before moving on (SDD flow).
