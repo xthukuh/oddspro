@@ -153,13 +153,45 @@ test('chunkPlan throws a TypeError on a non-positive-integer chunkSize (programm
 
 // --- excluded tables ---------------------------------------------------------
 
-test('DEFAULT_EXCLUDED_TABLES is frozen and matches the spec decision-12 list', () => {
+test('DEFAULT_EXCLUDED_TABLES is frozen and covers credentials, tracking AND operational state', () => {
     assert.ok(Object.isFrozen(DEFAULT_EXCLUDED_TABLES));
     assert.deepEqual([...DEFAULT_EXCLUDED_TABLES].sort(), [
+        'admin_audit',
         'knex_migrations', 'knex_migrations_lock', 'otp_codes', 'sessions',
+        'settings',
+        'sms_campaign_recipients', 'sms_campaigns', 'sms_templates',
         'user_prefs', 'users', 'visit_events', 'visit_sessions', 'visitor_devices',
         'visitors', 'visits',
     ]);
+});
+
+// The list is not arbitrary - it encodes two rules. Assert the RULES, so a
+// future table added to the schema is judged by them rather than by whether
+// someone remembered to extend a literal.
+test('every table FK-ing an excluded table is itself excluded', () => {
+    const ex = new Set(DEFAULT_EXCLUDED_TABLES);
+    // Known FK edges into `users`, which is excluded (credential + PK-collision
+    // risk moving local<->remote). With FOREIGN_KEY_CHECKS=0 during apply, an
+    // included child would import pointers that are dangling at best and
+    // MIS-ATTRIBUTED to whichever local user holds that id at worst.
+    for (const child of ['user_prefs', 'sessions', 'otp_codes', 'settings',
+        'admin_audit', 'sms_templates', 'sms_campaigns', 'sms_campaign_recipients']) {
+        assert.equal(ex.has(child), true,
+            `${child} references an excluded table and must be excluded too`);
+    }
+});
+
+test('per-install operational state is excluded, warehouse data is not', () => {
+    const ex = new Set(DEFAULT_EXCLUDED_TABLES);
+    // `settings` holds the destination's LIVE admin overrides - MAINTENANCE_*,
+    // the SAFE_*/TIP_* policy knobs. Importing a dev DB into prod would
+    // silently reconfigure prod, which no confirm dialog mentions.
+    assert.equal(ex.has('settings'), true);
+    // The warehouse itself is the whole point of the feature and stays in.
+    for (const t of ['matches', 'odds_markets', 'fixtures', 'teams', 'leagues',
+        'fixture_predictions', 'fixture_prematch']) {
+        assert.equal(ex.has(t), false, `${t} is warehouse data and must be transferable`);
+    }
 });
 
 test('resolveExcluded returns the defaults, deduped and sorted, with no argument', () => {
@@ -359,8 +391,18 @@ test('chunkFileName throws on a bad table or index (programmer error)', () => {
 
 // --- per-table chunk size -----------------------------------------------------
 
-test('chunkSizeFor pins matches to 500 and everything else to 5000', () => {
-    assert.equal(chunkSizeFor('matches'), 500);
+test('chunkSizeFor keeps matches small enough for one INSERT statement', () => {
+    // `matches.metadata` is ~39 KB/row of raw provider JSON, and the apply
+    // issues ONE multi-row INSERT per chunk. At the original 500 that is a
+    // ~19 MB statement against MariaDB's 16 MB default max_allowed_packet -
+    // ER_NET_PACKET_TOO_LARGE, deterministically, on the same chunk every
+    // resume. Assert the byte budget rather than the bare number, so the
+    // reason travels with the constant.
+    const METADATA_BYTES_PER_ROW = 39_000;
+    const PACKET_BUDGET = 16 * 1024 * 1024;
+    assert.ok(chunkSizeFor('matches') * METADATA_BYTES_PER_ROW < PACKET_BUDGET,
+        `matches chunk of ${chunkSizeFor('matches')} rows can exceed max_allowed_packet`);
+    assert.equal(chunkSizeFor('matches'), 100);
     assert.equal(chunkSizeFor('odds_markets'), 5000);
     assert.equal(chunkSizeFor('teams'), 5000);
     assert.equal(chunkSizeFor('fixture_ai_insights'), 5000);

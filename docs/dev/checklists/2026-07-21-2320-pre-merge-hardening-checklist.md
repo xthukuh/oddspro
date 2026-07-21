@@ -122,7 +122,7 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
 
 ## Batch D — DB transfer (M10)
 
-- [ ] **D1 (T1, CRITICAL) Import upsert must not rewrite primary keys.**
+- [x] **D1 (T1, CRITICAL) Import upsert must not rewrite primary keys.**
       `src/db-transfer.js:556` — knex's MySQL dialect DISCARDS the `.onConflict(pkCols)` target
       and compiles `.merge()` to `ON DUPLICATE KEY UPDATE <every column> = values(...)`,
       including `id` (verified in `node_modules/knex/.../mysql-querycompiler.js:65-95`).
@@ -130,18 +130,18 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
       provider_match_id)` — and the loop runs under `FOREIGN_KEY_CHECKS=0`, so a same-match
       row with a different auto-inc id rewrites the destination's `id` and silently orphans
       every `odds_markets.match_id`. Fix: merge non-PK columns only + state the contract.
-- [ ] **D2 (T2) Pre-flight chunk completeness before the destructive apply.** `runImportApply`
+- [x] **D2 (T2) Pre-flight chunk completeness before the destructive apply.** `runImportApply`
       never consults `ready_to_apply`/`missing_files`; a missing chunk ⇒ full ~1.7 GB safety
       export runs, then ENOENT mid-apply.
-- [ ] **D3 (T2) Import staging cleanup + delete route.** `var/imports/<stamp>/` is never
+- [x] **D3 (T2) Import staging cleanup + delete route.** `var/imports/<stamp>/` is never
       cleaned and has no DELETE route (exports have both) ⇒ multi-GB permanent growth.
-- [ ] **D4 (T2) Chunk sizing vs `max_allowed_packet`.** `CHUNK_SIZE_MATCHES=500` × ~39 KB
+- [x] **D4 (T2) Chunk sizing vs `max_allowed_packet`.** `CHUNK_SIZE_MATCHES=500` × ~39 KB
       `metadata` ⇒ ~19 MB single INSERT vs MariaDB's 16 MB default; deterministic, so it fails
       identically on every resume.
-- [ ] **D5 (T2) JSON columns break the round trip under MySQL 8.** mysql2 parses `Types.JSON`
+- [x] **D5 (T2) JSON columns break the round trip under MySQL 8.** mysql2 parses `Types.JSON`
       to objects; the insert then binds an object. MariaDB reports `longtext` so it is
       unaffected today. Cast to CHAR on export.
-- [ ] **D6 (T2) Default-exclude operational tables.** `settings` (an import silently
+- [x] **D6 (T2) Default-exclude operational tables.** `settings` (an import silently
       reconfigures the destination's live regime knobs incl. `MAINTENANCE_*`), `admin_audit`,
       `sms_templates`, `sms_campaigns`, `sms_campaign_recipients` (all FK `users`, which IS
       excluded ⇒ dangling or MIS-ATTRIBUTED pointers with FK checks off).

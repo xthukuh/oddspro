@@ -14,7 +14,7 @@ import { describeMigrationResult } from './db/migrate-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
 import { scorecardSummary } from './scorecard.js';
 import {
-    startExport, listExports, deleteExport, EXPORT_ROOT,
+    startExport, listExports, deleteExport, deleteImport, EXPORT_ROOT,
     startImportManifest, saveImportChunk, importStagingState, startImport,
 } from './db-transfer.js';
 import {
@@ -945,6 +945,19 @@ app.delete('/api/admin/db/exports/:stamp', requireAdminRole, async (req, res, ne
     if (!stamp) return res.status(400).json({ error: 'Invalid export name' });
     try {
         res.json({ ok: true, ...(await deleteExport(stamp)) });
+    } catch (e) { authErr(e, res, next); }
+});
+
+// DELETE /api/admin/db/imports/:stamp - reclaim a staged import. Imports had no
+// cleanup path at all while exports did, so staged copies of a whole warehouse
+// (plus a full safety export per apply) accumulated with no way to remove them
+// from the UI - on a quota'd shared host that is a slow disk-fill.
+app.delete('/api/admin/db/imports/:stamp', requireAdminRole, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    const stamp = safeExportFilename(req.params.stamp);
+    if (!stamp) return res.status(400).json({ error: 'Invalid import name' });
+    try {
+        res.json({ ok: true, ...(await deleteImport(stamp)) });
     } catch (e) { authErr(e, res, next); }
 });
 

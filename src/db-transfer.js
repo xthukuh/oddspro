@@ -75,6 +75,18 @@ function _selectList(columns) {
         if (c.data_type === 'date') {
             return db.raw('DATE_FORMAT(??, "%Y-%m-%d") AS ??', [c.name, c.name]);
         }
+        // Native JSON columns must cross as STRINGS. mysql2 (jsonStrings:false
+        // by default) JSON.parses a Types.JSON column into a JS object, which
+        // then round-trips into the insert as an object binding - and SqlString
+        // escapes that into `k` = 'v' fragments, not a JSON literal. The rest
+        // of the codebase always JSON.stringify's before writing a JSON column
+        // (hotpicks.js, enrich.js); this keeps the transfer consistent with it.
+        // MariaDB reports these columns as longtext and is unaffected either
+        // way, which is why the round trip looks fine on the current host and
+        // would break on a MySQL 8 destination.
+        if (c.data_type === 'json') {
+            return db.raw('CAST(?? AS CHAR) AS ??', [c.name, c.name]);
+        }
         return c.name;
     });
 }
@@ -286,6 +298,20 @@ export async function deleteExport(stamp) {
     return { deleted: true, stamp: safe };
 }
 
+// Twin of deleteExport for staged IMPORTS. Exports had both a cleanup function
+// and a route; imports had neither, so every staged import left a full gzipped
+// copy of the source warehouse on the destination forever - and each apply adds
+// another full safety export beside it. On a quota'd shared host a couple of
+// import cycles is multiple GB with no way to reclaim it from the UI.
+export async function deleteImport(stamp) {
+    const safe = safeExportFilename(stamp);
+    if (!safe) throw new AuthError(400, 'Invalid import name');
+    const dir = path.join(IMPORT_ROOT, safe);
+    if (!existsSync(dir)) throw new AuthError(404, 'Import not found');
+    rmSync(dir, { recursive: true, force: true });
+    return { deleted: true, stamp: safe };
+}
+
 // ===========================================================================
 // Task 4 - Import: three-phase upload (manifest -> chunks -> apply), sized
 // for the cPanel/Passenger host (spec decision 11). The apply phase is the
@@ -454,6 +480,21 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
     if (!staged.ok) throw new Error(`db-transfer: staged manifest is invalid - ${staged.error}`);
     const manifest = staged.manifest;
 
+    // Completeness pre-flight, BEFORE the safety export. importStagingState
+    // already computes ready_to_apply/missing_files and the admin UI gates on
+    // it, but runImportApply never consulted it - so a direct API call, or a
+    // chunk deleted between the poll and the apply, would run the full
+    // warehouse safety export (minutes, hundreds of MB) and only then die with
+    // ENOENT partway through writing tables. Three lines here turn that into a
+    // clean refusal that leaves the destination untouched.
+    const missing = buildUploadPlan(manifest)
+        .map(f => f.file)
+        .filter(f => !existsSync(path.join(dir, f)));
+    if (missing.length) {
+        throw new Error('db-transfer: staged import is incomplete - '
+            + `${missing.length} chunk file(s) missing, first: ${missing[0]}`);
+    }
+
     // Safety export FIRST - before a single row of the import is written. If
     // this throws, the whole import aborts here: nothing below has run yet,
     // so there is nothing to roll back. Deliberately excluded:[] (the
@@ -553,7 +594,26 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
                     // Concurrency 1 - one chunk applied at a time, sequentially,
                     // on the SAME pinned connection (the codebase's parallel
                     // delete+insert deadlock rule, src/utils.js's _batch note).
-                    await db(table).insert(rows).onConflict(pkCols).merge().connection(conn);
+                    //
+                    // The merge list EXCLUDES the primary key. `.onConflict(pk)`
+                    // reads like "on primary-key conflict", but MySQL has no
+                    // conflict target in its grammar: knex's mysql dialect
+                    // DISCARDS the argument and compiles a bare `.merge()` to
+                    // `ON DUPLICATE KEY UPDATE <every inserted column>`, `id`
+                    // included, firing on ANY unique index. `matches` carries
+                    // unique(provider, provider_match_id), so importing a match
+                    // both hosts scraped independently matched on the SECONDARY
+                    // key and rewrote the destination row's id to the source's -
+                    // and because the whole loop runs under FOREIGN_KEY_CHECKS=0,
+                    // every odds_markets.match_id pointing at the old id became a
+                    // dangling reference with no error. Preserving the identity
+                    // keeps a conflict an UPDATE of the matching row, which is
+                    // what the feature always meant.
+                    const mergeCols = Object.keys(rows[0]).filter(c => !pkCols.includes(c));
+                    const q = db(table).insert(rows).onConflict(pkCols);
+                    // An all-PK table has nothing to update - ignore rather than
+                    // write a no-op that re-states the key.
+                    await (mergeCols.length ? q.merge(mergeCols) : q.ignore()).connection(conn);
                 }
                 done.push({ table, chunk });
                 _writeProgress(dir, done);

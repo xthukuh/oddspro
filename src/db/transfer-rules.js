@@ -93,9 +93,25 @@ export function chunkPlan({ minId, maxId, chunkSize } = {}) {
 // PK-collide moving between the local warehouse and the remote host, so they
 // never ride an export/import by default. Verified against the live 33-table
 // schema listing (2026-07-20) - every name below exists on the live DB.
+// Also default-excluded: OPERATIONAL state, which is per-INSTALL rather than
+// warehouse data.
+//   settings   - an import would replace the destination's LIVE admin
+//                overrides, including MAINTENANCE_* and the SAFE_*/TIP_* policy
+//                knobs. Importing a dev DB into prod would silently
+//                reconfigure prod's behaviour, which no confirm dialog says.
+//   admin_audit / sms_templates / sms_campaigns / sms_campaign_recipients -
+//                all FK `users`, which is itself excluded. Moving them with FK
+//                checks off leaves pointers that are dangling at best and,
+//                where the two id spaces collide, MIS-ATTRIBUTED to whichever
+//                local user happens to hold that id. sms_campaign_recipients
+//                additionally carries unique(campaign_id, user_id), M9's
+//                double-send guard - mis-attribution there is not cosmetic.
+// The rule of thumb: anything FK-ing an excluded table is itself excludable.
 export const DEFAULT_EXCLUDED_TABLES = Object.freeze([
     'users', 'sessions', 'otp_codes', 'user_prefs',
     'visits', 'visit_events', 'visitors', 'visitor_devices', 'visit_sessions',
+    'settings', 'admin_audit',
+    'sms_templates', 'sms_campaigns', 'sms_campaign_recipients',
     'knex_migrations', 'knex_migrations_lock',
 ]);
 
@@ -236,12 +252,18 @@ export function chunkFileName(table, index) {
 }
 
 // --- Per-table chunk size ------------------------------------------------
-// Spec-pinned: 5000 rows/chunk, except `matches` at 500 - its `metadata`
-// column holds ~39 KB/row of raw provider JSON (src/db/store.js), so 5000
-// rows would balloon a single chunk file's in-flight memory ~8x over every
-// other table.
+// Spec-pinned: 5000 rows/chunk, except `matches` - its `metadata` column holds
+// ~39 KB/row of raw provider JSON (src/db/store.js), so a big chunk balloons
+// both in-flight memory and the SINGLE multi-row INSERT the apply issues.
+//
+// 500 was the original figure, chosen for the export side. It is wrong for the
+// APPLY side: 500 x ~39 KB is a ~19 MB statement against MariaDB's 16 MB
+// default max_allowed_packet, so the import would die with
+// ER_NET_PACKET_TOO_LARGE - deterministically, on the same chunk, every
+// resume. 100 keeps the statement comfortably inside the default while still
+// being far larger than the per-row overhead.
 const CHUNK_SIZE_DEFAULT = 5000;
-const CHUNK_SIZE_MATCHES = 500;
+const CHUNK_SIZE_MATCHES = 100;
 export function chunkSizeFor(table) {
     return table === 'matches' ? CHUNK_SIZE_MATCHES : CHUNK_SIZE_DEFAULT;
 }
