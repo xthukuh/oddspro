@@ -17,10 +17,18 @@ import { z } from 'zod';
 // unknown `${...}` is rejected AT SAVE by the pattern below, so renderTemplate
 // can be TOTAL and never throw inside a request path. A literal non-brace `$`
 // stays legal (prices: "$5").
+//
+// `${name}` was ADVERTISED here and in the admin editor but never supplied by
+// any caller: the campaign message is rendered and FROZEN at creation, before
+// a single recipient is known, and segment count / cost estimate are computed
+// from that one frozen string. So a personalized template shipped as "Hi ,"
+// to the entire audience. Per-recipient rendering is a real feature (it would
+// make the cost estimate a range rather than a number); advertising a
+// placeholder that cannot work is not. Removed rather than faked.
 export const MESSAGE_PLACEHOLDER = '${message}';
-export const TEMPLATE_PLACEHOLDERS = ['message', 'name'];
+export const TEMPLATE_PLACEHOLDERS = ['message'];
 export const TEMPLATE_MAX_LENGTH = 480;   // 3 GSM segments' worth of headroom
-export const TEMPLATE_BODY_PATTERN = '^(?:[^$]|\\$(?!\\{)|\\$\\{(?:message|name)\\})*$';
+export const TEMPLATE_BODY_PATTERN = '^(?:[^$]|\\$(?!\\{)|\\$\\{message\\})*$';
 export const DEFAULT_AUTH_TEMPLATE = '[OP] ${message}';
 
 const PLACEHOLDER_RX = /\$\{([^}]*)\}/g;
@@ -35,7 +43,7 @@ export function templateBodyIssue(body) {
     }
     for (const [, key] of s.matchAll(PLACEHOLDER_RX)) {
         if (!TEMPLATE_PLACEHOLDERS.includes(key)) {
-            return `Unknown placeholder \${${key}} - only \${message} and \${name} are allowed`;
+            return `Unknown placeholder \${${key}} - only \${message} is allowed`;
         }
     }
     if (!s.includes(MESSAGE_PLACEHOLDER)) {
@@ -52,18 +60,15 @@ export function templateBodyIssue(body) {
 // appears inside the substituted VALUES is never re-expanded - campaign text
 // containing "${name}" stays literal instead of reaching into the template
 // variable space.
+// The cosmetic whitespace/punctuation tidy that used to live here existed only
+// to repair the gap an empty ${name} left ("Hi , go"). With that placeholder
+// gone it had no job left but rewriting admin-authored text - it would turn a
+// deliberate "Kickoff 20 : 00" into "Kickoff 20: 00". Removed with its cause,
+// so what an admin types is what recipients receive.
 export function renderTemplate(template, vars = {}) {
     const t = String(template ?? '').trim() || MESSAGE_PLACEHOLDER;
-    const vals = {
-        message: String(vars.message ?? '').trim(),
-        name: String(vars.name ?? '').trim(),
-    };
-    return t.replace(/\$\{(message|name)\}/g, (_, k) => vals[k])
-        // An empty ${name} leaves dangling whitespace ("Hi , go"); tidy it so a
-        // nameless recipient still gets a well-formed sentence.
-        .replace(/\s+([,.!?;:])/g, '$1')
-        .replace(/[ \t]{2,}/g, ' ')
-        .trim();
+    const message = String(vars.message ?? '').trim();
+    return t.replace(/\$\{message\}/g, () => message).trim();
 }
 
 // --- Segment counting --------------------------------------------------------

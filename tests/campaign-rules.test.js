@@ -19,13 +19,21 @@ import {
 
 test('templateBodyIssue accepts a body carrying ${message}', () => {
     assert.equal(templateBodyIssue('[OP] ${message}'), null);
-    assert.equal(templateBodyIssue('Hi ${name}, ${message} - Oddspro'), null);
+    assert.equal(templateBodyIssue('Welcome! ${message} - Oddspro'), null);
     assert.equal(templateBodyIssue('${message}'), null);
+});
+
+// ${name} was advertised but never supplied by any caller (the campaign message
+// is frozen at creation, before recipients are known), so a personalized
+// template shipped as "Hi ," to everyone. It is now an unknown placeholder like
+// any other, rejected at save rather than silently rendering empty.
+test('templateBodyIssue rejects ${name} - it was never actually supported', () => {
+    assert.match(templateBodyIssue('Hi ${name}, ${message}'), /Unknown placeholder/);
 });
 
 test('templateBodyIssue requires the ${message} placeholder', () => {
     assert.match(templateBodyIssue('Just a flat announcement'), /\$\{message\}/);
-    assert.match(templateBodyIssue('Hi ${name}'), /\$\{message\}/);
+    assert.match(templateBodyIssue('Hi there'), /\$\{message\}/);
 });
 
 test('templateBodyIssue rejects unknown placeholders but allows a literal $', () => {
@@ -43,7 +51,8 @@ test('templateBodyIssue rejects blank and over-length bodies', () => {
 test('TEMPLATE_BODY_PATTERN agrees with templateBodyIssue on placeholder legality', () => {
     const rx = new RegExp(TEMPLATE_BODY_PATTERN);
     assert.ok(rx.test('[OP] ${message}'));
-    assert.ok(rx.test('Hi ${name}: ${message}'));
+    assert.ok(rx.test('Welcome: ${message}'));
+    assert.ok(!rx.test('Hi ${name}: ${message}'));
     assert.ok(rx.test('costs $5'));
     assert.ok(!rx.test('${message} ${price}'));
 });
@@ -55,15 +64,25 @@ test('DEFAULT_AUTH_TEMPLATE is a valid body carrying the message placeholder', (
 
 // --- rendering ---------------------------------------------------------------
 
-test('renderTemplate substitutes message and name', () => {
+test('renderTemplate substitutes the message placeholder', () => {
     assert.equal(renderTemplate('[OP] ${message}', { message: 'Hello' }), '[OP] Hello');
-    assert.equal(renderTemplate('Hi ${name}, ${message}', { message: 'go', name: 'Ada' }), 'Hi Ada, go');
+    assert.equal(renderTemplate('Welcome! ${message}', { message: 'go' }), 'Welcome! go');
+    // Repeated placeholders all substitute.
+    assert.equal(renderTemplate('${message}/${message}', { message: 'x' }), 'x/x');
+});
+
+// The cosmetic whitespace tidy went away with ${name} (its only reason to
+// exist). Admin-authored spacing must now survive verbatim.
+test('renderTemplate no longer rewrites admin-authored spacing', () => {
+    assert.equal(renderTemplate('Kickoff 20 : 00 - ${message}', { message: 'go' }),
+        'Kickoff 20 : 00 - go');
+    assert.equal(renderTemplate('${message}  double  spaced', { message: 'x' }),
+        'x  double  spaced');
 });
 
 test('renderTemplate is TOTAL: blank template, missing vars and unknown placeholders never throw', () => {
-    // A missing name renders empty (and collapses the double space it leaves).
-    assert.equal(renderTemplate('Hi ${name}, ${message}', { message: 'go' }), 'Hi, go');
-    assert.equal(renderTemplate('Hi ${name}, ${message}', { message: 'go', name: '  ' }), 'Hi, go');
+    // ${name} is now just another unknown placeholder: literal, never a throw.
+    assert.equal(renderTemplate('Hi ${name}, ${message}', { message: 'go' }), 'Hi ${name}, go');
     // Unknown placeholders stay literal - the save-time pattern already rejected
     // them; render sits in a request path and must not throw.
     assert.equal(renderTemplate('${message} ${nope}', { message: 'x' }), 'x ${nope}');
@@ -75,7 +94,7 @@ test('renderTemplate is TOTAL: blank template, missing vars and unknown placehol
 test('renderTemplate does not re-expand a placeholder that came from the message', () => {
     // A user-authored message containing ${name} must stay literal - otherwise
     // campaign text could reach into the template variable space.
-    assert.equal(renderTemplate('[OP] ${message}', { message: 'hi ${name}', name: 'Ada' }), '[OP] hi ${name}');
+    assert.equal(renderTemplate('[OP] ${message}', { message: 'hi ${message}' }), '[OP] hi ${message}');
 });
 
 // --- segments ----------------------------------------------------------------

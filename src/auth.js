@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { config } from './config.js';
+import { AuthError } from './errors.js';
 import { db } from './db/connection.js';
 import { withRetry, isRetryableDbError } from './db/retry-rules.js';
 import {
@@ -30,14 +31,10 @@ if (config.AUTH_ENABLED && !config.PIN_PEPPER) {
 
 const PEPPER = () => config.PIN_PEPPER || '';
 
-export class AuthError extends Error {
-    constructor(status, message, details = {}) {
-        super(message);
-        this.name = 'AuthError';
-        this.status = status;
-        this.details = details;
-    }
-}
+// Moved to src/errors.js so src/sms/templates.js can throw it without closing
+// an import cycle (auth.js imports templates.js). Re-exported here so every
+// existing `import { AuthError } from './auth.js'` keeps working.
+export { AuthError } from './errors.js';
 
 // Never leak pin_hash / internal columns to the client.
 export function publicUser(u) {

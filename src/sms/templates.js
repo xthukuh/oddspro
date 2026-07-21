@@ -1,5 +1,6 @@
 import { db } from '../db/connection.js';
 import { renderTemplate, templateBodyIssue, DEFAULT_AUTH_TEMPLATE } from '../db/campaign-rules.js';
+import { AuthError } from '../errors.js';
 
 // The one owner of the `sms_templates` table (M9): thin knex over the pure
 // rules in src/db/campaign-rules.js, same service idiom as auth.js/settings.js.
@@ -8,7 +9,8 @@ import { renderTemplate, templateBodyIssue, DEFAULT_AUTH_TEMPLATE } from '../db/
 // the auth-default wrap for OTP sends, and campaigns.js needs AuthError from
 // auth.js - putting the table access in campaigns.js would close that loop into
 // an import cycle (the T9 adjudicators split, same reasoning). Dependencies run
-// one way: auth.js -> templates.js, campaigns.js -> templates.js.
+// one way: auth.js -> templates.js, campaigns.js -> templates.js. AuthError
+// itself lives in src/errors.js precisely so this module can throw it.
 
 // Exactly one row may be the auth default. Enforced HERE rather than by a
 // partial unique index (MySQL has none): the flag is cleared across the table
@@ -31,19 +33,32 @@ export async function getTemplate(id) {
 // non-route callers). Returns the stored row.
 export async function saveTemplate({ id = null, name, body, is_auth_default = false }, actorId = null) {
     const issue = templateBodyIssue(body);
-    if (issue) throw new Error(issue);
+    if (issue) throw new AuthError(400, issue);
     const row = { name: String(name).trim(), body: String(body) };
-    let templateId = Number(id) || null;
+    // Distinguish "no id supplied" (create) from "a malformed id was supplied"
+    // (400). `Number(id) || null` collapsed both, so PUT .../templates/abc - or
+    // /0 - silently CREATED a new template instead of 404-ing.
+    let templateId = null;
+    if (id != null && id !== '') {
+        templateId = Number(id);
+        if (!Number.isInteger(templateId) || templateId <= 0) {
+            throw new AuthError(400, 'Invalid template id');
+        }
+    }
     await db.transaction(async trx => {
         if (templateId) {
             const existing = await trx('sms_templates').where('id', templateId).first();
-            if (!existing) throw new Error('Template not found');
+            if (!existing) throw new AuthError(404, 'Template not found');
             await trx('sms_templates').where('id', templateId).update(row);
         } else {
             const [newId] = await trx('sms_templates').insert({ ...row, created_by: actorId });
             templateId = newId;
         }
+        // Explicitly CLEAR the flag when it is turned off on the current
+        // default - previously only the truthy branch did anything, so there
+        // was no API path back to "no auth template" short of deleting the row.
         if (is_auth_default) await _claimAuthDefault(trx, templateId);
+        else await trx('sms_templates').where('id', templateId).update({ is_auth_default: 0 });
     });
     return getTemplate(templateId);
 }
@@ -52,7 +67,7 @@ export async function saveTemplate({ id = null, name, body, is_auth_default = fa
 // default, so auth SMS keeps working with no template rows at all.
 export async function deleteTemplate(id) {
     const n = await db('sms_templates').where('id', Number(id) || 0).del();
-    if (!n) throw new Error('Template not found');
+    if (!n) throw new AuthError(404, 'Template not found');
     return { deleted: n };
 }
 

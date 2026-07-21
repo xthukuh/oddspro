@@ -223,6 +223,24 @@ async function _runCampaign(campaign) {
         if (campaignJob.cancelRequested) return 'cancelled';
         // Re-read pending rows each batch: an interrupted run resumes from the
         // ledger by construction, no cursor to keep in sync.
+        // Consent is re-checked EVERY batch, not just at materialization. The
+        // ledger is built once at send time, but a broadcast is paced (batches
+        // with a delay between them), so a large audience runs for many minutes
+        // - and there is a live self-service opt-out in the profile screen.
+        // Without this, someone who opts out at minute 2 of a 20-minute send
+        // still receives the message. The module's promise is that consent is
+        // structural rather than remembered; this was the one place it was
+        // remembered-at-materialization instead.
+        //
+        // Retiring them to 'skipped' (rather than filtering the SELECT) keeps
+        // the ledger honest - "we deliberately did not send to this person" is
+        // a different fact from "still queued" - and lets the drain terminate
+        // cleanly instead of looping over rows it will never send.
+        await db('sms_campaign_recipients')
+            .where({ campaign_id: campaign.id, status: 'pending' })
+            .whereIn('user_id', db('users').select('id').where('sms_opt_out', 1))
+            .update({ status: 'skipped' });
+
         const pending = await db('sms_campaign_recipients')
             .where({ campaign_id: campaign.id, status: 'pending' })
             .orderBy('id', 'asc').limit(plan.size);
@@ -343,7 +361,19 @@ export async function sendCampaign(id, { expected_count }, _actor) {
         error: null,
     });
 
-    startCampaignJob(campaign, recipients.length);
+    // HONOR the claim. The guard above sits ~4 awaits earlier (audience query,
+    // ledger insert, campaign update), so two overlapping sends can both pass
+    // it - classic check-then-act across an await boundary. Discarding this
+    // boolean meant the loser answered { started:true } while its campaign sat
+    // in 'sending' with a materialized ledger and NO runner, and since
+    // canTransition('sending','sending') is false it could never be sent again:
+    // a silent lie plus an unrecoverable state. Roll the status back so the
+    // draft stays sendable once the slot frees.
+    if (!startCampaignJob(campaign, recipients.length)) {
+        await db('sms_campaigns').where('id', campaign.id)
+            .update({ status: 'draft', started_at: null });
+        throw new AuthError(409, 'Another campaign started sending - please try again in a moment');
+    }
     return { started: true, total: recipients.length, job: campaignJobStatus() };
 }
 

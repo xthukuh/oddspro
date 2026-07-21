@@ -91,7 +91,7 @@ function TemplatesCard({ templates, reload, onError }) {
 
     return (
         <Card title="Templates"
-            hint="A template wraps message text. It must contain ${message}; ${name} is the recipient's name. The auth default also wraps OTP/verification texts.">
+            hint="A template wraps message text and must contain ${message} - the only placeholder. The auth default also wraps OTP/verification texts.">
             {templates.length > 0 && (
                 <ul className="divide-y divide-separator-2 mb-3">
                     {templates.map(t => (

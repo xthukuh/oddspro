@@ -148,20 +148,20 @@ second half (honor `startCampaignJob`'s return value) is still open under Batch 
 
 ## Batch E — campaigns (M9)
 
-- [ ] **E1 (T1) Drain the campaign job on shutdown + honor `startCampaignJob`'s return.**
+- [x] **E1 (T1) Drain the campaign job on shutdown + honor `startCampaignJob`'s return.**
       `shutdown()` never touches the campaign slot (`requestCampaignCancel` is not even
       imported) and its grace predicate only checks `refreshJob.running` ⇒ a restart mid-send
       strands the campaign in `sending` forever (`canTransition('sending','sending')` is
       false); the documented recovery re-sends to everyone already delivered. Separately
       `sendCampaign:346` discards the claim result and answers `{started:true}` regardless.
-- [ ] **E2 (T2) `${name}` is a dead placeholder.** Every `renderTemplate` call site passes
+- [x] **E2 (T2) `${name}` is a dead placeholder.** Every `renderTemplate` call site passes
       `{ message }` only, yet the catalog and the admin hint advertise `${name}` ⇒ a
       personalized template ships as "Hi ," to the whole audience. Drop it (the message is
       rendered and frozen at creation, before any recipient is known).
-- [ ] **E3 (T2) Honor opt-out DURING a running send.** `src/campaigns.js:226-228` re-reads the
+- [x] **E3 (T2) Honor opt-out DURING a running send.** `src/campaigns.js:226-228` re-reads the
       ledger each batch but never re-consults `users.sms_opt_out`; a paced broadcast runs for
       many minutes and there IS a live self-service opt-out.
-- [ ] **E4 (T2) `src/sms/templates.js` hygiene** — plain `Error` ⇒ HTTP 500 (`:40,46,55`);
+- [x] **E4 (T2) `src/sms/templates.js` hygiene** — plain `Error` ⇒ HTTP 500 (`:40,46,55`);
       `Number(id) || null` turns a bad id into a silent CREATE (`:36`); the auth default can
       never be un-set (`:46`).
 
