@@ -6,6 +6,7 @@ import {
     isValidE164, toMsisdn, normalizePhone, generateOtp, otpExpiry, isOtpExpired, shouldReuseOtp,
     resendCooldownSeconds, canResend, otpIssueDecision, parseBongaSend, parseBongaBalance,
     parseBongaDelivery, classifyBongaStatus, isCleartextUrl, isDeliveryFailure, otpRowTarget,
+    sendBudgetVerdict,
 } from '../src/db/sms-rules.js';
 
 test('isValidE164 accepts real numbers and rejects junk', () => {
@@ -267,4 +268,53 @@ test('otpIssueDecision: email-channel row reuses for the same address, rejects a
     // A different target (the phone, or another email) inside the cooldown: reject.
     assert.equal(otpIssueDecision(row, '+254700000001', now, { base: 60, max: 5 }).action, 'reject');
     assert.equal(otpIssueDecision(row, 'x@y.z', now, { base: 60, max: 5 }).action, 'reject');
+});
+
+// Global per-EAT-day send ceiling. This is the ONE chokepoint standing between
+// the unauthenticated signup route and unbounded billed SMS, so its edges get
+// asserted rather than assumed.
+test('sendBudgetVerdict counts within a day and refuses past the cap', () => {
+    const day = '2026-07-21';
+    // Fresh day: first send allowed, counter starts at 1.
+    let v = sendBudgetVerdict({ day: null, count: 0 }, day, 3);
+    assert.equal(v.allowed, true);
+    assert.equal(v.count, 1);
+    assert.equal(v.remaining, 2);
+
+    // Walk to the ceiling.
+    v = sendBudgetVerdict({ day, count: 2 }, day, 3);
+    assert.equal(v.allowed, true);
+    assert.equal(v.count, 3);
+    assert.equal(v.remaining, 0);
+
+    // At and past the cap: refused, and the counter does not keep climbing.
+    for (const used of [3, 4, 99]) {
+        const r = sendBudgetVerdict({ day, count: used }, day, 3);
+        assert.equal(r.allowed, false, `used=${used}`);
+        assert.equal(r.remaining, 0);
+    }
+});
+
+test('sendBudgetVerdict rolls over on a new EAT day', () => {
+    // Yesterday's exhausted counter must not starve today.
+    const v = sendBudgetVerdict({ day: '2026-07-20', count: 500 }, '2026-07-21', 500);
+    assert.equal(v.allowed, true);
+    assert.equal(v.count, 1);
+});
+
+test('sendBudgetVerdict treats cap <= 0 as unlimited', () => {
+    // An operator who set no ceiling must never find SMS silently disabled.
+    for (const cap of [0, -1, null, undefined, 'abc']) {
+        const v = sendBudgetVerdict({ day: '2026-07-21', count: 10_000 }, '2026-07-21', cap);
+        assert.equal(v.allowed, true, `cap=${cap}`);
+        assert.equal(v.unlimited, true);
+    }
+});
+
+test('sendBudgetVerdict is total - missing or garbage state counts as a fresh day', () => {
+    for (const state of [null, undefined, {}, { day: 'x' }, { day: '2026-07-21', count: 'nope' }]) {
+        const v = sendBudgetVerdict(state, '2026-07-21', 5);
+        assert.equal(v.allowed, true, `state=${JSON.stringify(state)}`);
+        assert.equal(v.count, 1);
+    }
 });

@@ -326,6 +326,13 @@ if (config.AUTH_ENABLED) {
     app.post('/api/auth/resend-otp', requireAuth, authJson, async (req, res, next) => {
         if (!csrfOk(req, res)) return;
         try {
+            // User-keyed burst limit (session-derived, unspoofable), matching
+            // pin-change-otp. The DB cooldown is authoritative for SENDS, but
+            // the delivery_failed early-return deliberately does NOT advance
+            // that clock - so without this belt the route stays spinnable and
+            // each spin costs up to one outbound delivery-report call.
+            const rl = rateLimit(`resend:${req.user.id}`, { windowMs: 900_000, max: 8 });
+            if (!rl.allowed) return res.status(429).json({ error: 'Too many code requests - try again later.', retry_after_seconds: rl.retryAfterSeconds });
             const { email } = resendOtpSchema.parse(req.body ?? {});
             res.json(await resendOtp(req.user, { email }));
         } catch (e) { authErr(e, res, next); }

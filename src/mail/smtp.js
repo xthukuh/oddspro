@@ -28,7 +28,15 @@ function _transporter() {
         host,
         port: config.MAIL_PORT,
         secure,
-        requireTLS: !secure && config.MAIL_ENCRYPTION === 'tls',
+        // Require STARTTLS on every non-implicit-TLS connection unless the
+        // operator explicitly opts out with MAIL_ENCRYPTION=none. The previous
+        // `MAIL_ENCRYPTION === 'tls'` form meant the DEFAULT config (port 587,
+        // MAIL_ENCRYPTION unset) sent requireTLS:false, so nodemailer would
+        // opportunistically STARTTLS but fall back to PLAINTEXT AUTH against a
+        // server that does not advertise it - silently shipping the SMTP
+        // password and the reset code in the clear, which is exactly what this
+        // file's header claims never happens.
+        requireTLS: !secure && config.MAIL_ENCRYPTION !== 'none',
         auth: username ? { user: username, pass: password } : undefined,
         connectionTimeout: 20_000,
         socketTimeout: 20_000,

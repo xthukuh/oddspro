@@ -9,6 +9,7 @@ import {
     registerFailedAttempt, isLocked, registerOtpAttempt, mustChangePinBlocks,
     signupSchema, loginSchema, verifyOtpSchema, changePhoneSchema, profileSchema,
     maskEmail, emailFallbackTarget, resendOtpSchema, forgotPinSchema, resetPinSchema,
+    capturedEmail,
 } from '../src/auth-rules.js';
 
 // Deterministic fake scrypt for fast, injected tests: xor the salt bytes into a
@@ -281,4 +282,28 @@ test('profileSchema: a PIN change now requires the confirmation code (M13 critic
 
 test('mustChangePinBlocks exempts the pin-change OTP route (forced flow needs its code)', () => {
     assert.equal(mustChangePinBlocks('POST', '/api/auth/pin-change-otp'), false);
+});
+
+// The account-takeover regression guard. users.email must be captured from a
+// CONSUMED code, never from a send: capturing at send time let a session-only
+// attacker point the account's recovery address at their own inbox and then
+// drive the unauthenticated forgot-PIN flow into it.
+test('capturedEmail only yields an address from a consumed EMAIL-channel row', () => {
+    // The one case that may write users.email.
+    assert.deepEqual(capturedEmail({ channel: 'email', email: 'me@x.co' }), { email: 'me@x.co' });
+
+    // An SMS row proves control of a PHONE, never of an inbox - even when a
+    // stale address is still sitting on the row.
+    assert.deepEqual(capturedEmail({ channel: 'sms', email: 'me@x.co' }), {});
+    assert.deepEqual(capturedEmail({ channel: 'sms', email: null }), {});
+
+    // An email row with no address writes nothing rather than null-ing the
+    // account's existing one (the spread must stay empty, not { email: null }).
+    assert.deepEqual(capturedEmail({ channel: 'email', email: null }), {});
+    assert.deepEqual(capturedEmail({ channel: 'email', email: '' }), {});
+
+    // Total: garbage in, empty patch out - never a throw on a request path.
+    for (const junk of [null, undefined, {}, { channel: 'email' }, 'nope', 42]) {
+        assert.deepEqual(capturedEmail(junk), {}, `junk input ${JSON.stringify(junk)}`);
+    }
 });

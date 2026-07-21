@@ -4,7 +4,7 @@ import { db } from './db/connection.js';
 import { withRetry, isRetryableDbError } from './db/retry-rules.js';
 import {
     hashPinAsync, verifyPinAsync, newSessionToken, hashToken, hashOtpCode,
-    registerFailedAttempt, isLocked, registerOtpAttempt, maskEmail, emailFallbackTarget,
+    registerFailedAttempt, isLocked, registerOtpAttempt, maskEmail, emailFallbackTarget, capturedEmail,
 } from './auth-rules.js';
 import {
     generateOtp, otpExpiry, isOtpExpired, canResend, resendCooldownSeconds, otpIssueDecision,
@@ -311,8 +311,13 @@ export async function issueOtp(user, { purpose = 'phone_verify', phone, channel 
 async function _lastSmsDeliveryFailed(row) {
     if (!smsEnabled() || !row?.provider_msg_id || row.channel === 'email') return false;
     try {
-        const d = await smsDelivery(row.provider_msg_id);
-        return d.ok === true && isDeliveryFailure(d.deliveryStatusDesc);
+        // Same response-wait cap as the send path: smsDelivery rides withRetry
+        // {tries:3} over a 20s timeout, so an unresponsive vendor endpoint could
+        // otherwise stall a resend request for ~a minute. A timeout resolves
+        // null, which reads as "not a verified failure" - the conservative
+        // direction, since only a DEFINITIVE failure may skip the resend.
+        const d = await _capped(smsDelivery(row.provider_msg_id));
+        return d?.ok === true && isDeliveryFailure(d.deliveryStatusDesc);
     } catch {
         return false; // transient delivery-API failure - proceed with the SMS resend
     }
@@ -335,7 +340,6 @@ export async function resendOtp(user, { purpose = 'phone_verify', email = null }
     }
     const existing = await activeOtp(user.id, purpose);
     if (!existing) {
-        if (target?.store) await db('users').where('id', user.id).update({ email: target.email });
         return issueOtp(user, target ? { purpose, channel: 'email', email: target.email } : { purpose });
     }
     const nowMs = Date.now();
@@ -361,7 +365,6 @@ export async function resendOtp(user, { purpose = 'phone_verify', email = null }
         code_hash: codeHash, expires_at: new Date(otpExpiry(nowMs, effective('OTP_TTL_MINUTES'))),
         attempts: 0, resend_count: newCount, last_sent_at: db.fn.now(), provider_msg_id: null,
     });
-    if (target?.store) await db('users').where('id', user.id).update({ email: target.email });
     const extra = {
         resend_count: newCount,
         retry_after_seconds: resendCooldownSeconds(newCount, effective('OTP_RESEND_BASE_SECONDS')),
@@ -369,6 +372,17 @@ export async function resendOtp(user, { purpose = 'phone_verify', email = null }
     return target
         ? sendOtpEmail({ rowId: existing.id, codeHash, email: target.email, code }, extra)
         : sendOtpSms({ rowId: existing.id, codeHash, phone: user.phone, code }, extra);
+}
+
+// Single-use enforcement: _checkOtp reads the row OUTSIDE the caller's
+// transaction, so the "already consumed" guard has to live at the WRITE or two
+// concurrent submissions of one code both succeed (each reads a pending row,
+// each then writes). Guarding on consumed_at IS NULL makes the first writer
+// win; a 0-row update means someone else consumed it first.
+async function _consumeOtp(trx, rowId) {
+    const n = await trx('otp_codes').where({ id: rowId })
+        .whereNull('consumed_at').update({ consumed_at: trx.fn.now() });
+    if (!n) throw new AuthError(409, 'That code was just used - request a new one', { reason: 'consumed' });
 }
 
 // Shared code-check ladder (M13): pending-row, expiry, target and attempt
@@ -406,8 +420,8 @@ async function _checkOtp(user, { code, purpose }) {
 export async function verifyOtp(user, { code, purpose = 'phone_verify' }) {
     const existing = await _checkOtp(user, { code, purpose });
     await db.transaction(async trx => {
-        await trx('otp_codes').where('id', existing.id).update({ consumed_at: trx.fn.now() });
-        await trx('users').where('id', user.id).update({ phone_verified: 1 });
+        await _consumeOtp(trx, existing.id);
+        await trx('users').where('id', user.id).update({ phone_verified: 1, ...capturedEmail(existing) });
     });
     return publicUser(await userById(user.id));
 }
@@ -437,23 +451,38 @@ export async function changePhone(user, { phone, phone_region, phone_code }) {
 // flow must not add a cheaper oracle) and the email fallback may ONLY target
 // the account's STORED address (pure emailFallbackTarget - a typed inbox here
 // would be an account takeover).
+// Oracle discipline on this UNAUTHENTICATED route. Three response shapes used
+// to distinguish a known phone from an unknown one: a 400 'no email on file',
+// and a 200 carrying `email_hint` (first char + FULL DOMAIN of the stored
+// address). Both are now gone - a caller who only knows a phone number learns
+// nothing about the account's recovery channels, and in particular cannot
+// harvest the domain to aim a phishing mail.
+//
+// The cooldown 429 from issueOtp is DELIBERATELY still surfaced. It is
+// technically an existence signal, but signup's "already registered" 409
+// already leaks existence at a comparable rate, and swallowing it would leave
+// a legitimate user who taps resend with a silent {sent:false} that looks like
+// success. Honest rate-limit feedback beats a marginal oracle here; the real
+// mitigation is that the IP limiter actually binds once TRUST_PROXY is fixed.
 export async function forgotPinStart({ phone, channel = 'sms' }) {
     const user = await userByPhone(phone);
     if (!user || !user.is_active) return { ok: true, sent: false };
     if (channel === 'email') {
         const t = emailFallbackTarget('pin_reset', { storedEmail: user.email });
-        if (!t.ok) {
-            throw new AuthError(400, 'No email on file for this account - ask an admin for a PIN reset', { reason: t.reason });
-        }
+        // No address on file answers exactly like an unknown phone. The client
+        // says "if an email is on file, we've sent a code to it".
+        if (!t.ok) return { ok: true, sent: false };
         const otp = await issueOtp(user, { purpose: 'pin_reset', channel: 'email', email: t.email });
-        return { ok: true, ...otp, email_hint: maskEmail(user.email) };
+        return { ok: true, ...otp };
     }
     // A repeat request whose previous SMS verifiably failed to deliver skips
     // the pointless re-send and steers the client to the email option instead
     // (same no-rotate discipline as resendOtp - the fallback stays usable now).
+    // `delivery_failed` says only "that SMS bounced", never whether an address
+    // exists to fall back to - the email attempt itself answers generically.
     const existing = await activeOtp(user.id, 'pin_reset');
     if (existing && await _lastSmsDeliveryFailed(existing)) {
-        return { ok: true, sent: false, delivery_failed: true, email_hint: maskEmail(user.email) };
+        return { ok: true, sent: false, delivery_failed: true };
     }
     const otp = await issueOtp(user, { purpose: 'pin_reset' });
     return { ok: true, ...otp };
@@ -471,7 +500,7 @@ export async function resetPinWithOtp({ phone, code, pin }, meta = {}) {
     const existing = await _checkOtp(user, { code, purpose: 'pin_reset' });
     const pin_hash = await hashPinAsync(pin, { pepper: PEPPER() });
     await db.transaction(async trx => {
-        await trx('otp_codes').where('id', existing.id).update({ consumed_at: trx.fn.now() });
+        await _consumeOtp(trx, existing.id);
         await trx('users').where('id', user.id).update({
             pin_hash, pin_attempts: 0, locked_until: null, must_change_pin: 0, last_login_at: trx.fn.now(),
         });
@@ -512,10 +541,13 @@ export async function updateProfile(user, { name, pin, current_pin, otp_code, sm
         otpRow = await _checkOtp(user, { code: otp_code, purpose: 'pin_change' });
         patch.pin_hash = await hashPinAsync(pin, { pepper: PEPPER() });
         patch.must_change_pin = 0;
+        // Proof of inbox control arrived with the code - capture it here, not
+        // at send time (see auth-rules' capturedEmail).
+        Object.assign(patch, capturedEmail(otpRow));
     }
     if (Object.keys(patch).length) {
         await db.transaction(async trx => {
-            if (otpRow) await trx('otp_codes').where('id', otpRow.id).update({ consumed_at: trx.fn.now() });
+            if (otpRow) await _consumeOtp(trx, otpRow.id);
             await trx('users').where('id', user.id).update(patch);
         });
     }

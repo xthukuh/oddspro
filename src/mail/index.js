@@ -1,6 +1,7 @@
 import { effective } from '../settings.js';
 import { withRetry } from '../db/retry-rules.js';
 import { isRetryableNetworkError } from '../db/net-rules.js';
+import { debugLog } from '../utils.js';
 import * as smtp from './smtp.js';
 
 // Mail provider seam (M13), mirroring src/sms/index.js: smtp is the only
@@ -29,9 +30,24 @@ export function mailEnabled() {
 
 // Send one email. Returns { ok, messageId, dev? }. Never hits the network in
 // 'log' mode; throws only on a real send failure the caller should surface.
+// One-time notice when the dev sink is swallowing real mail. MAIL_MAILER
+// defaults to 'log', and the email fallback is precisely the recovery path for
+// users SMS cannot reach - a forgotten MAIL_MAILER=smtp is a silent dead end.
+let _warnedDevSink = false;
+function _warnDevSinkOnce() {
+    if (_warnedDevSink) return;
+    _warnedDevSink = true;
+    console.warn('[mail] MAIL_MAILER=log - no email is reaching the network, so the email OTP '
+        + 'fallback and Forgot-PIN recovery silently do nothing. Bodies are echoed to the log ONLY '
+        + 'under DEBUG=1 (they carry reset codes). Set MAIL_MAILER=smtp with MAIL_* credentials.');
+}
+
 export async function sendMail({ to, subject, text }) {
     if (!mailEnabled()) {
-        console.debug(`[mail:dev] MAIL_MAILER=log - would send to ${to}: ${subject} | ${text}`);
+        _warnDevSinkOnce();
+        // DEBUG-gated: the body carries a PIN-reset code, the strongest
+        // credential in the system. See the twin note in src/sms/index.js.
+        debugLog(`[mail:dev] MAIL_MAILER=log - would send to ${to}: ${subject} | ${text}`);
         return { ok: true, dev: true, messageId: null };
     }
     const res = await withRetry(() => getProvider().send({ to, subject, text }), RETRY);

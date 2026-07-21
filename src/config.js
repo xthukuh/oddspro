@@ -248,6 +248,13 @@ const EnvSchema = z.object({
     // server console, so signup/verify works in dev without a provider account.
     SMS_ENABLED: boolStr('0'),
     SMS_DEFAULT_REGION: z.string().default('KE'),   // ISO region for phone parsing (web input)
+    // Hard per-EAT-day ceiling on billed sends, enforced at the ONE spend seam
+    // (sendSms) so it covers signup / resend / forgot-PIN / campaigns together.
+    // Signup is unauthenticated and picks the recipient number, and the per-user
+    // OTP flood gate cannot engage there (each signup is a new user) - without a
+    // global ceiling that route is an SMS-bombing amplifier billed to us. 0 =
+    // unlimited (never silently disable an operator who set no ceiling).
+    SMS_DAILY_CAP: z.coerce.number().int().min(0).default(500),
     // M9 campaign pacing (spec decision 13): broadcasts walk the recipient
     // ledger in batches with a delay BETWEEN them, so a large audience never
     // becomes one provider-throttling burst. Admin-editable (settings catalog).
@@ -283,7 +290,9 @@ const EnvSchema = z.object({
     MAIL_PORT: z.coerce.number().int().min(1).default(587),
     MAIL_USERNAME: optionalStr(z.string().min(1).optional()),
     MAIL_PASSWORD: optionalStr(z.string().min(1).optional()),
-    MAIL_ENCRYPTION: optionalStr(z.enum(['tls', 'ssl']).optional()), // tls = STARTTLS, ssl = implicit
+    // tls = STARTTLS, ssl = implicit, none = explicit opt-out of the STARTTLS
+    // requirement (smtp.js requires it by default - see the requireTLS note).
+    MAIL_ENCRYPTION: optionalStr(z.enum(['tls', 'ssl', 'none']).optional()),
     MAIL_FROM_ADDRESS: optionalStr(z.string().min(1).optional()),
     MAIL_FROM_NAME: z.string().default('Odds Pro'),
     // --- Tracking v2 (M2/M6; src/track.js) -----------------------------------

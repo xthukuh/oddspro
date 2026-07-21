@@ -195,6 +195,20 @@ export function emailFallbackTarget(purpose, { storedEmail = null, typedEmail = 
     return { ok: false, reason: 'purpose' };
 }
 
+// Which address (if any) a CONSUMED OTP row proves control of. An emailed code
+// is the only evidence we ever get that the requester owns that inbox, so
+// users.email is captured when the code is consumed - never when it is sent.
+//
+// Capturing at send time (the original M13 shape) was an account-takeover
+// path: POST /api/auth/resend-otp needs only a session (no PIN, no verified
+// phone, and it is exempt from the forced-PIN-change gate), so an attacker
+// holding a session could point users.email at their own inbox, then drive the
+// UNAUTHENTICATED forgot-PIN flow into it - rotating the PIN and revoking every
+// victim session without ever proving a PIN. Consuming the code is the proof.
+export function capturedEmail(row) {
+    return row?.channel === 'email' && row.email ? { email: row.email } : {};
+}
+
 // --- Request schemas (zod) --------------------------------------------------
 const PIN = z.string().regex(/^\d{4}$/, 'PIN must be 4 digits');
 const PHONE = z.string().refine(isValidE164, 'Enter a valid phone number');

@@ -136,6 +136,7 @@ export const SETTINGS_CATALOG = [
     // ---- SMS (creds stay .env-only).
     { key: 'SMS_ENABLED', type: 'boolean', group: 'sms', public: false, live: true, label: 'SMS sending', hint: 'Off = zero network; OTP codes log to the server console instead (dev mode).' },
     { key: 'SMS_DEFAULT_REGION', type: 'string', group: 'sms', public: false, live: true, pattern: '^[A-Z]{2}$', patternHint: 'two-letter ISO country, e.g. KE', label: 'Default phone region', hint: 'ISO country used to parse local phone-number formats into E.164.' },
+    { key: 'SMS_DAILY_CAP', type: 'int', group: 'sms', public: false, live: true, min: 0, unit: 'messages', label: 'Daily SMS ceiling', hint: 'Hard per-day limit on ALL billed sends (signup, resend, PIN reset, campaigns). 0 = unlimited. Counted per server process and reset by a restart.' },
     { key: 'BONGA_SERVICE_ID', type: 'int', group: 'sms', public: false, live: true, label: 'Bonga service ID', hint: 'Vendor service/sender id attached to SMS sends.' },
     { key: 'SMS_BATCH_SIZE', type: 'int', group: 'sms', public: false, live: true, min: 1, max: 500, unit: 'messages', label: 'Campaign batch size', hint: 'Broadcast recipients sent per batch before pausing.' },
     { key: 'SMS_BATCH_DELAY_MS', type: 'int', group: 'sms', public: false, live: true, min: 0, max: 60000, unit: 'ms', label: 'Campaign batch delay', hint: 'Pause between broadcast batches - paces sends so a big audience is not one burst.' },

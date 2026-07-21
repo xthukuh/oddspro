@@ -230,6 +230,29 @@ export function isDeliveryFailure(deliveryStatusDesc) {
 // (a local HTTPS-terminating proxy) is exempt. The send path warns once when
 // this is true; operators can override BONGA_API_URL_SEND with their own HTTPS
 // proxy. Pure so it's unit-tested offline.
+// --- Global outbound send budget --------------------------------------------
+// A hard per-EAT-day ceiling on billed SMS, decided here and counted by the
+// sending process. This is the ONE chokepoint that makes unbounded SMS spend
+// structurally impossible instead of merely unlikely: it sits at the spend
+// seam, so it covers signup, resend, forgot-PIN and campaigns at once.
+//
+// Why a global cap is needed at all when otpIssueDecision already gates floods:
+// that gate is keyed on the USER (deliberately - alternating phone numbers must
+// not reset the clock), and every SIGNUP creates a NEW user, so a per-user gate
+// can never engage on the one unauthenticated route that spends real credit.
+//
+// `today` is supplied by the caller (auto-rules' eatDateKey) so this stays
+// total and clock-free. cap <= 0 means unlimited - an operator who has not set
+// a ceiling must not find their SMS silently disabled. Total by construction:
+// a missing/garbage state counts as a fresh day.
+export function sendBudgetVerdict(state, today, cap) {
+    if (!(Number(cap) > 0)) return { allowed: true, day: today, count: 0, unlimited: true };
+    const sameDay = state && state.day === today;
+    const used = sameDay ? (Number(state.count) || 0) : 0;
+    if (used >= cap) return { allowed: false, day: today, count: used, remaining: 0 };
+    return { allowed: true, day: today, count: used + 1, remaining: cap - used - 1 };
+}
+
 export function isCleartextUrl(url) {
     const s = String(url || '');
     if (!s.toLowerCase().startsWith('http://')) return false;
