@@ -52,7 +52,7 @@ import { userPatchSchema } from './db/admin-rules.js';
 import { listTemplates, saveTemplate, deleteTemplate } from './sms/templates.js';
 import {
     previewCampaign, createCampaign, listCampaigns, getCampaign, getCampaignRecipients,
-    sendCampaign, cancelCampaign, campaignJobStatus,
+    sendCampaign, cancelCampaign, campaignJobStatus, requestCampaignCancel,
 } from './campaigns.js';
 import { templateSchema, campaignCreateSchema, campaignSendSchema } from './db/campaign-rules.js';
 import { makeJsonCache, sendJson } from './http-cache.js';
@@ -69,7 +69,12 @@ const app = express();
 app.disable('x-powered-by');
 // Behind cPanel/Passenger (or any reverse proxy) the socket peer is the proxy;
 // trust it so req.ip / X-Forwarded-For reflect the real visitor (visit logging).
-app.set('trust proxy', true);
+// A HOP COUNT, never `true`: trusting all proxies makes req.ip the leftmost XFF
+// entry - which the client supplies - so every IP-keyed rate limit (signup,
+// forgot-PIN, reset-PIN, beacons) is bypassed by rotating one header. Signup is
+// the one that matters: it is unauthenticated, the caller picks the recipient
+// number, and each accepted request spends real SMS credit.
+app.set('trust proxy', config.TRUST_PROXY);
 
 // Bot user-agent blocklist (opt-in, BOT_UA_FILTER_ENABLED). Blocks known AI
 // scrapers / aggressive crawlers / raw HTTP clients site-wide before any route;
@@ -130,6 +135,17 @@ const maintenanceNow = () => maintenanceInfo({
     message: effective('MAINTENANCE_MESSAGE'),
 }, Date.now());
 
+// HTML-escape anything admin-authored before it reaches this page. The
+// maintenance message is free text validated only by MAINT_MSG_PATTERN, which
+// closes the ${...} placeholder set but deliberately permits ordinary
+// punctuation - including < and >. Unescaped, a stored <script> would run
+// same-origin in EVERY visitor's browser for the length of the window, and
+// session tokens live in localStorage. The React overlay is safe (auto-escaped);
+// this string template was the only unescaped sink in M14.
+const escHtml = s => String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+));
+
 // Self-contained 503 page: rendered notice + window, meta-refresh so a parked
 // tab recovers on its own shortly after the window ends. No external assets -
 // the SPA (and its theme tokens) is exactly what may be mid-deploy.
@@ -148,8 +164,8 @@ const maintenanceHtml = info => `<!doctype html>
   .w{color:#17C9BA;font-weight:600}
 </style></head><body><main>
 <h1>Scheduled maintenance</h1>
-<p>${info.message}</p>
-<p class="w">Back by ${info.end} EAT</p>
+<p>${escHtml(info.message)}</p>
+<p class="w">Back by ${escHtml(info.end)} EAT</p>
 <p>This page retries automatically.</p>
 </main></body></html>`;
 
@@ -176,8 +192,12 @@ app.use(async (req, res, next) => {
 // force a CORS preflight cross-origin, which this server never approves - only
 // same-origin callers can set X-Requested-With. Answers the 403 itself; callers
 // bail on false. (C1: one copy - auth/admin routes, refresh.)
+// The bare predicate, for callers that answer for themselves (the beacons owe
+// the client { ok:true } rather than a 403 - tracking must never surface as an
+// app error). csrfOk keeps writing the 403 for everyone else.
+const hasCsrfHeader = req => Boolean(req.get('x-requested-with'));
 const csrfOk = (req, res) => {
-    if (req.get('x-requested-with')) return true;
+    if (hasCsrfHeader(req)) return true;
     res.status(403).json({ error: 'Missing X-Requested-With header.' });
     return false;
 };
@@ -249,12 +269,29 @@ async function optionalAuth(req, res, next) {
     } catch (e) { next(e); }
 }
 
-// Best-effort in-memory rate limit (DB lockout/cooldown are authoritative -
-// trust proxy=true makes IP keys spoofable; see src/authlimit-rules.js).
-// Bounded so spoofed keys can't grow the map without limit.
+// Best-effort in-memory rate limit. The DB lockout/cooldown stay authoritative;
+// this is the cheap first line (see src/authlimit-rules.js). IP-keyed entries
+// are only as trustworthy as TRUST_PROXY - a hop COUNT, never `true`, or the
+// client picks its own key.
+//
+// Bounded, but by EVICTING OLDEST rather than clearing: the previous
+// `_rlHits.clear()` meant anyone able to mint 10k distinct keys could wipe every
+// in-flight login and OTP counter along with their own, turning the overflow
+// guard into the bypass. Map iterates in insertion order, so the head is the
+// least-recently-ADDED key (re-setting an existing key keeps its position, so
+// this is insertion-order, not true LRU - good enough for a spoofed-key flood,
+// which is all it defends against).
+const RL_MAX_KEYS = 10_000;
+const RL_EVICT_BATCH = 1_000;   // amortize: evict in blocks, not one per call
 const _rlHits = new Map();
 function rateLimit(key, opts) {
-    if (_rlHits.size > 10_000) _rlHits.clear();
+    if (_rlHits.size > RL_MAX_KEYS) {
+        let drop = _rlHits.size - RL_MAX_KEYS + RL_EVICT_BATCH;
+        for (const k of _rlHits.keys()) {
+            _rlHits.delete(k);
+            if (--drop <= 0) break;
+        }
+    }
     const r = slidingWindowAllow(_rlHits.get(key), Date.now(), opts);
     _rlHits.set(key, r.hits);
     return r;
@@ -530,7 +567,14 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         // (redacted, date-clamped) body and a full one can never share a
         // slot, or one tier would be served the other's cached payload.
         const tier = access && !access.fullDetail ? 'guest' : 'full';
-        const key = queryCacheKey('/api/records', { ...req.query, date: day, tier });
+        // Key on the params that actually CHANGE the body, not on req.query
+        // wholesale: spreading the raw query let `?nonce=1,2,3...` mint endless
+        // distinct keys, each forcing a cold compute and evicting the 12-slot
+        // LRU (including the warmed column catalog). Anything not listed here
+        // is ignored by queryRecords, so it must not shard the cache either.
+        const key = queryCacheKey('/api/records', {
+            date: day, tier, page, per_page, sort, filters, completed, providers, markets,
+        });
         await apiCache.send(req, res, key, () => queryRecords({
             date: date === 'all' ? null : (date || new Date()),
             page,
@@ -549,20 +593,27 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
     }
 });
 
-// GET /api/hotpicks - over 2.5 hot-pick accuracy windows + upcoming hot list
+// GET /api/hotpicks - over 2.5 hot-pick accuracy windows + upcoming hot list.
+// Memoized like /api/columns: it is a full scan of the prediction ledger, was
+// unauthenticated and uncached, and a modest concurrent flood could therefore
+// saturate the knex pool (DB_POOL_MAX is 3 on the shared host) and stall MySQL
+// for the whole app. data_version-keyed, so a refresh still invalidates it.
 app.get('/api/hotpicks', async (req, res, next) => {
     try {
-        res.json(await hotpicksSummary());
+        await apiCache.send(req, res, '/api/hotpicks', () => hotpicksSummary());
     } catch (e) {
         next(e);
     }
 });
 
 // GET /api/performance - flat-stake ROI / hit-rate / bucket report for tips
-// and hot picks (windows, confidence/market/edge buckets, AI-veto impact)
+// and hot picks (windows, confidence/market/edge buckets, AI-veto impact).
+// Memoized for the same reason as /api/hotpicks: it scans every tip ever
+// recorded into Node memory, and it now backs an admin dashboard widget as
+// well as the public report.
 app.get('/api/performance', async (req, res, next) => {
     try {
-        res.json(await performanceSummary());
+        await apiCache.send(req, res, '/api/performance', () => performanceSummary());
     } catch (e) {
         next(e);
     }
@@ -600,16 +651,32 @@ app.get('/api/visits/daily-unique', async (req, res, next) => {
 // Public + CSRF-guarded, tiny JSON bodies, best-effort by contract: tracking
 // must never break the app, so handler errors fold to { ok:true } (the debug
 // log keeps the evidence). optionalAuth links a signed-in check-in to its user.
-const _beacon = handler => async (req, res) => {
+//
+// The CSRF check and the per-IP limit live HERE rather than in each handler:
+// previously each route called csrfOk(req) without `res`, so a missing header
+// threw inside csrfOk and was swallowed by the catch below - the right outcome
+// reached by an exception rather than by intent.
+//
+// The limit is the real point. X-Requested-With only deters BROWSER-driven
+// cross-origin calls; any script sets it. Unlimited, one loop over /visit/checkin
+// inserts unbounded rows into visitors + visit_sessions + visitor_devices, none
+// of which is pruned by default (TRACK_EVENTS_RETENTION_DAYS defaults to 0 =
+// keep forever, and sessions/visitors have no purge at all) - a disk-exhaustion
+// vector on a quota'd shared host, plus poisoned analytics. Refusals stay
+// { ok:true }: a rate-limited beacon is not the client's problem to report.
+const _beacon = (handler, { max = 60 } = {}) => async (req, res) => {
     try {
+        if (!hasCsrfHeader(req)) return res.json({ ok: true });
+        const rl = rateLimit(`beacon:${req.ip}`, { windowMs: 60_000, max });
+        if (!rl.allowed) return res.json({ ok: true });
         res.json(await handler(req));
     } catch (e) {
         console.debug('[track] beacon failed:', e?.message ?? e);
         res.json({ ok: true });
     }
 };
+// Tighter than the default: a real client checks in on page load, not 60x/min.
 app.post('/api/visit/checkin', express.json({ limit: '8kb' }), optionalAuth, _beacon(async req => {
-    if (!csrfOk(req)) return { ok: true };
     const body = checkinSchema.parse(req.body ?? {});
     const r = await checkin({
         anonId: body.anon_id,
@@ -620,17 +687,15 @@ app.post('/api/visit/checkin', express.json({ limit: '8kb' }), optionalAuth, _be
         userId: req.user?.id ?? null,
     });
     return { ok: true, ...r };
-}));
+}, { max: 20 }));
 app.post('/api/visit/events', express.json({ limit: '8kb' }), _beacon(async req => {
-    if (!csrfOk(req)) return { ok: true };
     const body = eventsSchema.parse(req.body ?? {});
     return ingestEvents(body.sid, body.key, body.events);
 }));
 app.post('/api/visit/checkout', express.json({ limit: '8kb' }), _beacon(async req => {
-    if (!csrfOk(req)) return { ok: true };
     const body = checkoutSchema.parse(req.body ?? {});
     return checkout(body.sid, body.key);
-}));
+}, { max: 20 }));
 
 // Admin machine bearer: a SEPARATE secret (ADMIN_TOKEN, falling back to
 // API_TOKEN) so a public SPA doesn't have to expose it. The token is ONLY
@@ -1061,16 +1126,34 @@ app.get('/api/admin/sms/job', requireAdminRole, (req, res) => {
 // today permanently on manual cooldown.
 const refreshCooldown = new Map();
 
+// How far a manual refresh may reach. The UI offers today-ish ± a week; the
+// generous past window keeps legitimate back-fills of a missed day working
+// while still bounding a date-walking loop (each date is a full sweep).
+const REFRESH_MAX_AHEAD_DAYS = 7;
+const REFRESH_MAX_BEHIND_DAYS = 90;
+
 // POST /api/refresh?date=YYYY-MM-DD - start refreshing a date's data
 // (fixtures, results, odds, link, stats). 409 with the in-flight job when one
 // is already running (manual or scheduled), 200 {fresh:true} when the date
 // was successfully refreshed within REFRESH_CACHE_MINUTES (no re-run), 429
 // while that date is on manual cooldown (carries retry_after_seconds).
-app.post('/api/refresh', (req, res) => {
+// requireAuth: this route spends API-Football quota AND scrapes two bookmakers
+// from our server IP. Unauthenticated it was free to trigger, and the throttles
+// are PER DATE (cache + cooldown), so walking distinct dates missed both -
+// steady quota drain plus continuous scraping whose realistic end state is an
+// IP ban that kills odds ingestion. Guests have no refresh button anyway.
+app.post('/api/refresh', requireAuth, (req, res) => {
     if (!csrfOk(req, res)) return;
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
         return res.status(400).json({ error: `Invalid refresh date (expected YYYY-MM-DD): ${date}` });
+    }
+    // Bound the date to what the UI can actually ask for, so one signed-in
+    // account cannot walk arbitrary history and defeat the per-date throttles.
+    const dayMs = 86_400_000, nowDay = Math.floor(Date.now() / dayMs);
+    const offset = Math.floor(new Date(`${date}T00:00:00+03:00`).getTime() / dayMs) - nowDay;
+    if (offset > REFRESH_MAX_AHEAD_DAYS || offset < -REFRESH_MAX_BEHIND_DAYS) {
+        return res.status(400).json({ error: 'Refresh date is outside the supported range.' });
     }
     if (refreshStatus().running) return res.status(409).json(refreshStatus());
     // Cache reuse: a recent successful run (auto or manual) already covered
@@ -1110,7 +1193,12 @@ app.post('/api/refresh', (req, res) => {
 // POST /api/refresh/cancel - cooperatively cancel the in-flight refresh job
 // (F3). Same CSRF guard as the trigger. 202 with the job state when a cancel
 // was requested, 409 when nothing is running to cancel.
-app.post('/api/refresh/cancel', (req, res) => {
+// requireAdminDual: cancelling is inherently an operator action - requestCancel
+// targets the SHARED single-slot job, so an anonymous caller could loop this and
+// abort every 10-minute light pass, the daily full sweep, and an admin's
+// in-flight DB import. The product would silently go stale with nothing in the
+// UI to explain it, at zero cost to the attacker.
+app.post('/api/refresh/cancel', requireAdminDual, (req, res) => {
     if (!csrfOk(req, res)) return;
     if (!requestCancel()) return res.status(409).json({ error: 'No refresh is running.' });
     res.status(202).json(refreshStatus());
@@ -1217,24 +1305,64 @@ function shutdown(why) {
     stopCatalogWarm();
     stopHaltWatch();
     requestCancel(); // no-op when nothing is running
+    // A broadcast must be drained too, not just the refresh job. Its slot is
+    // separate, so shutdown used to run straight through a live send: the pool
+    // closed under the loop, the campaign row stayed 'sending' with pending
+    // ledger rows, and nothing resumes it - canTransition('sending','sending')
+    // is false, so the route 409s forever and the only recovery is a NEW
+    // campaign that re-sends (and re-bills) everyone already delivered. Asking
+    // it to stop shrinks that window to the one SMS in flight.
+    requestCampaignCancel();
+    const busy = () => refreshJob.running || campaignJobStatus().running;
     const finish = () => {
-        if (server) server.close(() => closeDb().finally(() => process.exit(0)));
-        else closeDb().finally(() => process.exit(0));
+        if (!server) return void closeDb().finally(() => process.exit(0));
+        // server.close() only stops NEW connections and waits for every
+        // non-idle one, unbounded: an in-flight export download (hundreds of MB
+        // over a slow link) or a Node 18 keep-alive socket would hold the
+        // process open forever - so `.HALT`, the lever the deploy docs reach
+        // for precisely when cPanel's Stop button fails, would leave a zombie
+        // holding :3001 and the DB pool. Close idle sockets, then hard-exit on
+        // a deadline. The timer is unref'd but still fires while ref'd sockets
+        // keep the loop alive, which is exactly the case that needs it.
+        const hard = setTimeout(() => {
+            console.error('[shutdown] connections still open after the grace period - exiting anyway.');
+            process.exit(0);
+        }, HARD_EXIT_MS);
+        hard.unref?.();
+        server.closeIdleConnections?.();
+        server.close(() => {
+            clearTimeout(hard);
+            closeDb().finally(() => process.exit(0));
+        });
     };
-    const GRACE_MS = 15_000, POLL_MS = 500;
+    const GRACE_MS = 15_000, POLL_MS = 500, HARD_EXIT_MS = 10_000;
     const deadline = Date.now() + GRACE_MS;
     const wait = setInterval(() => {
-        if (!refreshJob.running || Date.now() >= deadline) {
+        if (!busy() || Date.now() >= deadline) {
             clearInterval(wait);
             finish();
         }
     }, POLL_MS);
     wait.unref?.();
-    if (!refreshJob.running) {
+    if (!busy()) {
         clearInterval(wait);
         finish();
     }
 }
+
+// Diagnostics of last resort. Node's default on an unhandled rejection is to
+// throw and exit - on a host with no SSH that means Passenger silently
+// respawns with nothing in the log explaining why. Logging and STAYING UP on a
+// rejection is the right trade here: the alternative is an invisible restart
+// loop. An uncaught exception has genuinely corrupted state, so that one goes
+// through the same graceful path as a signal.
+process.on('unhandledRejection', reason => {
+    console.error('[fatal] unhandled promise rejection:', reason);
+});
+process.on('uncaughtException', err => {
+    console.error('[fatal] uncaught exception:', err);
+    shutdown('uncaughtException');
+});
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
     process.on(signal, () => shutdown(signal));

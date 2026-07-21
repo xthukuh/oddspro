@@ -131,6 +131,14 @@ const EnvSchema = z.object({
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)
     API_HOST: z.string().default('127.0.0.1'),
+    // How many reverse-proxy hops to trust for req.ip / X-Forwarded-For.
+    // MUST NOT be `true`: trusting ALL proxies makes req.ip the LEFTMOST XFF
+    // entry, which the client writes, so every IP-keyed rate limit becomes
+    // decorative - including the one in front of the unauthenticated signup
+    // route that spends real SMS credit. `1` reads the entry the nearest proxy
+    // appended (cPanel/Passenger). Raise to 2 behind Cloudflare, 0 for a
+    // directly-exposed server. Numeric hop counts only.
+    TRUST_PROXY: z.coerce.number().int().min(0).max(5).default(1),
     // Optional: require `Authorization: Bearer <token>` on /api/* (server.js).
     // Unset = today's behavior (same-origin X-Requested-With check only).
     API_TOKEN: optionalStr(z.string().min(1).optional()),

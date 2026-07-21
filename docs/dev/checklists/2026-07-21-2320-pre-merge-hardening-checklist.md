@@ -61,39 +61,51 @@ non-regressing branch.
 
 ## Batch B — server perimeter
 
-- [ ] **B1 (T1, CRITICAL) Rate-limit the three visit beacons + fix `csrfOk` arity.**
+- [x] **B1 (T1, CRITICAL) Rate-limit the three visit beacons + fix `csrfOk` arity.**
       `src/server.js:604,617,622` — no limiter (every other public POST has one); each
       `checkin` can insert into `visitors` + `visit_sessions` + `visitor_devices`, and none of
       those tables is pruned by default (`TRACK_EVENTS_RETENTION_DAYS` defaults 0 = forever).
       `csrfOk(req)` also omits `res` ⇒ the guard "works" only by throwing into `_beacon`'s catch.
-- [ ] **B2 (T1) `TRUST_PROXY` env knob, default `1`.** `src/server.js:72` — `true` trusts ALL
+- [x] **B2 (T1) `TRUST_PROXY` env knob, default `1`.** `src/server.js:72` — `true` trusts ALL
       proxies ⇒ `req.ip` is the attacker-controlled leftmost XFF ⇒ every IP-keyed limiter is
       decorative, which un-gates signup's billed SMS. Env knob avoids needing the host hop
       count now and makes a later Cloudflare hop a config change.
-- [ ] **B3 (T1) Authenticate the refresh routes.** `src/server.js:1062` (`/api/refresh`,
+- [x] **B3 (T1) Authenticate the refresh routes.** `src/server.js:1062` (`/api/refresh`,
       quota + scraper burn, unlimited distinct dates defeat the per-date cooldown) and
       `:1106` (`/api/refresh/cancel`, unauthenticated, targets the SHARED job slot ⇒ an
       anonymous loop permanently aborts every light pass, the daily sweep, and an admin's
       in-flight DB import).
-- [ ] **B4 (T1) Cap the unpaged records query.** `src/db/records.js:285` — `per_page=all` +
+- [x] **B4 (T1) Cap the unpaged records query.** `src/db/records.js:285` — `per_page=all` +
       `date=all` materializes ~1.5M `odds_markets` rows as JS objects, JSON-stringifies and
       gzips them. Single unauthenticated GET ⇒ OOM.
-- [ ] **B5 (T1) HTML-escape the 503 maintenance page.** `src/server.js:151` —
+- [x] **B5 (T1) HTML-escape the 503 maintenance page.** `src/server.js:151` —
       `<p>${info.message}</p>` raw; `MAINT_MSG_PATTERN` closes the placeholder set but permits
       markup ⇒ stored XSS for every visitor during a window (sessions live in localStorage).
       Found independently by review tracks 4 and 5.
-- [ ] **B6 (T1) Hard-exit backstop in `shutdown()`.** `src/server.js:1213` — `process.exit(0)`
+- [x] **B6 (T1) Hard-exit backstop in `shutdown()`.** `src/server.js:1213` — `process.exit(0)`
       lives inside `server.close(cb)`, which is unbounded; the 15s grace only waits on
       `refreshJob.running`. An in-flight export download (or Node 18 keep-alive) ⇒ `.HALT`
       leaves a zombie holding :3001 and the pool. Add `closeIdleConnections()` + unref'd hard timer.
-- [ ] **B7 (T1) `unhandledRejection` / `uncaughtException` handlers.** Absent from all of `src/`.
+- [x] **B7 (T1) `unhandledRejection` / `uncaughtException` handlers.** Absent from all of `src/`.
       Default is exit-with-no-explanation on a host with no SSH.
-- [ ] **B8 (T2) Limiter overflow should evict, not `clear()`.** `src/server.js:257` — spoofing
+- [x] **B8 (T2) Limiter overflow should evict, not `clear()`.** `src/server.js:257` — spoofing
       10k keys wipes ALL limiter state incl. in-flight login/OTP counters.
-- [ ] **B9 (T2) Whitelist the records cache key + memoize two uncached scans.**
+- [x] **B9 (T2) Whitelist the records cache key + memoize two uncached scans.**
       `src/server.js:526` spreads `req.query` ⇒ `?nonce=N` forces a cold compute and thrashes
       the 12-slot LRU. `/api/performance` (`:556`) and `/api/hotpicks` (`:546`) are uncached
       full-ledger scans.
+
+**Batch B live smoke test (2026-07-21, serve with billing seams neutered):**
+`POST /api/refresh` unauthenticated → **401** (was open) · `POST /api/refresh/cancel`
+unauthenticated → **401** (was open) · `GET /api/records?date=all&per_page=all` → **3000 rows
+of 4343, `truncated:true`** (was unbounded) · 25 rapid check-ins → **20 reached the handler,
+5 refused before it** (the 20/min cap, proven by the handler-side log appearing exactly 20
+times) · beacon without `X-Requested-With` → `{ok:true}`, no insert, no throw. Port freed and
+re-probed after; no orphaned node processes.
+
+NOTE E1's shutdown half (drain the campaign job + hard-exit backstop) landed with Batch B,
+since it lives inside `shutdown()` and touching that function twice was avoidable. E1's
+second half (honor `startCampaignJob`'s return value) is still open under Batch E.
 
 ## Batch C — settings / maintenance
 

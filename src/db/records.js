@@ -8,6 +8,12 @@ import { redactRecordForRole } from './access-rules.js';
 // Serves both the `export` CSV action and the :3001 API. Only correlated
 // records (matches with a canonical fixture) are considered.
 
+// Hard ceiling on an unpaged (`per_page: 'all'`) selection. The web table is
+// unpaginated BY DATE - a busy date is a few hundred rows - so this never binds
+// in real use, but it bounds `?date=all&per_page=all`, which an unauthenticated
+// caller could otherwise use to pull the entire warehouse through the Node heap.
+const MAX_UNPAGED = 3000;
+
 // Fixture statuses that carry a final result (usable for H2H history)
 const RESULT_STATUSES = ['FT', 'AET', 'PEN', 'AWD', 'WO'];
 
@@ -282,7 +288,15 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     }
     query.orderBy('m.start_time').orderBy('f.id').orderBy('m.provider');
 
+    // `per_page: 'all'` exists for the web table, which loads ONE date at a
+    // time (a busy date is a few hundred rows). Without a ceiling the same
+    // parameter combined with `date=all` is a one-request denial of service: an
+    // unauthenticated GET makes _hydrate materialize the whole warehouse's
+    // odds_markets rows as JS objects, then JSON-stringify and gzip them into
+    // the response cache. The cap keeps the escape hatch for real use and
+    // bounds the hostile case; `truncated` tells the caller it was applied.
     if (!unpaged) query.offset((page - 1) * per_page).limit(per_page);
+    else query.limit(MAX_UNPAGED);
     const rows = await query
         .select(
             'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
@@ -312,8 +326,9 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         data,
         total: Number(total),
         page,
-        per_page: unpaged ? Number(total) : per_page,
+        per_page: unpaged ? data.length : per_page,
         pages: unpaged ? 1 : Math.max(1, Math.ceil(Number(total) / per_page)),
+        ...(unpaged && Number(total) > MAX_UNPAGED ? { truncated: true, limit: MAX_UNPAGED } : {}),
     };
 }
 
