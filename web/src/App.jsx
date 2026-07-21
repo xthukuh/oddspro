@@ -4,6 +4,8 @@ import { startTracking, track, setTrackingSuspended } from './track.js';
 import { EV, onOff } from './trackEvents.js';
 import { shouldReloadForJob } from './freshness.js';
 import { loadMaintenance, saveMaintenance } from './maintenance.js';
+import { reduceBackoff } from './backoff.js';
+import { isStaleBuild, pruneStaleStorage, reloadForUpgrade, CLIENT_BUILD } from './appVersion.js';
 import { maintenanceStateAt } from '../../src/db/maintenance-rules.js';
 import MaintenanceOverlay from './MaintenanceOverlay.jsx';
 import useOutsideDismiss from './useOutsideDismiss.js';
@@ -379,6 +381,28 @@ export default function App() {
     }, [maintInfo, adoptMaintenance]);
     // The beacon pauses while the overlay is up (the API answers 503 anyway).
     useEffect(() => { setTrackingSuspended(maintActive); }, [maintActive]);
+    // --- G: connectivity + deployed-version state ---------------------------
+    // `offline` drives the "can't reach the server" strip; `upgrade` drives the
+    // "new version available" strip. Both are dismissible and neither ever
+    // reloads on its own - the user picks the moment, so a half-built betslip
+    // or a filter tree mid-edit is never discarded underneath them.
+    const [offline, setOffline] = useState(false);
+    const [offlineDismissed, setOfflineDismissed] = useState(false);
+    const [upgrade, setUpgrade] = useState(false);
+    const [upgradeDismissed, setUpgradeDismissed] = useState(false);
+
+    // A recovered connection re-arms the warning for next time.
+    useEffect(() => { if (!offline) setOfflineDismissed(false); }, [offline]);
+
+    // Compare the served bundle id with the one baked into this build. Pruning
+    // runs ONLY when they MATCH (see appVersion.keysToPrune): a stale tab has a
+    // stale key registry, so letting it decide what is obsolete is how a
+    // "cleanup" deletes a newer build's settings and syncs that deletion out.
+    const adoptBuild = useCallback(serverBuild => {
+        if (isStaleBuild(CLIENT_BUILD, serverBuild)) { setUpgrade(true); return; }
+        pruneStaleStorage({ clientBuild: CLIENT_BUILD, serverBuild });
+    }, []);
+
     const dismissMaintBanner = () => {
         setMaint(prev => {
             const next = { ...(prev ?? {}), dismissedSig: prev?.info?.signature ?? null };
@@ -725,24 +749,39 @@ export default function App() {
     // mount (e.g. page reloaded mid-refresh). The M14 maintenance schedule
     // rides the same payload; while the overlay is up the poll SUSPENDS
     // (network quiet) and the recovery timer resumes it by flipping the dep.
+    // Exponential backoff replaces the fixed 60s cadence ONLY while failing:
+    // a server that is down, restarting or mid-deploy otherwise takes steady
+    // pressure from every open tab at the worst possible moment. Recovery
+    // resets instantly, and self-scheduling timeouts (not setInterval) are what
+    // let the gap actually grow.
     useEffect(() => {
         if (maintActive) return;
         let stale = false;
+        let timer = null;
+        let failures = 0;
         const poll = async () => {
+            let ok = false;
             try {
                 const st = await fetchRefreshStatus();
                 if (stale) return;
+                ok = true;
                 setRefresh(st);
                 maybeReload(st);
                 adoptMaintenance(st.maintenance);
+                adoptBuild(st.build);
             } catch {
-                // transient poll failure - next interval retries
+                // Transient failure: back off rather than hammering. The banner
+                // only appears after WARN_AFTER_FAILURES consecutive misses.
             }
+            if (stale) return;
+            const next = reduceBackoff({ failures }, ok);
+            failures = next.failures;
+            setOffline(next.warn);
+            timer = setTimeout(poll, next.delay ?? 60_000);
         };
         poll();
-        const id = setInterval(poll, 60_000);
-        return () => { stale = true; clearInterval(id); };
-    }, [maybeReload, adoptMaintenance, maintActive]);
+        return () => { stale = true; if (timer) clearTimeout(timer); };
+    }, [maybeReload, adoptMaintenance, adoptBuild, maintActive]);
 
     // Fast poll while a job runs (manual or scheduled - the ⟳ button spins
     // for both). Manual completions reload unconditionally (the user asked;
@@ -1110,6 +1149,28 @@ export default function App() {
                     <span className="grow py-0.5">⚠ {maintInfo.message}</span>
                     <button onClick={dismissMaintBanner} aria-label="Dismiss maintenance notice" title="Dismiss"
                         className="cursor-pointer shrink-0 text-hot/70 hover:text-hot text-lg leading-none px-1">&times;</button>
+                </div>
+            )}
+            {/* G: a new build is deployed. Prompt, never auto-reload - the user
+                may be mid-slip or mid-filter, and losing that to a silent
+                refresh is worse than running one version behind for a minute. */}
+            {upgrade && !upgradeDismissed && (
+                <div className="shrink-0 flex items-center gap-2 px-3.5 py-1.5 bg-accent/10 border-b border-accent/40 text-accent text-[13px]" role="status">
+                    <span className="grow py-0.5">↻ A new version of Odds Pro is available.</span>
+                    <button onClick={reloadForUpgrade}
+                        className="cursor-pointer shrink-0 rounded-md px-2 py-0.5 bg-accent/20 hover:bg-accent/30 font-medium">Reload</button>
+                    <button onClick={() => setUpgradeDismissed(true)} aria-label="Dismiss update notice" title="Dismiss"
+                        className="cursor-pointer shrink-0 text-accent/70 hover:text-accent text-lg leading-none px-1">&times;</button>
+                </div>
+            )}
+            {/* G: sustained connectivity loss. Only after several consecutive
+                misses - one dropped request during a deploy is normal, and a
+                banner that cries wolf gets dismissed reflexively. */}
+            {offline && !offlineDismissed && (
+                <div className="shrink-0 flex items-center gap-2 px-3.5 py-1.5 bg-miss/10 border-b border-miss/40 text-miss text-[13px]" role="status">
+                    <span className="grow py-0.5">⚠ Can&rsquo;t reach the server - retrying automatically. Shown data may be out of date.</span>
+                    <button onClick={() => setOfflineDismissed(true)} aria-label="Dismiss connection notice" title="Dismiss"
+                        className="cursor-pointer shrink-0 text-miss/70 hover:text-miss text-lg leading-none px-1">&times;</button>
                 </div>
             )}
             {maintState === 'active' && isAdmin && (

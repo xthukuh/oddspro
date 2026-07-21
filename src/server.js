@@ -1,6 +1,6 @@
 import express from 'express';
 import compression from 'compression';
-import { existsSync, createReadStream, statSync } from 'node:fs';
+import { existsSync, createReadStream, statSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
@@ -1220,7 +1220,38 @@ app.post('/api/refresh/cancel', requireAdminDual, (req, res) => {
 // M14: the maintenance schedule rides this existing 60s poll (decision 17 -
 // no new endpoint); clients cache it in oddspro.maintenance and switch on
 // their own clock at the window's start.
-app.get('/api/refresh', (req, res) => res.json({ ...refreshStatus(), maintenance: maintenanceNow() }));
+// Deployed-bundle id, written beside the built assets by the vite build
+// (web/dist/build-id.txt). Rides this SAME poll - the M14 no-new-endpoint
+// discipline - so clients learn about a deploy on a request they already make.
+//
+// Distinct from data_version, which tracks WAREHOUSE freshness: that drives a
+// silent data reload, this needs a real page reload to pick up new hashed
+// assets. Cached with an mtime check (bounded to one stat per 10s) so a
+// frontend-only redeploy is noticed WITHOUT restarting the backend - which is
+// exactly how this host is updated. Absent file = null = feature off.
+const BUILD_ID_FILE = path.resolve('web', 'dist', 'build-id.txt');
+let _buildId = { value: null, mtime: 0, checkedAt: 0 };
+function deployedBuildId() {
+    const now = Date.now();
+    if (now - _buildId.checkedAt < 10_000) return _buildId.value;
+    _buildId.checkedAt = now;
+    try {
+        const mtime = statSync(BUILD_ID_FILE).mtimeMs;
+        if (mtime !== _buildId.mtime) {
+            _buildId.mtime = mtime;
+            _buildId.value = readFileSync(BUILD_ID_FILE, 'utf8').trim() || null;
+        }
+    } catch {
+        _buildId.value = null;   // no build stamp (dev, or backend-only deploy)
+    }
+    return _buildId.value;
+}
+
+app.get('/api/refresh', (req, res) => res.json({
+    ...refreshStatus(),
+    maintenance: maintenanceNow(),
+    build: deployedBuildId(),
+}));
 
 // Legacy admin dashboard URL -> the SPA admin area (M5, spec decision 14).
 // Registered before the static/SPA fallback so /admin doesn't resolve to the

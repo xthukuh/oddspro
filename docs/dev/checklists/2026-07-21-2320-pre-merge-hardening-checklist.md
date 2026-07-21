@@ -195,17 +195,17 @@ New FEATURE work, not review findings. Design decisions to confirm with the user
 building (backoff curve, which pollers participate, how a new version is detected, how far
 "deprecated store cleanup" should go).
 
-- [ ] **G1 Exponential-backoff polling when the server is unavailable.** Today every poller
+- [x] **G1 Exponential-backoff polling when the server is unavailable.** Today every poller
       retries on a fixed cadence regardless of failures: `/api/refresh` slow 60s / fast 2s,
       the visitor badge 2min, the records reload, plus tracking beacons. A down or restarting
       server therefore takes sustained request pressure exactly when it can least afford it -
       and it lengthens maintenance work. Needs: shared backoff helper (pure + offline-tested,
       per repo convention), a ceiling, jitter (so all tabs don't retry in lockstep), and an
       immediate reset on the first success.
-- [ ] **G2 Dismissible "can't reach the server" warning.** Reuse the existing M14 maintenance
+- [x] **G2 Dismissible "can't reach the server" warning.** Reuse the existing M14 maintenance
       banner pattern (`windowSignature`-keyed dismissal) rather than inventing a second one.
       Must distinguish "server unreachable" from the already-handled "maintenance 503".
-- [ ] **G3 Version-aware cache-bust + stale-store cleanup.** On detecting a newly deployed
+- [x] **G3 Version-aware cache-bust + stale-store cleanup.** On detecting a newly deployed
       build: reload to drop stale hashed assets, and prune deprecated `oddspro.*` localStorage
       keys. NOTE the existing `data_version` signal is about DATA freshness (silent table
       reload) - this needs a separate APP/build version. Interacts with prefs sync and
