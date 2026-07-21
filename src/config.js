@@ -92,9 +92,15 @@ const EnvSchema = z.object({
     // agreeing with itself. openrouter/auto and openrouter/free are auto-routers
     // that silently vary the model per fixture; they are disqualified.
     // Verified present in the live /api/v1/models list 2026-07-16.
-    OPENROUTER_MODEL: z.string().default('openai/gpt-5.6-terra'),
+    // 2026-07-21 AI-economy pass: default moved off the PAID gpt-5.6-terra to a
+    // FREE Nemotron slug (verified live on OpenRouter). The model id is baked into
+    // enrichModelTag()'s reuse key, so old rows never conflate with new ones - but
+    // this DOES fork the in-flight blind-measurement population (policy regime,
+    // dated in docs/memory-bank.md). Free tier is ~50 req/day: keep AI_ENRICH_CAP
+    // under it or blind coverage silently truncates (enrich.js fails open on 429).
+    OPENROUTER_MODEL: z.string().default('nvidia/nemotron-3-super-120b-a12b:free'),
     AI_ENRICH_ENABLED: boolStr('0'),
-    AI_ENRICH_CAP: z.coerce.number().int().min(0).default(200),        // FIXTURES per run, not calls
+    AI_ENRICH_CAP: z.coerce.number().int().min(0).default(40),         // FIXTURES per run, not calls
     AI_ENRICH_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
     AI_BLIND_MODEL: z.string().default(''),      // '' = provider default
     AI_ANCHORED_MODEL: z.string().default(''),   // '' = provider default
