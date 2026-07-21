@@ -41,9 +41,13 @@ stateDiagram-v2
   scoreboard is honest *by construction* — new rules are measured via the replay scripts,
   never by editing history.
 - **Results are canonical:** scores copy from final API-Football fixtures into linked
-  matches, never from bookmaker payloads. Terminal fixtures complete their matches;
-  unlinked matches complete 4h after start; `completed_at` set ⇒ odds refreshes skip the
-  match (the fetch-throttling half of the same invariant).
+  matches, never from bookmaker payloads. Terminal fixtures complete their matches; the
+  fallback completes anything still open 4h past `COALESCE(f.kickoff, m.start_time)` —
+  canonicality applies to the *cutoff* too, so a linked match is judged on the fixture's
+  kickoff, never on the bookmaker's `start_time` (which goes stale on a reschedule and,
+  before the 2026-07-21 fix, permanently froze rescheduled games: `completed_at` is a
+  one-way door). `completed_at` set ⇒ odds refreshes skip the match (the fetch-throttling
+  half of the same invariant).
 - **Stale odds are kept, not deleted** (`src/db/odds-diff.js`): markets present in the
   latest snapshot are replaced; vanished markets are flagged `is_stale` with their
   last-seen price (it *is* the historical price — the lab and UI need it); re-listed

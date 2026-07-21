@@ -274,10 +274,17 @@ export async function settleApisportsResults() {
         TERMINAL_STATUSES
     );
 
-    // Fallback: unlinked matches long past kickoff stop being refreshed.
+    // Fallback: matches long past kickoff stop being refreshed. The cutoff prefers the
+    // CANONICAL fixture kickoff whenever the match is linked - matches.start_time is
+    // bookmaker-provided and goes stale on a reschedule (seen 24h adrift), which would
+    // otherwise complete a game still in play and freeze its odds mid-match. Unlinked
+    // matches keep falling back to start_time, and retired NS/PST zombies (kickoff long
+    // past, never terminal upstream) still complete here rather than scraping forever.
     const [fallback] = await db.raw(
-        `UPDATE matches SET completed_at = NOW()
-         WHERE completed_at IS NULL AND start_time < NOW() - INTERVAL 4 HOUR`
+        `UPDATE matches m LEFT JOIN fixtures f ON f.id = m.fixture_id
+         SET m.completed_at = NOW()
+         WHERE m.completed_at IS NULL
+           AND COALESCE(f.kickoff, m.start_time) < NOW() - INTERVAL 4 HOUR`
     );
 
     return {
