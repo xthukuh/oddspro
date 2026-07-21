@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
 import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
 import { startTracking, track, setTrackingSuspended } from './track.js';
 import { EV, onOff } from './trackEvents.js';
@@ -17,7 +17,11 @@ import BetslipPlayground, { seedSlip } from './components/BetslipPlayground.jsx'
 import CalendarPopover from './components/CalendarPopover.jsx';
 import DataTable, { BASE_COLUMNS } from './components/DataTable.jsx';
 import FilterBuilder from './components/FilterBuilder.jsx';
-import HelpModal from './components/HelpModal.jsx';
+// Lazy: Help is click-opened and carries the glossary + LegalModal +
+// legalContent, none of which a first paint needs. FilterBuilder /
+// SettingsModal / BetslipPlayground stay static on purpose - they are opened
+// often enough that a fetch-then-open beat would be felt.
+const HelpModal = lazy(() => import('./components/HelpModal.jsx'));
 import Logo from './components/Logo.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
 import OverflowMenu from './components/OverflowMenu.jsx';
@@ -970,18 +974,28 @@ export default function App() {
         setSafeOverrides({});
         localStorage.removeItem(LS_SAFE_OVERRIDES);
     };
-    // Row selection (persist per current date).
+    // Row selection (persist per current date). Wrapped in a transition for the
+    // same reason as the sort/filter chains: a checkbox click re-stamps every
+    // row and re-sorts the table, which blocked the click on a big day.
+    // Takes a Set OR an updater - deferring the state means a closed-over
+    // `selection` can be one commit stale, so per-row toggles MUST derive from
+    // `prev` or a fast double-click would drop the first one.
     const saveSelection = next => {
-        setSelection(next);
-        const key = _selectKey(date);
-        if (next.size) localStorage.setItem(key, JSON.stringify([...next]));
-        else localStorage.removeItem(key);
+        startTransition(() => {
+            setSelection(prev => {
+                const value = typeof next === 'function' ? next(prev) : next;
+                const key = _selectKey(date);
+                if (value.size) localStorage.setItem(key, JSON.stringify([...value]));
+                else localStorage.removeItem(key);
+                return value;
+            });
+        });
     };
-    const toggleSelect = id => {
-        const next = new Set(selection);
+    const toggleSelect = id => saveSelection(prev => {
+        const next = new Set(prev);
         next.has(id) ? next.delete(id) : next.add(id);
-        saveSelection(next);
-    };
+        return next;
+    });
     // Bulk selection actions (the Select-column header menu). Select All /
     // Invert act on the VISIBLE rows (`rows`) - WYSIWYG; Select Similar / Keep
     // One Provider reach the whole loaded day (`stampedData`) so they find api_id
@@ -1371,7 +1385,11 @@ export default function App() {
                 />
             )}
 
-            {showHelp && <HelpModal onClose={() => setShowHelp(false)} />}
+            {showHelp && (
+                <Suspense fallback={null}>
+                    <HelpModal onClose={() => setShowHelp(false)} />
+                </Suspense>
+            )}
 
             {showSettings && catalog && (
                 <SettingsModal
