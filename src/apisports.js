@@ -8,6 +8,7 @@ import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate
 import { withRetry } from './db/retry-rules.js';
 import { isRetryableNetworkError } from './db/net-rules.js';
 import { buildEventRows } from './apisports-events.js';
+import { buildStandingRows } from './apisports-standings.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -551,70 +552,30 @@ export async function fetchApisportsPredictions() {
 
 // --- standings (replace per league+season) ---
 
-const StandingRow = z.object({
-    rank: z.number(),
-    team: z.object({ id: z.number(), name: z.string(), logo: z.string().nullable().optional() }),
-    points: z.number(),
-    goalsDiff: z.number(),
-    group: z.string().nullable().optional(),
-    form: z.string().nullable().optional(),
-    description: z.string().nullable().optional(),
-    all: z.object({
-        played: z.number(), win: z.number(), draw: z.number(), lose: z.number(),
-        goals: z.object({ for: z.number(), against: z.number() }),
-    }),
-});
-
 // Refresh standings for every league+season pair seen on correlated fixtures.
+// Parsing + row shaping live in the pure src/apisports-standings.js (tolerant
+// of the observed `points: null` bracket rows; a row zod cannot parse is
+// skipped and logged, never thrown - one bad row must not abort the sweep).
 export async function fetchApisportsStandings() {
     const pairs = await db('fixtures as f')
         .join('matches as m', 'm.fixture_id', 'f.id')
         .distinct('f.league_id', 'f.season');
     console.debug(`API-Football - ${pairs.length} league/season standings to refresh...`);
-    const counts = { leagues: pairs.length, rows: 0, empty: 0 };
+    const counts = { leagues: pairs.length, rows: 0, empty: 0, skipped: 0 };
     await _batch(pairs, async ({ league_id, season }) => {
         const items = await _get('/standings', { league: league_id, season });
         const groups = items?.[0]?.league?.standings ?? [];
-        // Keyed by the standings unique tuple (team_id|group_name; league+season
-        // are constant here) so an in-response duplicate - some leagues, e.g.
-        // MLS Next Pro, emit a team twice under an identically-labelled group -
-        // collapses to one row instead of tripping the unique constraint.
-        const byKey = new Map(), teams = new Map();
-        for (const group of groups) {
-            for (const raw of group) {
-                // Placeholder rows (TBD playoff/bracket slots) carry null team
-                // ids - no FK target, nothing to store.
-                if (!raw?.team?.id) continue;
-                const r = StandingRow.parse(raw);
-                teams.set(r.team.id, { id: r.team.id, name: r.team.name, logo: r.team.logo ?? null });
-                const group_name = r.group ?? '';
-                byKey.set(`${r.team.id}|${group_name}`, {
-                    league_id,
-                    season,
-                    team_id: r.team.id,
-                    group_name,
-                    rank: r.rank,
-                    points: r.points,
-                    goals_diff: r.goalsDiff,
-                    form: r.form ?? null,
-                    description: r.description ?? null,
-                    played: r.all.played,
-                    win: r.all.win,
-                    draw: r.all.draw,
-                    lose: r.all.lose,
-                    goals_for: r.all.goals.for,
-                    goals_against: r.all.goals.against,
-                    metadata: JSON.stringify(raw),
-                });
-            }
+        const { rows, teams: teamRows, skipped } = buildStandingRows(groups, { league_id, season });
+        if (skipped.length) {
+            counts.skipped += skipped.length;
+            console.warn(`  standings ${league_id}/${season}: skipped ${skipped.length} unparseable row(s)`);
         }
-        const rows = [...byKey.values()];
         if (!rows.length) {
             counts.empty++; // cups/friendlies have no table
             return;
         }
-        if (teams.size) {
-            await db('teams').insert([...teams.values()]).onConflict('id').merge(['name', 'logo']);
+        if (teamRows.length) {
+            await db('teams').insert(teamRows).onConflict('id').merge(['name', 'logo']);
         }
         await db.transaction(async trx => {
             await trx('standings').where({ league_id, season }).del();
