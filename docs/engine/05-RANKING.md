@@ -2,8 +2,8 @@
 
 > **Honesty contract** (full statement: `00-README.md`): no market is +EV on our books;
 > flat-stake EV ≈ −3%. Everything below maximizes *win probability and slip survival*,
-> never profit. Evidence: `docs/research/sure-win-analysis.md`,
-> `docs/research/fair-comparison-and-false-positives.md`.
+> never profit. Evidence: the 2026-07-13/14 sure-win + fair-comparison studies
+> (pruned 2026-08-04 — git history).
 
 All logic in `src/db/magic-rules.js` — shared VERBATIM by server and browser (one scorer,
 no client/server drift).

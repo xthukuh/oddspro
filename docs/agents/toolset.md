@@ -164,7 +164,7 @@ the shown bet). Sources: `docs/research/`.
 - `AGENTS.md` (root) — cross-harness entry point + hard invariants; points here.
 - `docs/` — PROJECT docs: `DEPLOYMENT.md`, `memory-bank.md` (historical/code-level KB + the
   AI regime-switch log — dated DARK-switch notes go THERE), `guides/`, `research/`, `visuals/`.
-- `docs/dev/` — DEVELOPMENT pipeline: `implementation-plan.md`, `specs/`, `plans/`,
+- `docs/dev/` — DEVELOPMENT pipeline (ACTIVE effort only since the 2026-08-04 lean-docs policy): `specs/`, `plans/`,
   `checklists/`. NEW docs go per the `docs/README.md` table.
 - Separation of duties: user-gated ops (live cPanel deploys, DB blob reclaim, billing,
   PAT rotation) are surfaced to the user once — never tracked as agent work.
