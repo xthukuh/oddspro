@@ -133,16 +133,21 @@ if (dbDump) console.log(`  ${dbDump}  (${kb(dbDump)})  -> import via phpMyAdmin 
 console.log(`[package-deploy] upload via cPanel File Manager (Upload -> Extract). See docs/DEPLOYMENT.md.`);
 
 // Zip the CONTENTS of a directory (entries at the archive root), cross-platform.
+// Windows uses the bundled bsdtar (tar.exe, Windows 10+) - PowerShell's
+// Compress-Archive writes BACKSLASH path separators, which Linux unzip
+// rejects ("appears to use backslashes as path separators"; broke the first
+// SSH web deploy 2026-08-07). bsdtar's -a picks zip format from the name and
+// writes forward slashes.
 function zipDirContents(srcDir, outZip) {
+    if (existsSync(outZip)) rmSync(outZip);
     if (process.platform === 'win32') {
-        // Compress-Archive -Force overwrites any existing archive.
-        const esc = s => s.replace(/'/g, "''");
-        const cmd = `Compress-Archive -Path '${esc(srcDir)}\\*' -DestinationPath '${esc(outZip)}' -Force`;
-        const r = spawnSync('powershell', ['-NoProfile', '-NonInteractive', '-Command', cmd], { encoding: 'utf8' });
-        if (r.status !== 0) die(`Compress-Archive failed: ${r.stderr || r.error?.message}`);
+        // The EXPLICIT System32 path matters: a Git-Bash PATH resolves `tar`
+        // to GNU tar, which can't write zips and parses `D:` as a remote host.
+        const bsdtar = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32', 'tar.exe');
+        const r = spawnSync(bsdtar, ['-a', '-c', '-f', path.resolve(outZip), '-C', srcDir, '.'], { encoding: 'utf8' });
+        if (r.status !== 0) die(`tar (bsdtar) zip failed: ${r.stderr || r.error?.message}`);
     } else {
-        // `zip` appends to an existing archive - remove a stale one first.
-        if (existsSync(outZip)) rmSync(outZip);
+        // `zip` appends to an existing archive - the rmSync above handles it.
         const r = spawnSync('zip', ['-r', '-q', path.resolve(outZip), '.'], { cwd: srcDir, encoding: 'utf8' });
         if (r.status !== 0) die(`zip failed (is 'zip' installed?): ${r.stderr || r.error?.message}`);
     }
