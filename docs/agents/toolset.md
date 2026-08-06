@@ -193,6 +193,22 @@ the shown bet). Sources: `docs/research/`.
   `node scripts/gen-secret.js [hex|b64|pin|uuid]` (node:crypto, no deps) for PIN_PEPPER/
   token generation. First audit found 12 redundant lines and 34 load-bearing overrides in
   the 55-key dev .env; trimming by audit output avoids the dropped-override trap.
+- 2026-08-07 — **SSH deploy route (verified):** `ssh oddsprok@oddspro-p` (key auth,
+  BatchMode works from Git Bash + node spawn). Remote has mysql/mariadb/mariadb-dump/
+  gzip/unzip/tar + node v24 at `~/.nvm/versions/node/v24.18.0/bin` (no pv — progress =
+  local byte counter feeding the ssh stdin stream). `node scripts/deploy-remote.js
+  [--db [--fresh]] [--app] [--web] [--all] [--dry-run]`; config `.env.deploy`, prod
+  server env `.env.server`. SQL snippets go over ssh STDIN, never `-e "..."` — a
+  scrypt hash's `$`-runs and SQL backticks inside remote double quotes corrupt silently.
+- 2026-08-07 — **AppScript SMS relay auth gotcha (verified live):** a web-app deployment
+  whose script calls `UrlFetchApp.fetch` fails with "You do not have permission" until
+  the project is authorized for `script.external_request` (run any UrlFetchApp function
+  once in the editor, approve, then re-deploy a NEW VERSION). Relay response shape is
+  parseBongaSend-compatible as-is (Bonga body spread last wins the `status` key).
+  Re-test: `node tmp/test-bonga-relay.js`.
+- 2026-08-07 — **InnoDB space reclaim (verified):** `UPDATE ... SET blob=NULL` frees
+  nothing on disk; `OPTIMIZE TABLE` (recreate+analyze) is what returns it — matches
+  went 1571 MB -> 11.6 MB after the metadata purge (whole DB 3.5 -> 1.9 GB).
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
 
