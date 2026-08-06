@@ -149,6 +149,29 @@ Verdict: at 36 days of data, honest value sits at ~break-even for a two-card
 proven +EV yet. The instrument re-runs monthly; every future claim must clear
 the worst-half fitness AND the untouched tail, exactly as these two rounds did.
 
+## What works — validated principles (session close, 2026-08-06)
+
+Eleven replay-tested experiments distilled; build on these, re-derive nothing:
+
+1. Structure beats selection at small samples (caps, splits, targets, floors
+   proved on weeks; league/line stereotypes all need months - queued, not dead).
+2. One walk-forward calibration layer shared everywhere (the 33% -> 86.7% lift).
+3. Diversify the day into small cards: a bad leg kills a card, never the day.
+4. Close-at-target construction = fewest legs and max value per leg, no cap needed.
+5. Anti-mirage fitness (worst-half train + untouched tail) is what makes hot
+   iteration converge - it caught two +28-35% train mirages this session.
+6. Preferences beat gates: rank by streaks, never hard-ban.
+7. Recency decay = costless healing; daily cell recompute = improvement without re-work.
+8. Market structure (measured): no calibrated 88%+ above 1.2 odds; near-Unders
+   below break-even yet least-bad; 1.5x targets the out-of-sample value ceiling.
+9. Owner intuition -> measurement -> bake-or-ledger: both outcomes advance the engine.
+10. Metric honesty (strict vs any-green vs P&L/unit, labeled backfills) keeps the
+    timeline a trustworthy judge.
+
+Concluding path: v1.5 accumulates LIVE days from 2026-08-06 forward (the real
+verdict); monthly instruments re-audition the graduation queue (2.0x arm first,
+then the near-Under split and league layer) as the ledger fattens.
+
 ## Honest framing (per the 2026-08-06 charter: report plainly, never stop experimenting)
 
 - 86.7% green days with a best streak of 8 is the strongest day-level survival
