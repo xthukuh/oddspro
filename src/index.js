@@ -6,6 +6,7 @@ import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks, performanceSummary } from './hotpicks.js';
 import { drainAiReviews } from './ai-worker.js';
+import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
 import { exportRecords } from './export.js';
 import { backfillGeo } from './geo.js';
@@ -107,6 +108,19 @@ import { haltRequested, HALT_FILE } from './halt.js';
             + `${c.tips} tips, ${c.tips_skipped} skipped ineligible `
             + `(AI reviews pending: ${c.pending_reviews.hot} hot, ${c.pending_reviews.tips} tips - `
             + `run \`node src/index.js aireview\` or let the serve worker drain them).`);
+        return;
+    }
+
+    // Daily MultiBet: settle pending slips, then build/refresh the date's
+    // card (default today EAT). The builder self-freezes once any leg has
+    // kicked off, so re-runs are always safe.
+    if (action === 'dailyslip') {
+        const s = await settleDailySlips();
+        const r = await buildDailySlip(value ? _dtime(_date(value)).substring(0, 10) : null);
+        if (s.settled) console.debug(`[+] dailyslip: settled ${s.settled} pending slip(s).`);
+        if (r.frozen) console.debug(`[+] dailyslip ${r.date}: frozen (started/settled), left as published.`);
+        else if (r.noSlip) console.debug(`[+] dailyslip ${r.date}: NO SLIP (fewer than the minimum qualifying legs among ${r.fixtures} fixtures).`);
+        else console.debug(`[+] dailyslip ${r.date}: ${r.slip.mood.toUpperCase()} card, ${r.slip.legs} legs @ ${r.slip.combined_odds}x.`);
         return;
     }
 

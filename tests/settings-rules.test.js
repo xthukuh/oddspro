@@ -115,7 +115,7 @@ test('settingsPutSchema pins the PUT body envelope (C2)', () => {
 // ---- M6: catalog metadata, regime flags, patterns, audit builder ----------
 
 test('M6 catalog completeness: every entry has label, hint, known group/type', () => {
-    const GROUPS = new Set(['safe', 'refresh', 'pipeline', 'hotpick', 'tip', 'ai', 'ai-dark',
+    const GROUPS = new Set(['safe', 'refresh', 'pipeline', 'hotpick', 'tip', 'ai', 'ai-dark', 'ai-triage',
         'auth-policy', 'otp', 'sms', 'mail', 'geo', 'bot', 'logging', 'tracking', 'maintenance']);
     const TYPES = new Set(['string', 'int', 'number', 'boolean']);
     for (const e of SETTINGS_CATALOG) {
@@ -135,8 +135,12 @@ test('M6 regime flags: TIP_*/HOTPICK_*/SAFE_* + DARK switches, concurrency exemp
     for (const e of SETTINGS_CATALOG) {
         const wildcard = /^(TIP_|HOTPICK_|SAFE_)/.test(e.key) && e.key !== 'HOTPICK_AI_CONCURRENCY';
         const dark = e.group === 'ai-dark';
-        assert.equal(Boolean(e.regime), wildcard || dark,
-            `${e.key} regime flag should be ${wildcard || dark}`);
+        // TRIAGE_AUTO_SWITCH is the one ai-triage regime knob: enabling it
+        // lets the tick rewrite the live model routing (a generation change);
+        // the rest of the group only shapes the advisory shortlist.
+        const triageSwitch = e.key === 'TRIAGE_AUTO_SWITCH';
+        assert.equal(Boolean(e.regime), wildcard || dark || triageSwitch,
+            `${e.key} regime flag should be ${wildcard || dark || triageSwitch}`);
     }
     // Spot checks for the flags the plan names explicitly.
     assert.equal(catalogEntry('TIP_MIN_PRICE').regime, true);

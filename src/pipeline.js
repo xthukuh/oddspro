@@ -5,13 +5,14 @@ import { saveMatches, completedMatchIds } from './db/store.js';
 import { linkMatches } from './link.js';
 import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
+import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
 import { _date, _dtime, debugLog } from './utils.js';
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
 
-const STEPS = 12;
+const STEPS = 13;
 
 // Full ingestion pipeline (default `npm run start` action). Step order is
 // chosen to minimize server hits:
@@ -94,6 +95,12 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     _step('hot picks (rules; AI reviews run in the background worker)');
     const k = await updateHotPicks();
     console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI reviews pending: ${k.pending_reviews.hot} hot, ${k.pending_reviews.tips} tips - worker/aireview drains them).`);
+
+    _step('daily multibet slip (settle pending, build today\'s card)');
+    const dsSettle = await settleDailySlips();
+    const ds = await buildDailySlip();
+    console.debug(`[+] dailyslip: ${dsSettle.settled} settled; today ${ds.frozen ? 'frozen'
+        : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.legs} legs @ ${ds.slip.combined_odds}x`}.`);
 
     _step('AI enrichment (upcoming correlated fixtures; collection only)');
     const e = await enrichFixtures();

@@ -20,7 +20,7 @@
 // columns via a server-side DATE_FORMAT cast, so the NDJSON captures the
 // exact wall-clock string MySQL itself sees - portable across hosts/timezones
 // and safe to re-insert verbatim on import.
-import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync, renameSync } from 'node:fs';
+import { createWriteStream, mkdirSync, readdirSync, readFileSync, writeFileSync, existsSync, statSync, rmSync, renameSync, copyFileSync } from 'node:fs';
 import { createGzip, gunzipSync } from 'node:zlib';
 import { Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -34,7 +34,7 @@ import {
     exportStamp, stampToIso, chunkFileName, chunkSizeFor, isIntegerPkType,
     ndjsonLine, buildExportListing, parseManifest,
     buildUploadPlan, buildFkDeps, fkSafeOrder, nextCursor,
-    shouldSkipSafetyExport,
+    shouldSkipSafetyExport, applySkipTables,
 } from './db/transfer-rules.js';
 import { AuthError } from './auth.js';
 
@@ -468,7 +468,7 @@ export async function importStagingState(stamp) {
 // that chunk - so a kill mid-run leaves the DB and the progress ledger
 // mutually consistent, and nextCursor() picks up exactly where the DB
 // actually is.
-export async function runImportApply({ stamp, onStep = null, shouldCancel = null } = {}) {
+export async function runImportApply({ stamp, skipTables = [], safetyExport = true, onStep = null, shouldCancel = null } = {}) {
     const safeStamp = safeExportFilename(stamp);
     if (!safeStamp) throw new Error('db-transfer: invalid import stamp');
     const dir = path.join(IMPORT_ROOT, safeStamp);
@@ -478,7 +478,11 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
     if (!existsSync(manifestPath)) throw new Error('db-transfer: staged manifest.json is missing');
     const staged = parseManifest(readFileSync(manifestPath, 'utf8'));
     if (!staged.ok) throw new Error(`db-transfer: staged manifest is invalid - ${staged.error}`);
-    const manifest = staged.manifest;
+    // Import-side retention (DB-sync CLI/boot): tables the DESTINATION wants
+    // kept intact are dropped from the manifest before ordering/apply, so
+    // their chunks (if present) are never read and never enter the cursor.
+    const { manifest, skipped } = applySkipTables(staged.manifest, skipTables);
+    if (skipped.length) _step(onStep, shouldCancel, `retaining destination tables (skipped: ${skipped.join(', ')})`);
 
     // Completeness pre-flight, BEFORE the safety export. importStagingState
     // already computes ready_to_apply/missing_files and the admin UI gates on
@@ -523,7 +527,14 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
     const preImportManifestRaw = existsSync(preImportManifestPath)
         ? readFileSync(preImportManifestPath, 'utf8')
         : null;
-    if (shouldSkipSafetyExport(preImportManifestRaw)) {
+    if (!safetyExport) {
+        // DB-sync opt-out (SYNC_IMPORT_SAFETY=0 / --no-safety): on a quota'd
+        // shared host the full-warehouse pre-import dump costs GBs per apply.
+        // The upsert-only apply never deletes destination rows, so the loss
+        // window without it is "rows overwritten by the bundle", not "data
+        // destroyed" - still, default stays ON.
+        _step(onStep, shouldCancel, 'safety export: SKIPPED by configuration');
+    } else if (shouldSkipSafetyExport(preImportManifestRaw)) {
         _step(onStep, shouldCancel, 'safety export: reusing existing pre-import snapshot');
     } else {
         _step(onStep, shouldCancel, 'safety export: starting');
@@ -653,12 +664,97 @@ export async function runImportApply({ stamp, onStep = null, shouldCancel = null
 // Claim the shared job slot and run the apply without awaiting - same
 // start-and-poll idiom as startExport. Returns {started:false} when a
 // refresh/export/import already holds the slot (409 upstream, never queued).
-export function startImport({ stamp, onDone = null } = {}) {
+export function startImport({ stamp, skipTables = [], safetyExport = true, onDone = null } = {}) {
     const started = startJob({
         mode: 'db-import',
         dates: [],
-        run: (onStep, shouldCancel) => runImportApply({ stamp, onStep, shouldCancel }),
+        run: (onStep, shouldCancel) => runImportApply({ stamp, skipTables, safetyExport, onStep, shouldCancel }),
         onFinish: onDone,
     });
     return { started };
+}
+
+// ===========================================================================
+// DB-sync (deploy data sync): local-filesystem staging + boot auto-apply.
+// The HTTP three-phase upload above is the ADMIN-UI path; these two are the
+// CLI (scripts/db-sync-import.js) and no-SSH deploy path (a sync bundle
+// extracted into var/imports/<stamp>/ via cPanel File Manager, applied by
+// SYNC_IMPORT_ON_BOOT as a background job after listen).
+// ===========================================================================
+
+// Stage an export directory (manifest.json + chunk files, i.e. the layout
+// runExport writes) into var/imports/<its own stamp>/ by copying the planned
+// files. Same guards as the HTTP flow: manifest must parse, schema_head must
+// match the LOCAL migration head (early feedback - runImportApply re-checks
+// at apply time anyway), and every chunk the manifest plans must be present.
+// Idempotent per source stamp: re-staging overwrites the same target dir.
+export async function stageImportFromDir(srcDir) {
+    if (!existsSync(srcDir) || !statSync(srcDir).isDirectory()) {
+        throw new Error(`db-transfer: source "${srcDir}" is not a directory`);
+    }
+    const manifestPath = path.join(srcDir, 'manifest.json');
+    if (!existsSync(manifestPath)) throw new Error(`db-transfer: "${srcDir}" has no manifest.json - not an export bundle`);
+    const parsed = parseManifest(readFileSync(manifestPath, 'utf8'));
+    if (!parsed.ok) throw new Error(`db-transfer: bundle manifest is invalid - ${parsed.error}`);
+    const manifest = parsed.manifest;
+
+    const localHead = await schemaHead();
+    if (manifest.schema_head !== localHead) {
+        throw new Error(`db-transfer: bundle was exported at migration head "${manifest.schema_head}" but this database is at "${localHead}" - run migrations to the same head first (MIGRATE_ON_BOOT or npm run migrate)`);
+    }
+
+    const plan = buildUploadPlan(manifest);
+    const missing = plan.filter(p => !existsSync(path.join(srcDir, p.file))).map(p => p.file);
+    if (missing.length) {
+        throw new Error(`db-transfer: bundle is incomplete - ${missing.length} chunk file(s) missing, first: ${missing[0]}`);
+    }
+
+    // Reuse the source dir's basename when it IS a valid stamp (keeps the
+    // deploy bundle's identity across hosts); otherwise mint a fresh one.
+    const base = safeExportFilename(path.basename(srcDir));
+    const stamp = (base && stampToIso(base)) ? base : exportStamp(new Date());
+    const dir = path.join(IMPORT_ROOT, stamp);
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(manifest, null, 2));
+    for (const p of plan) {
+        copyFileSync(path.join(srcDir, p.file), path.join(dir, p.file));
+    }
+    return {
+        stamp,
+        tables: manifest.tables.length,
+        rows: manifest.tables.reduce((sum, t) => sum + t.rows, 0),
+        files: plan.length,
+    };
+}
+
+// Every staged import's state, newest first - the boot auto-apply scans this
+// for a bundle that is complete but not yet applied.
+export async function listStagedImports() {
+    if (!existsSync(IMPORT_ROOT)) return [];
+    const dirs = readdirSync(IMPORT_ROOT, { withFileTypes: true })
+        .filter(d => d.isDirectory())
+        .map(d => d.name)
+        .sort()
+        .reverse();
+    const out = [];
+    for (const stamp of dirs) {
+        try {
+            out.push(await importStagingState(stamp));
+        } catch { /* unreadable staging dir - not a candidate */ }
+    }
+    return out;
+}
+
+// SYNC_IMPORT_ON_BOOT: called by server.js AFTER listen (and after
+// MIGRATE_ON_BOOT brought the schema to the bundle's head). Picks the newest
+// staged bundle that is ready and unapplied and starts the background apply
+// on the shared single-slot job - NEVER blocks boot (Passenger start timeouts
+// + resumability both want the job path, not the boot path). Returns what it
+// did for the boot log.
+export async function maybeStartBootSyncImport({ skipTables = [], safetyExport = true } = {}) {
+    const staged = await listStagedImports();
+    const candidate = staged.find(s => s.ready_to_apply && !s.apply_complete);
+    if (!candidate) return { started: false, reason: 'no staged unapplied bundle' };
+    const { started } = startImport({ stamp: candidate.stamp, skipTables, safetyExport });
+    return { started, stamp: candidate.stamp, reason: started ? 'started' : 'job slot busy' };
 }

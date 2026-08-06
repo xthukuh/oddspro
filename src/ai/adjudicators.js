@@ -3,7 +3,7 @@ import { Verdict } from '../ai-parse.js';
 import { tipMarketLabel } from '../db/magic-rules.js';
 import { injectionPreamble, consensusFor } from '../db/ai-guard-rules.js';
 import { callStructured, ensembleTag } from './harness.js';
-import { aiEnabled } from './gemini.js';
+import { enabled as aiEnabled } from './openrouter.js';
 
 // The hot-pick/tip adjudicators, moved out of gemini.js (T9) so the provider
 // module stays transport-only and the import cycle harness -> index ->

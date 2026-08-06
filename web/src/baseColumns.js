@@ -12,5 +12,6 @@ export const BASE_COLUMNS = [
     { key: 'provider', label: 'Provider' },
     { key: 'score', label: 'Score' },
     { key: 'tip', label: 'Tip' },
+    { key: 'banker', label: 'Banker' },
     { key: 'status', label: 'Status' },
 ];

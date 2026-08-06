@@ -1,13 +1,14 @@
 import { config } from '../config.js';
 import { resolveTask } from '../db/ai-rules.js';
-import * as gemini from './gemini.js';
 import * as openrouter from './openrouter.js';
 
 // AI provider seam. ONE getProvider() swap point - directly mirrors
 // src/sms/index.js, which already solved this shape. Adding a provider means
 // implementing complete({ model, prompt, grounded }) -> { text, sources } and
-// nothing else changes.
-const PROVIDERS = { gemini, openrouter };
+// nothing else changes. (Gemini was retired permanently 2026-08-04; its
+// provider module is deleted - historic fixture_ai_insights rows keep the
+// 'gemini' provider string as provenance.)
+const PROVIDERS = { openrouter };
 
 // The adjudicators moved to src/ai/adjudicators.js (T9) and are no longer
 // re-exported here - re-exporting them would form the import cycle the split

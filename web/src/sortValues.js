@@ -67,6 +67,11 @@ const VALUES = {
     // the % the tip cell displays - a filter-only field (no hot bonus, no table
     // column) so users can screen by "win % ≥ 70".
     tip_confidence: r => (r.tip_confidence == null ? null : Math.round(Number(r.tip_confidence) * 100)),
+    // Banker sorts on the book's own devigged probability - the number the cell
+    // shows and the number the selection ranks by, so all three agree. Tipless
+    // rows sink; there is no hot bonus because the banker has no hot concept.
+    banker: r => (r.tip_banker_prob == null ? null : Number(r.tip_banker_prob)),
+    banker_price: r => (r.tip_banker_price == null ? null : Number(r.tip_banker_price)),
     status: r => _str(r.status),
     updated_at: r => _date(r.updated_at),
     locked_at: r => _date(r.locked_at),

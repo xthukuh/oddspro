@@ -120,6 +120,31 @@ export async function fetchMagicSort() {
     return _get('/api/magic-sort');
 }
 
+// Shareable user slips (engine-v2 Phase 4). Signed-in sessions only; the
+// server sanitizes legs and recomputes odds, and answers the saved slip WITH
+// its share code. Loading by code returns a slip WITHOUT owner identity.
+export async function saveUserSlip({ title, legs, source_code = null }) {
+    return _send('/api/slips', { title, legs, source_code }, 'POST');
+}
+export async function fetchMySlips() {
+    const { slips } = await _get('/api/slips');
+    return slips;
+}
+export async function fetchSlipByCode(code) {
+    const { slip } = await _get(`/api/slips/code/${encodeURIComponent(code)}`);
+    return slip;
+}
+export async function deleteUserSlip(id) {
+    return _send(`/api/slips/${encodeURIComponent(id)}`, {}, 'DELETE');
+}
+
+// Daily MultiBet timeline (engine-v2): { streaks: {current, best, greenRate,
+// played}, days: [...] }. Guests get teaser rows (counts/mood, no legs) with
+// auth_required: true - the modal renders the sign-in nudge off that flag.
+export async function fetchDailySlipTimeline(days = 60) {
+    return _get('/api/daily-slip/timeline', { days });
+}
+
 // Start refreshing a date's data. A 409 (refresh already running - manual or
 // scheduled) also resolves to the in-flight job state - callers just track
 // it. May resolve to { fresh: true, last_refreshed_at, ... } when the server
@@ -266,9 +291,40 @@ export async function getLabFeatures() {
     return _get('/api/admin/lab/features');
 }
 
+// --- Admin model triage (src/modeltriage/, 2026-08-04) ------------------------
+
+// { status: {enabled, auto_switch, interval_hours, probe_budget,
+//   openrouter_key, running, last_run_at}, routing: {task: modelId},
+//   shortlist: newest persisted shortlist payload | null }. Session only.
+export async function getAdminTriage() {
+    return _get('/api/admin/triage');
+}
+
+// Fire a triage pass now (bypasses the enabled/due gates) -> 202 {started};
+// a pass already running surfaces as a 409 ApiError.
+export async function runAdminTriage() {
+    return _send('/api/admin/triage/run', {}, 'POST');
+}
+
 // --- Admin user management (M8) ----------------------------------------------
 
 // All users + live-session counts: { users: [adminUserView...], total }.
+// Personal access tokens (engine-v2 Phase 2). Dual-auth server-side (admin
+// session or ADMIN_TOKEN bearer - the machine-bootstrap path). The mint
+// response carries the plaintext token EXACTLY ONCE; it is never listed again.
+export async function getAdminPats() {
+    const { tokens } = await _get('/api/admin/pats');
+    return tokens;
+}
+
+export async function createAdminPat({ user_id, name, expires_days = null }) {
+    return _send('/api/admin/pats', { user_id, name, expires_days }, 'POST');
+}
+
+export async function revokeAdminPat(id) {
+    return _send(`/api/admin/pats/${encodeURIComponent(id)}`, {}, 'DELETE');
+}
+
 // Admin SESSION only (like the audit trail - no machine-bearer path).
 export async function getAdminUsers(q) {
     return _get('/api/admin/users', { q });

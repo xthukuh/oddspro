@@ -10,6 +10,8 @@ import UsersSection from './UsersSection.jsx';
 import MessagingSection from './MessagingSection.jsx';
 import DatabaseSection from './DatabaseSection.jsx';
 import PerformanceSection from './PerformanceSection.jsx';
+import ModelsSection from './ModelsSection.jsx';
+import TokensSection from './TokensSection.jsx';
 
 // Admin panel (M5 shell): a full-page overlay in the AuthShell idiom (App
 // stays mounted underneath - table state/scroll survive), opened from
@@ -42,7 +44,9 @@ const SECTION_BODY = {
     users: <UsersSection />,
     messaging: <MessagingSection />,
     performance: <PerformanceSection />,
+    models: <ModelsSection />,
     database: <DatabaseSection />,
+    tokens: <TokensSection />,
     about: <AboutSection />,
 };
 

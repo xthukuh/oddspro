@@ -7,7 +7,13 @@
 //   3. (only with --export-db) oddspro-db_<ts>.sql.gz - a gzipped dump of the
 //      local Docker DB via db-export.js exportDb(), same <ts> as the zips so
 //      one release = one matching artifact set.
-// Usage: node scripts/package-deploy.js [--out-dir <dir>] [--export-db]
+//   4. (only with --sync-db) oddspro-sync_<ts>.zip - a portable NDJSON data
+//      bundle (db-sync-export.js machinery; prod-retentive: users/sessions/
+//      prefs/visits/settings/audit/SMS never included). Remote: extract into
+//      <app root>/var/imports/<bundle stamp>/, then apply via Admin ->
+//      Database or SYNC_IMPORT_ON_BOOT=1 + Restart (applies in the background
+//      after boot + migrate; chunk-resumable).
+// Usage: node scripts/package-deploy.js [--out-dir <dir>] [--export-db] [--sync-db]
 //
 // RELEASE RULE: releases are built from `main` only; version tags exist only
 // on `main` (every other branch is feature work). The script refuses to run
@@ -41,6 +47,7 @@ const args = process.argv.slice(2);
 const oi = args.indexOf('--out-dir');
 const outDir = path.resolve(REPO_ROOT, oi >= 0 && args[oi + 1] ? args[oi + 1] : 'release');
 const wantDbExport = args.includes('--export-db');
+const wantSyncDb = args.includes('--sync-db');
 
 // Sanity: run from the repo root.
 const pkgPath = path.join(REPO_ROOT, 'package.json');
@@ -94,6 +101,28 @@ if (wantDbExport) {
     }
 }
 
+// --- Sync data bundle (opt-in): portable NDJSON warehouse for deploy sync ----
+let syncZip = null;
+if (wantSyncDb) {
+    console.log('[package-deploy] exporting sync data bundle (--sync-db)...');
+    try {
+        const { runExport, EXPORT_ROOT } = await import('../src/db-transfer.js');
+        const { closeDb } = await import('../src/db/connection.js');
+        let result;
+        try {
+            result = await runExport({ onStep: s => process.stdout.write(`\r[package-deploy] sync: ${s}                    `) });
+            process.stdout.write('\n');
+        } finally {
+            await closeDb();
+        }
+        syncZip = path.join(outDir, `oddspro-sync_${stamp}.zip`);
+        zipDirContents(path.join(REPO_ROOT, EXPORT_ROOT, result.stamp), syncZip);
+        console.log(`[package-deploy] sync bundle stamp: ${result.stamp} (${result.tables} tables, ${result.rows} rows) - remote staging dir: var/imports/${result.stamp}/`);
+    } catch (e) {
+        die(`sync data export failed - no version tag was created: ${e.message}`);
+    }
+}
+
 // --- Version tag: LAST, only after every artifact succeeded (idempotent) -----
 const version = JSON.parse(readFileSync(pkgPath, 'utf8')).version;
 const webPkgPath = path.join(REPO_ROOT, 'web', 'package.json');
@@ -130,6 +159,7 @@ console.log(`[package-deploy] wrote:`);
 console.log(`  ${backendZip}  (${kb(backendZip)})  -> extract into the Node app Application Root (oddspro-app), then Run NPM Install + Restart`);
 console.log(`  ${frontendZip}  (${kb(frontendZip)})  -> extract into public_html`);
 if (dbDump) console.log(`  ${dbDump}  (${kb(dbDump)})  -> import via phpMyAdmin (gzip is imported natively)`);
+if (syncZip) console.log(`  ${syncZip}  (${kb(syncZip)})  -> extract into <app root>/var/imports/<bundle stamp>/ (see stamp above); apply via Admin -> Database or SYNC_IMPORT_ON_BOOT=1 + Restart`);
 console.log(`[package-deploy] upload via cPanel File Manager (Upload -> Extract). See docs/DEPLOYMENT.md.`);
 
 // Zip the CONTENTS of a directory (entries at the archive root), cross-platform.

@@ -225,7 +225,10 @@ test('bestTip stats corroboration moves confidence in both directions', () => {
     assert.equal(corroborated.market, '1');
     // stats say ~0.857 while the market says ~0.64 - blend must land between
     assert.ok(corroborated.confidence > marketOnlyOut.confidence);
-    assert.ok(corroborated.stats_prob > 0.8);
+    // Beta-shrink (DEFAULT_TIP.statsShrinkK) pulls a 7-game 0.857 toward 0.5,
+    // so assert the RELATION the test is about, not a pre-shrink constant.
+    assert.ok(corroborated.stats_prob > 0.7);
+    assert.equal(bestTip({ ...inputs, home: strongHome, away: weakAway }, { statsShrinkK: 0 }).stats_prob, 0.857);
     // Contradicting stats (weak home) drag confidence below market-only
     const contradicted = bestTip({ ...inputs, home: weakAway, away: strongHome });
     if (contradicted?.market === '1') {
@@ -254,7 +257,13 @@ test('bestTip O/U uses over-rate support and its complement for unders', () => {
         home: overish, away: overish, h2h: noH2h, apiPercents: null,
     });
     assert.equal(out.market, 'O 2.5');
-    assert.equal(out.stats_prob, 0.714);
+    // raw mean is 0.714; shrunk toward 0.5 by a 7-game sample with k=5
+    assert.equal(bestTip({
+        x12: null, dc: null,
+        ou: { 2.5: { over: 1.6, under: 2.3 } },
+        home: overish, away: overish, h2h: noH2h, apiPercents: null,
+    }, { statsShrinkK: 0 }).stats_prob, 0.714);
+    assert.ok(out.stats_prob > 0.5 && out.stats_prob < 0.714);
     const underish = { ...overish, overRates: { ...overish.overRates, 2.5: 0.143 } };
     // U 2.5 sits below the default minUnderLine floor - override to exercise
     // the complement math the floor otherwise suppresses
@@ -264,7 +273,21 @@ test('bestTip O/U uses over-rate support and its complement for unders', () => {
         home: underish, away: underish, h2h: noH2h, apiPercents: null,
     }, { minUnderLine: 2.5 });
     assert.equal(under.market, 'U 2.5');
-    assert.equal(under.stats_prob, Math.round((1 - 0.143) * 10000) / 10000);
+    // The Under support is the COMPLEMENT of the (shrunk) over rate, so the
+    // identity to assert is over + under === 1 - not a pre-shrink constant.
+    const over2 = bestTip({
+        x12: null, dc: null,
+        ou: { 2.5: { over: 1.6, under: 2.3 } },
+        home: underish, away: underish, h2h: noH2h, apiPercents: null,
+    }, { minConfidence: 0 });
+    assert.ok(Math.abs(under.stats_prob + over2.stats_prob - 1) < 1e-4);
+    // and without shrink it is exactly the old number
+    const rawUnder = bestTip({
+        x12: null, dc: null,
+        ou: { 2.5: { over: 2.6, under: 1.5 } },
+        home: underish, away: underish, h2h: noH2h, apiPercents: null,
+    }, { minUnderLine: 2.5, statsShrinkK: 0 });
+    assert.equal(rawUnder.stats_prob, Math.round((1 - 0.143) * 10000) / 10000);
 });
 
 test('bestTip blends API percentages into result markets only', () => {
@@ -439,8 +462,11 @@ test('bestTip suppresses Under tips below the minUnderLine floor', () => {
     const strongUnder35 = { 3.5: { over: 3.4, under: 1.3 } };
     // Only a near-Under would qualify -> no tip at all under the default floor
     assert.equal(bestTip({ ...marketOnly, x12: null, dc: null, ou: strongUnder35 }), null);
-    // Overriding the floor restores the candidate
-    const lenient = bestTip({ ...marketOnly, x12: null, dc: null, ou: strongUnder35 }, { minUnderLine: 3.5 });
+    // Overriding the floor restores the candidate. suppressedMarkets is cleared
+    // too: U 3.5 is ALSO barred by the 2026-07-26 market suppression list, and
+    // this test is about the minUnderLine mechanism specifically.
+    const lenient = bestTip({ ...marketOnly, x12: null, dc: null, ou: strongUnder35 },
+        { minUnderLine: 3.5 });
     assert.equal(lenient.market, 'U 3.5');
     // U 4.5 and above still allowed by default; Overs never affected
     const tail = bestTip({ ...marketOnly, x12: null, dc: null, ou: { 4.5: { over: 4.2, under: 1.25 } } });
@@ -459,6 +485,74 @@ test('bestTip yields to the runner-up market when the near-Under is suppressed',
     };
     assert.equal(bestTip(inputs, { minUnderLine: 3.5 }).market, 'U 3.5');
     assert.equal(bestTip(inputs).market, '12');
+    // The suppression gate is shipped EMPTY (see DEFAULT_TIP.suppressedMarkets),
+    // but when configured it yields as deep as needed - here past both U 3.5
+    // and 12 to 1X.
+    assert.equal(bestTip(inputs, { suppressedMarkets: ['12', 'U 3.5'] }).market, '1X');
+});
+
+// --- suppressed markets (2026-07-26 study) ---
+// 12 and U 3.5 are the only markets whose flat-stake ROI has a day-clustered
+// 95% CI entirely below zero (-8.8% and -8.7% over 220/164 settled tips).
+
+test('a suppressed market never surfaces as tip OR runner-up', () => {
+    const inputs = {
+        ...marketOnly,
+        x12: { 1: 2.4, X: 3.4, 2: 2.9 },
+        dc: { '1X': 1.35, X2: 1.5, 12: 1.28 },
+        ou: { 3.5: { over: 3.8, under: 1.24 }, 4.5: { over: 6.0, under: 1.14 } },
+    };
+    const tip = bestTip(inputs, { suppressedMarkets: ['12', 'U 3.5'] });
+    assert.ok(!['12', 'U 3.5'].includes(tip.market));
+    for (const ru of tip.runners_up) assert.ok(!['12', 'U 3.5'].includes(ru.market));
+});
+
+test('the suppression gate ships DISABLED and is opt-in', () => {
+    // Guards the 2026-07-26 decision: the mechanism exists, the evidence for
+    // using it does not replicate, so the default must stay empty.
+    assert.deepEqual(DEFAULT_TIP.suppressedMarkets, []);
+    assert.equal(DEFAULT_TIP.statsVetoGap, null);
+    const inputs = { ...marketOnly, x12: null, dc: { '1X': 3.0, X2: 3.0, 12: 1.28 }, ou: {} };
+    assert.equal(bestTip(inputs).market, '12');
+    assert.equal(bestTip(inputs, { suppressedMarkets: ['12'] }), null);
+});
+
+// --- stats veto ---
+
+test('bestTip flags (but does not drop) a tip whose stats sit below the market', () => {
+    // 1X2 only, so the winner is forced to be '1' (market ~0.742). Both sides
+    // are poor, giving statsProb['1'] = mean(home.winRate .1, away.lossRate .8)
+    // = 0.45 - a gap of about -0.29, comfortably past the threshold.
+    const weak = { n: 6, winRate: 0.1, drawRate: 0.1, lossRate: 0.8, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
+    const input = {
+        x12: { 1: 1.25, X: 6.0, 2: 9.0 }, dc: null,
+        ou: {}, home: weak, away: weak, h2h: { n: 0 }, apiPercents: null,
+    };
+    const tip = bestTip(input, { minConfidence: 0, statsVetoGap: -0.08 });
+    assert.equal(tip.market, '1');
+    assert.equal(tip.veto, 'stats_below_market');
+    assert.ok(tip.stats_gap < -0.08);
+    // Reporting, not enforcing: the tip is still returned in full so the caller
+    // decides (hotpicks drops it and records the reason), and the breakdown
+    // stays inspectable instead of collapsing to a bare null.
+    assert.ok(tip.price);
+    assert.ok(tip.runners_up);
+    // Disabling the rule removes only the flag
+    const off = bestTip(input, { minConfidence: 0, statsVetoGap: null });
+    assert.equal(off.veto, undefined);
+    assert.equal(off.market, tip.market);
+    assert.equal(off.stats_gap, tip.stats_gap);
+    // A comfortably-agreeing tip is never flagged
+    const strong = { ...weak, winRate: 0.8, lossRate: 0.1 };
+    const ok = bestTip({ ...input, home: strong, away: weak }, { minConfidence: 0, statsVetoGap: -0.08 });
+    assert.equal(ok.veto, undefined);
+});
+
+test('stats_gap is null when the tip carries no stats component', () => {
+    const tip = bestTip({ ...marketOnly, x12: { 1: 1.25, X: 6.0, 2: 9.0 }, dc: null, ou: {} },
+        { statsVetoGap: -0.08 });
+    assert.equal(tip.stats_gap, null);
+    assert.equal(tip.veto, undefined);
 });
 
 // --- bestTip new-family candidates (M3) ---
@@ -467,7 +561,7 @@ test('bestTip considers BTTS and can pick GG', () => {
     const agg = { n: 6, winRate: 0.5, drawRate: 0.2, lossRate: 0.3, overRates: O(0.8), bttsRate: 0.9, oddRate: 0.5, scoredOverRates: O(0.8), concededOverRates: O(0.7) };
     const tip = bestTip({ btts: { GG: 1.55, NG: 2.3 }, home: agg, away: agg, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0.5 });
     assert.equal(tip.market, 'GG');
-    assert.ok(tip.stats_prob > 0.8);
+    assert.ok(tip.stats_prob > 0.7);   // 0.9 raw, shrunk by a 6-game sample
 });
 
 test('bestTip DNB stats renormalize over non-draw outcomes', () => {
@@ -477,7 +571,8 @@ test('bestTip DNB stats renormalize over non-draw outcomes', () => {
     const away = { n: 6, winRate: 0.2, drawRate: 0.2, lossRate: 0.6, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.5), concededOverRates: O(0.5) };
     const tip = bestTip({ dnb: { DNB1: 1.5, DNB2: 2.6 }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
     const dnb1 = [tip, ...(tip.runners_up ?? [])].find(c => c.market === 'DNB1');
-    assert.equal(dnb1.stats_prob, 0.75);
+    // DNB renormalizes AFTER the shrink, so the ratio is what is asserted
+    assert.ok(dnb1.stats_prob > 0.5 && dnb1.stats_prob < 0.75);
 });
 
 test('bestTip TT:H uses scored-vs-conceded blend', () => {
@@ -485,14 +580,18 @@ test('bestTip TT:H uses scored-vs-conceded blend', () => {
     const away = { n: 6, winRate: 0.3, drawRate: 0.2, lossRate: 0.5, overRates: O(0.5), bttsRate: 0.5, oddRate: 0.5, scoredOverRates: O(0.3), concededOverRates: O(0.8) };
     const tip = bestTip({ tt: { H: { 1.5: { over: 1.7, under: 2.0 } } }, home, away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 });
     assert.equal(tip.market, 'TT:H:O 1.5');
-    // stats = mean(home.scoredOverRates[1.5]=.9, away.concededOverRates[1.5]=.8)
-    assert.equal(tip.stats_prob, 0.85);
+    // raw stats = mean(home.scoredOverRates[1.5]=.9, away.concededOverRates[1.5]=.8) = .85
+    assert.equal(bestTip({ tt: { H: { 1.5: { over: 1.7, under: 2.0 } } }, home, away, h2h: { n: 0 }, apiPercents: null },
+        { minConfidence: 0, statsShrinkK: 0 }).stats_prob, 0.85);
+    assert.ok(tip.stats_prob > 0.5 && tip.stats_prob < 0.85);
 });
 
 test('legacy byte-compat: canonical-only input reproduces the pre-M3 tip exactly', () => {
     // Same input as "bestTip lists up to two runners-up..." above - exercises
     // x12 + dc together with a market-only blend, giving a rich return with
     // runners_up populated. Captured from the pre-M3 bestTip (before Task 5).
+    // The only shape change since is the additive `stats_gap` key (2026-07-26),
+    // asserted explicitly below so any further drift still fails loudly.
     const out = bestTip({
         ...marketOnly,
         x12: { 1: 1.25, X: 6.0, 2: 9.0 },
@@ -508,6 +607,7 @@ test('legacy byte-compat: canonical-only input reproduces the pre-M3 tip exactly
         api_prob: null,
         weights: { market: 1, stats: null, api: null },
         samples: { home_n: 0, away_n: 0, h2h_n: 0 },
+        stats_gap: null,
         runners_up: [
             {
                 market: '12',
@@ -627,4 +727,45 @@ test('bestTip stamps book_overround from the family overrounds input (Task 5 gap
     }, { minConfidence: 0.5 });
     assert.equal(tip.market, 'GG');
     assert.equal(tip.book_overround, 1.07);
+});
+
+// --- stats beta-shrink (2026-07-26) -----------------------------------------
+// Every other rate in the codebase is shrunk. This one was not, so a 5-game
+// window could assert stats_prob = 1.000 outright and three such tips lost.
+
+test('a perfect short record never asserts certainty', () => {
+    const perfect = { n: 6, winRate: 1, drawRate: 0, lossRate: 0, overRates: O(1),
+        bttsRate: 1, oddRate: 0.5, scoredOverRates: O(1), concededOverRates: O(0) };
+    const hopeless = { n: 6, winRate: 0, drawRate: 0, lossRate: 1, overRates: O(1),
+        bttsRate: 1, oddRate: 0.5, scoredOverRates: O(0), concededOverRates: O(1) };
+    const inputs = { x12: { 1: 1.5, X: 4, 2: 6 }, dc: null, ou: {},
+        home: perfect, away: hopeless, h2h: { n: 0 }, apiPercents: null };
+    const raw = bestTip(inputs, { minConfidence: 0, statsShrinkK: 0 });
+    const shrunk = bestTip(inputs, { minConfidence: 0 });
+    assert.equal(raw.stats_prob, 1);          // what shipped before
+    assert.ok(shrunk.stats_prob < 1);         // and must never happen again
+    assert.ok(shrunk.stats_prob > 0.75);      // ...without gutting real evidence
+    assert.equal(shrunk.market, raw.market);  // the PICK is unchanged
+});
+
+test('shrinkage scales with sample size, not just rate', () => {
+    const mk = n => ({ n, winRate: 1, drawRate: 0, lossRate: 0, overRates: O(1),
+        bttsRate: 1, oddRate: 0.5, scoredOverRates: O(1), concededOverRates: O(0) });
+    const away = { n: 30, winRate: 0, drawRate: 0, lossRate: 1, overRates: O(1),
+        bttsRate: 1, oddRate: 0.5, scoredOverRates: O(0), concededOverRates: O(1) };
+    const at = n => bestTip({ x12: { 1: 1.5, X: 4, 2: 6 }, dc: null, ou: {},
+        home: mk(n), away, h2h: { n: 0 }, apiPercents: null }, { minConfidence: 0 }).stats_prob;
+    // a deeper sample is pulled less far toward 0.5
+    assert.ok(at(30) > at(12));
+    assert.ok(at(12) > at(6));
+});
+
+test('statsShrinkK is configurable and 0 restores the old behaviour', () => {
+    assert.equal(DEFAULT_TIP.statsShrinkK, 5);
+    const agg = { n: 6, winRate: 1, drawRate: 0, lossRate: 0, overRates: O(1),
+        bttsRate: 1, oddRate: 0.5, scoredOverRates: O(1), concededOverRates: O(0) };
+    const away = { ...agg, winRate: 0, lossRate: 1, scoredOverRates: O(0), concededOverRates: O(1) };
+    const inputs = { x12: { 1: 1.5, X: 4, 2: 6 }, dc: null, ou: {}, home: agg, away, h2h: { n: 0 }, apiPercents: null };
+    assert.ok(bestTip(inputs, { minConfidence: 0, statsShrinkK: 20 }).stats_prob
+        < bestTip(inputs, { minConfidence: 0, statsShrinkK: 5 }).stats_prob);
 });

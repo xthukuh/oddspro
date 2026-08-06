@@ -68,3 +68,5 @@ var/
 **.xx*
 .playwright-mcp/
 .HALT
+.env.bak*
+env.replacement.txt

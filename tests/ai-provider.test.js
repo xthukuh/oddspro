@@ -8,7 +8,7 @@ import { resolveTask } from '../src/db/ai-rules.js';
 import { isRetryableNetworkError } from '../src/db/net-rules.js';
 
 test('getProvider returns a provider exposing complete()', () => {
-    for (const name of ['gemini', 'openrouter']) {
+    for (const name of ['openrouter']) {
         assert.equal(typeof getProvider(name).complete, 'function');
     }
 });
@@ -22,7 +22,7 @@ test('getProvider returns a provider exposing complete()', () => {
 // .env and must stay untested here (offline, deterministic regardless of
 // GEMINI_API_KEY/OPENROUTER_API_KEY actually being set).
 test('getProvider exposes enabled() on every provider (seam interface parity)', () => {
-    for (const name of ['gemini', 'openrouter']) {
+    for (const name of ['openrouter']) {
         assert.equal(typeof getProvider(name).enabled, 'function');
     }
 });

@@ -226,3 +226,14 @@ The committed `.env.example` is now the authoritative template: it lists only th
 5. Verify with Admin → Database → Overview (row counts + per-table sizes) and Health.
 
 **Schema mismatch:** transfer moves ROWS, not schema. Migrate the destination to the same batch first (§5) — otherwise the apply fails on unknown columns.
+
+### 10.1 Deploy data sync (CLI + no-SSH auto-apply)
+
+The same machinery, packaged for the deploy flow — for shipping locally-corrected/backfilled warehouse data alongside a code release:
+
+1. **Build the bundle locally:** `npm run package:deploy -- --sync-db` adds `release/oddspro-sync_<ts>.zip` (the printed *bundle stamp* names its staging dir), or standalone `node scripts/db-sync-export.js --zip <out.zip>`. Prod-specific tables (users/sessions/prefs/visits/settings/audit/SMS) are **excluded by construction** — a sync bundle can never overwrite production accounts or configuration.
+2. **Upload + extract** the zip into `<app root>/var/imports/<bundle stamp>/` via File Manager (so `manifest.json` and the chunk files sit directly in that directory).
+3. **Apply**, either from **Admin → Database** (typed-confirm, progress, resumable), or hands-free with **`SYNC_IMPORT_ON_BOOT=1`** in the host `.env` + Restart: after boot + `MIGRATE_ON_BOOT` + listen, the newest complete unapplied bundle is applied as a **background job** on the shared single-slot (boot never blocks; a mid-apply restart resumes at the next chunk). Companion knobs: `SYNC_IMPORT_SAFETY=0` skips the full-warehouse pre-import safety dump (see the §10 cost caveat — recommended on quota'd hosts once the flow is trusted), `SYNC_IMPORT_SKIP=t1,t2` retains extra destination tables untouched.
+4. The apply is **upsert-only** — it inserts/updates bundle rows and never deletes destination rows.
+
+Local restore of any bundle: `node scripts/db-sync-import.js <dir|zip> [--skip t1,t2] [--no-safety] --yes` (dry-run without `--yes`; run with the serve process stopped).

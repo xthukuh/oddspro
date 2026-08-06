@@ -7,6 +7,8 @@ import { saveMatches, oddsExcludeIds } from './db/store.js';
 import { db } from './db/connection.js';
 import { linkMatches } from './link.js';
 import { settleHotPicks } from './hotpicks.js';
+import { settleDailySlips } from './daily-slip.js';
+import { settleUserSlips } from './user-slips.js';
 import { purgeExpiredAuth } from './auth.js';
 import { pruneTrackEvents } from './track.js';
 import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
@@ -190,6 +192,19 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     const s = await settleHotPicks();
     summary.picks_settled = s.settled;
     summary.tips_settled = s.tips_settled;
+
+    // Daily MultiBet slips settle on the same cadence (pure SQL + rollup, no
+    // fetches); best-effort like the auth purge - never fails the refresh.
+    try {
+        summary.daily_slips_settled = (await settleDailySlips()).settled;
+    } catch (e) {
+        console.error('[light] daily-slip settle failed:', e?.message ?? e);
+    }
+    try {
+        summary.user_slips_settled = (await settleUserSlips()).settled;
+    } catch (e) {
+        console.error('[light] user-slip settle failed:', e?.message ?? e);
+    }
 
     // Auth housekeeping (E3): drop long-expired sessions/OTP rows. Best-effort -
     // a purge hiccup must never fail the data refresh.

@@ -325,12 +325,12 @@ export { effectiveAiConfig } from './settings.js';
 // caller already resolved (getProvider(name).enabled()), rather than this
 // function reaching into config/.env itself - a test can simulate "key
 // missing" without touching this machine's real .env at all.
-export function assertAiProvidersConfigured({ geminiEnabled, openrouterEnabled }) {
-    if (!geminiEnabled) {
-        throw new Error('AI_ENRICH_ENABLED is on but GEMINI_API_KEY is unset - the facts/anchored calls need it.');
-    }
+// (2026-08-04 Gemini retirement: OpenRouter is the ONLY provider now, so the
+// preflight collapsed to one key - the signature keeps the object form so a
+// future second provider slots back in without touching call sites.)
+export function assertAiProvidersConfigured({ openrouterEnabled }) {
     if (!openrouterEnabled) {
-        throw new Error('AI_ENRICH_ENABLED is on but OPENROUTER_API_KEY is unset - the blind reasoner needs it.');
+        throw new Error('AI_ENRICH_ENABLED is on but OPENROUTER_API_KEY is unset - every AI task needs it.');
     }
 }
 
@@ -359,7 +359,6 @@ export async function enrichFixtures() {
     // misconfiguration that must be caught HERE, before a single call is
     // billed - see assertAiProvidersConfigured's own comment.
     assertAiProvidersConfigured({
-        geminiEnabled: getProvider('gemini').enabled(),
         openrouterEnabled: getProvider('openrouter').enabled(),
     });
 

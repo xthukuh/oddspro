@@ -264,7 +264,7 @@ let timer = null;
 export function startAiWorker() {
     if (timer) return;
     if (!aiEnabled()) {
-        console.debug('[ai-worker] disabled - no GEMINI_API_KEY (rules-only verdicts).');
+        console.debug('[ai-worker] disabled - no OPENROUTER_API_KEY (rules-only verdicts).');
         return;
     }
     timer = setInterval(() => {

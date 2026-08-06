@@ -44,6 +44,13 @@ const BASE_FIELDS = {
     // "Tip" column sorts/filters by its blended confidence (0..1); `like`
     // conditions match the tip market TEXT instead (what the cell displays)
     tip: { sql: 'fp.tip_confidence', like_sql: 'fp.tip_market', type: 'number' },
+    // "Banker" column: the safest market the book offered on the fixture
+    // (src/db/ladder-rules.js). Sorts/filters by the DEVIGGED win probability -
+    // the number the cell shows - and `like` matches the market TEXT, exactly
+    // mirroring the tip pair above. A short price is a HIGH probability, so
+    // sorting desc puts the safest bets on top, same direction as tip.
+    banker: { sql: 'fp.tip_banker_prob', like_sql: 'fp.tip_banker_market', type: 'number' },
+    banker_price: { sql: 'fp.tip_banker_price', type: 'number' },
     // Odds refresh time / betting-closed time ("Locked At" = completed_at)
     updated_at: { sql: 'm.updated_at', type: 'datetime' },
     locked_at: { sql: 'm.completed_at', type: 'datetime' },
@@ -313,6 +320,8 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
             'fp.tip_breakdown', 'fp.tip_skip_reason', 'fp.tip_ai_verdict', 'fp.tip_ai_reason',
             'fp.tip_ai_review',
+            'fp.tip_banker_market', 'fp.tip_banker_price', 'fp.tip_banker_prob',
+            'fp.tip_banker_outcome',
         );
 
     const hydrated = await _hydrate(rows, markets === 'all' ? null : _pivotAllowed);
@@ -499,6 +508,10 @@ async function _hydrate(rows, allowed = null) {
             tip_ai_verdict: r.tip_ai_verdict ?? null,
             tip_ai_reason: r.tip_ai_reason ?? null,
             tip_ai_review: _json(r.tip_ai_review),
+            tip_banker_market: r.tip_banker_market ?? null,
+            tip_banker_price: r.tip_banker_price == null ? null : Number(r.tip_banker_price),
+            tip_banker_prob: r.tip_banker_prob == null ? null : Number(r.tip_banker_prob),
+            tip_banker_outcome: r.tip_banker_outcome ?? null,
             markets,
             markets_stale,
             stats,

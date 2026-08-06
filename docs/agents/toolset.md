@@ -20,9 +20,10 @@
   (proxies `/api` → :3001); vite silently binds **:5174** when :5173 is orphan-held — always
   read the printed URL (§3.3).
 - API-Football plan ~150k req/day — quota is not a practical constraint (the guard stays).
-  Gemini HTTP 429 `RESOURCE_EXHAUSTED` = OUT OF CREDITS, not rate limiting — stop and
-  escalate to the user for a top-up; never work around it (adjudicate/facts/anchored tasks
-  are Gemini-hardcoded).
+  OpenRouter (sole AI provider since the 2026-08-04 Gemini retirement) HTTP 429 on a
+  `:free` slug = daily free quota exhausted (50 req/day free; 1,000/day after the one-time
+  $10 top-up) - stop and escalate to the user for a top-up; never swap models to work
+  around it (a model switch re-keys the reuse tags = a policy-regime fork).
 - Live site `oddspro.ke`: shared cPanel, NO SSH; deploys are manual zip uploads
   (`docs/DEPLOYMENT.md`). Merged-to-main ≠ live.
 
@@ -97,6 +98,23 @@
 - Migrations: `npm run migrate` (forward-only). Remote host without SSH: `MIGRATE_ON_BOOT=1`
   self-migrates on restart (fail-fast).
 - `backups/` and `release/` are gitignored — dumps must never land in git.
+- **DB-sync (verified 2026-08-04, full round trip):** `node scripts/db-sync-export.js
+  [--zip out.zip] [--exclude t1,t2]` → NDJSON bundle in `var/exports/<stamp>/`
+  (prod tables excluded by construction); `node scripts/db-sync-import.js <dir|zip>
+  [--skip t1,t2] [--no-safety] --yes` (dry-run without `--yes`; upsert-only; resumable).
+  PREREQ: serve process STOPPED for a CLI apply (separate writers gap-lock). Remote no-SSH:
+  extract into `var/imports/<stamp>/` + `SYNC_IMPORT_ON_BOOT=1` (background apply after
+  boot+migrate).
+- **Cross-DB inspection one-liner (verified 2026-08-04):** ad-hoc knex against ANY local DB
+  without touching src config —
+  `node -e "import('knex').then(async ({default:knex})=>{const cfg=(await import('dotenv')).config().parsed; const k=knex({client:'mysql2',connection:{host:cfg.DB_HOST,port:+cfg.DB_PORT,user:cfg.DB_USERNAME,password:cfg.DB_PASSWORD,database:'<dbname>'},pool:{afterCreate:(c,d)=>c.query(\"SET time_zone='+03:00'\",e=>d(e,c))}}); /* queries */ await k.destroy();})"`
+  — ALWAYS pin the +03:00 session and select DATETIMEs via `DATE_FORMAT` when values cross
+  DBs (driver Date decoding reinterprets EAT wall-clock).
+- **Merging two SAME-SCHEMA DBs whose rows were created independently: NEVER by
+  auto-increment PK** — id spaces are unrelated; a PK upsert rewrites unrelated rows.
+  Natural keys only (`matches` = `(provider, provider_match_id)` with odds `match_id`
+  remap; `fixtures`/`fixture_prematch`/`fixture_predictions` = API-native PKs, safe).
+  Proven by the 2026-08-04 stage-window salvage (22,843 odds rows, 0 orphans).
 
 ### 3.6 Release packaging (rule since 2026-07-18)
 - `npm run package:deploy [-- --export-db] [-- --out-dir <dir>]` — **MAIN-ONLY** (refuses on
@@ -155,6 +173,26 @@ the shown bet). Sources: `docs/research/`.
 - 2026-07-16 — **Unindexed catalog scan:** `/api/columns` full-scanned the 2.4M-row
   `odds_markets` (> 180 s; the settings modal "wouldn't open"); fix = covering index
   (migration batch 13). Caching cannot save an unindexed query.
+- 2026-08-04 — **Split-brain `.env` DB target:** a session left `DB_DATABASE=oddspro-stage`
+  (sandbox) and every subsequent run — including the user's own and the daily scheduled
+  task — silently wrote there while the real warehouse stalled. Bookmaker odds are NOT
+  retroactively refetchable, so the gap is permanent data loss unless salvaged. RULES:
+  (a) any sandbox experiment that flips `.env` must flip it BACK in the same session;
+  (b) prefer an explicit env override (`DB_NAME=... node script`) over editing `.env`;
+  (c) when analysis numbers look absurdly thin, `SELECT DATABASE(), COUNT(*)` FIRST.
+- 2026-08-04 — **Scratchpad scripts can't resolve repo packages:** a node script outside
+  the repo tree fails `ERR_MODULE_NOT_FOUND` on `knex` (ESM ignores NODE_PATH). Copy it
+  into the repo root as `*.tmp.mjs`, run, delete.
+- 2026-08-04 — **OpenRouter live smoke (verified):** free blind + grounded call in one
+  shot — `node -e "import('./src/ai/index.js').then(async({callModel})=>{...})"` asking
+  the grounded task a current-events question; success = text + non-empty `sources`.
+  Free-endpoint quirks seen live: transient empty replies ("no message content") and
+  429s — both fail-open by design, the breaker guards drains.
+- 2026-08-04 — **Env hygiene pair (verified):** `node scripts/env-audit.js` (read-only
+  SECRET/DIFFERS/REDUNDANT/UNKNOWN report vs code defaults; run BEFORE any .env trim) and
+  `node scripts/gen-secret.js [hex|b64|pin|uuid]` (node:crypto, no deps) for PIN_PEPPER/
+  token generation. First audit found 12 redundant lines and 34 load-bearing overrides in
+  the 55-key dev .env; trimming by audit output avoids the dropped-override trap.
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
 
@@ -182,3 +220,8 @@ the shown bet). Sources: `docs/research/`.
 - 2026-07-18 — §6 append: `docs/engine/` + root `QUICK-REFERENCE.md` joined the topology;
   dev-pipeline timestamp-prefix convention (plan:
   `docs/dev/plans/2026-07-18-0324-quickref-engine-docs.md`).
+- 2026-08-04 — §3.5 append (DB-sync commands, cross-DB knex one-liner, natural-key merge
+  rule) + §5 entries (split-brain .env, scratchpad module resolution, OpenRouter smoke).
+  STANDING PRACTICE (user directive 2026-08-04): every command proven working in a session
+  — including its nuances, prerequisites and the WHY — gets a dated entry here rather than
+  being re-discovered later. This library is the proven-commands knowledge base.

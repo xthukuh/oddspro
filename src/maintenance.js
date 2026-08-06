@@ -23,7 +23,8 @@ export function maintenanceNow(nowMs = Date.now()) {
 // hot path in server.js and on two scheduler ticks.
 //
 // QUIESCE POLICY (decided 2026-07-21): an active window pauses the BILLED and
-// outbound-facing background work - the AI review worker and the geo backfill -
+// outbound-facing background work - the AI review worker, the geo backfill and
+// the model-triage tick (src/modeltriage/, probes bill real calls) -
 // but deliberately NOT the auto-refresh light pass. Rationale: a declared
 // downtime should not quietly bill Gemini or call a third-party geo API while
 // visitors are being told the site is unavailable, but the warehouse should

@@ -9,6 +9,7 @@ import {
     buildSlips, tipAgreement, safeQualifies, safeSelection, DEFAULT_SAFE,
     safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats, tipMarketLabel,
     sureBetsSelection, DEFAULT_SURE_BETS,
+    bankerView, bankerSelection, DEFAULT_BANKERS, BANKER_TIERS, hotTip, DEFAULT_HOT_TIP,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -851,4 +852,119 @@ test('buildSlips: pool exhausted before target leaves a final under-target slip'
 test('buildSlips: empty / non-array pool yields no slips', () => {
     assert.deepEqual(buildSlips([], { maxLegs: 4 }), []);
     assert.deepEqual(buildSlips(null, { maxLegs: 4 }), []);
+});
+
+// --- Banker (2026-07-26) ----------------------------------------------------
+
+test('bankerView normalizes the banker columns and tolerates absence', () => {
+    assert.equal(bankerView(null), null);
+    assert.equal(bankerView({}), null);
+    assert.equal(bankerView({ tip_market: 'O 2.5' }), null);   // tip without banker
+    assert.deepEqual(
+        bankerView({ tip_banker_market: 'O 0.5', tip_banker_price: '1.04', tip_banker_prob: '0.8964', tip_banker_outcome: 'hit' }),
+        { market: 'O 0.5', price: 1.04, prob: 0.8964, outcome: 'hit' },
+    );
+    // a banker with NO tip is legitimate (the stats veto drops the tip only)
+    assert.equal(bankerView({ tip_banker_market: 'U 5.5', tip_banker_price: 1.02 }).market, 'U 5.5');
+});
+
+test('bankerSelection ranks a day safest-first and caps it', () => {
+    const row = (api_id, day, market, price, prob) => ({
+        api_id, day, tip_banker_market: market, tip_banker_price: price, tip_banker_prob: prob,
+    });
+    const rows = [
+        row(1, '2026-07-10', 'O 1.5', 1.25, 0.79),
+        row(2, '2026-07-10', 'O 0.5', 1.04, 0.94),
+        row(3, '2026-07-10', 'U 5.5', 1.10, 0.88),
+        row(4, '2026-07-11', 'U 4.5', 1.20, 0.82),
+    ];
+    const out = bankerSelection(rows, { maxPerDay: 2, minProb: 0 });
+    assert.deepEqual(out.map(e => e.row.api_id), [2, 3, 4]);   // day 1 capped at 2, day 2 has one
+    assert.equal(out[0].prob, 0.94);
+});
+
+test('bankerSelection dedupes provider rows and drops long/incomplete bankers', () => {
+    const rows = [
+        { api_id: 1, day: '2026-07-10', tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 },
+        { api_id: 1, day: '2026-07-10', tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 },
+        { api_id: 2, day: '2026-07-10', tip_banker_market: 'X2', tip_banker_price: 2.4, tip_banker_prob: 0.41 },
+        { api_id: 3, day: '2026-07-10', tip_banker_market: 'O 1.5' },   // no price/prob
+        { api_id: 4, day: '2026-07-10' },                               // no banker at all
+    ];
+    assert.deepEqual(bankerSelection(rows, { minProb: 0 }).map(e => e.row.api_id), [1]);
+    // the long one comes back when the price cap is lifted
+    assert.deepEqual(bankerSelection(rows, { maxPrice: 0, minProb: 0 }).map(e => e.row.api_id), [1, 2]);
+    assert.deepEqual(bankerSelection([]), []);
+    assert.deepEqual(bankerSelection(null), []);
+});
+
+test('legPicks offers the banker as a leg option, last, and never duplicates the tip', () => {
+    const base = {
+        tip_market: 'O 2.5', tip_price: 1.8, tip_confidence: 0.62,
+        tip_breakdown: JSON.stringify({ market_prob: 0.6, runners_up: [] }),
+    };
+    const withBanker = { ...base, tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 };
+    const picks = legPicks(withBanker, null);
+    assert.deepEqual(picks.map(p => p.market), ['O 2.5', 'O 0.5']);
+    assert.deepEqual(picks.map(p => p.kind), ['tip', 'banker']);
+    // the banker's probability is the book's devigged number, used as-is
+    assert.equal(picks[1].prob, 0.94);
+    // when the banker IS the tip there is nothing to switch to
+    const same = { ...base, tip_banker_market: 'O 2.5', tip_banker_price: 1.8, tip_banker_prob: 0.58 };
+    assert.deepEqual(legPicks(same, null).map(p => p.market), ['O 2.5']);
+    // a vetoed fixture has a banker and no tip - still offer the banker
+    const bankerOnly = { tip_banker_market: 'U 5.5', tip_banker_price: 1.05, tip_banker_prob: 0.93 };
+    assert.deepEqual(legPicks(bankerOnly, null).map(p => p.market), ['U 5.5']);
+    assert.deepEqual(legPicks({}, null), []);
+});
+
+// --- banker tiers + the re-pointed fire icon (2026-07-26) --------------------
+
+test('bankerSelection filters on the probability bar, not a fixed list length', () => {
+    const row = (api_id, prob, price) => ({ api_id, day: '2026-07-10',
+        tip_banker_market: 'O 0.5', tip_banker_price: price, tip_banker_prob: prob });
+    const rows = [row(1, 0.96, 1.01), row(2, 0.94, 1.04), row(3, 0.91, 1.07), row(4, 0.80, 1.20)];
+    // the whole point: the LIST LENGTH FLOATS with what qualifies
+    assert.deepEqual(bankerSelection(rows, BANKER_TIERS.reliability).map(e => e.row.api_id), [1]);
+    assert.deepEqual(bankerSelection(rows, BANKER_TIERS.balanced).map(e => e.row.api_id), [1, 2]);
+    assert.deepEqual(bankerSelection(rows, BANKER_TIERS.volume).map(e => e.row.api_id), [1, 2, 3]);
+});
+
+test('the shipped default is the reliability tier', () => {
+    assert.equal(DEFAULT_BANKERS.minProb, 0.95);
+    assert.equal(BANKER_TIERS.reliability.minProb, 0.95);
+    // tiers must be ordered - a stricter tier can never publish more legs
+    assert.ok(BANKER_TIERS.reliability.minProb > BANKER_TIERS.balanced.minProb);
+    assert.ok(BANKER_TIERS.balanced.minProb > BANKER_TIERS.volume.minProb);
+});
+
+test('a day with nothing above the bar publishes NOTHING, not its least-bad leg', () => {
+    // The failure mode a fixed top-N has and a threshold does not.
+    const weak = [{ api_id: 9, day: '2026-07-10', tip_banker_market: 'O 1.5',
+        tip_banker_price: 1.30, tip_banker_prob: 0.77 }];
+    assert.deepEqual(bankerSelection(weak, BANKER_TIERS.reliability), []);
+    assert.equal(bankerSelection(weak, { minProb: 0, maxPerDay: 10 }).length, 1);
+});
+
+test('hotTip marks a likely tip, and is total without a calibration', () => {
+    assert.equal(DEFAULT_HOT_TIP.minProb, 0.78);
+    assert.equal(hotTip({ tip_market: '1X', tip_price: 1.3, tip_confidence: 0.82 }, null), true);
+    assert.equal(hotTip({ tip_market: '1X', tip_price: 1.3, tip_confidence: 0.60 }, null), false);
+    // tipless rows are never hot
+    assert.equal(hotTip({}, null), false);
+    assert.equal(hotTip(null, null), false);
+    // threshold is configurable
+    assert.equal(hotTip({ tip_market: '1X', tip_price: 1.3, tip_confidence: 0.60 }, null, { minProb: 0.5 }), true);
+});
+
+test('hotTip reads the CALIBRATED probability, not raw confidence', () => {
+    // A market the live ledger says underperforms must be able to lose its fire
+    // even at high blend confidence - that is the whole reason it routes through
+    // estimateLegProb rather than reading tip_confidence directly.
+    const cal = computeCalibration(Array.from({ length: 40 }, () => ({
+        market: 'U 3.5', price: 1.4, confidence: 0.85, outcome: 'miss',
+    })));
+    const row = { tip_market: 'U 3.5', tip_price: 1.4, tip_confidence: 0.85 };
+    assert.equal(hotTip(row, null), true);    // no evidence -> trusts the blend
+    assert.equal(hotTip(row, cal), false);    // evidence says otherwise -> no fire
 });

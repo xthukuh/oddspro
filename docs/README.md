@@ -19,7 +19,9 @@ Command/routine quick card: repo-root `QUICK-REFERENCE.md`; system-behavior chap
 - `agents/` — the agent toolset knowledge library (`toolset.md`): verified operational
   playbooks, what-to-use-when, operational issue KB. Entry point: repo-root `AGENTS.md`.
 - `guides/` — operator playbooks: `safety-net-protocol.md` (the betting protocol behind the
-  Safe toggles), `sms-bonga-integration.md` (SMS provider wire format + live-verify checklist).
+  Safe toggles), `sms-bonga-integration.md` (SMS provider wire format + live-verify checklist),
+  `api.md` (HTTP API reference with captured examples: auth modes, records, Daily MultiBet,
+  performance, refresh semantics).
 - `research/` — ACTIVE analysis only. Engine-v2 studies live here while the investigation
   runs; a study that is refuted/superseded gets deleted (git history is the archive).
 - `visuals/` — image assets referenced by docs.

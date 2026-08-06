@@ -1,5 +1,6 @@
 import { db } from './db/connection.js';
 import { simulateStrategies } from './db/magic-rules.js';
+import { loadCalibrator } from './daily-slip.js';
 import { effective } from './settings.js';
 
 // The Safe-only policy (DEFAULT_SAFE overridden by SAFE_* env, then by any admin
@@ -36,6 +37,9 @@ export async function settledTipRows() {
             db.raw("DATE_FORMAT(f.kickoff, '%Y-%m-%d') as day"),
             'p.tip_market', 'p.tip_price', 'p.tip_confidence', 'p.tip_outcome',
             'p.tip_breakdown', 'p.tip_ai_verdict',
+            // Banker columns (Phase 3): the v2 strategies and analysis
+            // scripts read them off the same ledger rows.
+            'p.tip_banker_market', 'p.tip_banker_price', 'p.tip_banker_prob', 'p.tip_banker_outcome',
             db.raw('COALESCE(f.ft_home, f.goals_home) as fh'),
             db.raw('COALESCE(f.ft_away, f.goals_away) as fa'),
         );
@@ -45,10 +49,23 @@ export async function settledTipRows() {
 // the safe policy - that is attached fresh per response (magicSortCached) so
 // a live admin SAFE_* edit reaches browsers immediately instead of hiding in
 // the per-day cache until the next day / ?refresh=1 (M6).
+// The v2 menu (Phase 3, owner decision 4): the payload's strategy list is the
+// calibration trio, ranked among themselves by the replay stats. Legacy
+// scorers stay in STRATEGIES (replay/analysis + still callable on /api/view).
+const V2_MENU = ['banker', 'target', 'value'];
+
 export async function magicSortSummary() {
     const rows = await settledTipRows();
     // tipView (magic-rules) coerces DECIMAL strings and parses breakdown JSON
-    return { generated_at: new Date().toISOString(), ...simulateStrategies(rows) };
+    // topN 99 = the FULL ranked list, so the trio is always present to filter.
+    const summary = simulateStrategies(rows, { topN: 99 });
+    summary.strategies = summary.strategies.filter(s => V2_MENU.includes(s.id));
+    // The leg-cell layer (Phase 3): walk-forward menu-leg calibration cells,
+    // attached so client and server score with ONE layer (estimateLegProb,
+    // bankerProb, the v2 strategies). ~80 cells, a few KB.
+    const today = (await db.raw("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') as d"))[0][0].d;
+    summary.calibration.leg_cells = (await loadCalibrator(today)).export();
+    return { generated_at: new Date().toISOString(), ...summary };
 }
 
 // Per-day in-memory cache: the settled ledger only grows when the hotpicks

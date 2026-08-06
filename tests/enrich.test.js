@@ -85,26 +85,19 @@ test('effectiveAiConfig defaults to settings.effectiveConfig() (offline-safe: no
 });
 
 // --- Finding 4 (FINAL REVIEW): no API-key preflight -------------------------
-// With one provider's key missing, every fixture used to bill the grounded
-// Gemini facts call then throw on the blind call - anchored-with-no-blind on
-// EVERY fixture, at full Gemini cost. assertAiProvidersConfigured is the
-// fail-fast fix; it takes already-resolved booleans (never reaches into
+// With the provider key missing, every fixture used to fail mid-sweep instead
+// of failing fast before any call was billed. assertAiProvidersConfigured is
+// the fail-fast fix; it takes already-resolved booleans (never reaches into
 // config/.env itself) so the assertion is testable without this machine's
-// real GEMINI_API_KEY/OPENROUTER_API_KEY influencing the result.
-test('assertAiProvidersConfigured throws naming GEMINI_API_KEY when the grounded provider is unconfigured', () => {
+// real OPENROUTER_API_KEY influencing the result. (Since the 2026-08-04
+// Gemini retirement OpenRouter is the only provider left to check.)
+test('assertAiProvidersConfigured throws naming OPENROUTER_API_KEY when the provider is unconfigured', () => {
     assert.throws(
-        () => assertAiProvidersConfigured({ geminiEnabled: false, openrouterEnabled: true }),
-        /GEMINI_API_KEY/,
-    );
-});
-
-test('assertAiProvidersConfigured throws naming OPENROUTER_API_KEY when the blind provider is unconfigured', () => {
-    assert.throws(
-        () => assertAiProvidersConfigured({ geminiEnabled: true, openrouterEnabled: false }),
+        () => assertAiProvidersConfigured({ openrouterEnabled: false }),
         /OPENROUTER_API_KEY/,
     );
 });
 
-test('assertAiProvidersConfigured passes silently when both providers are configured', () => {
-    assert.doesNotThrow(() => assertAiProvidersConfigured({ geminiEnabled: true, openrouterEnabled: true }));
+test('assertAiProvidersConfigured passes silently when the provider is configured', () => {
+    assert.doesNotThrow(() => assertAiProvidersConfigured({ openrouterEnabled: true }));
 });

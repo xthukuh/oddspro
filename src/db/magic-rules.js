@@ -18,6 +18,7 @@
 // per-day cap that cherry-pick multi-bet slip legs for the web's Safe-only
 // toggle. Thresholds in DEFAULT_SAFE, re-tuned via scripts/analyze-safe-tips.js.
 import { confidenceBand, marketGroup } from './perf-rules.js';
+import { cellKey } from './leg-calibration.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0; // + 0 normalizes -0
 
@@ -47,6 +48,23 @@ export function tipView(r) {
         outcome: r.tip_outcome ?? null,
         vetoed: r.tip_ai_verdict === 'veto',
         breakdown,
+    };
+}
+
+// Normalized Banker view over the same row (2026-07-26). The Banker is the
+// safest market the book offered on a fixture - a SEPARATE output from the tip,
+// not a re-ranking of it, so it gets its own view rather than being folded into
+// tipView. Null when the row carries no banker.
+//
+// A fixture can carry a banker with NO tip (the stats veto drops the tip, while
+// the banker reads only prices), so never assume the two views co-occur.
+export function bankerView(r) {
+    if (r == null || r.tip_banker_market == null) return null;
+    return {
+        market: r.tip_banker_market,
+        price: _num(r.tip_banker_price),
+        prob: _num(r.tip_banker_prob),
+        outcome: r.tip_banker_outcome ?? null,
     };
 }
 
@@ -151,12 +169,48 @@ function _bucketPosterior(tip, cal) {
     return g;
 }
 
+// --- Leg-cell calibration (engine-v2 Phase 3) --------------------------------
+// The walk-forward (market group x price band) realized-rate cells the Daily
+// MultiBet builder proved load-bearing (2026-08-06 grids: 33% -> 86.7% green).
+// The server attaches their export() to /api/magic-sort's calibration as
+// `leg_cells`, so client and server score with ONE layer. Every consumer
+// falls back gracefully when leg_cells is absent (LODO replays, old caches).
+export function legCellProb(market, price, devig, legCells) {
+    const base = _num(devig) ?? (Number(price) > 1 ? 1 / Number(price) : null);
+    if (market == null || !(Number(price) > 1)) return base;
+    const cells = legCells?.cells ?? legCells;
+    const c = cells?.[cellKey({ market, price })];
+    if (!c || !c.n || base == null) return base;
+    const k = legCells?.shrinkK ?? 50;
+    return _round((c.hit + k * base) / (c.n + k));
+}
+
+// The banker leg's calibrated survival probability for one records/ledger row.
+// Shared by the 'banker' strategy and sureBetsSelection so the number the UI
+// ranks by is the number it displays.
+export function bankerProb(row, cal) {
+    const b = bankerView(row);
+    if (!b || b.price == null) return null;
+    return legCellProb(b.market, b.price, b.prob, cal?.leg_cells);
+}
+
 // Betslip-playground survival input: the tip's calibrated win probability,
 // falling back to blend confidence before any data exists. Clamped away
 // from 0/1 - no leg is ever certain.
+// v2 (Phase 3): when the leg-cell layer carries real evidence for this tip's
+// cell (n >= 30 settled menu legs), it outranks the tip-bucket posterior -
+// ~120k observations against ~4k settled tips, and price-aware.
 export function estimateLegProb(tip, cal) {
     if (!tip) return null;
-    const p = _bucketPosterior(tip, cal) ?? tip.confidence;
+    const cells = cal?.leg_cells?.cells ?? cal?.leg_cells;
+    const cell = cells && tip.price != null ? cells[cellKey({ market: tip.market, price: tip.price })] : null;
+    let p;
+    if (cell?.n >= 30) {
+        const devig = _num(_bd(tip).market_prob) ?? tip.confidence;
+        p = legCellProb(tip.market, tip.price, devig, cal.leg_cells);
+    } else {
+        p = _bucketPosterior(tip, cal) ?? tip.confidence;
+    }
     return p == null ? null : _round(Math.min(0.98, Math.max(0.05, p)));
 }
 
@@ -168,16 +222,28 @@ export function estimateLegProb(tip, cal) {
 // reuses tipView (chosen) + the runners_up carried in tip_breakdown.
 export function legPicks(r, cal) {
     const chosen = tipView(r);
-    if (!chosen) return [];
-    const picks = [{ market: chosen.market, price: chosen.price, prob: estimateLegProb(chosen, cal) }];
+    const banker = bankerView(r);
+    // The banker is offered as a leg option even with no tip on the row - a
+    // stats-vetoed fixture still has a perfectly good safe bet on it.
+    const bankerPick = banker && banker.price != null
+        // Its prob is the DEVIGGED book probability, which needs no calibration
+        // bucket: it is already the market's own answer, and the whole point of
+        // the banker is that our stats add nothing to a price this short.
+        ? [{ market: banker.market, price: banker.price, prob: banker.prob, kind: 'banker' }]
+        : [];
+    if (!chosen) return bankerPick;
+    const picks = [{ market: chosen.market, price: chosen.price, prob: estimateLegProb(chosen, cal), kind: 'tip' }];
     const ups = Array.isArray(chosen.breakdown?.runners_up) ? chosen.breakdown.runners_up : [];
     for (const ru of ups.slice(0, 2)) {
         if (!ru || ru.market == null) continue;
         // A runner-up carries its own blend components - wrap them as a tipView
         // so estimateLegProb buckets it exactly like the chosen tip.
         const view = { market: ru.market, price: _num(ru.price), confidence: _num(ru.confidence), breakdown: ru };
-        picks.push({ market: ru.market, price: _num(ru.price), prob: estimateLegProb(view, cal) });
+        picks.push({ market: ru.market, price: _num(ru.price), prob: estimateLegProb(view, cal), kind: 'runner_up' });
     }
+    // Banker last: it is the fallback rung, not the headline pick. Skipped when
+    // it IS the tip (nothing to switch to).
+    for (const b of bankerPick) if (b.market !== chosen.market) picks.push(b);
     return picks;
 }
 
@@ -345,6 +411,52 @@ export const STRATEGIES = [
             return _clamp01(market * (post / cal.global_rate));
         },
     },
+    // --- v2 strategies (engine-v2 Phase 3, 2026-08-06) -----------------------
+    // The rebuilt menu: three calibration-layer strategies replace the legacy
+    // set in the UI (magicSortSummary filters the payload to these; the legacy
+    // scorers stay exported for replay/analysis and remain API-callable).
+    {
+        id: 'banker',
+        label: 'Banker (safest first)',
+        // The DEFAULT sort and the same ordering family the Daily MultiBet
+        // uses: the row's safest offered leg by CALIBRATED survival. rowScore
+        // sees the full row, so a stats-vetoed fixture with no tip still
+        // ranks by its banker instead of sinking.
+        rowScore: (row, cal) => {
+            const p = bankerProb(row, cal);
+            if (p != null) return p;
+            const tip = tipView(row);
+            return tip ? estimateLegProb(tip, cal) : null;
+        },
+        // Ledger-replay path (tip views carry no banker fields): the tip's
+        // calibrated survival - same layer, total by construction.
+        score: (tip, cal) => estimateLegProb(tip, cal),
+    },
+    {
+        id: 'target',
+        label: 'Target odds (efficiency)',
+        // Survival cost per unit of log-odds, negated so higher = better: the
+        // replay showcase's buildCard metric. Prefers a 1.25 leg at 96% over
+        // a 1.01 leg at 97% - the odds-bearing arm of the 2026-08-06 frontier
+        // (83.3% green, best streak 11 at 6 legs in the grid).
+        score: (tip, cal) => {
+            if (!(tip.price > 1)) return null;
+            const p = estimateLegProb(tip, cal);
+            if (p == null) return null;
+            return _round(-(-Math.log(Math.max(1e-9, Math.min(1, p))) / Math.log(tip.price)));
+        },
+    },
+    {
+        id: 'value',
+        label: 'Calibrated value',
+        // Calibrated edge: p x price - 1 with p from the same layer. Ordering
+        // signal, not an EV promise - no market is +EV on our books.
+        score: (tip, cal) => {
+            if (!(tip.price > 1)) return null;
+            const p = estimateLegProb(tip, cal);
+            return p == null ? null : _round(p * tip.price - 1);
+        },
+    },
 ];
 
 const _byId = new Map(STRATEGIES.map(s => [s.id, s]));
@@ -352,13 +464,19 @@ const _byId = new Map(STRATEGIES.map(s => [s.id, s]));
 // Score one records/ledger row under a strategy. Null (= sink to the table
 // bottom) for tipless / skip-reason rows and unknown strategies.
 export function scoreTip(row, strategyId, cal) {
+    const strategy = _byId.get(strategyId);
+    if (!strategy) return null;
+    // rowScore strategies (v2 'banker') see the FULL row - a tipless row with
+    // a banker leg still ranks instead of sinking.
+    if (strategy.rowScore) {
+        const v = strategy.rowScore(row, cal);
+        return Number.isFinite(v) ? v : null;
+    }
     const tip = tipView(row);
     // NOTE: tip.vetoed is deliberately NOT consulted (M4.1 spec 3.8). The AI veto
     // shows no discrimination on settled data (confirm 75.0% vs veto 72.7%, n=61),
     // so it must not shape ranking. It is still persisted + surfaced for the ledger.
     if (!tip) return null;
-    const strategy = _byId.get(strategyId);
-    if (!strategy) return null;
     const v = strategy.score(tip, cal);
     return Number.isFinite(v) ? v : null;
 }
@@ -524,13 +642,27 @@ export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS) {
         const key = r?.api_id ?? r;
         if (seen.has(key)) continue;
         seen.add(key);
-        if (!safeQualifies(r, o, cal)) continue;
-        const prob = estimateLegProb(tipView(r), cal);
+        // v2 (Phase 3): Sure Bets = banker top-N. A row with a banker leg
+        // ranks by its CALIBRATED banker survival (the leg-cell layer) and
+        // skips safeQualifies - those gates screen a BLENDED tip, and the
+        // banker carries no blend (see bankerSelection's rationale below).
+        // Rows without a banker keep the legacy tip path + gates, so the
+        // feature degrades gracefully on pre-banker data.
+        const b = bankerView(r);
+        let prob = null, market = null, price = null, kind = null;
+        if (b && b.price != null) {
+            prob = bankerProb(r, cal);
+            market = b.market; price = b.price; kind = 'banker';
+        } else if (safeQualifies(r, o, cal)) {
+            const t = tipView(r);
+            prob = estimateLegProb(t, cal);
+            market = t?.market ?? null; price = t?.price ?? null; kind = 'tip';
+        }
         if (prob == null) continue;
         const day = _dayKey(r);
         let list = byDay.get(day);
         if (!list) byDay.set(day, list = []);
-        list.push({ row: r, prob });
+        list.push({ row: r, prob, market, price, kind });
     }
     const out = [];
     for (const day of [...byDay.keys()].sort()) {
@@ -539,6 +671,106 @@ export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS) {
         out.push(...ranked.slice(0, Math.max(1, o.maxPerDay)));
     }
     return out;
+}
+
+// --- Banker selection (2026-07-26) ------------------------------------------
+// The day's safest legs, ranked by the book's own devigged probability. This is
+// the Sure-Bets pool rebuilt on the Banker instead of the Tip.
+//
+// WHY IT DOES NOT REUSE safeQualifies: those gates exist to screen a BLENDED
+// tip - minimum blend components, component agreement, rolling sample size.
+// None of that applies here. The banker carries no blend at all; its claim
+// rests on a short, well-calibrated price. Running it through gates designed
+// for a different object would reject good bankers for missing signals they
+// were never supposed to have.
+//
+// Ranking is by price ASC (equivalently prob DESC), which is the same order the
+// backtest used: taking a day's picks safest-first, the median day ran 13 legs
+// deep before its first miss (mean 17.5, max 45) at a 1.01 floor.
+//
+// Returns ordered [{ row, market, price, prob }] - one entry per canonical
+// fixture, capped per EAT day. HONESTY: this is a SURVIVAL ranking, never an EV
+// claim. Measured flat-stake ROI over 1,199 settled fixtures was -3.6%; the
+// banker wins far more often than the tip, it does not win more money.
+// Tiers, measured over 16 days with scripts/simulate.js (uniform config, no
+// hindsight). `minProb` is the devigged book probability a leg must clear; the
+// LIST LENGTH IS NOT FIXED - a day publishes only what qualifies, which is the
+// whole point. A fixed top-10 forces the 10th-best leg onto the slip on a thin
+// day; a probability bar simply prints fewer legs.
+//
+//   tier          minProb  legs/day  leg accuracy  all-green days   flat ROI
+//   reliability     0.95      2.2        100.0%        10/10          +1.1%
+//   balanced        0.93     10.1         98.1%        13/16          -0.6%
+//   volume          0.90     44.6         95.4%         3/16          -2.9%
+//
+// READ THE PRICES BEFORE CHOOSING. At reliability the average price is 1.0114:
+// 22 legs, zero losses, +1.14%. ONE more loss makes it -3.46%, because a single
+// miss costs 88 wins at those odds. The 100% is "no loss yet", not an edge.
+// Walk-forward (threshold re-picked daily from prior days only) the same policy
+// returned 62/64 legs = 96.9%, 8/10 all-green days, ROI -1.9%.
+export const BANKER_TIERS = {
+    reliability: { minProb: 0.95, maxPerDay: 10 },
+    balanced: { minProb: 0.93, maxPerDay: 10 },
+    volume: { minProb: 0.90, maxPerDay: 20 },
+};
+
+export const DEFAULT_BANKERS = { maxPerDay: 10, maxPrice: 1.6, minProb: 0.95 };
+
+export function bankerSelection(rows, opts = DEFAULT_BANKERS) {
+    const o = { ...DEFAULT_BANKERS, ...opts };
+    const seen = new Set();
+    const byDay = new Map();
+    for (const r of Array.isArray(rows) ? rows : []) {
+        const key = r?.api_id ?? r;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        const b = bankerView(r);
+        if (!b || b.price == null || b.prob == null) continue;
+        if (o.minProb > 0 && b.prob < o.minProb) continue;
+        if (o.maxPrice > 0 && b.price > o.maxPrice) continue;
+        const day = _dayKey(r);
+        let list = byDay.get(day);
+        if (!list) byDay.set(day, list = []);
+        list.push({ row: r, market: b.market, price: b.price, prob: b.prob });
+    }
+    const out = [];
+    for (const day of [...byDay.keys()].sort()) {
+        // Stable: equal prices keep row order. Price asc == prob desc within a
+        // fixture, but ACROSS fixtures the margins differ, so sort on prob and
+        // break ties on price - the number we rank by is the number we show.
+        const ranked = byDay.get(day).sort((a, b) => (b.prob - a.prob) || (a.price - b.price));
+        out.push(...ranked.slice(0, Math.max(1, o.maxPerDay)));
+    }
+    return out;
+}
+
+// --- the fire icon, re-pointed (2026-07-26) ----------------------------------
+// The legacy hot pick evaluated ONE market - Over 2.5 - through nine gates, and
+// settled against that line. It is being retired: a flag that answers a question
+// nobody asked ("would O 2.5 have landed?") cannot be relied on alongside a tip
+// that is usually some other market entirely.
+//
+// The replacement answers the question the table is actually for: IS THIS TIP
+// LIKELY TO WIN? It reads the same calibrated probability the betslip survival
+// meter shows, so the icon and the number can never disagree.
+//
+// WHAT THE MEASUREMENT SUPPORTS, AND WHAT IT DOES NOT. On the 1,199-tip ledger
+// the legacy gate did carry real information about the TIP (not about O 2.5):
+// tips on hot=1 fixtures hit 76.9% (n=117) against 70.2% elsewhere. That
+// HIT-RATE gap is the robust part. The apparent +4.2% flat ROI on the same rows
+// is NOT: it splits +5.9% train / -1.7% test and its bootstrap CI spans zero.
+// So this flag means "more likely to win". It does not mean "profitable", and no
+// surface may label it that way.
+//
+// The threshold is provisional. It was set to sit just above the pooled tip hit
+// rate (70.9%) so the icon marks a genuine step up rather than most of the card,
+// and it must be re-tuned once the ledger is deeper than 15 days.
+export const DEFAULT_HOT_TIP = { minProb: 0.78 };
+
+export function hotTip(row, cal, opts = DEFAULT_HOT_TIP) {
+    const o = { ...DEFAULT_HOT_TIP, ...opts };
+    const p = estimateLegProb(tipView(row), cal);
+    return p != null && p >= o.minProb;
 }
 
 // Virtual multi-bet math over legs [{ price, prob }]: combined odds, payout,

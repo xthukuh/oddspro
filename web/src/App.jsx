@@ -26,6 +26,7 @@ import FilterBuilder from './components/FilterBuilder.jsx';
 const HelpModal = lazy(() => import('./components/HelpModal.jsx'));
 import Logo from './components/Logo.jsx';
 import MagicMenu from './components/MagicMenu.jsx';
+import DailyMultibet from './components/DailyMultibet.jsx';
 import OverflowMenu from './components/OverflowMenu.jsx';
 import AvatarMenu from './components/AvatarMenu.jsx';
 import { useSession } from './auth/SessionProvider.jsx';
@@ -145,9 +146,10 @@ function _loadSort() {
         localStorage.removeItem(LS_MAGIC);
         return seed;
     }
-    // Default sort for a fresh user: the 'sure' magic strategy (most-likely-to-
-    // win). NOT persisted, so clearing the sort (writes '[]') stays cleared.
-    return [{ type: 'magic', id: 'sure' }];
+    // Default sort for a fresh user: the v2 'banker' strategy (safest offered
+    // leg by calibrated survival - engine-v2 Phase 3). NOT persisted, so
+    // clearing the sort (writes '[]') stays cleared.
+    return [{ type: 'magic', id: 'banker' }];
 }
 
 // Stable empty-array reference for null-catalog fallbacks - a fresh `[]` per
@@ -308,6 +310,7 @@ export default function App() {
     const [showHelp, setShowHelp] = useState(false);
     const [showCal, setShowCal] = useState(false);
     const [showMagic, setShowMagic] = useState(false);
+    const [showDailySlip, setShowDailySlip] = useState(false);
     const [showOverflow, setShowOverflow] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
@@ -454,10 +457,11 @@ export default function App() {
     const activeChain = useMemo(() => {
         if (!magicData) return sortChain;
         const ids = new Set(magicData.strategies.map(s => s.id));
-        // 'sure' is the built-in default sort and is always scoreable client-side
-        // (it lives in the imported STRATEGIES), so never prune it even if a stale
-        // payload omits it - otherwise the default sort would silently vanish.
-        return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id) || e.id === 'sure');
+        // 'banker' is the built-in default sort (v2) and always scoreable
+        // client-side (it lives in the imported STRATEGIES), so never prune it
+        // even if a stale payload omits it - otherwise the default sort would
+        // silently vanish. 'sure' keeps the same grace for stored pre-v2 chains.
+        return sortChain.filter(e => e.type !== 'magic' || ids.has(e.id) || e.id === 'banker' || e.id === 'sure');
     }, [sortChain, magicData]);
     const cal = magicData?.calibration ?? null;
     // Safe-only policy served from the API (SAFE_* env → DEFAULT_SAFE fallback);
@@ -1417,7 +1421,13 @@ export default function App() {
                     onClearMagic={onClearMagic} onClose={() => setShowMagic(false)}
                     signedIn={signedIn} sureBets={sureBets} sureCount={surePicks.length}
                     sureCap={DEFAULT_SURE_BETS.maxPerDay} slipSize={DEFAULT_SURE_BETS.slipSize}
-                    onSureBets={saveSureBets} onTopSlip={seedTopSlip} />
+                    onSureBets={saveSureBets} onTopSlip={seedTopSlip}
+                    onDailySlip={() => { setShowMagic(false); setShowDailySlip(true); }} />
+            )}
+
+            {showDailySlip && (
+                <DailyMultibet onClose={() => setShowDailySlip(false)} signedIn={signedIn}
+                    onSignIn={() => { setShowDailySlip(false); session?.openAuth('signin'); }} />
             )}
 
             {showFilters && catalog && (

@@ -5,6 +5,12 @@ import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
+import { dailySlipPayload, dailyTimelinePayload } from './daily-slip.js';
+import { featureAllowed } from './db/feature-rules.js';
+import { isPatToken, patRouteAllowed } from './pat-rules.js';
+import { saveUserSlip, listUserSlips, getSlipByCode, deleteUserSlip } from './user-slips.js';
+import { createPat, listPats, revokePat, resolvePat } from './pats.js';
+import { renderedView, knownStrategy } from './view.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
@@ -29,6 +35,7 @@ import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js
 import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
+import { getTriageState, runTriageNow, startTriageScheduler, stopTriageScheduler } from './modeltriage/index.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
@@ -259,8 +266,21 @@ async function optionalAuth(req, res, next) {
         // Feature off = no session lookup at all (an API_TOKEN bearer would
         // miss the sessions table on every request for nothing).
         if (config.AUTH_ENABLED) {
-            const ctx = await resolveSession(bearerToken(req));
-            if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+            const bearer = bearerToken(req);
+            if (isPatToken(bearer)) {
+                // Personal access token (Phase 2): resolves to the OWNING
+                // user's tier but is READ-ONLY and never admin/auth - the
+                // route-matrix lives in pure pat-rules. An unknown/revoked/
+                // expired PAT degrades to guest, the invalid-session idiom.
+                if (!patRouteAllowed(req.method, req.path)) {
+                    return res.status(403).json({ error: 'This access token is read-only.' });
+                }
+                const ctx = await resolvePat(bearer);
+                if (ctx) { req.user = ctx.user; req.pat = ctx.pat; }
+            } else {
+                const ctx = await resolveSession(bearer);
+                if (ctx) { req.user = ctx.user; req.session = ctx.session; }
+            }
         }
         next();
     } catch (e) { next(e); }
@@ -603,6 +623,116 @@ app.get('/api/hotpicks', async (req, res, next) => {
     }
 });
 
+// Daily MultiBet (engine-v2, spec 2026-08-06-0100). Premium seam v1: guests
+// get a TEASER (day mood/counts/streaks, no legs, no reasoning); signed-in
+// users get the full card. Machine bearers and AUTH_ENABLED=0 stay legacy
+// full-access, the /api/records access idiom.
+function _dailySlipFull(req) {
+    if (!config.AUTH_ENABLED) return true;
+    if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return true;
+    return featureAllowed(req.user ?? null, 'daily_multibet');
+}
+const _slipTeaser = s => s && ({
+    date: s.date, status: s.status, mood: s.mood, legs_total: s.legs_total,
+    legs_hit: s.legs_hit, cards_total: s.cards_total, cards_won: s.cards_won,
+    combined_odds: s.combined_odds, outcome: s.outcome,
+    backfilled: s.backfilled, teaser: true, auth_required: true,
+});
+
+app.get('/api/daily-slip', optionalAuth, async (req, res, next) => {
+    try {
+        const day = _dtime(req.query.date || new Date()).slice(0, 10);
+        const slip = await dailySlipPayload(day);
+        if (!slip) return res.json({ date: day, slip: null });
+        res.json({ date: day, slip: _dailySlipFull(req) ? slip : _slipTeaser(slip) });
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.get('/api/daily-slip/timeline', optionalAuth, async (req, res, next) => {
+    try {
+        const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
+        const t = await dailyTimelinePayload(days);
+        if (!_dailySlipFull(req)) t.days = t.days.map(_slipTeaser);
+        res.json(t);
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/view - the RENDERED view (Phase 2): the exact dataset the
+// signed-in browser shows, computed server-side through the same shared
+// pure pipeline (magic-rules verbatim). Full tier only (session, PAT or
+// machine bearer) - it mirrors the signed-in table, so a guest teaser
+// makes no sense here. Params: date, strategy, safe_only=1, one_of_each=1,
+// providers=a,b (also the one-of-each priority order).
+app.get('/api/view', optionalAuth, async (req, res, next) => {
+    try {
+        const full = !config.AUTH_ENABLED || req.user != null
+            || bearerMatches(req.get('authorization'), MACHINE_BEARERS);
+        if (!full) return res.status(401).json({ error: 'Sign in or use an access token for the rendered view.', auth_required: true });
+        const strategy = String(req.query.strategy || 'sure');
+        if (!knownStrategy(strategy)) return res.status(400).json({ error: `unknown strategy: ${strategy}` });
+        const day = _dtime(req.query.date || new Date()).slice(0, 10);
+        res.json(await renderedView({
+            date: day,
+            strategy,
+            safeOnly: req.query.safe_only === '1',
+            oneEach: req.query.one_of_each === '1',
+            providers: req.query.providers ? String(req.query.providers).split(',').filter(Boolean) : null,
+        }));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// Shareable user slips (engine-v2 Phase 4). Signed-in only (sessions, not
+// PATs - saving is a mutation and PATs are read-only by construction); the
+// slip_sharing premium seam gates the by-code load path. Legs are sanitized
+// server-side to a closed scalar shape and combined odds recomputed - the
+// client's arithmetic is display-only.
+app.get('/api/slips', requireAuth, async (req, res, next) => {
+    try {
+        res.json({ slips: await listUserSlips(req.user.id, Number(req.query.limit) || 100) });
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.post('/api/slips', requireAuth, express.json({ limit: '64kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const { title, legs, source_code } = req.body ?? {};
+        const slip = await saveUserSlip({ userId: req.user.id, title, legs, sourceCode: source_code });
+        res.json({ ok: true, slip });
+    } catch (e) {
+        if (e?.status === 400) return res.status(400).json({ error: e.message });
+        next(e);
+    }
+});
+
+app.get('/api/slips/code/:code', requireAuth, async (req, res, next) => {
+    try {
+        if (!featureAllowed(req.user, 'slip_sharing')) return res.status(403).json({ error: 'Slip sharing is not available.' });
+        const slip = await getSlipByCode(req.params.code);
+        if (!slip) return res.status(404).json({ error: 'No slip with that code.' });
+        res.json({ slip });
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.delete('/api/slips/:id', requireAuth, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const n = await deleteUserSlip(req.user.id, Number(req.params.id));
+        res.json({ ok: true, deleted: n });
+    } catch (e) {
+        next(e);
+    }
+});
+
 // GET /api/performance - flat-stake ROI / hit-rate / bucket report for tips
 // and hot picks (windows, confidence/market/edge buckets, AI-veto impact).
 // Memoized for the same reason as /api/hotpicks: it scans every tip ever
@@ -770,6 +900,49 @@ app.delete('/api/admin/settings/:key', requireAdminDual, async (req, res, next) 
     }
 });
 
+// Personal access tokens (Phase 2). requireAdminDual DELIBERATELY (the
+// settings precedent, not the session-only M8+ one): PAT minting is the
+// machine-bootstrap path for integrations - an n8n install or Claude's
+// grounding reads must be able to mint/rotate via ADMIN_TOKEN without an
+// interactive phone+PIN login. The plaintext token appears ONCE, in the
+// mint response; audit rows carry only the display prefix.
+app.get('/api/admin/pats', requireAdminDual, async (req, res, next) => {
+    try {
+        res.json({ tokens: await listPats() });
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.post('/api/admin/pats', requireAdminDual, express.json({ limit: '2kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const { user_id, name, expires_days } = req.body ?? {};
+        if (!Number.isInteger(user_id) || user_id <= 0) return res.status(400).json({ error: 'user_id required' });
+        if (!name || typeof name !== 'string') return res.status(400).json({ error: 'name required' });
+        const user = await db('users').where('id', user_id).first('id', 'is_active');
+        if (!user || !user.is_active) return res.status(400).json({ error: 'unknown or disabled user' });
+        const out = await createPat({
+            userId: user_id, name,
+            expiresDays: Number(expires_days) > 0 ? Number(expires_days) : null,
+            actorId: req.user?.id ?? null,
+        });
+        res.json({ ok: true, token: out.token, pat: out.pat });
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.delete('/api/admin/pats/:id', requireAdminDual, async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        await revokePat(Number(req.params.id), req.user?.id ?? null);
+        res.json({ ok: true });
+    } catch (e) {
+        next(e);
+    }
+});
+
 // GET /api/admin/settings/audit - recent dated old->new settings changes (M6).
 // Session-only like every NEW admin route (spec guards note) - the legacy
 // ADMIN_TOKEN bearer deliberately does not unlock the trail.
@@ -779,6 +952,28 @@ app.get('/api/admin/settings/audit', requireAdminRole, async (req, res, next) =>
     } catch (e) {
         next(e);
     }
+});
+
+// Model triage (src/modeltriage/, 2026-08-04 design spec) - admin SESSION
+// only like every new admin route. GET = knob state + live routing + the
+// newest persisted shortlist; POST /run = the admin "Run triage now" button
+// (fire-and-forget on the module's own single slot - a busy slot answers 409
+// rather than queueing, the DatabaseSection idiom). Adopting a model needs no
+// route of its own: the card writes the routing key through the standard
+// settings PUT above, so the admin_audit trail dates it automatically.
+app.get('/api/admin/triage', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json(await getTriageState());
+    } catch (e) {
+        next(e);
+    }
+});
+
+app.post('/api/admin/triage/run', requireAdminRole, (req, res) => {
+    if (!csrfOk(req, res)) return;
+    const r = runTriageNow();
+    if (!r.started) return res.status(409).json({ error: 'A triage pass is already running' });
+    res.status(202).json({ ok: true, started: true });
 });
 
 // Data-viz lab (v1.1.0 Phase 6, admin SESSION only - the SPA admin panel; no
@@ -1302,6 +1497,25 @@ async function migrateOnBoot() {
     console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
 }
 
+// DB-sync auto-apply (SYNC_IMPORT_ON_BOOT): the no-SSH deploy data path. A
+// sync bundle extracted into var/imports/<stamp>/ (from the package:deploy
+// --sync-db zip) is applied as a BACKGROUND job on the shared single-slot -
+// deliberately after listen, never blocking boot (Passenger start timeouts;
+// the apply is chunk-resumable across restarts, so a mid-apply restart just
+// continues). Fire-and-forget with its own catch: a broken bundle must never
+// take the API down - it logs and the admin DB section shows the job error.
+function startBootSyncImport() {
+    if (!config.SYNC_IMPORT_ON_BOOT) return;
+    const skipTables = config.SYNC_IMPORT_SKIP.split(',').map(s => s.trim()).filter(Boolean);
+    import('./db-transfer.js')
+        .then(m => m.maybeStartBootSyncImport({ skipTables, safetyExport: config.SYNC_IMPORT_SAFETY }))
+        .then(r => {
+            if (r.started) console.debug(`[db-sync] boot sync import started for staged bundle "${r.stamp}" (background job; progress in Admin -> Database)`);
+            else console.debug(`[db-sync] no boot sync import started - ${r.reason}`);
+        })
+        .catch(err => console.error('[db-sync] boot sync import failed to start:', err?.message ?? err));
+}
+
 let server = null;
 (async () => {
     try {
@@ -1320,8 +1534,10 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
+            startTriageScheduler();
             startCatalogWarm();
             startHaltWatch(() => shutdown('halt-file'));
+            startBootSyncImport();
         });
     } catch (err) {
         // Fail fast: don't serve on an uncertain schema (or unloadable
@@ -1343,6 +1559,7 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
+    stopTriageScheduler();
     stopCatalogWarm();
     stopHaltWatch();
     requestCancel(); // no-op when nothing is running

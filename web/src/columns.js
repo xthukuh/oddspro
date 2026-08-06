@@ -24,6 +24,8 @@ const EXTRA_BASE_LABELS = {
     // Client-only derived filter field: the chosen tip's confidence as an
     // integer win % (0-100). Not a table column - filterable only.
     tip_confidence: 'Tip confidence %',
+    banker: 'Banker win probability',
+    banker_price: 'Banker price',
     // Filterable data fields that are no longer their own TABLE column (id folds
     // into Start; updated/locked fold into the Status tooltip; goals folds into
     // Score) but stay queryable.
@@ -39,7 +41,7 @@ const EXTRA_BASE_LABELS = {
 // control the builder offers for the same field.
 export const FILTER_DATE_KEYS = new Set(['start_time', 'updated_at', 'locked_at']);
 export const FILTER_NUMBER_KEYS = new Set(['no', 'goals', 'score', 'h2h_count', 'hot', 'hot_score',
-    'api_id', 'tip', 'tip_confidence', 'season', 'home_rank', 'away_rank', 'home_form', 'away_form',
+    'api_id', 'tip', 'tip_confidence', 'banker', 'banker_price', 'season', 'home_rank', 'away_rank', 'home_form', 'away_form',
     'h2h', 'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
 
 // Filter value type of a column: odds markets + post-match (fs:*) stats + the

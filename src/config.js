@@ -1,7 +1,8 @@
 import 'dotenv/config';
 import { z } from 'zod';
 import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS, parseLinesCsv } from './db/goals-rules.js'; // zero-import module - no cycle
-import { DEFAULT_TIP } from './db/tip-rules.js'; // zero-import module - no cycle
+import { DEFAULT_TIP } from './db/tip-rules.js';
+import { DEFAULT_LADDER } from './db/ladder-rules.js'; // pure; imports tip-rules only, no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
@@ -57,20 +58,33 @@ const EnvSchema = z.object({
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
     TIP_MIN_UNDER_LINE: z.coerce.number().min(0).default(DEFAULT_TIP.minUnderLine),
+    // Banker floor: the SAFETY product's own price floor, deliberately far below
+    // TIP_MIN_PRICE. The two express different things - "worth betting" vs
+    // "safe" - and collapsing them into one number is exactly what caused the
+    // adverse selection the 2026-07-26 study found. See src/db/ladder-rules.js.
+    TIP_BANKER_FLOOR: z.coerce.number().min(1).default(DEFAULT_LADDER.bankerFloor),
     // Book-integrity guards (M3): family-book overround band + cross-provider
     // devigged-probability divergence veto (see src/db/tip-rules.js)
     TIP_MIN_OVERROUND: z.coerce.number().default(DEFAULT_TIP.minOverround),
     TIP_MAX_OVERROUND: z.coerce.number().default(DEFAULT_TIP.maxOverround),
     TIP_MAX_BOOK_DIVERGENCE: z.coerce.number().default(DEFAULT_TIP.maxBookDivergence),
     // AI adjudication is optional: no key = rules-only verdicts (fail-open).
-    // Google Gemini (https://aistudio.google.com/apikey) replaced OpenRouter
-    // 2026-07-04 - stronger reasoner + native Google Search grounding.
-    GEMINI_API_KEY: optionalStr(z.string().min(1).optional()),
-    GEMINI_URL: z.string().url().default('https://generativelanguage.googleapis.com/v1beta'),
-    HOTPICK_AI_MODEL: z.string().default('gemini-2.5-flash'),
-    // Web-grounded AI: attach Gemini's google_search tool for BOTH
-    // adjudicators. Opt-in - grounded requests bill extra per call.
+    // 2026-08-04: Google Gemini RETIRED PERMANENTLY (user decision) - every AI
+    // task now routes through OpenRouter (src/db/ai-rules.js resolveTask).
+    // GEMINI_* env lines left in a .env are simply ignored (schema strips
+    // unknown keys). Model defaults follow the 2026-08-04 OpenRouter research
+    // (verified live /api/v1/models): vendor spread OpenAI (adjudicate) /
+    // DeepSeek (facts, anchored) / NVIDIA (blind) keeps the blind reasoner
+    // independent of the anchored one.
+    HOTPICK_AI_MODEL: z.string().default('openai/gpt-5.6-luna'),
+    // Web-grounded AI: attach OpenRouter's web plugin (AI_WEB_ENGINE) to the
+    // grounded tasks. Opt-in - grounded requests bill the per-search fee.
     HOTPICK_AI_WEB: boolStr('0'),
+    // OpenRouter web plugin engine: 'parallel' ($0.001/req, up to 10 results)
+    // is 5x cheaper than 'exa'; 'native' uses the model vendor's own search at
+    // the model's pass-through price (e.g. gpt-5.6-luna $0.005/search).
+    AI_WEB_ENGINE: z.enum(['parallel', 'exa', 'native']).default('parallel'),
+    AI_WEB_MAX_RESULTS: z.coerce.number().int().min(1).max(10).default(5),
     // Tip AI review: only tips at/above this confidence, best-first, at most
     // this many fresh (billed) verdicts per EAT day - enforced by the
     // background AI-review worker (src/ai-worker.js); cached verdicts and
@@ -103,7 +117,12 @@ const EnvSchema = z.object({
     AI_ENRICH_CAP: z.coerce.number().int().min(0).default(40),         // FIXTURES per run, not calls
     AI_ENRICH_CONCURRENCY: z.coerce.number().int().min(1).max(16).default(4),
     AI_BLIND_MODEL: z.string().default(''),      // '' = provider default
-    AI_ANCHORED_MODEL: z.string().default(''),   // '' = provider default
+    // 2026-08-04 Gemini retirement: anchored moved to DeepSeek (strong cheap
+    // reasoner, and a different VENDOR from the NVIDIA blind slot - resolveTask
+    // enforces that independence). Facts gets its own key for the first time
+    // (it used to ride HOTPICK_AI_MODEL).
+    AI_ANCHORED_MODEL: z.string().default('deepseek/deepseek-v4-flash-0731'),
+    AI_FACTS_MODEL: z.string().default('deepseek/deepseek-v4-flash-0731'),
     // --- Detour B: AI safety-harness run guards (src/ai/harness.js) ---
     // Per-run wall-clock budget in minutes (0 = off; TIP_AI_DAILY_CAP /
     // AI_ENRICH_CAP already bound call COUNTS) and the circuit breaker:
@@ -127,6 +146,22 @@ const EnvSchema = z.object({
     AI_CONSENSUS_TASKS: z.string().default(''),
     AI_CONSENSUS_MODELS: z.string().default(''),
     AI_CONSENSUS_MIN_AGREE: z.coerce.number().int().min(2).max(9).default(2),
+    // --- OpenRouter model triage (src/modeltriage/, 2026-08-04 design spec) ---
+    // Weekly background shortlist of the best value-per-cost models per AI
+    // task, surfaced in Admin -> Models. OFF by default; the tick is quiesced
+    // during maintenance windows like the geo sweep. AUTO_SWITCH lets a
+    // shortlist PRIMARY rewrite the live task routing through the standard
+    // settings PUT (admin_audit dates it - the policy-regime discipline is
+    // automatic); OFF = the panel shows one-click adopt buttons instead.
+    TRIAGE_ENABLED: boolStr('0'),
+    TRIAGE_INTERVAL_HOURS: z.coerce.number().int().min(1).default(168),
+    TRIAGE_AUTO_SWITCH: boolStr('0'),
+    // Max BILLED probe calls per tick (3 per candidate); catalog/endpoint
+    // pulls are free and uncapped.
+    TRIAGE_PROBE_BUDGET: z.coerce.number().int().min(0).default(12),
+    // :free models cost daily-cap risk, not $0 - the value score charges this
+    // capability fraction instead of a dollar cost (0 = free is truly free).
+    TRIAGE_FREE_FLAKINESS_TAX: z.coerce.number().min(0).max(1).default(0.15),
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)
@@ -157,6 +192,23 @@ const EnvSchema = z.object({
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.
     // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
     MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
+    // DB-sync auto-apply (deploy data sync, the no-SSH twin of MIGRATE_ON_BOOT):
+    // when set, a complete UNAPPLIED sync bundle staged under var/imports/
+    // (extracted there from the package:deploy --sync-db zip via cPanel File
+    // Manager) is applied as a BACKGROUND job after listen - boot never blocks
+    // (Passenger start timeouts; the apply is resumable across restarts).
+    // OFF by default; local/dev never auto-imports.
+    SYNC_IMPORT_ON_BOOT: boolStr('0'),
+    // Pre-import full-warehouse safety export before a boot-sync apply. ON by
+    // default; a quota'd shared host can set 0 (each safety dump is the whole
+    // warehouse - GBs per apply). The apply itself is upsert-only (never
+    // deletes destination rows), so skipping narrows the recovery net rather
+    // than enabling destruction.
+    SYNC_IMPORT_SAFETY: boolStr('1'),
+    // Comma-separated extra tables the boot-sync apply must leave untouched on
+    // THIS host (import-side retention, on top of the export-side exclusions -
+    // users/sessions/prefs/visits/settings/audit/SMS never ride a bundle at all).
+    SYNC_IMPORT_SKIP: z.string().default(''),
     // --- SPA bot-protection (opt-in) ---
     // NOTE: the proof-of-work human gate (HUMAN_POW_*) was removed 2026-07-16 -
     // deprecated as irrelevant at this stage. Any leftover HUMAN_* entries in a
@@ -324,3 +376,8 @@ const rawEnv = { ...process.env };
 if (!rawEnv.API_PORT && rawEnv.PORT) rawEnv.API_PORT = rawEnv.PORT;
 
 export const config = EnvSchema.parse(rawEnv);
+
+// The schema itself is exported for scripts/env-audit.js, which compares the
+// live .env against schema defaults to find redundant lines. Nothing else
+// should import it - consumers read `config`.
+export { EnvSchema };

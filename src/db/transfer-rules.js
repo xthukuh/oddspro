@@ -237,6 +237,25 @@ export function stampToIso(stamp) {
     return Number.isFinite(Date.parse(iso)) ? iso : null;
 }
 
+// --- Import-side table retention (DB-sync) ---------------------------------
+// Filters a parsed manifest down to the tables the destination actually wants
+// applied - the CLI/boot sync import's `--skip` retention, layered ON TOP of
+// the export-side exclusions. Returns a NEW manifest (input never mutated)
+// plus the list of names actually dropped (junk/absent names are ignored -
+// the skip list is external CLI/env input). Skipped tables never enter the
+// FK ordering or the resumable cursor walk, so their chunk files (if present
+// in the staging dir) are simply never read.
+export function applySkipTables(manifest, skipTables) {
+    const skip = new Set(
+        (Array.isArray(skipTables) ? skipTables : [])
+            .map(s => (typeof s === 'string' ? s.trim() : ''))
+            .filter(Boolean),
+    );
+    const skipped = manifest.tables.filter(t => skip.has(t.name)).map(t => t.name);
+    const tables = manifest.tables.filter(t => !skip.has(t.name));
+    return { manifest: { ...manifest, tables }, skipped };
+}
+
 // --- Chunk file naming -----------------------------------------------------
 // <table>.<NNNN>.ndjson.gz - zero-padded to 4 digits. The largest live table
 // (odds_markets, ~2.2M rows / chunkSize 5000) is ~445 chunks, comfortably

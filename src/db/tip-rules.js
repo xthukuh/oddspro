@@ -18,11 +18,103 @@ export const DEFAULT_TIP = {
     teamWindow: 7,       // rolling last-N games per team (vs other opponents)
     minGames: 5,         // minimum sample before a team's rates count as evidence
     h2hMinMeetings: 3,   // minimum meetings before H2H rates count as evidence
-    minPrice: 1.2,       // tips priced below this pay too little to matter
+    minPrice: 1.2,       // tips priced below this pay too little to matter.
+                         // NB this floor is a VALUE floor, not a safety floor -
+                         // it deliberately excludes the safest bets on the board.
+                         // The safety product is the separate Banker output
+                         // (src/db/ladder-rules.js), which has its own 1.01
+                         // floor. Do not lower this one to chase accuracy: that
+                         // conflates the two jobs again.
     minConfidence: 0.5,  // no tip at all below this blend
     minUnderLine: 4.5,   // no Under tips below this line (near-Unders bet against
                          // goals with no demonstrated edge: 61.9% realized vs
                          // 78.1% break-even over the 2026-07-04 cohort)
+    // Markets barred from winning the candidate race - same yield-to-the-next
+    // mechanism as minUnderLine above. Listed markets never become the tip.
+    //
+    // SHIPPED EMPTY ON PURPOSE (2026-07-26). The mechanism is built and tested;
+    // the evidence for using it is NOT settled, and the two honest readings
+    // disagree in SIGN:
+    //   - Over the live settled ledger (1,199 tips), 12 ran -8.8% flat-stake ROI
+    //     with a day-clustered 95% CI of [-16.9,-1.7], and U 3.5 -8.7%
+    //     CI[-15.6,-1.6]. Both CIs exclude zero. Suppressing them there lifts
+    //     ledger ROI -4.0% -> -2.2%.
+    //   - Re-deriving every tip from the warehouse under the CURRENT config
+    //     reverses it: 12 becomes the BEST market at -0.1% (n=59) and U 3.5
+    //     -0.4% (n=165) against -6.2% for everything else, so suppressing them
+    //     makes the book WORSE (-5.1% -> -5.6%).
+    // The live ledger spans two config regimes (TIP_MIN_PRICE moved 1.20->1.35
+    // mid-window, TIP_MIN_UNDER_LINE 4.5->3.5), which is the known ledger-split
+    // trap; the re-derivation applies one config uniformly but uses history
+    // depth the engine did not have at the time. Neither is clean. A result that
+    // flips sign under a reasonable re-analysis is not a result.
+    // Re-test once the ledger holds >= 800 settled tips generated under ONE
+    // unchanged config before turning this on.
+    suppressedMarkets: [],
+    // Fixture-level veto: when the winning candidate's rolling-stats support
+    // sits this far BELOW its devigged market probability, tip nothing.
+    //
+    // ALSO SHIPPED OFF (null). On the live ledger this looked strong - stats
+    // 0.08-0.20 below market ran 66.7% against a 76.2% implied (-9.6pp, ROI
+    // -12.5%, n=69). Re-derived under the current config it does essentially
+    // nothing: -5.1% -> -4.9% ROI while discarding 44 fixtures, comfortably
+    // inside the noise. Not worth the lost volume until it replicates.
+    //
+    // When enabled this does NOT yield to the runner-up (the runner-up is scored
+    // off the same disagreeing evidence); bestTip reports the veto and the
+    // caller drops the tip. Both semantics were tested; the fixture-level drop
+    // measured better.
+    statsVetoGap: null,
+    // Beta-shrink pseudo-counts for the stats component. Every OTHER rate in the
+    // codebase is shrunk (magic-rules' shrunkRate, safePrior); this one was not,
+    // so a 5-game window could assert stats_prob = 1.000 outright. Observed live:
+    // Petrocub-Milsami U 3.5 at 1.000 -> 5-0; Crvena Zvezda-Macva U 4.5 at 1.000
+    // -> 5-0; Mjallby-Vasteraas TT:A:O 0.5 at 1.000 -> 0-0. Each component is
+    // pulled toward 0.5 by its OWN sample size, so a thin side is damped harder
+    // than a deep one. k=3 on a 6-7 game window turns a 1.000 into ~0.80.
+    // Set to 0 to restore the pre-2026-07-26 raw means.
+    //
+    // k=5 was chosen by A/B over the whole 16-day window (scripts/simulate.js
+    // --tipeval), NOT by taste:
+    //   k=0  hit 75.8%  ROI -4.1%   (OVER -4.2%  UNDER -3.2%  RESULT -4.9%)
+    //   k=3  hit 75.8%  ROI -4.6%   (OVER -4.4%  UNDER -2.8%  RESULT -6.4%)
+    //   k=5  hit 76.4%  ROI -4.1%   (OVER -1.9%  UNDER -2.8%  RESULT -6.7%)
+    // k=3 is strictly worse than doing nothing. k=5 is ROI-NEUTRAL against the
+    // status quo and buys +0.6pp of hit rate, so it ships on correctness grounds
+    // (a 5-game window must not assert certainty) at no measured cost. It is not
+    // a performance win and must not be described as one.
+    statsShrinkK: 5,
+    // How much of the stats component comes from the fitted goal model
+    // (src/db/goal-model.js) rather than the empirical rolling rates.
+    // 0 = pure empirical (pre-2026-07-26 behaviour), 1 = pure model.
+    // Only applies to markets the model actually covers AND when the caller
+    // supplies `modelProbs`; everything else falls through to the rates.
+    // SHIPPED AT 0, and the reason is the most important finding in the project.
+    //
+    // The goal model is a BETTER PREDICTOR than the rolling rates - it wins on
+    // log-loss in 9 of 10 markets over 1,818 fixtures. It is also a WORSE BETTOR:
+    //   modelWeight 0    hit 76.4%  ROI -4.1%
+    //   modelWeight 0.5  hit 75.0%  ROI -6.2%
+    //   modelWeight 1    hit 75.1%  ROI -5.7%
+    //
+    // Why: the devigged market price beats BOTH estimators on every market
+    // tested. So a more accurate stats term simply agrees with the price more
+    // often, and agreeing with the price means paying the vig. Betting the
+    // model's disagreements is worse still, and MONOTONICALLY so - over 55,234
+    // model-vs-price comparisons, ROI fell from -9.4% at any claimed edge to
+    // -15.9% at edge > 0.25, every CI excluding zero. Those disagreements are
+    // model error, not market error.
+    //
+    // The corollary is uncomfortable but load-bearing: the stats component is
+    // not earning its 0.3 weight by predicting. It earns it by DECORRELATING the
+    // pick from the price - dropping it entirely gives -4.5%, and pure market
+    // gives -5.6%. Noise that pulls selection off the shortest (highest-vig)
+    // prices helps; accuracy does not.
+    //
+    // Keep the model. It is the right foundation, it is coherent where the rates
+    // were not, and any future work needs it. Do not raise this weight without
+    // re-running scripts/simulate.js --tipeval and beating -4.1%.
+    modelWeight: 0,
     // Blend weights, renormalized over the components actually available
     weights: { market: 0.6, stats: 0.3, api: 0.1 },
     // Bookmaker-trick guards (spec §4.2, M3): a family book's implied-
@@ -33,6 +125,13 @@ export const DEFAULT_TIP = {
     maxOverround: 1.30,
     // Cross-provider devigged-probability divergence veto (any outcome)
     maxBookDivergence: 0.15,
+    // How the two displayed runners-up are chosen from the ranked remainder.
+    // Injected rather than imported: the real filter lives in ladder-rules.js
+    // (coherentAlternatives), which imports tipOutcome from THIS module - taking
+    // it as an option is what keeps that dependency one-way. Default is the
+    // pre-2026-07-26 behaviour, so a caller that passes nothing is byte-compatible.
+    //   (chosenMarket, rankedRemainder, limit) => candidate[]
+    alternatives: (_chosen, rest, limit) => rest.slice(0, limit),
 };
 
 // League names whose history evidence is invalid for tipping: preseason
@@ -311,6 +410,20 @@ function _mean(components) {
     return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
 }
 
+// Beta-shrink one observed rate toward 0.5 by its own sample size. A rate seen
+// over n games carries n pseudo-observations against k of "no information", so
+// thin evidence is pulled to the middle and deep evidence is left alone. 0.5 is
+// the max-entropy prior on purpose: shrinking toward the MARKET probability
+// would make the stats component collinear with the market component, which is
+// the one thing the blend must not do.
+const _shrink = (rate, n, k) =>
+    (rate == null ? null : k > 0 ? (rate * (n ?? 0) + k * 0.5) / ((n ?? 0) + k) : rate);
+
+// Mean over [rate, sampleSize] pairs, each shrunk before averaging.
+function _shrunkMean(pairs, k) {
+    return _mean(pairs.map(([rate, n]) => _shrink(rate, n, k)));
+}
+
 // Cheap evidence screen run BEFORE bestTip: a fixture without enough
 // independent evidence never gets a tip at all. Without it the blend silently
 // renormalizes to market-only - and the market component is the bookmaker's
@@ -400,6 +513,9 @@ export function tipHitSafe(market, ftHome, ftAway) {
 //   home/away: teamOutcomeAggregates(); h2h: h2hOutcomeAggregates()
 //   apiPercents: { home, draw, away } fractions 0..1 | null (backs
 //       result/double-chance candidates only)
+//   modelProbs: { [market]: probability } | null - fitted goal-model output
+//       (goal-model.js marketProbabilities). Supplies the stats component for
+//       every market it covers, blended at opts.modelWeight.
 //   overrounds: { [family]: number } | undefined - each new family's
 //       devigged-book overround (selectFamilyBook), surfaced back as
 //       book_overround on the winning pick + each runner-up (spec §4.2
@@ -412,7 +528,7 @@ export function tipHitSafe(market, ftHome, ftAway) {
 // runners_up the next two candidates (justification breakdown persisted as
 // fixture_predictions.tip_breakdown) - or null when nothing clears the
 // price/confidence floors.
-export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, apiPercents, overrounds }, opts = {}) {
+export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, apiPercents, overrounds, modelProbs }, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
     const w = t.weights;
 
@@ -430,18 +546,20 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
     // Stats support per outcome: mean of whichever evidence streams qualify
     // (each team's sample independently, H2H only when established).
     const hOk = home.n >= t.minGames, aOk = away.n >= t.minGames, hhOk = h2h.n >= t.h2hMinMeetings;
+    const k = t.statsShrinkK ?? 0;
+    const _sm = pairs => _shrunkMean(pairs, k);
     const statsProb = {
-        1: _mean([hOk ? home.winRate : null, aOk ? away.lossRate : null, hhOk ? h2h.homeWinRate : null]),
-        X: _mean([hOk ? home.drawRate : null, aOk ? away.drawRate : null, hhOk ? h2h.drawRate : null]),
-        2: _mean([hOk ? home.lossRate : null, aOk ? away.winRate : null, hhOk ? h2h.awayWinRate : null]),
+        1: _sm([[hOk ? home.winRate : null, home.n], [aOk ? away.lossRate : null, away.n], [hhOk ? h2h.homeWinRate : null, h2h.n]]),
+        X: _sm([[hOk ? home.drawRate : null, home.n], [aOk ? away.drawRate : null, away.n], [hhOk ? h2h.drawRate : null, h2h.n]]),
+        2: _sm([[hOk ? home.lossRate : null, home.n], [aOk ? away.winRate : null, away.n], [hhOk ? h2h.awayWinRate : null, h2h.n]]),
     };
     statsProb['1X'] = statsProb['2'] == null ? null : 1 - statsProb['2'];
     statsProb['X2'] = statsProb['1'] == null ? null : 1 - statsProb['1'];
     statsProb['12'] = statsProb['X'] == null ? null : 1 - statsProb['X'];
-    const statsOver = line => _mean([
-        hOk ? home.overRates[line] : null,
-        aOk ? away.overRates[line] : null,
-        hhOk ? h2h.overRates[line] : null,
+    const statsOver = line => _sm([
+        [hOk ? home.overRates[line] : null, home.n],
+        [aOk ? away.overRates[line] : null, away.n],
+        [hhOk ? h2h.overRates[line] : null, h2h.n],
     ]);
 
     // API-Football 1X2 percentages back the result markets only
@@ -455,8 +573,28 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
         : null;
 
     const candidates = [];
+    const suppressed = new Set(t.suppressedMarkets ?? []);
+    // The stats component, resolved. A fitted goal model answers ONE question
+    // (how many goals will each side score?) and reads every market off the
+    // answer, so its numbers are mutually coherent - P(O 1.5) >= P(O 2.5) always.
+    // The empirical rates could not promise that: each line was a separate count
+    // over ~6 games, i.e. a 17-point grid, and adjacent lines could contradict.
+    // Where the model has an opinion it is blended in at modelWeight; where it
+    // does not, the rates stand unchanged.
+    const _stats = (market, empirical) => {
+        const mp = modelProbs?.[market];
+        if (mp == null) return empirical;
+        if (empirical == null) return _round(mp);
+        const w = Math.min(1, Math.max(0, t.modelWeight ?? 0));
+        return _round(w * mp + (1 - w) * empirical);
+    };
     const consider = (market, price, mkt, stats, apiP, overround) => {
+        stats = _stats(market, stats);
         if (mkt == null || !(Number(price) >= t.minPrice)) return;
+        // Barred markets yield to the next-best candidate, exactly like a
+        // sub-minUnderLine Under does. They are never merely down-ranked -
+        // a market with a CI entirely below zero has no rank worth having.
+        if (suppressed.has(market)) return;
         const parts = [[w.market, mkt], ...(stats != null ? [[w.stats, stats]] : []), ...(apiP != null ? [[w.api, apiP]] : [])];
         const weight = parts.reduce((sum, [wt]) => sum + wt, 0);
         const confidence = parts.reduce((sum, [wt, v]) => sum + wt * v, 0) / weight;
@@ -504,7 +642,7 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
     if (btts) {
         const probs = _devig([btts.GG, btts.NG]);
         if (probs) {
-            const gg = _mean([hOk ? home.bttsRate : null, aOk ? away.bttsRate : null, hhOk ? h2h.bttsRate : null]);
+            const gg = _sm([[hOk ? home.bttsRate : null, home.n], [aOk ? away.bttsRate : null, away.n], [hhOk ? h2h.bttsRate : null, h2h.n]]);
             consider('GG', btts.GG, probs[0], gg, null, overrounds?.btts);
             consider('NG', btts.NG, probs[1], gg == null ? null : 1 - gg, null, overrounds?.btts);
         }
@@ -524,7 +662,7 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
     if (oddEven) {
         const probs = _devig([oddEven.ODD, oddEven.EVEN]);
         if (probs) {
-            const odd = _mean([hOk ? home.oddRate : null, aOk ? away.oddRate : null, hhOk ? h2h.oddRate : null]);
+            const odd = _sm([[hOk ? home.oddRate : null, home.n], [aOk ? away.oddRate : null, away.n], [hhOk ? h2h.oddRate : null, h2h.n]]);
             consider('ODD', oddEven.ODD, probs[0], odd, null, overrounds?.oddEven);
             consider('EVEN', oddEven.EVEN, probs[1], odd == null ? null : 1 - odd, null, overrounds?.oddEven);
         }
@@ -534,9 +672,9 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
             const probs = _devig([pair.over, pair.under]);
             if (!probs) continue;
             const scoredSide = side === 'H' ? home : away, otherSide = side === 'H' ? away : home;
-            const over = _mean([
-                (side === 'H' ? hOk : aOk) ? scoredSide.scoredOverRates?.[line] : null,
-                (side === 'H' ? aOk : hOk) ? otherSide.concededOverRates?.[line] : null,
+            const over = _sm([
+                [(side === 'H' ? hOk : aOk) ? scoredSide.scoredOverRates?.[line] : null, scoredSide.n],
+                [(side === 'H' ? aOk : hOk) ? otherSide.concededOverRates?.[line] : null, otherSide.n],
             ]);
             consider(`TT:${side}:O ${line}`, pair.over, probs[0], over, null, overrounds?.tt);
             // minUnderLine does NOT apply to TT Unders - it is a total-goals
@@ -559,9 +697,32 @@ export function bestTip({ x12, dc, ou, btts, dnb, oddEven, tt, home, away, h2h, 
         const { overround, ...rest } = c;
         return { ...rest, book_overround: overround };
     };
+    // One-sided stats veto (see DEFAULT_TIP.statsVetoGap). Reported, not
+    // enforced: bestTip stays a calculator and the caller decides what a veto
+    // means (hotpicks drops the tip and records the reason). That split keeps
+    // the whole candidate breakdown inspectable in tests instead of collapsing
+    // to a bare null.
+    const winner = candidates[0];
+    const gap = winner.stats_prob == null || winner.market_prob == null
+        ? null
+        : _round(winner.stats_prob - winner.market_prob);
+    const veto = t.statsVetoGap != null && gap != null && gap < t.statsVetoGap
+        ? 'stats_below_market'
+        : null;
+
     return {
-        ..._surfaceOverround(candidates[0]),
+        ..._surfaceOverround(winner),
         samples: { home_n: home.n, away_n: away.n, h2h_n: h2h.n },
-        runners_up: candidates.slice(1, 3).map(_surfaceOverround),
+        // Distance between our stats support and the book's own number. Kept on
+        // every tip (not just vetoed ones) so the ledger can measure the rule
+        // that is now acting on it.
+        stats_gap: gap,
+        ...(veto ? { veto } : {}),
+        // "Close alternatives" must actually BE alternatives. Measured over the
+        // 1,199-tip ledger, 2.6% of displayed candidate pairs were logically
+        // contradictory (O 2.5 beside U 2.5) and 6.3% were nested (O 1.5 beside
+        // O 2.5 - the same call at a different rung, which is the Banker's job).
+        // The filter is injected via opts.alternatives; see DEFAULT_TIP.
+        runners_up: t.alternatives(winner.market, candidates.slice(1), 2).map(_surfaceOverround),
     };
 }

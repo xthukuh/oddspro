@@ -6,6 +6,8 @@ import { track } from '../track.js';
 import { EV } from '../trackEvents.js';
 import NumberInput from './NumberInput.jsx';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
+import MySlips from './MySlips.jsx';
+import { saveUserSlip } from '../api.js';
 
 // Betslip playground: build VIRTUAL multi-bet slips from the day's tips -
 // drag a candidate onto a slip card (or use its + button), tune the
@@ -125,6 +127,10 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     // settings so you needn't expand to read them). On md+ the full input row
     // always shows - the `contents`/`hidden` swap only bites below md.
     const [cfgOpen, setCfgOpen] = useState(false);
+    // Phase 4: account-saved slips (share codes). Save pushes the ACTIVE slip
+    // to the account; My slips lists/loads them (and loads by a shared code).
+    const [showMine, setShowMine] = useState(false);
+    const [saveNote, setSaveNote] = useState(null);
     const bodyCls = open => (open
         ? 'flex flex-col min-h-0 md:grow'
         : 'hidden md:flex md:flex-col md:min-h-0 md:grow');
@@ -380,6 +386,38 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     </label>
                     </div>
                     <div className="grow" />
+                    {saveNote && (
+                        <span className="pb-1.5 text-xs text-label-2 self-center max-w-[16rem] truncate" title={saveNote}>{saveNote}</span>
+                    )}
+                    <button
+                        onClick={async () => {
+                            const active = slips.find(s => s.id === activeId) ?? slips[0];
+                            if (!active?.legs?.length) return;
+                            try {
+                                const legs = active.legs.map(l => {
+                                    const [home, away] = String(l.fixture ?? '').split(' - ');
+                                    return { fixture_id: l.api_id, market: l.market, price: l.price,
+                                        prob: l.prob ?? null, outcome: l.outcome ?? null, home, away };
+                                });
+                                const { slip } = await saveUserSlip({ title: active.name, legs, source_code: active.sourceCode ?? null });
+                                setSaveNote(`Saved as ${slip.code} - it settles automatically; find it under My slips.`);
+                            } catch (e) {
+                                setSaveNote(e?.status === 401 ? 'Sign in to save slips to your account.' : (e?.message ?? String(e)));
+                            }
+                        }}
+                        disabled={!slips.length}
+                        title="Save the active slip to your account (mints a share code)"
+                        className="cursor-pointer h-10 px-3 rounded-full border border-separator text-sm text-label-2 hover:bg-fill"
+                    >
+                        ☁ Save
+                    </button>
+                    <button
+                        onClick={() => setShowMine(true)}
+                        title="Your saved slips + load a shared slip by its code"
+                        className="cursor-pointer h-10 px-3 rounded-full border border-separator text-sm text-label-2 hover:bg-fill"
+                    >
+                        My slips
+                    </button>
                     <button
                         onClick={clearSlips}
                         disabled={!slips.length}
@@ -666,6 +704,28 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
                     Survival multiplies each leg's calibrated win estimate (independence assumption) -
                     an expectation over many slips, not a promise for this one.
                 </p>
+                {showMine && (
+                    <MySlips
+                        onClose={() => setShowMine(false)}
+                        onLoad={(saved, { copyOf } = {}) => {
+                            // Server slip -> local book entry (self-contained legs, the
+                            // one-owner format): appended and made active; a code-loaded
+                            // slip carries sourceCode so saving mints a provenanced copy.
+                            const legs = (saved.legs ?? []).map(l => ({
+                                api_id: l.fixture_id,
+                                fixture: [l.home, l.away].filter(Boolean).join(' - ') || `#${l.fixture_id}`,
+                                market: l.market, price: l.price, prob: l.prob ?? null,
+                                outcome: l.outcome ?? null,
+                                date: (l.kickoff ?? '').slice(0, 10) || null, time: null,
+                            }));
+                            const slip = { id: _id(), name: saved.title ?? (copyOf ? `From ${copyOf}` : saved.code), legs,
+                                ...(copyOf ? { sourceCode: copyOf } : {}) };
+                            setState(s => ({ ...s, slips: [...s.slips, slip] }));
+                            setActiveId(slip.id);
+                            setShowMine(false);
+                        }}
+                    />
+                )}
         </Sheet>
     );
 }

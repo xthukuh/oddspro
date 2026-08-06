@@ -267,42 +267,56 @@ export function effectivePromptVersion(preambleOn, base = PROMPT_VERSION) {
     return preambleOn ? base + 1 : base;
 }
 
+// The vendor prefix of an OpenRouter model id ('openai/gpt-5.6-luna' ->
+// 'openai'); a slug without a slash is its own vendor. Pure, used by the
+// blind-independence guard below.
+export function modelVendor(model) {
+    const s = String(model ?? '');
+    const slash = s.indexOf('/');
+    return (slash > 0 ? s.slice(0, slash) : s).toLowerCase();
+}
+
 // task -> { provider, model, grounded }. Facts are extracted ONCE by the
 // grounded model; both reasoners then work identical evidence, so disagreement
 // is reasoning difference rather than one model simply knowing more.
+//
+// 2026-08-04: Gemini RETIRED - every task routes through OpenRouter. Grounding
+// is the OpenRouter web plugin (openrouter.js attaches it when grounded).
+// Model switches re-key the reuse tags (aiModelTag/enrichModelTag), so the
+// swap re-adjudicates/re-enriches upcoming rows automatically, budget-bounded
+// - the dated regime entry lives in docs/memory-bank.md.
 export function resolveTask(task, cfg) {
     const grounded = Boolean(cfg.HOTPICK_AI_WEB);
-    // 'adjudicate' (T9): the hot-pick/tip adjudicators, routed through the
-    // same resolver now that they ride callStructured. Byte-identical to what
-    // gemini.js#_adjudicate hardcoded before the harness migration - model,
-    // grounding and therefore the #p3 reuse tag are all unchanged.
     if (task === 'adjudicate') {
-        return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
+        return { provider: 'openrouter', model: cfg.HOTPICK_AI_MODEL, grounded };
     }
     if (task === 'facts') {
-        return { provider: 'gemini', model: cfg.HOTPICK_AI_MODEL, grounded };
+        return { provider: 'openrouter', model: cfg.AI_FACTS_MODEL || cfg.HOTPICK_AI_MODEL, grounded };
     }
     if (task === 'blind') {
-        // Non-Google by requirement: reasoner independence is the property the
-        // consensus signal rests on - two Google models is Gemini agreeing with
-        // itself. Enforced HERE, not just documented, because AI_BLIND_MODEL is
-        // free-form env config and a valid OpenRouter slug
-        // (`google/gemini-2.5-pro`) would otherwise silently defeat it.
+        // Independent by requirement: the blind reasoner is the check on the
+        // anchored one, so it must be a DIFFERENT VENDOR - same-vendor pairs
+        // are one lab's model agreeing with itself. (The old Google-only ban
+        // generalized when the whole stack moved to OpenRouter.) Enforced
+        // HERE, not just documented, because these are free-form env keys.
         const model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL;
-        // Name the source key that actually resolved the model - the model may
-        // have fallen through to OPENROUTER_MODEL, and an operator chasing the
-        // error by editing AI_BLIND_MODEL would otherwise be editing the wrong
-        // key.
+        // Name the source key that actually resolved the model - an operator
+        // chasing the error would otherwise edit the wrong key.
         const src = cfg.AI_BLIND_MODEL ? 'AI_BLIND_MODEL' : 'OPENROUTER_MODEL';
         if (model && /gemini|google|gemma/i.test(model)) {
-            throw new Error(`${src} "${model}" is a Google model - the blind reasoner must be `
-                + 'non-Google so it is an independent check on the (Google) anchored/facts reasoner, '
-                + 'not the same model agreeing with itself.');
+            throw new Error(`${src} "${model}" is a Google model - the blind reasoner must stay `
+                + 'vendor-independent of the anchored/facts reasoners, not the same lab agreeing with itself.');
+        }
+        const anchored = cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL;
+        if (model && anchored && modelVendor(model) === modelVendor(anchored)) {
+            throw new Error(`${src} "${model}" shares a vendor with AI_ANCHORED_MODEL "${anchored}" - `
+                + 'the blind reasoner must be a different vendor from the anchored one '
+                + '(reasoner independence is what the blind-vs-anchored comparison rests on).');
         }
         return { provider: 'openrouter', model, grounded: false };
     }
     if (task === 'anchored') {
-        return { provider: 'gemini', model: cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL, grounded };
+        return { provider: 'openrouter', model: cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL, grounded: false };
     }
     throw new Error(`unknown ai task: ${task}`);
 }

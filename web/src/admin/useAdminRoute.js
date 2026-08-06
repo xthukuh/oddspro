@@ -15,7 +15,9 @@ export const ADMIN_SECTIONS = [
     { id: 'messaging', label: 'Messaging' },
     { id: 'lab', label: 'Data lab' },
     { id: 'performance', label: 'Performance' },
+    { id: 'models', label: 'Models' },
     { id: 'database', label: 'Database' },
+    { id: 'tokens', label: 'API tokens' },
     { id: 'about', label: 'About' },
 ];
 const IDS = new Set(ADMIN_SECTIONS.map(s => s.id));

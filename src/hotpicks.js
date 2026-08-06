@@ -5,6 +5,7 @@ import {
     apiPredictionSignal, scoreOverLine, LINE_THRESHOLDS, parseLinesCsv,
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
+import { marketMenu, bankerPick, rungGap, coherentAlternatives } from './db/ladder-rules.js';
 import { summarizePerformance } from './db/perf-rules.js';
 import { aiEnabled, aiModelTag } from './ai/adjudicators.js';
 import { canReuseHotVerdict, hotReviewPending, tipReviewPending } from './db/adjudicate-rules.js';
@@ -34,6 +35,9 @@ const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
     'api_advice_supports',
     'tip_market', 'tip_price', 'tip_confidence', 'tip_breakdown', 'tip_skip_reason',
+    // Banker columns are sweep-owned like the tip ones; tip_banker_outcome is
+    // deliberately ABSENT (settle-pass owned, same idiom as tip_outcome).
+    'tip_banker_market', 'tip_banker_price', 'tip_banker_prob',
     'computed_at',
 ];
 
@@ -115,7 +119,30 @@ export async function settleHotPicks() {
         }
     }
     const tips_settled = buckets.hit.length + buckets.miss.length + buckets.void.length;
-    return { settled, tips_settled };
+
+    // Banker outcomes settle on the SAME contract, in their own pass: a fixture
+    // may carry a banker without a tip (the stats veto drops the tip but the
+    // banker reads only prices), so the two selection sets are not the same rows.
+    const pendingBankers = await db('fixture_predictions as p')
+        .join('fixtures as f', 'f.id', 'p.fixture_id')
+        .whereNull('p.tip_banker_outcome').whereNotNull('p.tip_banker_market')
+        .whereIn('f.status', FINAL_STATUSES)
+        .select('p.fixture_id', 'p.tip_banker_market',
+            db.raw('COALESCE(f.ft_home, f.goals_home) as fh'),
+            db.raw('COALESCE(f.ft_away, f.goals_away) as fa'));
+    const bankerBuckets = { hit: [], miss: [], void: [] };
+    for (const t of pendingBankers) {
+        if (t.fh == null || t.fa == null) continue;
+        bankerBuckets[tipOutcome(t.tip_banker_market, t.fh, t.fa)].push(t.fixture_id);
+    }
+    for (const [outcome, ids] of Object.entries(bankerBuckets)) {
+        for (let i = 0; i < ids.length; i += 200) {
+            await db('fixture_predictions').whereIn('fixture_id', ids.slice(i, i + 200))
+                .update({ tip_banker_outcome: outcome });
+        }
+    }
+    const bankers_settled = bankerBuckets.hit.length + bankerBuckets.miss.length + bankerBuckets.void.length;
+    return { settled, tips_settled, bankers_settled };
 }
 
 // Bulk history loader: every FINAL fixture involving any of `teamIds`,
@@ -276,8 +303,28 @@ export async function updateHotPicks() {
                 minPrice: effective('TIP_MIN_PRICE'),
                 minConfidence: effective('TIP_MIN_CONFIDENCE'),
                 minUnderLine: effective('TIP_MIN_UNDER_LINE'),
+                // "Close alternatives" must be genuine alternatives: never the
+                // negation of the tip, never the same call at another rung.
+                alternatives: coherentAlternatives,
             });
         }
+
+        // The Banker: safest market on the board, priced not reasoned. Computed
+        // from the SAME books the tip used, but independently of it - it needs no
+        // stats, so it survives the stats veto and is available on any eligible
+        // fixture that has a book at all.
+        const menu = elig.eligible ? marketMenu(groups) : {};
+        const banker = elig.eligible
+            ? bankerPick(menu, { bankerFloor: effective('TIP_BANKER_FLOOR') })
+            : null;
+
+        // Stats veto is enforced HERE, not inside bestTip: the calculator
+        // reports, the writer decides (see tip-rules DEFAULT_TIP.statsVetoGap).
+        // The tip is dropped and the reason recorded like any other skip; the
+        // banker above is untouched.
+        const vetoed = tip?.veto ?? null;
+        if (vetoed) tip = null;
+
         const row = {
             fixture_id: f.id,
             market: `O ${best.line}`,
@@ -291,10 +338,22 @@ export async function updateHotPicks() {
             tip_market: tip?.market ?? null,
             tip_price: tip?.price ?? null,
             tip_confidence: tip?.confidence ?? null,
-            tip_breakdown: tip ? JSON.stringify(tip) : null,
+            // rung_gap rides the breakdown (not its own column): it is a derived
+            // diagnostic, and the study's strongest non-trivial hit/miss
+            // discriminator (-0.20 sd), so it belongs with the justification.
+            tip_breakdown: tip
+                ? JSON.stringify({ ...tip, rung_gap: rungGap(tip.price, menu) })
+                : null,
             // 'no_pick' = eligible but nothing cleared the price/confidence
-            // floors - distinguishable from "not enough data" in the UI
-            tip_skip_reason: (elig.eligible ? (tip ? null : 'no_pick') : elig.reason)?.substring(0, 64) ?? null,
+            // floors - distinguishable from "not enough data" in the UI.
+            // 'stats_below_market' = the veto fired; also distinct, because it
+            // means "we had a pick and chose not to make it".
+            tip_skip_reason: (elig.eligible
+                ? (tip ? null : (vetoed ?? 'no_pick'))
+                : elig.reason)?.substring(0, 64) ?? null,
+            tip_banker_market: banker?.market ?? null,
+            tip_banker_price: banker?.price ?? null,
+            tip_banker_prob: banker?.prob ?? null,
             computed_at: db.fn.now(),
         };
         // Read-only veto re-apply: a stored AI veto that is still reusable

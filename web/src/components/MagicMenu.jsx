@@ -20,6 +20,7 @@ const STATS_TITLE = 'What each number means (replayed on past days):\n'
 export default function MagicMenu({
     data, error, activeIds, onToggle, onClearMagic, onClose,
     signedIn, sureBets, sureCount, sureCap, slipSize, onSureBets, onTopSlip,
+    onDailySlip,
 }) {
     // Session-aware: methodology prose + backtest numbers hide for guests
     const showDetails = useShowDetails();
@@ -115,6 +116,19 @@ export default function MagicMenu({
                             ⭐ Sure bets - sign in to unlock the daily top-10 safe list.
                         </div>
                     )}
+                </div>
+                {/* Daily MultiBet (engine-v2 Phase 3): one survival card per
+                    day + its settled history. Visible to everyone - guests get
+                    the streak record and a sign-in nudge inside the modal. */}
+                <div className="mt-1 pt-1 border-t border-separator-2">
+                    <button onClick={() => onDailySlip?.()} className="cursor-pointer block w-full text-left px-3 py-2.5 rounded-xl hover:bg-fill">
+                        <span className="flex items-center text-[15px]">
+                            <span className="font-semibold text-label">📅 Daily MultiBet</span>
+                        </span>
+                        <span className="block text-[12.5px] text-label-2">
+                            Today's cherry-picked survival card and its win-streak history.
+                        </span>
+                    </button>
                 </div>
             </div>
             <div className="px-5 py-3 border-t border-separator-2">

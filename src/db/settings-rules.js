@@ -94,6 +94,7 @@ export const SETTINGS_CATALOG = [
     { key: 'TIP_MIN_PRICE', type: 'number', group: 'tip', public: false, live: true, regime: true, min: 1, unit: 'odds', label: 'Tip: min price', hint: 'Excludes near-certain junk odds below this floor from tip candidacy.' },
     { key: 'TIP_MIN_CONFIDENCE', type: 'number', group: 'tip', public: false, live: true, regime: true, min: 0, max: 1, label: 'Tip: min confidence', hint: 'Blend-confidence floor a candidate needs to become the fixture\'s tip.' },
     { key: 'TIP_MIN_UNDER_LINE', type: 'number', group: 'tip', public: false, live: true, regime: true, min: 0, unit: 'line', label: 'Tip: min Under line', hint: 'No Under tips below this line (near-Unders realized 61.9% vs 78.1% break-even).' },
+    { key: 'TIP_BANKER_FLOOR', type: 'number', group: 'tip', public: false, live: true, regime: true, min: 1, unit: 'odds', label: 'Banker: min price', hint: 'Price floor for the Banker (safest offered market). Separate from the Tip floor on purpose - 1.01 measured 92.1% hit-rate over 1,199 settled tips.' },
     { key: 'TIP_MIN_OVERROUND', type: 'number', group: 'tip', public: false, live: true, regime: true, label: 'Tip book: min overround', hint: 'Family-book integrity floor - a book under 1.0 smells like a palpable error or boosted price.' },
     { key: 'TIP_MAX_OVERROUND', type: 'number', group: 'tip', public: false, live: true, regime: true, label: 'Tip book: max overround', hint: 'Family-book ceiling - heavy margin loading ruins the devig.' },
     { key: 'TIP_MAX_BOOK_DIVERGENCE', type: 'number', group: 'tip', public: false, live: true, regime: true, label: 'Tip book: max divergence', hint: 'Cross-provider devigged-probability divergence veto for the M3 families.' },
@@ -103,11 +104,14 @@ export const SETTINGS_CATALOG = [
     { key: 'AI_ENRICH_ENABLED', type: 'boolean', group: 'ai', public: false, live: true, label: 'AI enrichment', hint: 'M4.1 three-call collection for upcoming fixtures (bills per fixture); feeds NO ranking.' },
     { key: 'AI_ENRICH_CAP', type: 'int', group: 'ai', public: false, live: true, min: 0, max: 2000, unit: 'fixtures', label: 'Enrichment cap', hint: 'Fixtures enriched per run (each costs up to 3 AI calls).' },
     { key: 'AI_ENRICH_CONCURRENCY', type: 'int', group: 'ai', public: false, live: true, min: 1, max: 16, label: 'Enrichment concurrency', hint: 'In-flight fixtures during an enrichment run (network calls only).' },
-    { key: 'OPENROUTER_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Blind reasoner model', hint: 'OpenRouter model id for the blind task; must NOT be a Google model (reasoner independence).' },
+    { key: 'OPENROUTER_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Blind reasoner model', hint: 'OpenRouter model id for the blind task; must be a different vendor from the anchored model (reasoner independence).' },
     { key: 'AI_BLIND_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Blind model override', hint: 'Overrides the blind task\'s model; blank = provider default (OPENROUTER_MODEL).' },
-    { key: 'AI_ANCHORED_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Anchored model override', hint: 'Overrides the anchored task\'s Gemini model; blank = provider default.' },
-    { key: 'HOTPICK_AI_MODEL', type: 'string', group: 'ai', public: false, live: true, regime: true, label: 'Adjudicator model', hint: 'Gemini model for hot-pick/tip verdicts; switching re-keys the reuse tag and re-adjudicates upcoming rows.' },
-    { key: 'HOTPICK_AI_WEB', type: 'boolean', group: 'ai', public: false, live: true, regime: true, label: 'Adjudicator web grounding', hint: 'Attach Google Search grounding to verdict calls (bills extra; flips the model tag -> re-adjudication).' },
+    { key: 'AI_ANCHORED_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Anchored model', hint: 'OpenRouter model for the anchored task; must differ in vendor from the blind model.' },
+    { key: 'AI_FACTS_MODEL', type: 'string', group: 'ai', public: false, live: true, label: 'Facts model', hint: 'OpenRouter model for the grounded facts extraction; blank = the adjudicator model.' },
+    { key: 'HOTPICK_AI_MODEL', type: 'string', group: 'ai', public: false, live: true, regime: true, label: 'Adjudicator model', hint: 'OpenRouter model for hot-pick/tip verdicts; switching re-keys the reuse tag and re-adjudicates upcoming rows.' },
+    { key: 'HOTPICK_AI_WEB', type: 'boolean', group: 'ai', public: false, live: true, regime: true, label: 'Adjudicator web grounding', hint: 'Attach the OpenRouter web plugin to verdict calls (bills the per-search fee; flips the model tag -> re-adjudication).' },
+    { key: 'AI_WEB_ENGINE', type: 'string', group: 'ai', public: false, live: true, pattern: '^(parallel|exa|native)$', label: 'Web search engine', hint: 'OpenRouter web plugin engine: parallel ($0.001/req) / exa ($0.005) / native (model vendor pass-through).' },
+    { key: 'AI_WEB_MAX_RESULTS', type: 'int', group: 'ai', public: false, live: true, label: 'Web search results', hint: 'Max search results attached per grounded call (1-10).' },
     { key: 'TIP_AI_MIN_CONFIDENCE', type: 'number', group: 'ai', public: false, live: true, regime: true, min: 0, max: 1, label: 'Tip review floor', hint: 'Only tips at/above this confidence get an AI review (best-first under the daily budget).' },
     { key: 'TIP_AI_DAILY_CAP', type: 'int', group: 'ai', public: false, live: true, regime: true, min: 0, unit: 'verdicts', label: 'Tip review daily budget', hint: 'Fresh (billed) tip verdicts per EAT day; reused verdicts are free.' },
     { key: 'HOTPICK_AI_CONCURRENCY', type: 'int', group: 'ai', public: false, live: true, min: 1, max: 16, label: 'AI review concurrency', hint: 'Concurrent verdict calls in the review worker (network only - DB writes stay sequential).' },
@@ -121,6 +125,17 @@ export const SETTINGS_CATALOG = [
     { key: 'AI_CONSENSUS_TASKS', type: 'string', group: 'ai-dark', public: false, live: true, regime: true, pattern: '^$|^[a-z_]+(\\s*,\\s*[a-z_]+)*$', patternHint: 'CSV of task keys, e.g. adjudicate', label: 'DARK: consensus tasks', hint: 'Tasks routed to a cross-vendor panel (only adjudicate is wired); blank = off.' },
     { key: 'AI_CONSENSUS_MODELS', type: 'string', group: 'ai-dark', public: false, live: true, regime: true, pattern: '^$|^[\\w.-]+:[^,\\s]+(\\s*,\\s*[\\w.-]+:[^,\\s]+)*$', patternHint: 'CSV of provider:model entries', label: 'DARK: consensus panel', hint: 'provider:model CSV for the panel; must span vendors (one vendor agreeing with itself is not consensus).' },
     { key: 'AI_CONSENSUS_MIN_AGREE', type: 'int', group: 'ai-dark', public: false, live: true, regime: true, min: 2, max: 9, label: 'DARK: consensus floor', hint: 'Per-field agreement minimum; disagreement below it throws (the panel never guesses).' },
+    // ---- OpenRouter model triage (src/modeltriage/). All live: the weekly
+    // tick late-reads every knob at due-check time, so no restart is needed.
+    // AUTO_SWITCH is regime: turning it on lets the tick rewrite the live
+    // model routing, which re-keys the verdict/insight reuse tags exactly
+    // like a manual model edit would (the switch itself still lands its own
+    // dated admin_audit row via the standard settings write).
+    { key: 'TRIAGE_ENABLED', type: 'boolean', group: 'ai-triage', public: false, live: true, label: 'Model triage', hint: 'Weekly OpenRouter catalog pull + qualification probes + per-task model shortlist (Admin -> Models).' },
+    { key: 'TRIAGE_INTERVAL_HOURS', type: 'int', group: 'ai-triage', public: false, live: true, min: 1, unit: 'h', label: 'Triage cadence', hint: 'Hours between triage runs (168 = weekly). The due-check runs hourly, so a shortened interval applies without a restart.' },
+    { key: 'TRIAGE_AUTO_SWITCH', type: 'boolean', group: 'ai-triage', public: false, live: true, regime: true, label: 'Triage auto-switch', hint: 'Let a shortlist PRIMARY rewrite the live task routing (one task per run, fully qualified candidates only). Off = adopt buttons in Admin -> Models.' },
+    { key: 'TRIAGE_PROBE_BUDGET', type: 'int', group: 'ai-triage', public: false, live: true, min: 0, unit: 'calls', label: 'Triage probe budget', hint: 'Max billed qualification probe calls per run (3 per candidate); catalog pulls are free and uncapped.' },
+    { key: 'TRIAGE_FREE_FLAKINESS_TAX', type: 'number', group: 'ai-triage', public: false, live: true, min: 0, max: 1, label: 'Free-tier flakiness tax', hint: 'Value-score penalty charged to :free models instead of a dollar cost (they cost daily-cap risk, not $0).' },
     // ---- Auth policy (creds/pepper stay .env-only; AUTH_ENABLED stays a boot
     // switch - an admin flipping it from inside a session would saw off the
     // branch the settings UI sits on).

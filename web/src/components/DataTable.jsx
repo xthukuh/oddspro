@@ -51,6 +51,7 @@ const HEADER_META = {
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
     tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
+    banker: { info: 'The SAFEST market this bookmaker offers on the fixture, with its devigged win probability. Not the value pick - the survival pick. Wins far more often than the Tip; does not win more money.' },
     status: { info: 'Fixture status - hover a cell for the odds-refresh & betting-closed times' },
     league: { info: 'Country - league' },
     season: { info: 'Season (starting year)' },
@@ -197,7 +198,7 @@ const _sortNum = v => (typeof v === 'number' ? Math.round(v * 1000) / 1000 : v);
 // Columns still relying on the "⇅ sorts as:" tooltip (sort value NOT shown
 // inline): tip (its own rich cell) and the rolling-goals columns (avg already
 // visible in parentheses).
-const SORT_HINT_KEYS = new Set(['tip',
+const SORT_HINT_KEYS = new Set(['tip', 'banker',
     'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
 
 // "⇅ sorts as: <derived value>" - the exact value sorting/filtering uses
@@ -304,6 +305,30 @@ function _cell(row, col, linkProviders, openTip) {
             <div className="leading-tight whitespace-nowrap">
                 <div className="text-label-3 text-[10px] tabular-nums">{row.api_id}</div>
                 <div className="tabular-nums">{_hm(row.start_time)}</div>
+            </div>
+        );
+    }
+    if (key === 'banker') {
+        // The safest market the book offers on this fixture (ladder-rules
+        // bankerPick). Deliberately a SEPARATE column from Tip, not a
+        // replacement: Tip is the value pick behind its price floor, Banker is
+        // the survival pick behind a 1.01 floor, and keeping both lets the two
+        // accumulate settled evidence side by side on one population.
+        if (!row.tip_banker_market) return <span className="text-label-3">-</span>;
+        const prob = row.tip_banker_prob != null ? `${Math.round(row.tip_banker_prob * 100)}%` : null;
+        const missed = row.tip_banker_outcome === 'miss';
+        // A banker at or above this bar is what the Sure Bets list publishes.
+        const sure = row.tip_banker_prob != null && Number(row.tip_banker_prob) >= 0.95;
+        return (
+            <div className={`whitespace-nowrap ${missed ? 'text-miss' : ''}`}
+                title={`${row.tip_banker_market} @ ${row.tip_banker_price}\n`
+                    + `Book's own win probability: ${prob ?? '-'}\n`
+                    + (sure ? 'Clears the Sure Bets bar (>=95%)\n' : '')
+                    + 'Safest market offered - survival, not value'}>
+                {sure ? '\u2b50 ' : ''}
+                <span className={`font-semibold ${missed ? '' : 'text-accent'}`}>{row.tip_banker_market}</span>
+                {prob && <span className={missed ? '' : 'text-label-2'}> · {prob}</span>}
+                {_tick(row.tip_banker_outcome)}
             </div>
         );
     }

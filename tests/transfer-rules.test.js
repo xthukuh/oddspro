@@ -17,6 +17,7 @@ import {
     isIntegerPkType,
     ndjsonLine,
     formatBytes,
+    applySkipTables,
     buildExportListing,
     exportRequestSchema,
     buildUploadPlan,
@@ -648,4 +649,46 @@ test('shouldSkipSafetyExport returns false on a well-formed-JSON-but-wrong-shape
     assert.equal(shouldSkipSafetyExport('{}'), false);
     assert.equal(shouldSkipSafetyExport('null'), false);
     assert.equal(shouldSkipSafetyExport(JSON.stringify({ ...validManifest, tables: [{ name: 'leagues' }] })), false);
+});
+
+// --- applySkipTables (DB-sync import-side retention) -------------------------
+// The CLI/boot sync import can skip tables the destination wants to keep
+// intact ON TOP of the export-side exclusions - the manifest is filtered
+// before ordering/apply, so skipped tables never enter the cursor walk.
+test('applySkipTables drops the named tables and reports them', () => {
+    const manifest = {
+        version: 1, created_at: 'x', database: 'd', schema_head: 'm1', excluded: [],
+        tables: [
+            { name: 'fixtures', rows: 10, chunks: 1, pk: 'id' },
+            { name: 'odds_markets', rows: 20, chunks: 2, pk: 'id' },
+            { name: 'ip_geo', rows: 5, chunks: 1, pk: 'ip' },
+        ],
+    };
+    const { manifest: out, skipped } = applySkipTables(manifest, ['ip_geo', 'not-present']);
+    assert.deepEqual(out.tables.map(t => t.name), ['fixtures', 'odds_markets']);
+    assert.deepEqual(skipped, ['ip_geo']);           // only tables actually in the manifest
+    assert.equal(manifest.tables.length, 3);          // input not mutated
+    assert.equal(out.schema_head, 'm1');              // everything else carried over
+});
+
+test('applySkipTables with no skips returns an equivalent manifest and empty skipped', () => {
+    const manifest = {
+        version: 1, created_at: 'x', database: 'd', schema_head: 'm1', excluded: [],
+        tables: [{ name: 'fixtures', rows: 1, chunks: 1, pk: 'id' }],
+    };
+    const a = applySkipTables(manifest, []);
+    const b = applySkipTables(manifest, null);
+    assert.deepEqual(a.manifest.tables, manifest.tables);
+    assert.deepEqual(a.skipped, []);
+    assert.deepEqual(b.skipped, []);
+});
+
+test('applySkipTables tolerates junk in the skip list (external CLI input)', () => {
+    const manifest = {
+        version: 1, created_at: 'x', database: 'd', schema_head: 'm1', excluded: [],
+        tables: [{ name: 'fixtures', rows: 1, chunks: 1, pk: 'id' }],
+    };
+    const { manifest: out, skipped } = applySkipTables(manifest, ['', null, '  fixtures  ']);
+    assert.deepEqual(out.tables, []);                 // trimmed name matched
+    assert.deepEqual(skipped, ['fixtures']);
 });
