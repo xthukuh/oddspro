@@ -128,6 +128,27 @@ Honesty: any-green at ~1.03x/card is a survival record, not profit (still −3.3
 per unit); `outcome` keeps the strict all-cards meaning, `cards_won/total`
 carries the survivability record.
 
+## Round 7: value-seeking evolution with real risk (owner directive, 2026-08-06)
+
+`scripts/evolve-value-slip.js`: fitness flipped to PROFIT PER STAKED UNIT at real
+odds (target-closing cards, legs to 3.5x, floors to 0.70, edge floors, family
+tilts, error-feedback knobs). Two iterations:
+
+1. **Round 1 produced a MIRAGE and the guard caught it**: train +28.8% ROI
+   (floor 0.70 + minLegPrice 1.10) collapsed to **−41.6% on the untouched test
+   tail**. Recorded as the canonical overfit example.
+2. **Round 2 (anti-mirage fitness: a config's score is its WORST-half train
+   ROI) found a generalizing emergent**: the seed 1.5x card + **maxCards 2**
+   (two efficiency-ranked 1.5x-target cards per day). Full window: 44/72 cards
+   = 61.1% at 1.63x avg, **ROI −0.4% (break-even, vs −4.5% single-card)**,
+   any-win day streak 11; test tail −4.5% = no collapse. Risk ladder: 2.0x arm
+   −2.1% (fair-priced), 2.5x/3.0x arms −17%/−39% (real ceiling at this ledger).
+
+Verdict: at 36 days of data, honest value sits at ~break-even for a two-card
+1.5x construction — a genuine 4pp/unit improvement over the single card, no
+proven +EV yet. The instrument re-runs monthly; every future claim must clear
+the worst-half fitness AND the untouched tail, exactly as these two rounds did.
+
 ## Honest framing (per the 2026-08-06 charter: report plainly, never stop experimenting)
 
 - 86.7% green days with a best streak of 8 is the strongest day-level survival
