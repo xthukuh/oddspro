@@ -131,11 +131,6 @@ export const SETTINGS_CATALOG = [
     // model routing, which re-keys the verdict/insight reuse tags exactly
     // like a manual model edit would (the switch itself still lands its own
     // dated admin_audit row via the standard settings write).
-    { key: 'TRIAGE_ENABLED', type: 'boolean', group: 'ai-triage', public: false, live: true, label: 'Model triage', hint: 'Weekly OpenRouter catalog pull + qualification probes + per-task model shortlist (Admin -> Models).' },
-    { key: 'TRIAGE_INTERVAL_HOURS', type: 'int', group: 'ai-triage', public: false, live: true, min: 1, unit: 'h', label: 'Triage cadence', hint: 'Hours between triage runs (168 = weekly). The due-check runs hourly, so a shortened interval applies without a restart.' },
-    { key: 'TRIAGE_AUTO_SWITCH', type: 'boolean', group: 'ai-triage', public: false, live: true, regime: true, label: 'Triage auto-switch', hint: 'Let a shortlist PRIMARY rewrite the live task routing (one task per run, fully qualified candidates only). Off = adopt buttons in Admin -> Models.' },
-    { key: 'TRIAGE_PROBE_BUDGET', type: 'int', group: 'ai-triage', public: false, live: true, min: 0, unit: 'calls', label: 'Triage probe budget', hint: 'Max billed qualification probe calls per run (3 per candidate); catalog pulls are free and uncapped.' },
-    { key: 'TRIAGE_FREE_FLAKINESS_TAX', type: 'number', group: 'ai-triage', public: false, live: true, min: 0, max: 1, label: 'Free-tier flakiness tax', hint: 'Value-score penalty charged to :free models instead of a dollar cost (they cost daily-cap risk, not $0).' },
     // ---- Auth policy (creds/pepper stay .env-only; AUTH_ENABLED stays a boot
     // switch - an admin flipping it from inside a session would saw off the
     // branch the settings UI sits on).

@@ -18,15 +18,6 @@ import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
-import { scorecardSummary } from './scorecard.js';
-import {
-    startExport, listExports, deleteExport, deleteImport, EXPORT_ROOT,
-    startImportManifest, saveImportChunk, importStagingState, startImport,
-} from './db-transfer.js';
-import {
-    safeExportFilename, exportRequestSchema,
-    importApplySchema, matchesImportConfirm, importConfirmPhrase,
-} from './db/transfer-rules.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
 import { shouldLogVisit, pickIp } from './db/visit-rules.js';
@@ -35,7 +26,6 @@ import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js
 import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
-import { getTriageState, runTriageNow, startTriageScheduler, stopTriageScheduler } from './modeltriage/index.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
@@ -52,8 +42,6 @@ import { accessFromUser, guestDateAllowed } from './db/access-rules.js';
 import { getUserPrefs, saveUserPrefs } from './prefs.js';
 import { loadOverrides, effective, publicSettings, adminSettings, setOverrides, resetOverride, auditTrail } from './settings.js';
 import { settingsPutSchema } from './db/settings-rules.js';
-import { labData, LAB_DEFAULTS } from './lab.js';
-import { LAB_FEATURES, LAB_OUTCOMES } from './db/lab-rules.js';
 import { listUsers, getAdminUser, patchUser } from './admin-users.js';
 import { userPatchSchema } from './db/admin-rules.js';
 import { listTemplates, saveTemplate, deleteTemplate } from './sms/templates.js';
@@ -954,59 +942,8 @@ app.get('/api/admin/settings/audit', requireAdminRole, async (req, res, next) =>
     }
 });
 
-// Model triage (src/modeltriage/, 2026-08-04 design spec) - admin SESSION
-// only like every new admin route. GET = knob state + live routing + the
-// newest persisted shortlist; POST /run = the admin "Run triage now" button
-// (fire-and-forget on the module's own single slot - a busy slot answers 409
-// rather than queueing, the DatabaseSection idiom). Adopting a model needs no
-// route of its own: the card writes the routing key through the standard
-// settings PUT above, so the admin_audit trail dates it automatically.
-app.get('/api/admin/triage', requireAdminRole, async (req, res, next) => {
-    try {
-        res.json(await getTriageState());
-    } catch (e) {
-        next(e);
-    }
-});
-
-app.post('/api/admin/triage/run', requireAdminRole, (req, res) => {
-    if (!csrfOk(req, res)) return;
-    const r = runTriageNow();
-    if (!r.started) return res.status(409).json({ error: 'A triage pass is already running' });
-    res.status(202).json({ ok: true, started: true });
-});
-
-// Data-viz lab (v1.1.0 Phase 6, admin SESSION only - the SPA admin panel; no
-// machine-bearer path, unlike the transitional requireAdminDual above). Raw
-// rows never leave the server: /data returns small pre-binned aggregates with
-// a minCount guardrail (src/lab.js + pure src/db/lab-rules.js).
-
-// GET /api/admin/lab/features - the fixed feature/outcome catalogs + defaults.
-app.get('/api/admin/lab/features', requireAdminRole, (req, res) => {
-    res.json({ features: LAB_FEATURES, outcomes: LAB_OUTCOMES, defaults: LAB_DEFAULTS });
-});
-
-// GET /api/admin/lab/data?x=&outcome=[&y=&color=&filters=&days=&sample=&min_count=]
-// filters is a JSON [{key,op,value}] over feature keys. Unknown keys/ops throw
-// TypeError -> the JSON error handler's 400.
-app.get('/api/admin/lab/data', requireAdminRole, async (req, res, next) => {
-    try {
-        const q = req.query;
-        res.json(await labData({
-            x: q.x != null ? String(q.x) : null,
-            y: q.y ? String(q.y) : null,
-            color: q.color ? String(q.color) : null,
-            outcome: q.outcome != null ? String(q.outcome) : null,
-            filters: _json(q.filters, []),
-            days: q.days ? Number(q.days) : null,
-            sample: q.sample ? Number(q.sample) : undefined,
-            minCount: q.min_count ? Number(q.min_count) : undefined,
-            topCategories: q.top_categories ? Number(q.top_categories) : undefined,
-        }));
-    } catch (e) {
-        next(e);
-    }
-});
+// (Model triage + data-viz lab admin routes removed 2026-08-07 - the core-
+// focus trim; git history has both. Re-add alongside their admin sections.)
 
 // GET /api/admin/track/summary[?days=] - pre-binned visitor/feature analytics
 // for the admin Dashboard (M5). Admin SESSION only like the lab: raw rows
@@ -1071,168 +1008,10 @@ app.get('/api/admin/db/health', requireAdminRole, async (req, res, next) => {
     } catch (e) { next(e); }
 });
 
-// --- M10: DB export (Task 3 - chunked NDJSON+gzip dump; Task 4 adds import).
-// Rides the SAME single-slot job as /api/refresh (src/auto-refresh.js) - an
-// export can never overlap a data refresh (or vice versa): delete+insert
-// gap-lock safety, spec decision 11. Job state is the plain refreshStatus()
-// object every /api/refresh poller already understands - no second shape to
-// learn.
-
-// POST /api/admin/db/export - body {excluded?: string[]}. 409 (not queued)
-// when a refresh/export/import job already holds the slot.
-app.post('/api/admin/db/export', requireAdminRole, express.json({ limit: '8kb' }), async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    try {
-        const body = exportRequestSchema.parse(req.body ?? {});
-        const { started } = startExport({ excluded: body.excluded ?? [] });
-        if (!started) return res.status(409).json(refreshStatus());
-        res.status(202).json(refreshStatus());
-    } catch (e) { authErr(e, res, next); }
-});
-
-// GET /api/admin/db/exports - every export on disk (newest first, manifest
-// validated) + the shared job state (the web polls this while an export
-// runs, same idiom as campaign routes embedding campaignJobStatus()).
-app.get('/api/admin/db/exports', requireAdminRole, async (req, res, next) => {
-    try {
-        res.json({ exports: await listExports(), job: refreshStatus() });
-    } catch (e) { next(e); }
-});
-
-// GET /api/admin/db/exports/:stamp/:file - stream one chunk/manifest file.
-// BOTH path params go through safeExportFilename BEFORE any filesystem
-// access - a rejection is 400, not 404, and the handler returns before ever
-// touching disk (the path-traversal gate; src/db/transfer-rules.js).
-app.get('/api/admin/db/exports/:stamp/:file', requireAdminRole, (req, res) => {
-    const stamp = safeExportFilename(req.params.stamp);
-    const file = safeExportFilename(req.params.file);
-    if (!stamp || !file) return res.status(400).json({ error: 'Invalid export path' });
-    const filePath = path.join(EXPORT_ROOT, stamp, file);
-    if (!existsSync(filePath)) return res.status(404).json({ error: 'Export file not found' });
-    // A concurrent DELETE between the existsSync check above and here would
-    // otherwise make statSync/createReadStream throw synchronously -> a
-    // generic 500 instead of the honest 404 the file's actual absence
-    // deserves (TOCTOU). Any OTHER stat failure still propagates (throw ->
-    // Express 5's built-in sync-handler catch -> the JSON error middleware).
-    let size;
-    try {
-        size = statSync(filePath).size;
-    } catch (e) {
-        if (e?.code === 'ENOENT') return res.status(404).json({ error: 'Export file not found' });
-        throw e;
-    }
-    res.set('Content-Type', file.endsWith('.json') ? 'application/json' : 'application/gzip');
-    res.set('Content-Disposition', `attachment; filename="${file}"`);
-    res.set('Content-Length', String(size));
-    createReadStream(filePath)
-        .on('error', e => {
-            if (e?.code === 'ENOENT' && !res.headersSent) return res.status(404).json({ error: 'Export file not found' });
-            res.destroy();
-        })
-        .pipe(res);
-});
-
-// DELETE /api/admin/db/exports/:stamp - remove one export directory. Same
-// path-traversal gate as the download route above (one param here).
-app.delete('/api/admin/db/exports/:stamp', requireAdminRole, async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    const stamp = safeExportFilename(req.params.stamp);
-    if (!stamp) return res.status(400).json({ error: 'Invalid export name' });
-    try {
-        res.json({ ok: true, ...(await deleteExport(stamp)) });
-    } catch (e) { authErr(e, res, next); }
-});
-
-// DELETE /api/admin/db/imports/:stamp - reclaim a staged import. Imports had no
-// cleanup path at all while exports did, so staged copies of a whole warehouse
-// (plus a full safety export per apply) accumulated with no way to remove them
-// from the UI - on a quota'd shared host that is a slow disk-fill.
-app.delete('/api/admin/db/imports/:stamp', requireAdminRole, async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    const stamp = safeExportFilename(req.params.stamp);
-    if (!stamp) return res.status(400).json({ error: 'Invalid import name' });
-    try {
-        res.json({ ok: true, ...(await deleteImport(stamp)) });
-    } catch (e) { authErr(e, res, next); }
-});
-
-// --- M10 Task 4: DB import (upload manifest -> upload chunks -> apply) ------
-// Three-phase, sized for the cPanel/Passenger host (spec decision 11). The
-// apply phase is the destructive half - it rides the SAME shared job slot as
-// export/refresh (never overlaps one).
-
-// POST /api/admin/db/import/manifest - body IS the manifest object.
-// startImportManifest validates it (parseManifest) and hard-409s a
-// schema_head mismatch (both values in the body - the import compatibility
-// guard, spec decision 11) BEFORE creating the staging dir.
-app.post('/api/admin/db/import/manifest', requireAdminRole, express.json({ limit: '256kb' }), async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    try {
-        res.json(await startImportManifest(req.body));
-    } catch (e) { authErr(e, res, next); }
-});
-
-// POST /api/admin/db/import/chunk?stamp=&file= - raw gzip body, capped at the
-// plan's 32 MB per-chunk bound (Passenger buffers the whole request body).
-// BOTH query params go through safeExportFilename before this handler ever
-// touches the filesystem - a rejection is 400, never a disk access.
-app.post('/api/admin/db/import/chunk', requireAdminRole, express.raw({ type: 'application/gzip', limit: '32mb' }), async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    const stamp = safeExportFilename(req.query.stamp);
-    const file = safeExportFilename(req.query.file);
-    if (!stamp || !file) return res.status(400).json({ error: 'Invalid import chunk path' });
-    try {
-        res.json(await saveImportChunk(stamp, file, req.body));
-    } catch (e) { authErr(e, res, next); }
-});
-
-// GET /api/admin/db/import/:stamp - staging state (manifest/upload progress/
-// resumable-apply cursor) + the shared job state, for the wizard's poll.
-app.get('/api/admin/db/import/:stamp', requireAdminRole, async (req, res, next) => {
-    const stamp = safeExportFilename(req.params.stamp);
-    if (!stamp) return res.status(400).json({ error: 'Invalid import stamp' });
-    try {
-        res.json({ ...(await importStagingState(stamp)), job: refreshStatus() });
-    } catch (e) { authErr(e, res, next); }
-});
-
-// POST /api/admin/db/import/apply - body {stamp, confirm}. `confirm` must be
-// EXACTLY "IMPORT <database-name>" (importConfirmPhrase/matchesImportConfirm,
-// src/db/transfer-rules.js) - the same typed-confirmation idiom M9's campaign
-// send uses (campaignSendSchema's `confirm: z.literal('SEND')`), except the
-// phrase is dynamic (embeds config.DB_DATABASE) so it can't be a zod literal.
-// Anything else is a 400, checked BEFORE the job is ever started.
-app.post('/api/admin/db/import/apply', requireAdminRole, express.json({ limit: '4kb' }), async (req, res, next) => {
-    if (!csrfOk(req, res)) return;
-    try {
-        const body = importApplySchema.parse(req.body ?? {});
-        const stamp = safeExportFilename(body.stamp);
-        if (!stamp) return res.status(400).json({ error: 'Invalid import stamp' });
-        if (!matchesImportConfirm(body.confirm, config.DB_DATABASE)) {
-            return res.status(400).json({ error: `Type "${importConfirmPhrase(config.DB_DATABASE)}" exactly to confirm` });
-        }
-        const { started } = startImport({ stamp });
-        if (!started) return res.status(409).json(refreshStatus());
-        res.status(202).json(refreshStatus());
-    } catch (e) { authErr(e, res, next); }
-});
-
-// --- M11 Task 7: AI scorecard endpoint ---------------------------------------
-// The same S1-S5 structured data `node scripts/ai-scorecard.js` prints
-// (src/scorecard.js's scorecardSummary()), for the admin PerformanceSection.
-// Cached in a DEDICATED 60s memo - NOT the shared apiCache (whose key space
-// and data_version invalidation belong to the public /api/records-family
-// reads) and NOT sendJson (which recomputes every request; this is a heavy
-// full-ledger scan over fixture_predictions x fixture_ai_insights that has no
-// reason to re-run more than once a minute for an admin dashboard).
-const perfCache = makeJsonCache({ max: 2, ttlMs: 60_000, version: () => 0 });
-
-// GET /api/admin/perf/scorecard - admin session only, read-only (no csrfOk).
-app.get('/api/admin/perf/scorecard', requireAdminRole, async (req, res, next) => {
-    try {
-        await perfCache.send(req, res, '/api/admin/perf/scorecard', () => scorecardSummary());
-    } catch (e) { next(e); }
-});
+// (M10 DB export/import routes + M11 admin scorecard route removed
+// 2026-08-07 - the core-focus trim. DB transfer is superseded by the SSH
+// deploy route (scripts/deploy-remote.js); the scorecard stays available as
+// the CLI instrument `node scripts/ai-scorecard.js`. Git history has both.)
 
 // --- M9: SMS templates + broadcast campaigns --------------------------------
 // Admin SESSION only (never the machine bearer): these spend real credits and
@@ -1497,25 +1276,6 @@ async function migrateOnBoot() {
     console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
 }
 
-// DB-sync auto-apply (SYNC_IMPORT_ON_BOOT): the no-SSH deploy data path. A
-// sync bundle extracted into var/imports/<stamp>/ (from the package:deploy
-// --sync-db zip) is applied as a BACKGROUND job on the shared single-slot -
-// deliberately after listen, never blocking boot (Passenger start timeouts;
-// the apply is chunk-resumable across restarts, so a mid-apply restart just
-// continues). Fire-and-forget with its own catch: a broken bundle must never
-// take the API down - it logs and the admin DB section shows the job error.
-function startBootSyncImport() {
-    if (!config.SYNC_IMPORT_ON_BOOT) return;
-    const skipTables = config.SYNC_IMPORT_SKIP.split(',').map(s => s.trim()).filter(Boolean);
-    import('./db-transfer.js')
-        .then(m => m.maybeStartBootSyncImport({ skipTables, safetyExport: config.SYNC_IMPORT_SAFETY }))
-        .then(r => {
-            if (r.started) console.debug(`[db-sync] boot sync import started for staged bundle "${r.stamp}" (background job; progress in Admin -> Database)`);
-            else console.debug(`[db-sync] no boot sync import started - ${r.reason}`);
-        })
-        .catch(err => console.error('[db-sync] boot sync import failed to start:', err?.message ?? err));
-}
-
 let server = null;
 (async () => {
     try {
@@ -1534,10 +1294,8 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
-            startTriageScheduler();
             startCatalogWarm();
             startHaltWatch(() => shutdown('halt-file'));
-            startBootSyncImport();
         });
     } catch (err) {
         // Fail fast: don't serve on an uncertain schema (or unloadable
@@ -1559,7 +1317,6 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
-    stopTriageScheduler();
     stopCatalogWarm();
     stopHaltWatch();
     requestCancel(); // no-op when nothing is running

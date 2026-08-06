@@ -146,22 +146,6 @@ const EnvSchema = z.object({
     AI_CONSENSUS_TASKS: z.string().default(''),
     AI_CONSENSUS_MODELS: z.string().default(''),
     AI_CONSENSUS_MIN_AGREE: z.coerce.number().int().min(2).max(9).default(2),
-    // --- OpenRouter model triage (src/modeltriage/, 2026-08-04 design spec) ---
-    // Weekly background shortlist of the best value-per-cost models per AI
-    // task, surfaced in Admin -> Models. OFF by default; the tick is quiesced
-    // during maintenance windows like the geo sweep. AUTO_SWITCH lets a
-    // shortlist PRIMARY rewrite the live task routing through the standard
-    // settings PUT (admin_audit dates it - the policy-regime discipline is
-    // automatic); OFF = the panel shows one-click adopt buttons instead.
-    TRIAGE_ENABLED: boolStr('0'),
-    TRIAGE_INTERVAL_HOURS: z.coerce.number().int().min(1).default(168),
-    TRIAGE_AUTO_SWITCH: boolStr('0'),
-    // Max BILLED probe calls per tick (3 per candidate); catalog/endpoint
-    // pulls are free and uncapped.
-    TRIAGE_PROBE_BUDGET: z.coerce.number().int().min(0).default(12),
-    // :free models cost daily-cap risk, not $0 - the value score charges this
-    // capability fraction instead of a dollar cost (0 = free is truly free).
-    TRIAGE_FREE_FLAKINESS_TAX: z.coerce.number().min(0).max(1).default(0.15),
     API_PORT: z.coerce.number().int().positive().default(3001),
     // Loopback by default - set 0.0.0.0 to expose the dashboard on the LAN
     // (the refresh endpoint triggers scrapes; don't expose it unknowingly)
@@ -192,30 +176,6 @@ const EnvSchema = z.object({
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.
     // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
     MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
-    // DB-sync auto-apply (deploy data sync, the no-SSH twin of MIGRATE_ON_BOOT):
-    // when set, a complete UNAPPLIED sync bundle staged under var/imports/
-    // (extracted there from the package:deploy --sync-db zip via cPanel File
-    // Manager) is applied as a BACKGROUND job after listen - boot never blocks
-    // (Passenger start timeouts; the apply is resumable across restarts).
-    // OFF by default; local/dev never auto-imports.
-    SYNC_IMPORT_ON_BOOT: boolStr('0'),
-    // Pre-import full-warehouse safety export before a boot-sync apply. ON by
-    // default; a quota'd shared host can set 0 (each safety dump is the whole
-    // warehouse - GBs per apply). The apply itself is upsert-only (never
-    // deletes destination rows), so skipping narrows the recovery net rather
-    // than enabling destruction.
-    SYNC_IMPORT_SAFETY: boolStr('1'),
-    // Comma-separated extra tables the boot-sync apply must leave untouched on
-    // THIS host (import-side retention, on top of the export-side exclusions -
-    // users/sessions/prefs/visits/settings/audit/SMS never ride a bundle at all).
-    SYNC_IMPORT_SKIP: z.string().default(''),
-    // --- SPA bot-protection (opt-in) ---
-    // NOTE: the proof-of-work human gate (HUMAN_POW_*) was removed 2026-07-16 -
-    // deprecated as irrelevant at this stage. Any leftover HUMAN_* entries in a
-    // .env are simply ignored (this schema is not strict), so no deploy breaks.
-    // Known-bot user-agent blocklist (+ AI-crawler robots.txt), src/bot-rules.js.
-    // Blocks AI scrapers / aggressive crawlers / raw HTTP clients; general search
-    // engines are intentionally left alone (landing-page SEO).
     BOT_UA_FILTER_ENABLED: boolStr('0'),
     BOT_UA_EXTRA: z.string().default(''),   // comma-separated extra UA substrings to block
     BOT_UA_ALLOW: z.string().default(''),   // comma-separated UA substrings to exempt

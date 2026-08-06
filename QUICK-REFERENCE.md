@@ -102,29 +102,11 @@ cPanel access. Deep guide: `docs/DEPLOYMENT.md` §2–3 (one-time host setup liv
 npm test
 npm run build:web
 npm run package:deploy    # [-- --export-db] adds a gzipped DB dump, same timestamp
-                          # [-- --sync-db] adds oddspro-sync_<ts>.zip - portable NDJSON
-                          # data bundle (prod-retentive: users/sessions/prefs/visits/
-                          # settings/audit/SMS never included)
 ```
 
 Produces `release/oddspro-app_<ts>.zip` + `oddspro-web_<ts>.zip`; refuses off-`main`;
 idempotently tags `v<version>` at HEAD and pushes the tag (existing tag not at HEAD = loud
 "bump the version" warning).
-
-### 2.2b DB sync (local warehouse -> prod, or any host -> host)
-
-```sh
-node scripts/db-sync-export.js [--zip out.zip] [--exclude t1,t2]   # NDJSON bundle -> var/exports/<stamp>/
-node scripts/db-sync-import.js <dir|zip> [--skip t1,t2] [--no-safety] [--stage-only] [--yes]
-```
-
-Import is upsert-only (never deletes destination rows), FK-safe ordered, chunk-resumable,
-dry-run by default (`--yes` applies), full pre-import safety export unless `--no-safety`.
-⚠ CLI import with the serve process STOPPED (separate writers = InnoDB gap-lock risk).
-Remote no-SSH path: extract the bundle zip into `<app root>/var/imports/<stamp>/` (File
-Manager), then Admin → Database apply, or `SYNC_IMPORT_ON_BOOT=1` + Restart (background
-apply after boot+migrate; `SYNC_IMPORT_SAFETY=0` skips the heavy safety dump on quota'd
-hosts; `SYNC_IMPORT_SKIP=t1,t2` adds import-side retention).
 
 ### 2.2c Secrets + env hygiene
 

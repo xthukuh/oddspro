@@ -4,23 +4,20 @@ import { OP_MARK } from '../components/Logo.jsx';
 import { Z } from '../zLayers.js';
 import { useAdminRoute, ADMIN_SECTIONS } from './useAdminRoute.js';
 import SettingsEditor from './SettingsEditor.jsx';
-import DataLab from './DataLab.jsx';
 import DashboardSection from './DashboardSection.jsx';
 import UsersSection from './UsersSection.jsx';
 import MessagingSection from './MessagingSection.jsx';
 import DatabaseSection from './DatabaseSection.jsx';
-import PerformanceSection from './PerformanceSection.jsx';
-import ModelsSection from './ModelsSection.jsx';
 import TokensSection from './TokensSection.jsx';
 
 // Admin panel (M5 shell): a full-page overlay in the AuthShell idiom (App
 // stays mounted underneath - table state/scroll survive), opened from
 // AvatarMenu/OverflowMenu -> Admin or an `#admin/<section>` deep link, and
 // lazy-loaded from AuthGate so recharts never rides the guest bundle.
-// Section nav: sidebar rail on md+, horizontal pill row below. As of M11 every
-// ADMIN_SECTIONS entry has a real component (M12 is cleanup/E2E/docs/merge,
-// not another section). The server stays authoritative - every API this
-// drives re-checks the admin session.
+// Section nav: sidebar rail on md+, horizontal pill row below. Trimmed to the
+// core-focus set 2026-08-07 (Data lab / Performance / Models removed - git
+// history has them; re-add alongside their routes). The server stays
+// authoritative - every API this drives re-checks the admin session.
 
 function AboutSection() {
     return (
@@ -40,11 +37,8 @@ function AboutSection() {
 const SECTION_BODY = {
     dashboard: <DashboardSection />,
     settings: <SettingsEditor />,
-    lab: <DataLab />,
     users: <UsersSection />,
     messaging: <MessagingSection />,
-    performance: <PerformanceSection />,
-    models: <ModelsSection />,
     database: <DatabaseSection />,
     tokens: <TokensSection />,
     about: <AboutSection />,

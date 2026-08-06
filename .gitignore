@@ -72,3 +72,4 @@ var/
 .HALT
 .env.bak*
 env.replacement.txt
+_attic/

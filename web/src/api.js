@@ -286,26 +286,6 @@ export async function getAdminAudit(limit = 25) {
     return audit;
 }
 
-// Data-viz lab catalogs: { features, outcomes, defaults } (admin session only).
-export async function getLabFeatures() {
-    return _get('/api/admin/lab/features');
-}
-
-// --- Admin model triage (src/modeltriage/, 2026-08-04) ------------------------
-
-// { status: {enabled, auto_switch, interval_hours, probe_budget,
-//   openrouter_key, running, last_run_at}, routing: {task: modelId},
-//   shortlist: newest persisted shortlist payload | null }. Session only.
-export async function getAdminTriage() {
-    return _get('/api/admin/triage');
-}
-
-// Fire a triage pass now (bypasses the enabled/due gates) -> 202 {started};
-// a pass already running surfaces as a 409 ApiError.
-export async function runAdminTriage() {
-    return _send('/api/admin/triage/run', {}, 'POST');
-}
-
 // --- Admin user management (M8) ----------------------------------------------
 
 // All users + live-session counts: { users: [adminUserView...], total }.
@@ -392,16 +372,6 @@ export async function getSmsJob() {
     return _get('/api/admin/sms/job');
 }
 
-// Pre-binned lab aggregates: { x, y, color, outcome, cells, rows_used,
-// rows_skipped, rows_loaded, min_count }. filters: [{key, op, value}].
-export async function getLabData({ x, y, color, outcome, filters, days, sample, minCount, topCategories }) {
-    return _get('/api/admin/lab/data', {
-        x, y, color, outcome,
-        filters: filters?.length ? JSON.stringify(filters) : null,
-        days, sample, min_count: minCount, top_categories: topCategories,
-    });
-}
-
 // --- Admin DB overview + health (M10) -----------------------------------------
 
 // { database, server_version, tables: [{name, rows_estimate, data_bytes,
@@ -415,130 +385,6 @@ export async function getDbOverview() {
 // { ok: false, error, checked_at } on failure (never throws server-side).
 export async function getDbHealth() {
     return _get('/api/admin/db/health');
-}
-
-// --- Admin DB export (M10 Task 3) ---------------------------------------------
-
-// Start a chunked NDJSON+gzip export -> {started}. 409 (thrown as ApiError)
-// when a refresh/export/import job already holds the shared slot.
-export async function startDbExport(excluded = []) {
-    return _send('/api/admin/db/export', { excluded });
-}
-
-// { exports: [{stamp, files, bytes, created_at, manifest_ok}], job } - job is
-// the same shape GET /api/refresh returns (the export rides that slot).
-export async function getDbExports() {
-    return _get('/api/admin/db/exports');
-}
-
-// Download one export file (a .ndjson.gz chunk or manifest.json) through the
-// authenticated fetch path - the route is admin-session-guarded, so a bare
-// <a href> would send no Authorization header and just 401. Triggers a
-// client-side object-URL download and revokes it once the click is queued.
-export async function downloadDbExportFile(stamp, file) {
-    const res = await fetch(`/api/admin/db/exports/${encodeURIComponent(stamp)}/${encodeURIComponent(file)}`,
-        { headers: _authHeaders() });
-    if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new ApiError(res.status, body, res.statusText);
-    }
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = file;
-    document.body.appendChild(a);
-    a.click();
-    a.remove();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-// Delete one export directory (irreversible - the UI gates this behind a
-// typed confirm like UsersSection's DISABLE/RESET actions).
-export async function deleteDbExport(stamp) {
-    return _send(`/api/admin/db/exports/${encodeURIComponent(stamp)}`, {}, 'DELETE');
-}
-
-// --- Admin DB import (M10 Task 4) ----------------------------------------------
-// Three phases: upload the manifest -> upload each planned chunk file
-// sequentially -> apply (a typed "IMPORT <db>" confirm, destructive).
-
-// Phase 1: POST the manifest OBJECT itself as the body (not wrapped) ->
-// {stamp, schema_head, tables, rows, upload_plan}. A schema_head mismatch
-// against this server's migration state comes back as a 409 ApiError with
-// {manifest_schema_head, local_schema_head} both in body - surface it as a
-// clear, non-dismissible error (it means the export came from a different
-// migration state and importing it would corrupt this warehouse).
-export async function uploadDbImportManifest(manifest) {
-    return _send('/api/admin/db/import/manifest', manifest);
-}
-
-// Phase 2: one chunk. `blob` is the raw .ndjson.gz file content (a File/Blob
-// from the manifest's own export directory) - sent as the whole raw request
-// body (Content-Type: application/gzip), not JSON. Idempotent server-side:
-// re-uploading the same (stamp, file) overwrites.
-export async function uploadDbImportChunk(stamp, file, blob) {
-    const res = await fetch(
-        `/api/admin/db/import/chunk?stamp=${encodeURIComponent(stamp)}&file=${encodeURIComponent(file)}`,
-        {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/gzip', 'X-Requested-With': 'fetch', ..._authHeaders() },
-            body: blob,
-        },
-    );
-    const body = await res.json().catch(() => ({}));
-    if (!res.ok) {
-        if (res.status === 503) _noteMaintenance(body);
-        throw new ApiError(res.status, body, res.statusText);
-    }
-    return body;
-}
-
-// Phase 2, sequenced: uploads every file in `uploadPlan` (the manifest
-// response's upload_plan, [{table,chunk,file}, ...]) ONE AT A TIME - a
-// parallel uploader would defeat both the 32 MB per-request bound and the
-// memory discipline the whole plan is sized around (Passenger buffers whole
-// request bodies). `fileFor(plannedFile)` resolves a planned filename to its
-// local File/Blob (the admin's selected export directory); `onProgress`
-// fires after each chunk lands so the wizard can show a progress bar.
-export async function uploadDbImportChunksSequential(stamp, uploadPlan, fileFor, onProgress = null) {
-    const total = uploadPlan.length;
-    for (let i = 0; i < total; i++) {
-        const { file } = uploadPlan[i];
-        const blob = fileFor(file);
-        if (!blob) throw new Error(`Missing local file for chunk "${file}"`);
-        await uploadDbImportChunk(stamp, file, blob);
-        if (typeof onProgress === 'function') onProgress({ done: i + 1, total, file });
-    }
-    return { uploaded: total };
-}
-
-// Phase 4: staging state (manifest_ok, upload_plan, missing_files,
-// ready_to_apply, applied_chunks, apply_complete) + job (the same shape
-// GET /api/refresh returns) - what the wizard polls while chunks land and
-// while the apply job runs.
-export async function getDbImportStatus(stamp) {
-    return _get(`/api/admin/db/import/${encodeURIComponent(stamp)}`);
-}
-
-// Phase 3: apply. `confirm` must be EXACTLY "IMPORT <db-name>" (the db name
-// comes from getDbOverview().database) - anything else is a 400 before the
-// job is ever started. 409 (thrown as ApiError) when a refresh/export/import
-// job already holds the shared slot.
-export async function applyDbImport(stamp, confirm) {
-    return _send('/api/admin/db/import/apply', { stamp, confirm });
-}
-
-// --- Admin performance scorecard (M11 Task 7) ---------------------------------
-
-// AI-scorecard S1-S5: hot-pick adjudicator + tip reviewer per model tag
-// (confirm/veto rates, units saved by following vetoes), blind reasoner Brier/
-// reliability bins, error verdicts per day, verdict coverage per day - the
-// same structured data `node scripts/ai-scorecard.js` prints. Admin session
-// only; cached 60s server-side (its own dedicated cache, not the public
-// apiCache/data_version invalidation).
-export async function getPerfScorecard() {
-    return _get('/api/admin/perf/scorecard');
 }
 
 // NOTE: fetchChallenge/submitHuman (the proof-of-work human gate) were removed
