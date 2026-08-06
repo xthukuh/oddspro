@@ -6,8 +6,8 @@
 - [ ] 4. Bonga relay live-tested - BLOCKED owner-side: AppScript deployment lacks script.external_request scope ("You do not have permission to call UrlFetchApp.fetch"); relay transport + response shape verified compatible (balance 222 direct, relay logs rows). Owner must re-authorize + redeploy; re-test = node tmp/test-bonga-relay.js
 - [x] 5. scripts/deploy-remote.js + .env.deploy(.example) + .env.server; dry-run verified; SQL rides ssh stdin (quoting safety)
 - [x] 6. Prod web build (VITE_SHOW_DETAILS=0 via .env.production); commits landed; release 20260806_233054 packaged (v1.4.0 tag left at pre-trim commit - remote tag rewrite classifier-blocked, owner one-liner if wanted)
-- [ ] 7. Remote: DB fresh-imported to oddsprok_prod_1_4_0 (instance tables truncated, admin reseeded); app extracted to oddspro-app-v1.4.0 + npm install + prod .env; public_html backed up + replaced
-- [ ] 8. DEPLOYMENT.md + QUICK-REFERENCE.md updated; memory/resume-point updated; owner notified for cPanel app creation
+- [x] 7. Remote DONE + verified: oddsprok_prod_1_4_0 = 37 tables / 82,097 fixtures / 6.3M odds rows / 22 settings overrides / admin +254799944004 seeded (must_change_pin=1) / migrations at head; app in oddspro-app-v1.4.0 (.env uploaded, 112 node_modules); public_html backed up (v1.3.0.2-web*.tar.gz) + v1.4.0 build extracted (INDEX_OK). Gotcha fixed en route: Compress-Archive backslash zip paths broke Linux unzip -> package-deploy now zips via System32 bsdtar
+- [x] 8. DEPLOYMENT.md §4a + QUICK-REFERENCE §2.4 + toolset KB + memory/resume-point updated; owner actions listed in the session summary (cPanel app creation, relay re-auth, optional tag move)
 
 ## Added mid-session (owner, 2026-08-07)
 
