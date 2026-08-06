@@ -166,6 +166,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
     let slip = null;
     let byFixture = new Map();
     let fxById = new Map();
+    const linksByFixture = new Map();
     if (targets.length) {
         fxById = new Map(targets.map(f => [f.id, f]));
         const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
@@ -176,6 +177,19 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
             .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
         const grouped = _menusByFixture(oddsRows, namesById);
         byFixture = grouped.byFixture;
+        // Per-provider match links for legs whose markets are still live
+        // (completed matches excluded at capture; the client additionally
+        // hides links once a leg settles).
+        const linkRows = await db('matches')
+            .whereIn('fixture_id', targets.map(f => f.id))
+            .whereNull('completed_at')
+            .select('fixture_id', 'provider', 'match_url');
+        for (const r of linkRows) {
+            if (!r.match_url) continue;
+            let m = linksByFixture.get(r.fixture_id);
+            if (!m) linksByFixture.set(r.fixture_id, m = {});
+            m[r.provider] = r.match_url;
+        }
         const cal = await loadCalibrator(slipDate);
         const fixtures = targets.map(f => ({ id: f.id, league: f.league, menuLegs: grouped.menus.get(f.id) ?? [] }));
         // v1.3: the day's top legs deal into MULTIPLE small cards (legs carry
@@ -211,6 +225,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
                 kickoff: f.kickoff instanceof Date ? f.kickoff.toISOString() : f.kickoff,
                 market: l.market, label: tipMarketLabel(l.market),
                 price: l.price, prices: _providerPrices(byFixture.get(l.id), l.market),
+                links: linksByFixture.get(l.id) ?? {},
                 prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: l.cellKey,
                 card: l.card ?? 0,
                 kind: l.kind ?? 'safe',

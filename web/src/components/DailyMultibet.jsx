@@ -38,7 +38,22 @@ function Leg({ leg, allPrices }) {
                 </span>
                 <span className="ml-auto shrink-0 tabular-nums text-label">
                     {allPrices && leg.prices && Object.keys(leg.prices).length
-                        ? Object.entries(leg.prices).map(([p, v]) => `${p} ${Number(v).toFixed(2)}`).join(' · ')
+                        ? Object.entries(leg.prices).map(([p, v], i) => {
+                            // Live bookmaker link while the leg is unsettled and the
+                            // match page was still active at build time.
+                            const url = leg.outcome == null ? leg.links?.[p] : null;
+                            const label = `${p} ${Number(v).toFixed(2)}`;
+                            return (
+                                <span key={p}>
+                                    {i > 0 && ' · '}
+                                    {url
+                                        ? <a href={url} target="_blank" rel="noopener noreferrer"
+                                            className="text-accent hover:underline"
+                                            title={`Open this match on ${p}`}>{label}</a>
+                                        : label}
+                                </span>
+                            );
+                        })
                         : Number(leg.price).toFixed(2)}
                 </span>
             </div>
