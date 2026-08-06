@@ -31,18 +31,23 @@ const MAX_GENERATIONS = 12;
 // Round 3 seed = the round-2 emergent (two 1.5x cards). The owner's ship
 // mandate adds: max profit with the LEAST legs per card - avgLegs joins the
 // fitness as the final tiebreak and 2-leg cards enter the space.
+// --target <odds> pins the target for the whole run (the higher-value
+// question: each target gets its own evolution instead of retreating to
+// 1.5x); production decay is the seed calibrator since it carries the
+// live +9.5%/unit value record.
+const TARGET = Number(opt('target', 1.5));
 const SEED = {
-    targetOdds: 1.5, maxCards: 2, maxLegsPerCard: 6, maxPerLeague: 3,
+    targetOdds: TARGET, maxCards: 2, maxLegsPerCard: 6, maxPerLeague: 3,
     probFloor: 0.80, minLegPrice: 1.0, maxLegPrice: 1.35,
     rankBy: 'eff',             // 'eff' | 'prob' | 'value' (calProb x price - 1)
     edgeFloor: 0,              // round 2: only legs with calibrated edge >= this
     familyFilter: 'all',       // round 2: market-family tilt (audit structure)
-    halfLifeDays: 0,           // error-feedback: recency decay
+    halfLifeDays: 30,          // error-feedback: recency decay (production parity)
     missCooldownDays: 0,       // error-feedback: bench a cell after a miss
 };
 
 const SPACE = {
-    targetOdds: [1.5, 2.0, 2.5, 3.0],
+    targetOdds: [TARGET],      // pinned per run via --target
     maxCards: [1, 2, 3],
     maxLegsPerCard: [2, 3, 4, 6, 8],
     probFloor: [0.70, 0.75, 0.80, 0.85, 0.88, 0.90],
