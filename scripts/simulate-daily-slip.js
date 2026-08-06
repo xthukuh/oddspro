@@ -25,7 +25,7 @@ import { DEFAULT_TIP, buildTipBooks, tipOutcome } from '../src/db/tip-rules.js';
 import { DEFAULT_LADDER, marketMenu } from '../src/db/ladder-rules.js';
 import { DEFAULT_MODEL } from '../src/db/goal-model.js';
 import { makeCalibrator } from '../src/db/leg-calibration.js';
-import { DEFAULT_DAILY_SLIP, DEFAULT_GROUPING, selectDailyLegs, groupCards, dayMood, slipOutcomeRollup } from '../src/db/daily-slip-rules.js';
+import { DEFAULT_DAILY_SLIP, DEFAULT_GROUPING, DEFAULT_VALUE_CARDS, selectDailyLegs, groupCards, valueCards, dayMood, slipOutcomeRollup } from '../src/db/daily-slip-rules.js';
 import { tipMarketLabel } from '../src/db/magic-rules.js';
 
 const argv = process.argv.slice(2);
@@ -94,12 +94,19 @@ function runParams(params, calOpts = {}) {
         for (const r of rows) for (const l of r.menuLegs) outcomeOf.set(`${r.id}|${l.market}`, l.outcome);
         const pool = selectDailyLegs(fixtures, cal, params);
         const cards = groupCards(pool, params.grouping ?? DEFAULT_GROUPING);
-        const taken = cards.flat();
+        const taken = cards.flat().map(l => ({ ...l, kind: 'safe' }));
         const slip = taken.length >= 2 ? {
             legs: taken, pool: pool.length, cards: cards.length,
             combinedOdds: taken.reduce((p, l) => p * l.price, 1),
             mood: dayMood(pool, params),
         } : null;
+        // Value arm (v1.4, backfill parity with the live builder): eff-ranked
+        // pool, target-closing cards, outcomes attached from the settled menu.
+        if (params.withValue && slip) {
+            const vPool = selectDailyLegs(fixtures, cal, DEFAULT_VALUE_CARDS);
+            slip.vCards = valueCards(vPool, DEFAULT_VALUE_CARDS, cards.length)
+                .map(c => c.map(l => ({ ...l, outcome: outcomeOf.get(`${l.id}|${l.market}`) ?? null })));
+        }
         if (slip) {
             const outcomes = slip.legs.map(l => outcomeOf.get(`${l.id}|${l.market}`) ?? null);
             const roll = slipOutcomeRollup(outcomes);
@@ -182,7 +189,7 @@ if (WRITE_DAILY) {
     const [[{ today }]] = await db.raw("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') as today");
     // Backfill with the PRODUCTION calibrator config (decay baked in v1.1) so
     // the timeline shows exactly what the live builder would have published.
-    const run = runParams({ ...DEFAULT_DAILY_SLIP }, { halfLifeDays: 30 });
+    const run = runParams({ ...DEFAULT_DAILY_SLIP, withValue: true }, { halfLifeDays: 30 });
     const rows = [];
     for (const p of run.perDay) {
         if (p.day >= today) continue;
@@ -196,9 +203,10 @@ if (WRITE_DAILY) {
             });
             continue;
         }
-        const legs = p.slip.legs.map((l, i) => {
+        const _mapLeg = (l, outcome) => {
             const f = fxById.get(l.id);
             const kick = f.kickoff instanceof Date ? f.kickoff.toISOString() : f.kickoff;
+            const noun = l.kind === 'value' ? 'Value pick' : 'Safest qualifying pick';
             return {
                 fixture_id: l.id,
                 home: f.home_name, away: f.away_name, league: l.league,
@@ -206,15 +214,21 @@ if (WRITE_DAILY) {
                 market: l.market, label: tipMarketLabel(l.market),
                 price: l.price, prices: {},
                 prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: l.cellKey,
-                card: l.card ?? 0,
+                card: l.card ?? 0, kind: l.kind ?? 'safe',
                 reasoning: l.cell
-                    ? `Safest qualifying pick of this fixture: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, calibrated ${(100 * l.calProb).toFixed(1)}% from ${l.cell.n} settled legs in its price/market cell (${l.cell.hit} hit).`
-                    : `Safest qualifying pick of this fixture: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, book devig ${(100 * l.calProb).toFixed(1)}% (no cell evidence yet).`,
-                outcome: p.outcomes[i],
+                    ? `${noun}: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, calibrated ${(100 * l.calProb).toFixed(1)}% from ${l.cell.n} settled legs in its price/market cell (${l.cell.hit} hit).`
+                    : `${noun}: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, book devig ${(100 * l.calProb).toFixed(1)}% (no cell evidence yet).`,
+                outcome,
             };
-        });
+        };
+        const legs = [
+            ...p.slip.legs.map((l, i) => _mapLeg(l, p.outcomes[i])),
+            ...(p.slip.vCards ?? []).flat().map(l => _mapLeg(l, l.outcome)),
+        ];
         const kicks = legs.map(l => l.kickoff).sort();
-        const roll = slipOutcomeRollup(legs.map(l => l.outcome));
+        // Day outcome = the SAFE arm's strict result (live-builder parity);
+        // value cards score through cards_won only.
+        const roll = slipOutcomeRollup(legs.filter(l => l.kind !== 'value').map(l => l.outcome));
         const byCard = new Map();
         for (const l of legs) {
             let list = byCard.get(l.card ?? 0); if (!list) byCard.set(l.card ?? 0, list = []);
@@ -224,7 +238,9 @@ if (WRITE_DAILY) {
             slip_date: p.day, status: 'published', mood: p.slip.mood,
             legs: JSON.stringify(legs),
             combined_odds: Math.round(p.slip.combinedOdds * 100) / 100,
-            legs_total: legs.length, legs_hit: roll.legsHit, outcome: roll.outcome,
+            legs_total: legs.length,
+            legs_hit: legs.filter(l => l.outcome === 'hit').length,
+            outcome: roll.outcome,
             cards_total: byCard.size,
             cards_won: [...byCard.values()].filter(list => slipOutcomeRollup(list).outcome === 'won').length,
             algo_version: `${opt('algo', 'v1')}-backfill`, backfilled: 1,
