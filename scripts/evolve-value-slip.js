@@ -28,8 +28,11 @@ const MAX_GENERATIONS = 12;
 
 // Start from the replay showcase's proven odds-bearing arm (calibrated
 // 1.5x-target card: 61.8% green, +2.35u over 34 days) expressed here.
+// Round 3 seed = the round-2 emergent (two 1.5x cards). The owner's ship
+// mandate adds: max profit with the LEAST legs per card - avgLegs joins the
+// fitness as the final tiebreak and 2-leg cards enter the space.
 const SEED = {
-    targetOdds: 1.5, maxCards: 1, maxLegsPerCard: 6, maxPerLeague: 3,
+    targetOdds: 1.5, maxCards: 2, maxLegsPerCard: 6, maxPerLeague: 3,
     probFloor: 0.80, minLegPrice: 1.0, maxLegPrice: 1.35,
     rankBy: 'eff',             // 'eff' | 'prob' | 'value' (calProb x price - 1)
     edgeFloor: 0,              // round 2: only legs with calibrated edge >= this
@@ -41,7 +44,7 @@ const SEED = {
 const SPACE = {
     targetOdds: [1.5, 2.0, 2.5, 3.0],
     maxCards: [1, 2, 3],
-    maxLegsPerCard: [3, 4, 6, 8],
+    maxLegsPerCard: [2, 3, 4, 6, 8],
     probFloor: [0.70, 0.75, 0.80, 0.85, 0.88, 0.90],
     minLegPrice: [1.0, 1.10, 1.20],
     maxLegPrice: [1.35, 1.60, 2.20, 3.50],
@@ -148,6 +151,7 @@ function replay(config, evalDays) {
                     if (won) green++;
                 }
                 perDay.push({ day, cards: cards.length, cardsWon: green, staked: cards.length, pnl,
+                    legsTotal: cards.reduce((s, c) => s + c.legs.length, 0),
                     avgOdds: cards.reduce((s, c) => s + c.product, 0) / cards.length });
             } else {
                 perDay.push({ day, cards: 0 });
@@ -177,6 +181,7 @@ function replay(config, evalDays) {
         roi: staked ? pnl / staked : -1,
         pnl, best,
         avgOdds: cards ? played.reduce((s, p) => s + p.avgOdds * p.cards, 0) / cards : 0,
+        avgLegs: cards ? played.reduce((s, p) => s + (p.legsTotal ?? 0), 0) / cards : 0,
     };
 }
 
@@ -187,7 +192,8 @@ function replay(config, evalDays) {
 // card rate, then any-win day streak.
 const trainA = trainDays.slice(0, Math.floor(trainDays.length / 2));
 const trainB = trainDays.slice(Math.floor(trainDays.length / 2));
-const fitnessCmp = (a, b) => (b.minRoi - a.minRoi) || (b.cardRate - a.cardRate) || (b.best - a.best);
+const fitnessCmp = (a, b) => (b.minRoi - a.minRoi) || (b.cardRate - a.cardRate) || (b.best - a.best)
+    || ((a.avgLegs ?? 9) - (b.avgLegs ?? 9));   // least legs per card wins ties (ship mandate)
 const fmt = r => `${r.cardsWon}/${r.cards} cards=${(100 * r.cardRate).toFixed(1)}% roi ${r.roi >= 0 ? '+' : ''}${(100 * r.roi).toFixed(1)}% pnl ${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(2)}u dayStk${r.best} @${r.avgOdds.toFixed(2)}x over ${r.played}d`;
 const cfgKey = c => JSON.stringify(c);
 

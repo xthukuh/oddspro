@@ -2,8 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { makeCalibrator } from '../src/db/leg-calibration.js';
 import {
-    DEFAULT_DAILY_SLIP, selectDailyLegs, constructSlip, dayMood,
-    slipOutcomeRollup, slipStreaks,
+    DEFAULT_DAILY_SLIP, DEFAULT_VALUE_CARDS, selectDailyLegs, constructSlip,
+    valueCards, dayMood, slipOutcomeRollup, slipStreaks,
 } from '../src/db/daily-slip-rules.js';
 
 const fx = (id, league, legs) => ({ id, league, menuLegs: legs });
@@ -90,6 +90,21 @@ test('mood thresholds (baked 2026-08-06 terciles)', () => {
     assert.equal(dayMood(mk(12, 0.966), DEFAULT_DAILY_SLIP), 'amber');
     assert.equal(dayMood(mk(5, 0.98), DEFAULT_DAILY_SLIP), 'red');         // quality without depth
     assert.equal(dayMood(mk(25, 0.91), DEFAULT_DAILY_SLIP), 'amber');      // depth without quality
+});
+
+test('valueCards: greedy target-close = fewest legs, remainder discarded, tagged', () => {
+    const leg = (id, price) => ({ id, league: `L${id}`, market: 'X2', price, calProb: 0.85 });
+    // 1.25 x 1.22 = 1.525 closes card 1 at TWO legs; 1.15 x 1.1 x 1.05 = 1.33
+    // never reaches 1.5 inside 3 legs -> that remainder is DISCARDED, never bet.
+    const pool = [leg(1, 1.25), leg(2, 1.22), leg(3, 1.15), leg(4, 1.1), leg(5, 1.05)];
+    const cards = valueCards(pool, { ...DEFAULT_VALUE_CARDS, maxLegsPerCard: 3 }, 2);
+    assert.equal(cards.length, 1);
+    assert.deepEqual(cards[0].map(l => l.id), [1, 2]);
+    assert.ok(cards[0].every(l => l.kind === 'value' && l.card === 2));   // indices continue after safe cards
+    // A deeper pool closes the second card too.
+    const pool2 = [...pool, leg(6, 1.3), leg(7, 1.3)];
+    const cards2 = valueCards(pool2, { ...DEFAULT_VALUE_CARDS, maxLegsPerCard: 3 }, 0);
+    assert.equal(cards2.length, 2);
 });
 
 test('rollup: miss settles early, voids survive without hitting', () => {

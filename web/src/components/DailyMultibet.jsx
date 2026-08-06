@@ -86,12 +86,20 @@ function DayCard({ d, today, allPrices }) {
             )}
             {!teaser && Array.isArray(d.legs) && d.legs.length > 0 && (
                 d.cards_total > 1
-                    ? [...new Set(d.legs.map(l => l.card ?? 0))].sort().map(ci => (
-                        <div key={ci} className="mt-1.5">
-                            <div className="text-[11px] uppercase tracking-wide text-label-3">Card {ci + 1}</div>
-                            {d.legs.filter(l => (l.card ?? 0) === ci).map((l, i) => <Leg key={i} leg={l} allPrices={allPrices} />)}
-                        </div>
-                    ))
+                    ? [...new Set(d.legs.map(l => l.card ?? 0))].sort((a, b) => a - b).map(ci => {
+                        const legs = d.legs.filter(l => (l.card ?? 0) === ci);
+                        const isValue = legs.some(l => l.kind === 'value');
+                        const odds = legs.reduce((p, l) => p * Number(l.price), 1);
+                        return (
+                            <div key={ci} className="mt-1.5">
+                                <div className={`text-[11px] uppercase tracking-wide ${isValue ? 'text-hot' : 'text-label-3'}`}
+                                    title={isValue ? 'Value arm: 1.5x-target card at real odds. Replay record 61% cards, break-even - a risk product, not a profit promise.' : 'Safety arm: the survival card.'}>
+                                    {isValue ? `Value card · ${odds.toFixed(2)}x` : `Card ${ci + 1}`}
+                                </div>
+                                {legs.map((l, i) => <Leg key={i} leg={l} allPrices={allPrices} />)}
+                            </div>
+                        );
+                    })
                     : <div className="mt-1.5">{d.legs.map((l, i) => <Leg key={i} leg={l} allPrices={allPrices} />)}</div>
             )}
         </div>

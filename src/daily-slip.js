@@ -15,7 +15,8 @@ import { buildTipBooks, tipOutcome } from './db/tip-rules.js';
 import { marketMenu } from './db/ladder-rules.js';
 import { makeCalibrator } from './db/leg-calibration.js';
 import {
-    DEFAULT_DAILY_SLIP, DEFAULT_GROUPING, selectDailyLegs, groupCards, dayMood,
+    DEFAULT_DAILY_SLIP, DEFAULT_GROUPING, DEFAULT_VALUE_CARDS,
+    selectDailyLegs, groupCards, valueCards, dayMood,
     slipOutcomeRollup, slipStreaks,
 } from './db/daily-slip-rules.js';
 import { tipMarketLabel } from './db/magic-rules.js';
@@ -182,10 +183,18 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         // in the replay). Mood still reads the whole qualifying pool.
         const pool = selectDailyLegs(fixtures, cal, o);
         const cards = groupCards(pool, DEFAULT_GROUPING);
-        const taken = cards.flat();
+        // Value arm (owner ship order 2026-08-06): eff-ranked pool, cards
+        // close at the 1.5x target, indices continue after the safe cards.
+        // A day can ship value cards even when the safe pool is thin.
+        const vPool = selectDailyLegs(fixtures, cal, DEFAULT_VALUE_CARDS);
+        const vCards = valueCards(vPool, DEFAULT_VALUE_CARDS, cards.length);
+        const safeTaken = cards.flat().map(l => ({ ...l, kind: 'safe' }));
+        const taken = [...safeTaken, ...vCards.flat()];
         slip = taken.length >= o.minLegs ? {
-            legs: taken, pool: pool.length, cards: cards.length,
-            combinedOdds: taken.reduce((p, l) => p * l.price, 1),
+            legs: taken, pool: pool.length, cards: cards.length + vCards.length,
+            // Headline combined odds stay the SAFE arm's product; value cards
+            // carry their own products in the legs/cards view.
+            combinedOdds: safeTaken.length ? safeTaken.reduce((p, l) => p * l.price, 1) : 1,
             mood: dayMood(pool, o),
         } : null;
     }
@@ -204,6 +213,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
                 price: l.price, prices: _providerPrices(byFixture.get(l.id), l.market),
                 prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: l.cellKey,
                 card: l.card ?? 0,
+                kind: l.kind ?? 'safe',
                 reasoning: _reasoning(l),
                 outcome: null,
             };
@@ -273,9 +283,16 @@ export async function settleDailySlips() {
             try { l.outcome = tipOutcome(l.market, f.ft_home, f.ft_away); changed = true; }
             catch (e) { debugLog(`daily-slip settle: unknown market key ${l.market} (${e.message})`); }
         }
-        const roll = slipOutcomeRollup(r.legs.map(l => l.outcome ?? null));
+        // Day `outcome` = the SAFE recommendation's strict result (the green-
+        // streak metric keeps its meaning); value cards ride cards_won only.
+        // Legacy/backfilled legs carry no kind and all count (unchanged).
+        const safeLegs = r.legs.filter(l => l.kind !== 'value');
+        const roll = slipOutcomeRollup((safeLegs.length ? safeLegs : r.legs).map(l => l.outcome ?? null));
         if (!changed && roll.outcome == null) continue;
-        const patch = { legs: JSON.stringify(r.legs), legs_hit: roll.legsHit };
+        const patch = {
+            legs: JSON.stringify(r.legs),
+            legs_hit: r.legs.filter(l => l.outcome === 'hit').length,
+        };
         // Per-card rollups (v1.3): cards_won counts cards whose every leg
         // settled green; `outcome` keeps the STRICT all-cards meaning.
         const byCard = new Map();

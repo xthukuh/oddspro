@@ -139,6 +139,47 @@ export function groupCards(legs, g = DEFAULT_GROUPING) {
     return cards.filter(c => c.length >= 2);
 }
 
+// VALUE cards (owner ship order 2026-08-06; scripts/evolve-value-slip.js
+// rounds 1-3): two efficiency-ranked cards per day that each CLOSE the moment
+// combined odds reach targetOdds - inherently the fewest legs consistent with
+// the target (measured 3.75 avg legs/card; hard 2-3 leg caps lost on
+// worst-half profit). Replay record: 44/72 cards = 61.1% at 1.63x avg, ROI
+// -0.4% (break-even vs -4.5% single-card), any-win day streak 11, test tail
+// held. Round 1's +28.8%-train mirage collapsed -41.6% OOS and is the
+// standing reason every re-bake must clear worst-half fitness + the tail.
+// HONESTY: break-even at real odds, not proven +EV - labeled so in the UI.
+export const DEFAULT_VALUE_CARDS = {
+    minLegs: 2, maxLegs: 0,        // selection pool depth uncapped; cards self-limit
+    targetOdds: 1.5, maxCards: 2, maxLegsPerCard: 6,
+    probFloor: 0.80, minLegPrice: 1.0, maxLegPrice: 1.35,
+    maxPerLeague: 3, minCellN: 0, rankBy: 'eff',
+};
+
+// pool: selectDailyLegs output under the value opts (eff-ranked). Deals legs
+// greedily into cards that close at >= targetOdds; an unclosable remainder is
+// discarded, never bet. Legs are tagged { card: startIndex + i, kind: 'value' }.
+export function valueCards(pool, opts = DEFAULT_VALUE_CARDS, startIndex = 0) {
+    const o = { ...DEFAULT_VALUE_CARDS, ...(opts ?? {}) };
+    const cards = [];
+    const perLeague = new Map();
+    let cur = [], prod = 1;
+    for (const l of pool) {
+        if (cards.length >= o.maxCards) break;
+        const n = perLeague.get(l.league) ?? 0;
+        if (l.league != null && n >= o.maxPerLeague) continue;
+        perLeague.set(l.league, n + 1);
+        cur.push(l); prod *= l.price;
+        if (prod >= o.targetOdds) {
+            const idx = startIndex + cards.length;
+            cards.push(cur.map(x => ({ ...x, card: idx, kind: 'value' })));
+            cur = []; prod = 1;
+        } else if (cur.length >= o.maxLegsPerCard) {
+            cur = []; prod = 1;
+        }
+    }
+    return cards;
+}
+
 // legs: selectDailyLegs output (calibrated-prob ranked). The card takes the
 // TOP maxLegs of the qualifying pool (the 2026-08-06 grid: unlimited depth
 // collapses survival - floor 0.90 uncapped went 11% green vs the capped
