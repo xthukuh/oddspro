@@ -28,18 +28,26 @@ import { cellKey } from './leg-calibration.js';
 // on the held-out test tail (91.7%). Hard streak GATES (perfect-cell /
 // tail-streak / miss-cooldown) were all rejected by the search: they starve
 // publishing. Re-run the evolution monthly as the ledger grows.
+// v1.5 (owner order 2026-08-06: safe legs capped at MIN price 1.2 - junk
+// 1.01 legs banned from the safety cards). Round-8 grid under the 1.2+
+// regime (production decay calibrator, split-2x2): winner floor 0.75 prob-
+// rank publishes 36/36 days at 4 legs @ 2.08x combined - any-card green
+// 86.1%, strict both-cards 50%, flat P&L +1.36u (the first POSITIVE safe-arm
+// replay). Floors >= 0.88 empty the pool (no calibrated 88%+ exists at
+// 1.2+, the round-3 market-structure fact). Trade-off vs the 1.01-leg era
+// (strict 88.6% / any 100% / 1.04x) accepted by owner order: real odds.
 export const DEFAULT_DAILY_SLIP = {
     minLegs: 2,
     maxLegs: 5,
-    probFloor: 0.95,
-    minLegPrice: 1.0,       // 1.0 = off; raising it empties the pool (see above)
+    probFloor: 0.75,
+    minLegPrice: 1.2,
     maxLegPrice: 1.35,
     maxPerLeague: 3,
     minCellN: 0,
-    rankBy: 'streak',       // 'streak' = unbroken cells first | 'prob' = calibrated survival | 'eff' = cost per log-odds
+    rankBy: 'prob',         // 'prob' = calibrated survival | 'streak' = unbroken cells first | 'eff' = cost per log-odds
     mood: {
-        green: { legs: 20, meanProb: 0.970 },
-        amber: { legs: 11, meanProb: 0.965 },
+        green: { legs: 74, meanProb: 0.840 },
+        amber: { legs: 36, meanProb: 0.831 },
     },
 };
 

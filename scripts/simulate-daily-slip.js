@@ -43,15 +43,16 @@ if (WRITE_DAILY && !flag('yes')) {
 // floor region (a 0.96-floor leg is never priced 1.6). Round 2 adds the
 // maxLegs depth cap (the replay's top-10 banker construction) and drops the
 // inert price axis. Every cell is reported.
-// Round 4 (disclosed; rounds 1-3 in git history + the research doc): the
-// construction is PINNED at the baked winner (prob/0.96/top-6) and only the
-// CALIBRATOR varies - the owner's error-feedback directive (2026-08-06):
-// recency decay ("heal from bad picks") x the hierarchical league layer
-// ("stereotype patterns"). Both off = the incumbent, reproduced as control.
+// Round 8 (owner order 2026-08-06: cap safe legs at MIN price 1.2 - no more
+// 1.01 junk on the safety cards). The 0.95 floor is IMPOSSIBLE at 1.2+
+// prices (round-3 finding: no calibrated 94%+ above 1.08), so the floor and
+// ranking axes reopen to find the best safe construction in the new price
+// regime. Production calibrator (decay 30) throughout; split-2x2 grouping.
 const GRID = {
-    halfLifeDays: [0, 14, 30],
-    leagueK: [0, 10, 20],
+    probFloor: [0.75, 0.78, 0.80, 0.82, 0.85, 0.88],
+    rankBy: ['streak', 'prob', 'eff'],
 };
+const PINNED = { minLegPrice: 1.2, maxLegPrice: 1.35 };
 
 const cfg = { tip: { ...DEFAULT_TIP }, ladder: { ...DEFAULT_LADDER }, model: { ...DEFAULT_MODEL }, h2hWindow: 5 };
 console.error('[dailyslip-sim] loading...');
@@ -110,7 +111,14 @@ function runParams(params, calOpts = {}) {
         if (slip) {
             const outcomes = slip.legs.map(l => outcomeOf.get(`${l.id}|${l.market}`) ?? null);
             const roll = slipOutcomeRollup(outcomes);
-            perDay.push({ day, slip, outcomes, outcome: roll.outcome, legsHit: roll.legsHit });
+            const byCard = new Map();
+            slip.legs.forEach((l, i) => {
+                let list = byCard.get(l.card ?? 0); if (!list) byCard.set(l.card ?? 0, list = []);
+                list.push(outcomes[i]);
+            });
+            const cardsWon = [...byCard.values()].filter(o => o.every(x => x === 'hit')).length;
+            perDay.push({ day, slip, outcomes, outcome: roll.outcome, legsHit: roll.legsHit,
+                cardsWon, cardsTotal: byCard.size });
         } else {
             perDay.push({ day, slip: null });
         }
@@ -137,10 +145,10 @@ function runParams(params, calOpts = {}) {
 
 if (!WRITE_DAILY) {
     const results = [];
-    for (const halfLifeDays of GRID.halfLifeDays)
-        for (const leagueK of GRID.leagueK) {
-            const r = runParams({ ...DEFAULT_DAILY_SLIP }, { halfLifeDays, leagueK });
-            r.calOpts = { halfLifeDays, leagueK };
+    for (const probFloor of GRID.probFloor)
+        for (const rankBy of GRID.rankBy) {
+            const r = runParams({ ...DEFAULT_DAILY_SLIP, ...PINNED, probFloor, rankBy }, { halfLifeDays: 30 });
+            r.calOpts = { probFloor, rankBy };
             results.push(r);
         }
 
@@ -151,11 +159,12 @@ if (!WRITE_DAILY) {
     results.sort(rank);
 
     console.log(`\n=== DAILY MULTIBET GRID  (${days.length} days; publish floor ${minPlayed} days; winner rule: green rate > best streak > P&L)`);
-    console.log('halfLife  leagueK |  played  green  rate    bestStk   P&L      avgLegs  avgOdds');
+    console.log('floor  rank    |  played  green(strict)  anyGreen   bestStk   P&L      avgLegs  avgOdds');
     for (const r of results) {
         const c = r.calOpts;
+        const any = r.perDay.filter(p => p.cardsWon > 0).length;
         const star = eligible[0] === r ? '  <== WINNER' : (r.played < minPlayed ? '  (under publish floor)' : '');
-        console.log(`${String(c.halfLifeDays || 'off').padEnd(8)}  ${String(c.leagueK || 'off').padEnd(6)} |  ${String(r.played).padStart(4)}   ${String(r.green).padStart(4)}   ${(100 * r.greenRate).toFixed(1).padStart(5)}%   ${String(r.best).padStart(4)}   ${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(2).padStart(7)}u   ${r.avgLegs.toFixed(1).padStart(5)}   ${r.avgOdds.toFixed(2).padStart(6)}x${star}`);
+        console.log(`${c.probFloor.toFixed(2)}   ${c.rankBy.padEnd(6)} |  ${String(r.played).padStart(4)}   ${String(r.green).padStart(4)} ${(100 * r.greenRate).toFixed(1).padStart(6)}%   ${String(any).padStart(3)} ${(100 * any / Math.max(1, r.played)).toFixed(1).padStart(5)}%   ${String(r.best).padStart(4)}   ${r.pnl >= 0 ? '+' : ''}${r.pnl.toFixed(2).padStart(7)}u   ${r.avgLegs.toFixed(1).padStart(5)}   ${r.avgOdds.toFixed(2).padStart(6)}x${star}`);
     }
 
     const w = eligible[0];

@@ -24,7 +24,7 @@ import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
 
-export const ALGO_VERSION = 'v1.3-cards-2026-08-06';   // multi-card grouping champion (see daily-slip-rules.js)
+export const ALGO_VERSION = 'v1.5-floor12-2026-08-06';   // min-price-1.2 safe cards (see daily-slip-rules.js)
 
 const CALIBRATION_WINDOW_DAYS = 90;
 // Recency decay (grid round 4, owner's error-feedback directive): identical

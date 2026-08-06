@@ -11,7 +11,7 @@ const leg = (market, price, prob) => ({ market, price, prob });
 
 test('gates: floor, price window, one leg per fixture, league cap', () => {
     const cal = makeCalibrator({ shrinkK: 1 });
-    const opts = { ...DEFAULT_DAILY_SLIP, probFloor: 0.9, maxPerLeague: 2 };
+    const opts = { ...DEFAULT_DAILY_SLIP, probFloor: 0.9, maxPerLeague: 2, minLegPrice: 1.0 };
     const fixtures = [
         fx(1, 'EPL', [leg('U 5.5', 1.05, 0.95), leg('1X', 1.30, 0.85)]),   // best leg passes
         fx(2, 'EPL', [leg('U 5.5', 1.06, 0.94)]),
@@ -32,7 +32,7 @@ test('gate: minCellN excludes markets without settled evidence', () => {
         fx(1, 'EPL', [seen]),                                  // cell has n=5
         fx(2, 'EPL', [leg('GG', 1.30, 0.94)]),                 // cell unseen, n=0
     ];
-    const opts = { ...DEFAULT_DAILY_SLIP, probFloor: 0.9, minCellN: 5 };
+    const opts = { ...DEFAULT_DAILY_SLIP, probFloor: 0.9, minCellN: 5, minLegPrice: 1.0 };
     assert.deepEqual(selectDailyLegs(fixtures, cal, opts).map(l => l.id), [1]);
 });
 
@@ -41,7 +41,7 @@ test('selection uses the CALIBRATED prob, not the devig prob', () => {
     const trap = { market: 'O 0.5', price: 1.01, prob: 0.99 };
     for (let i = 0; i < 20; i++) cal.observe({ ...trap, outcome: i < 10 ? 'hit' : 'miss' });
     const fixtures = [fx(1, 'EPL', [trap, leg('U 5.5', 1.10, 0.92)])];
-    const picked = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.9 });
+    const picked = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.9, minLegPrice: 1.0 });
     // The trap's calibrated prob collapsed to ~0.52: the honest U 5.5 leg wins the fixture.
     assert.equal(picked[0].market, 'U 5.5');
 });
@@ -53,9 +53,9 @@ test('streak ranking prefers unbroken-record cells over higher calProb', () => {
     const broken = { market: '1X', price: 1.05, prob: 0.96 };        // 59/60, deep but broken
     for (let i = 0; i < 60; i++) cal.observe({ ...broken, outcome: i === 0 ? 'miss' : 'hit' });
     const fixtures = [fx(1, 'A', [unbroken]), fx(2, 'B', [broken])];
-    const streak = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.5, rankBy: 'streak' });
+    const streak = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.5, rankBy: 'streak', minLegPrice: 1.0 });
     assert.deepEqual(streak.map(l => l.id), [1, 2]);                 // unbroken first
-    const byProb = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.5, rankBy: 'prob' });
+    const byProb = selectDailyLegs(fixtures, cal, { ...DEFAULT_DAILY_SLIP, probFloor: 0.5, rankBy: 'prob', minLegPrice: 1.0 });
     assert.deepEqual(byProb.map(l => l.id), [2, 1]);                 // prob mode: the deep cell wins
 });
 
@@ -79,17 +79,17 @@ test('construction: maxLegs caps depth at the top of the ranking, pool drives mo
     assert.equal(slip.legs.length, 5);
     assert.deepEqual(slip.legs.map(l => l.id), [0, 1, 2, 3, 4]);           // top of the ranking
     assert.equal(slip.pool, 20);
-    assert.equal(slip.mood, 'green');                                      // deep quality pool
+    assert.equal(slip.mood, 'red');                                        // 20-leg pool is thin under the v1.5 terciles
     const uncapped = constructSlip(legs, { ...DEFAULT_DAILY_SLIP, maxLegs: 0 });
     assert.equal(uncapped.legs.length, 20);                                // 0 = uncapped (sim harness)
 });
 
-test('mood thresholds (baked 2026-08-06 terciles)', () => {
+test('mood thresholds (v1.5 terciles, min-price-1.2 regime)', () => {
     const mk = (n, p) => Array.from({ length: n }, (_, i) => ({ id: i, calProb: p }));
-    assert.equal(dayMood(mk(22, 0.975), DEFAULT_DAILY_SLIP), 'green');
-    assert.equal(dayMood(mk(12, 0.966), DEFAULT_DAILY_SLIP), 'amber');
-    assert.equal(dayMood(mk(5, 0.98), DEFAULT_DAILY_SLIP), 'red');         // quality without depth
-    assert.equal(dayMood(mk(25, 0.91), DEFAULT_DAILY_SLIP), 'amber');      // depth without quality
+    assert.equal(dayMood(mk(80, 0.85), DEFAULT_DAILY_SLIP), 'green');
+    assert.equal(dayMood(mk(40, 0.835), DEFAULT_DAILY_SLIP), 'amber');
+    assert.equal(dayMood(mk(10, 0.98), DEFAULT_DAILY_SLIP), 'red');        // quality without depth
+    assert.equal(dayMood(mk(80, 0.70), DEFAULT_DAILY_SLIP), 'amber');      // depth without quality
 });
 
 test('valueCards: greedy target-close = fewest legs, remainder discarded, tagged', () => {
