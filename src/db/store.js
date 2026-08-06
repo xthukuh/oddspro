@@ -32,7 +32,9 @@ function _matchRow(g) {
         category_name: g.category_name,
         competition_id: g.competition_id,
         competition_name: g.competition_name,
-        metadata: g.metadata,
+        // metadata (raw ~39KB provider JSON) is no longer persisted at all
+        // (owner ruling 2026-08-07: zero readers, 1.5 GB reclaimed; the
+        // column survives for schema compat, historical blobs purged).
     };
 }
 
@@ -151,13 +153,9 @@ export async function saveMatches(games) {
             const tUpsert = Date.now();
             if (found) {
                 match_id = found.id;
-                // metadata (raw ~39KB provider JSON) is insert-only: written at
-                // first sight, excluded here so refreshes stop rewriting 556MB
-                // of write-only blobs every sweep (settle-columns idiom).
-                const { metadata, ...refresh } = _matchRow(g);
                 // Explicit bump: ON UPDATE CURRENT_TIMESTAMP skips no-op updates,
                 // but updated_at must reflect every odds refresh (UI freshness).
-                await trx('matches').where('id', match_id).update({ ...refresh, updated_at: db.fn.now() });
+                await trx('matches').where('id', match_id).update({ ..._matchRow(g), updated_at: db.fn.now() });
                 updated = true;
             } else {
                 const [id] = await trx('matches').insert(_matchRow(g));

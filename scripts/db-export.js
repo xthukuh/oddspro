@@ -46,8 +46,10 @@ function resolveDumpBinary(container) {
 }
 
 // Dump the configured database, gzipped, to outPath. Resolves { path, bytes };
-// throws on any failure so the caller decides how to die.
-export async function exportDb({ outPath, container = null }) {
+// throws on any failure so the caller decides how to die. ignoreTables (bare
+// table names) become --ignore-table flags - the deploy-remote.js subsequent-
+// deploy mode uses this to keep instance-unique tables out of the dump.
+export async function exportDb({ outPath, container = null, ignoreTables = [] }) {
     const name = resolveContainer(container || process.env.DB_DOCKER_CONTAINER || null);
     const dumpBin = resolveDumpBinary(name);
     console.log(`[db-export] using ${dumpBin} in container "${name}" for database "${config.DB_DATABASE}".`);
@@ -60,6 +62,7 @@ export async function exportDb({ outPath, container = null }) {
         `-u${config.DB_USERNAME}`,
         '--single-transaction', '--routines', '--triggers', '--events',
         '--no-tablespaces', '--default-character-set=utf8mb4',
+        ...ignoreTables.map(t => `--ignore-table=${config.DB_DATABASE}.${t}`),
         config.DB_DATABASE,
     ];
 
