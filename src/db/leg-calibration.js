@@ -23,6 +23,15 @@ export const bandOf = p => p <= 1.02 ? '1.02' : p <= 1.05 ? '1.05' : p <= 1.10 ?
     : p <= 1.20 ? '1.20' : p <= 1.35 ? '1.35' : p <= 1.60 ? '1.60' : p <= 2.20 ? '2.20'
     : p <= 3.50 ? '3.50' : 'long';
 
+// KEPT UNSPLIT after a real experiment (owner-spotted pattern, 2026-08-06):
+// near-Unders (U 3.5/4.5 at 1.20-1.35) DO run below break-even (76.1-76.3%
+// vs 78.4%) and break the most slips - but splitting them into their own
+// cell made every replay metric WORSE (strict 51.4% -> 45.7%, value cards
+// +9.5% -> -1.6%; floor retune could not recover it), because the
+// replacement legs at that price band realize 73.3% - near-Unders are the
+// LEAST-BAD shorts. Same lesson as the refuted league layer: taxonomy
+// refinement needs sample mass. Re-test the split when the ledger has
+// months, not weeks (scripts/simulate-daily-slip.js round 9, git history).
 export const groupOf = m => /^O 0\.5$/.test(m) ? 'O0.5'            // its own cell - the known trap
     : /^O /.test(m) ? 'over' : /^U /.test(m) ? 'under'
     : /^TT:.:O/.test(m) ? 'tt-over' : /^TT:.:U/.test(m) ? 'tt-under'

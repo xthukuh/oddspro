@@ -7,7 +7,7 @@ test('bands and groups match the replay taxonomy', () => {
     assert.equal(bandOf(1.35), '1.35');
     assert.equal(bandOf(9.0), 'long');
     assert.equal(groupOf('O 0.5'), 'O0.5');       // the known trap cell stays isolated
-    assert.equal(groupOf('U 4.5'), 'under');
+    assert.equal(groupOf('U 4.5'), 'under');   // deliberately UNSPLIT - see groupOf's comment
     assert.equal(groupOf('TT:H:O 1.5'), 'tt-over');
     assert.equal(groupOf('TT:A:U 2.5'), 'tt-under');
     assert.equal(groupOf('GG'), 'btts');
