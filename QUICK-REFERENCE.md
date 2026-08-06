@@ -129,8 +129,9 @@ hosts; `SYNC_IMPORT_SKIP=t1,t2` adds import-side retention).
 ### 2.2c Secrets + env hygiene
 
 ```sh
-node scripts/gen-secret.js [hex|b64|pin|uuid] [bytes|digits]   # secure values for PIN_PEPPER/tokens/seed PINs
+npm run gen:secret        # = node scripts/gen-secret.js [hex|b64|pin|uuid] [bytes|digits]
 node scripts/env-audit.js                                      # read-only: SECRET / DIFFERS / REDUNDANT / UNKNOWN report
+node scripts/env-to-settings.js [--yes]                        # migrate admin-editable .env overrides into the settings table
 ```
 
 env-audit compares the live .env against code defaults so trims are safe: REDUNDANT lines
@@ -163,6 +164,23 @@ change nothing and can go; a DIFFERS line is load-bearing (the 2026-07-26 lesson
 | Bot protection (opt-in) — `docs/DEPLOYMENT.md` §8 | `bot` |
 
 ### 2.4 Deploy — in this order (detail: `docs/DEPLOYMENT.md` §4–5)
+
+**Automated over SSH (v1.4.0+, the default; config `.env.deploy`, prod env `.env.server`):**
+
+```sh
+node scripts/deploy-remote.js --all --fresh   # FIRST deploy of a version: DB full copy
+                                              # + instance-table truncate + admin reseed,
+                                              # app extract + npm install, web backup/swap
+node scripts/deploy-remote.js --db            # subsequent: warehouse-only DB overwrite
+                                              # (users/sessions/settings survive)
+node scripts/deploy-remote.js --app --web     # code-only redeploy
+                                              # (--dry-run prints every remote command)
+```
+
+Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Restart**
+(with `MIGRATE_ON_BOOT=1` this applies any new migration first). Smoke test (§2.5).
+
+**Manual fallback (File Manager):**
 
 1. Upload + extract app zip → Application Root; web zip → `public_html`.
 2. cPanel **Run NPM Install** — only if dependencies changed.

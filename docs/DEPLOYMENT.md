@@ -106,7 +106,48 @@ Do these **in order**:
     bash /home/<CPANEL_USER>/<APP_DIR>/scripts/pipeline-cron.sh
     ```
 
-## 4. Ongoing deploys (manual)
+## 4. Ongoing deploys
+
+### 4a. Automated over SSH (v1.4.0+, the default route)
+
+SSH access landed 2026-08-07 (`ssh oddsprok@oddspro-p`, key auth). One
+orchestrator replaces the File-Manager routine (byte-progress on every long
+transfer; config in gitignored `.env.deploy`, template `.env.deploy.example`;
+prod server env in gitignored `.env.server`, uploaded as the app root's
+`.env` when absent):
+
+```sh
+npm test && npm run build:web && npm run package:deploy   # release zips as before
+node scripts/deploy-remote.js --db --fresh   # FIRST deploy of a version: full dump
+                                             # -> stream-import -> truncate the 16
+                                             # instance tables -> reseed admin
+node scripts/deploy-remote.js --db           # subsequent: warehouse-only dump
+                                             # (instance tables + settings excluded
+                                             # so remote records/admin edits win),
+                                             # then sessions/otp cleared
+node scripts/deploy-remote.js --app          # upload + extract backend into
+                                             # /home2/<user>/oddspro-app-v<version>/,
+                                             # upload .env.server if absent,
+                                             # remote npm install --omit=dev
+node scripts/deploy-remote.js --web          # tar.gz backup of public_html ->
+                                             # wipe -> extract the new build
+node scripts/deploy-remote.js --all --fresh  # everything (first deploy)
+```
+
+Remote paths and the DB name derive from `package.json`'s version
+(`oddspro-app-v1.4.0`, `oddsprok_prod_1_4_0`). `--dry-run` prints every remote
+command without executing. Instance-unique tables (never overwritten after
+the first deploy): users, sessions, otp_codes, user_prefs,
+personal_access_tokens, user_slips, visits, visitors, visit_sessions,
+visitor_devices, visit_events, ip_geo, admin_audit, sms_templates,
+sms_campaigns, sms_campaign_recipients. `settings` ships on `--fresh` only
+(it carries the runtime policy - see §9).
+
+Still manual in cPanel: creating/pointing the Node.js app (Application
+Manager) at the new versioned root and Restart - a shared-hosting shell
+cannot script Passenger registration.
+
+### 4b. Manual via File Manager (fallback)
 
 For any future change:
 

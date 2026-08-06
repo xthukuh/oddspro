@@ -128,7 +128,7 @@ All optional; validated in `src/config.js`. Defaults shown.
 | `BONGA_API_KEY` | — | Bonga API key. Required to send/query. |
 | `BONGA_API_SECRET` | — | Bonga API secret. Required to **send**. |
 | `BONGA_SERVICE_ID` | `1` | Bonga sender/service id — **confirm yours** in the dashboard. |
-| `BONGA_API_URL_SEND` | `http://167.172.14.50:4002/v1/send-sms` | ⚠ cleartext HTTP (see §7). Override with your HTTPS proxy. |
+| `BONGA_API_URL_SEND` | `http://167.172.14.50:4002/v1/send-sms` | ⚠ cleartext HTTP (see §7). Since 2026-08-07 both local and prod point this at the AppScript HTTPS relay — see `sms-bonga-relay.md` (the vendor host blacklists the production server's IP). |
 | `BONGA_API_URL_BALANCE` | `https://app.bongasms.co.ke/api/check-credits` | HTTPS. |
 | `BONGA_API_URL_DELIVERY` | `https://app.bongasms.co.ke/api/fetch-delivery` | HTTPS. |
 | `OTP_TTL_MINUTES` | `10` | Code lifetime. |
