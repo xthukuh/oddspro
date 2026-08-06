@@ -3,6 +3,8 @@
 .env.production
 .env.local
 .env.*.local
+.env.deploy
+.env.server
 
 # Node
 node_modules/

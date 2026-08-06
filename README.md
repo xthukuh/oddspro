@@ -32,6 +32,20 @@ npm run migrate         # forward-only knex migrations
 
 **User accounts (v1.1.0):** set `PIN_PEPPER` (a long random secret) **before** `npm run migrate` — the users migration seeds an admin whose PIN (`ADMIN_SEED_PIN`, default `0000`, changed on first login) is hashed with it, and changing the pepper later invalidates every stored PIN. SMS OTP verification is off by default (`SMS_ENABLED=0` logs codes to the server console for dev); see `.env.example`.
 
+**Generating secrets** (`PIN_PEPPER`, `ADMIN_TOKEN`, `API_TOKEN`): use the bundled generator
+
+```sh
+npm run gen:secret              # 32-byte hex (64 chars); also: hex|b64|pin|uuid, see scripts/gen-secret.js
+```
+
+or the plain Node one-liner:
+
+```sh
+node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+```
+
+**`.env` doctrine (since 2026-08-07):** `.env` holds only integrated-service credentials and boot infra (DB, API keys, SMS/SMTP credentials, the pepper, `MIGRATE_ON_BOOT`). Every runtime knob is edited in **Admin → Settings** (audit-dated). `node scripts/env-audit.js` reports which lines are load-bearing; `node scripts/env-to-settings.js` migrates admin-editable overrides into the settings table.
+
 ## Commands
 
 All commands, setup sequences, routines, health checks and critical warnings live in
