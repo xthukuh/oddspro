@@ -30,3 +30,22 @@ export function isRetryableNetworkError(err) {
     if (err.isAxiosError === true && !err.response) return true;
     return false;
 }
+
+// Edge/WAF throttles observed live (owner report 2026-08-08): API-Football
+// answered 403 on a past-fixture stats pull, then succeeded on a plain
+// re-run - an unseen throttle, not an auth failure. These statuses get a
+// BOUNDED exponential-backoff retry before the error is treated permanent;
+// a real auth 403 simply exhausts the retries and still fails loudly.
+const TRANSIENT_HTTP_STATUSES = new Set([403, 408, 429, 500, 502, 503, 504]);
+
+export function isTransientHttpStatus(status) {
+    return TRANSIENT_HTTP_STATUSES.has(Number(status));
+}
+
+// The API-fetch predicate: network transients OR transient HTTP statuses.
+// (The API-Football body-level rate-limit path in rate-rules.js is separate
+// and still owns 200-with-rateLimit-errors responses.)
+export function isRetryableApiError(err) {
+    if (isRetryableNetworkError(err)) return true;
+    return isTransientHttpStatus(err?.response?.status);
+}

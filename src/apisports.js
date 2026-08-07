@@ -6,7 +6,7 @@ import { _date, _dtime, _batch, _progress } from './utils.js';
 import { db } from './db/connection.js';
 import { minuteRemaining, msToNextMinute, shouldRetryRateLimit } from './db/rate-rules.js';
 import { withRetry } from './db/retry-rules.js';
-import { isRetryableNetworkError } from './db/net-rules.js';
+import { isRetryableApiError } from './db/net-rules.js';
 import { buildEventRows } from './apisports-events.js';
 import { buildStandingRows } from './apisports-standings.js';
 
@@ -96,14 +96,15 @@ async function _getPage(path, params) {
             await _sleep(msToNextMinute(Date.now()));
             _minuteRemaining = Infinity; // fresh window; headers re-sync below
         }
-        // Transient socket/TLS/DNS faults (e.g. ECONNRESET before the TLS
-        // handshake) get a bounded retry so one blip doesn't abort the whole
-        // sweep - the GET is idempotent. Quota-floor + per-minute pacing above
-        // are outside the wrap (never retried); HTTP error responses carry a
-        // `.response` and are excluded by the predicate (rate-limit path owns
-        // them). Distinct from the outer rate-limit `attempt` counter.
+        // Transient socket/TLS/DNS faults AND transient HTTP statuses (the
+        // live-observed 403-then-success edge throttle, 429/5xx) get a
+        // bounded exponential-backoff retry so one blip doesn't abort the
+        // whole sweep - the GET is idempotent. Quota-floor + per-minute
+        // pacing above are outside the wrap (never retried); the body-level
+        // rate-limit path below still owns 200-with-errors responses. A real
+        // auth 403 exhausts the 4 tries and stays a loud permanent failure.
         const res = await withRetry(() => ApisportsClient.get(path, { params }), {
-            tries: 3, base: 400, isRetryable: isRetryableNetworkError,
+            tries: 4, base: 1500, isRetryable: isRetryableApiError,
         });
         const rem = Number(res.headers?.['x-ratelimit-requests-remaining']);
         if (Number.isFinite(rem)) _remaining = rem;

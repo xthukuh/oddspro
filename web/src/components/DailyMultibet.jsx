@@ -72,6 +72,17 @@ function Leg({ leg, allPrices }) {
     );
 }
 
+// Gen-2 ladder tiers (v2.0): visual identity per rung. Anchor is the
+// flagship survival card (day verdict); top3 is the proven >= 1.5-odds value
+// card; grand appears only when the calibration genuinely supports a 5x win.
+const TIER_META = {
+    anchor: { label: 'Anchor 1.5x', cls: 'text-green', hint: 'The flagship survival card: safest calibrated legs, 1.5x floor. Its strict result IS the day verdict. Replay: 64.9% days, +1.7u.' },
+    double: { label: 'Double 2x', cls: 'text-accent', hint: '2x-target rung from the same safe band. Replay: 39% cards at 2.07x.' },
+    top3: { label: 'Top-3 value', cls: 'text-hot', hint: 'The three safest markets at 1.5+ odds each (~3.4x combined). The replay-profitable value rung - positive every tested window.' },
+    grand: { label: 'Grand 5x', cls: 'text-miss', hint: 'The 5x aspiration card - published ONLY when calibrated evidence clears the EV gate. Rare by design; a lottery arm, never a promise.' },
+    value: { label: 'Value card', cls: 'text-hot', hint: 'Value arm: 1.5x-target card at real odds (legacy).' },
+};
+
 function DayCard({ d, today, allPrices }) {
     const mood = MOOD[d.mood] ?? MOOD.red;
     const teaser = d.teaser && !Array.isArray(d.legs);
@@ -103,13 +114,20 @@ function DayCard({ d, today, allPrices }) {
                 d.cards_total > 1
                     ? [...new Set(d.legs.map(l => l.card ?? 0))].sort((a, b) => a - b).map(ci => {
                         const legs = d.legs.filter(l => (l.card ?? 0) === ci);
-                        const isValue = legs.some(l => l.kind === 'value');
                         const odds = legs.reduce((p, l) => p * Number(l.price), 1);
+                        const kind = legs[0]?.kind;
+                        const meta = TIER_META[kind] ?? (legs.some(l => l.kind === 'value') ? TIER_META.value : null);
+                        const settled = legs.every(l => l.outcome != null);
+                        const won = settled && legs.every(l => l.outcome === 'hit' || l.outcome === 'void');
                         return (
                             <div key={ci} className="mt-1.5">
-                                <div className={`text-[11px] uppercase tracking-wide ${isValue ? 'text-hot' : 'text-label-3'}`}
-                                    title={isValue ? 'Value arm: 1.5x-target card at real odds. Replay record 61% cards, break-even - a risk product, not a profit promise.' : 'Safety arm: the survival card.'}>
-                                    {isValue ? `Value card · ${odds.toFixed(2)}x` : `Card ${ci + 1}`}
+                                <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide">
+                                    <span className={`font-semibold ${meta?.cls ?? 'text-label-3'}`} title={meta?.hint ?? 'Survival card.'}>
+                                        {(legs[0]?.tier_label ?? meta?.label ?? `Card ${ci + 1}`)} · {odds.toFixed(2)}x
+                                    </span>
+                                    {settled && (
+                                        <span className={`font-bold ${won ? 'text-green' : 'text-miss'}`}>{won ? 'WON' : 'LOST'}</span>
+                                    )}
                                 </div>
                                 {legs.map((l, i) => <Leg key={i} leg={l} allPrices={allPrices} />)}
                             </div>
@@ -147,9 +165,11 @@ export default function DailyMultibet({ onClose, signedIn, onSignIn }) {
                     <div className="ml-auto"><SheetClose onClose={onClose} /></div>
                 </div>
                 <p className="px-6 pb-2 text-[13px] text-label-2 leading-relaxed">
-                    One cherry-picked survival card per day: the safest qualifying legs by calibrated
-                    win chance. Green days carry more legs; a day without enough safe picks honestly
-                    publishes no slip. Survival ranking, never a profit promise.
+                    A daily value ladder, safest rung first: <span className="text-green font-semibold">Anchor 1.5x</span> (the
+                    survival flagship - its result is the day verdict), <span className="text-accent font-semibold">Double 2x</span>,{' '}
+                    <span className="text-hot font-semibold">Top-3 value</span> (three markets at 1.5+ odds each), and a rare{' '}
+                    <span className="text-miss font-semibold">Grand 5x</span> that only appears when the evidence clears its gate.
+                    Every rung is contradiction-free and built from calibrated survival. Honest labels, never a profit promise.
                 </p>
                 {s && (
                     <div className="px-6 pb-2 flex flex-wrap gap-2 text-[12px]">

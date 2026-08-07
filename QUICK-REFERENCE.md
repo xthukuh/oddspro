@@ -64,7 +64,11 @@ Analysis-script chooser (backtests, mines, scorecards): `docs/agents/toolset.md`
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
-Daily MultiBet evolution (MONTHLY routine): `node scripts/evolve-daily-slip.js --db oddspro`
+Gen-2 ladder evolution (MONTHLY routine): `node scripts/evolve-gen2.js [--json out.json]`
+(deterministic 120+ generation coordinate descent over the tier-card config, train/test
+split, per-tier refinement; bake = edit DEFAULT_GEN2 + bump ALGO_VERSION, then
+`node scripts/backfill-gen2-timeline.js --yes` to regenerate the honest timeline).
+Legacy v1 evolution: `node scripts/evolve-daily-slip.js --db oddspro`
 (deterministic coordinate-descent over the walk-forward replay, train/test split; bake a
 new champion ONLY when it wins train AND does not lose the test tail, then bump
 ALGO_VERSION + re-run the backfill).

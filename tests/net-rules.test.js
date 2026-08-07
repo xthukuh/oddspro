@@ -54,3 +54,18 @@ test('network and DB retry predicates are disjoint', () => {
     assert.equal(isRetryableNetworkError({ code: 'ER_LOCK_DEADLOCK', errno: 1213 }), false);
     assert.equal(isRetryableNetworkError(new Error('Deadlock found; try restarting transaction')), false);
 });
+
+import { isTransientHttpStatus, isRetryableApiError } from '../src/db/net-rules.js';
+
+test('isTransientHttpStatus: edge throttles retryable, real client errors not', () => {
+    for (const s of [403, 408, 429, 500, 502, 503, 504]) assert.equal(isTransientHttpStatus(s), true, String(s));
+    for (const s of [400, 401, 404, 422, 200]) assert.equal(isTransientHttpStatus(s), false, String(s));
+});
+
+test('isRetryableApiError: network transients OR transient statuses', () => {
+    assert.equal(isRetryableApiError({ code: 'ECONNRESET' }), true);
+    assert.equal(isRetryableApiError({ isAxiosError: true, response: { status: 403 } }), true);
+    assert.equal(isRetryableApiError({ isAxiosError: true, response: { status: 401 } }), false);
+    assert.equal(isRetryableApiError({ isAxiosError: true }), true);
+    assert.equal(isRetryableApiError(null), false);
+});
