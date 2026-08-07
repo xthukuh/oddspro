@@ -267,15 +267,29 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
 // Settle pending slips from canonical final scores. Cheap (SQL + pure
 // tipOutcome/rollup, no fetches), light-pass safe. Leg outcomes persist into
 // the JSON; outcome/legs_hit/settled_at written exactly once per slip.
+// A leg whose fixture never reaches a terminal status (postponed/cancelled/
+// upstream zombie) VOIDS after this many days past kickoff - the bookmaker
+// behavior (leg odds collapse to 1), and what lets a day with one dead
+// fixture still resolve won/lost instead of hanging pending forever.
+const LEG_RETIRE_DAYS = 7;
+
 export async function settleDailySlips() {
+    // Selection deliberately includes DECIDED days that still carry ungraded
+    // legs: one early miss settles the day verdict (any miss = lost), but the
+    // remaining legs must keep grading as their fixtures finalize - the
+    // 2026-08-06/07 live rows froze at legs_hit=1 with true 7/10 legs (and a
+    // true 2-cards-won day reported 0) because whereNull('outcome') excluded
+    // them from every later pass.
     const pending = await db('daily_slips')
-        .whereNull('outcome').where('status', 'published')
-        .select('id', 'legs');
+        .where('status', 'published')
+        .where(q => q.whereNull('outcome').orWhere('legs', 'like', '%"outcome":null%'))
+        .select('id', 'legs', 'outcome');
     if (!pending.length) return { settled: 0, pending: 0 };
 
     const legIds = new Set();
     const parsed = pending.map(r => ({
         id: r.id,
+        outcome: r.outcome ?? null,
         legs: typeof r.legs === 'string' ? JSON.parse(r.legs) : (r.legs ?? []),
     }));
     for (const r of parsed) for (const l of r.legs) legIds.add(l.fixture_id);
@@ -287,6 +301,7 @@ export async function settleDailySlips() {
         .whereNotNull('ft_home').whereNotNull('ft_away')
         .select('id', 'ft_home', 'ft_away');
     const byId = new Map(finals.map(f => [f.id, f]));
+    const retireBefore = Date.now() - LEG_RETIRE_DAYS * 86_400_000;
 
     let settled = 0;
     for (const r of parsed) {
@@ -294,16 +309,20 @@ export async function settleDailySlips() {
         for (const l of r.legs) {
             if (l.outcome != null) continue;
             const f = byId.get(l.fixture_id);
-            if (!f) continue;
+            if (!f) {
+                const ko = Date.parse(l.kickoff);
+                if (Number.isFinite(ko) && ko < retireBefore) { l.outcome = 'void'; changed = true; }
+                continue;
+            }
             try { l.outcome = tipOutcome(l.market, f.ft_home, f.ft_away); changed = true; }
             catch (e) { debugLog(`daily-slip settle: unknown market key ${l.market} (${e.message})`); }
         }
+        if (!changed) continue;
         // Day `outcome` = the SAFE recommendation's strict result (the green-
         // streak metric keeps its meaning); value cards ride cards_won only.
         // Legacy/backfilled legs carry no kind and all count (unchanged).
         const safeLegs = r.legs.filter(l => l.kind !== 'value');
         const roll = slipOutcomeRollup((safeLegs.length ? safeLegs : r.legs).map(l => l.outcome ?? null));
-        if (!changed && roll.outcome == null) continue;
         const patch = {
             legs: JSON.stringify(r.legs),
             legs_hit: r.legs.filter(l => l.outcome === 'hit').length,
@@ -318,7 +337,9 @@ export async function settleDailySlips() {
         }
         patch.cards_won = [...byCard.values()]
             .filter(list => slipOutcomeRollup(list).outcome === 'won').length;
-        if (roll.outcome != null) { patch.outcome = roll.outcome; patch.settled_at = db.fn.now(); settled++; }
+        // Stamp the day verdict exactly once; late leg grades on an already-
+        // decided day update legs/legs_hit/cards_won without touching it.
+        if (r.outcome == null && roll.outcome != null) { patch.outcome = roll.outcome; patch.settled_at = db.fn.now(); settled++; }
         await db('daily_slips').where('id', r.id).update(patch);
     }
     return { settled, pending: pending.length };
