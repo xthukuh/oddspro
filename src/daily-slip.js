@@ -13,10 +13,9 @@ import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import { buildTipBooks, tipOutcome } from './db/tip-rules.js';
 import { marketMenu } from './db/ladder-rules.js';
-import { makeCalibrator } from './db/leg-calibration.js';
+import { makeCalibrator, cellKey } from './db/leg-calibration.js';
 import {
-    DEFAULT_DAILY_SLIP, DEFAULT_GROUPING, DEFAULT_VALUE_CARDS,
-    selectDailyLegs, groupCards, valueCards, dayMood,
+    DEFAULT_DAILY_SLIP, DEFAULT_GEN2, selectLadderCards,
     slipOutcomeRollup, slipStreaks,
 } from './db/daily-slip-rules.js';
 import { tipMarketLabel } from './db/magic-rules.js';
@@ -24,7 +23,7 @@ import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
 
-export const ALGO_VERSION = 'v1.5-floor12-2026-08-06';   // min-price-1.2 safe cards (see daily-slip-rules.js)
+export const ALGO_VERSION = 'v2.0-ladder-2026-08-08';   // gen-2 value ladder (see DEFAULT_GEN2 in daily-slip-rules.js)
 
 const CALIBRATION_WINDOW_DAYS = 90;
 // Recency decay (grid round 4, owner's error-feedback directive): identical
@@ -101,6 +100,28 @@ export async function loadCalibrator(beforeDate, windowDays = CALIBRATION_WINDOW
             cal.observe({ ...leg, outcome, day: f.day, league: f.league });
         }
     }
+    // Error backprop (gen-2, errorBoost): a PUBLISHED leg that missed
+    // re-observes extra times, so the engine's own selection mistakes
+    // depress their cells harder than mere menu observation - the next
+    // day's generation avoids them sooner. Walk-forward safe: only slips
+    // strictly before `beforeDate` feed.
+    const boost = DEFAULT_GEN2.errorBoost ?? 0;
+    if (boost > 0) {
+        const slips = await db('daily_slips')
+            .where('status', 'published')
+            .whereRaw('slip_date < ?', [beforeDate])
+            .whereRaw('slip_date >= DATE_SUB(?, INTERVAL ? DAY)', [beforeDate, windowDays])
+            .select('legs', db.raw("DATE_FORMAT(slip_date, '%Y-%m-%d') as day"));
+        for (const s of slips) {
+            const legs = typeof s.legs === 'string' ? JSON.parse(s.legs) : (s.legs ?? []);
+            for (const l of legs) {
+                if (l.outcome !== 'miss') continue;
+                for (let i = 0; i < boost; i++) {
+                    cal.observe({ market: l.market, price: l.price, prob: l.prob, outcome: 'miss', day: s.day, league: l.league });
+                }
+            }
+        }
+    }
     return cal;
 }
 
@@ -152,17 +173,22 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         }
     }
 
+    // v2.0: LEFT JOIN the tip row - `tip_market IS NOT NULL` is the live
+    // eligibility screen (population parity with the evolve-gen2 replay:
+    // evidence-less fixtures never enter the pick universe) and the tip
+    // market feeds the contradiction guard.
     const targets = await db('fixtures as f')
         .join('leagues as l', 'l.id', 'f.league_id')
         .join('teams as th', 'th.id', 'f.home_team_id')
         .join('teams as ta', 'ta.id', 'f.away_team_id')
+        .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
         .whereRaw('DATE(f.kickoff) = ?', [slipDate])
         .where('f.kickoff', '>', db.raw('NOW()'))
         .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
         .select('f.id', 'f.kickoff', 'l.name as league',
-            'th.name as home_name', 'ta.name as away_name');
+            'th.name as home_name', 'ta.name as away_name', 'fp.tip_market');
 
-    const o = { ...DEFAULT_DAILY_SLIP, ...(opts ?? {}) };
+    const o = { ...DEFAULT_GEN2, ...(opts ?? {}) };
     let slip = null;
     let byFixture = new Map();
     let fxById = new Map();
@@ -191,25 +217,29 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
             m[r.provider] = r.match_url;
         }
         const cal = await loadCalibrator(slipDate);
-        const fixtures = targets.map(f => ({ id: f.id, league: f.league, menuLegs: grouped.menus.get(f.id) ?? [] }));
-        // v1.3: the day's top legs deal into MULTIPLE small cards (legs carry
-        // `card: i`); one bad leg kills one card, not the day (35/35 any-green
-        // in the replay). Mood still reads the whole qualifying pool.
-        const pool = selectDailyLegs(fixtures, cal, o);
-        const cards = groupCards(pool, DEFAULT_GROUPING);
-        // Value arm (owner ship order 2026-08-06): eff-ranked pool, cards
-        // close at the 1.5x target, indices continue after the safe cards.
-        // A day can ship value cards even when the safe pool is thin.
-        const vPool = selectDailyLegs(fixtures, cal, DEFAULT_VALUE_CARDS);
-        const vCards = valueCards(vPool, DEFAULT_VALUE_CARDS, cards.length);
-        const safeTaken = cards.flat().map(l => ({ ...l, kind: 'safe' }));
-        const taken = [...safeTaken, ...vCards.flat()];
-        slip = taken.length >= o.minLegs ? {
-            legs: taken, pool: pool.length, cards: cards.length + vCards.length,
-            // Headline combined odds stay the SAFE arm's product; value cards
-            // carry their own products in the legs/cards view.
-            combinedOdds: safeTaken.length ? safeTaken.reduce((p, l) => p * l.price, 1) : 1,
-            mood: dayMood(pool, o),
+        // v2.0 ladder: tier cards (anchor 1.5x / double 2x / top-3 >=1.5 /
+        // EV-gated grand 5x) from the gen-2 baked config - coherent by
+        // construction (one leg per fixture per card, no cross-card or
+        // tip contradictions), eligible fixtures only.
+        const rows = targets.map(f => ({
+            id: f.id, league: f.league,
+            menuLegs: grouped.menus.get(f.id) ?? [],
+            eligible: f.tip_market != null,
+            tipMarket: f.tip_market ?? null,
+        }));
+        const ladder = selectLadderCards(rows, cal, o);
+        const taken = ladder.flatMap((card, i) =>
+            card.legs.map(l => ({ ...l, id: l.fixture, card: i, kind: card.tier, tierLabel: card.label })));
+        const anchor = ladder.find(x => x.tier === 'anchor');
+        slip = ladder.length ? {
+            legs: taken, cards: ladder.length,
+            // Headline combined odds = the ANCHOR card (the 1.5x-floor rung
+            // whose strict result is the day verdict); other tiers carry
+            // their own products in the cards view.
+            combinedOdds: (anchor ?? ladder[0]).product,
+            // Display mood from ladder completeness: all four rungs = green,
+            // an anchor plus company = amber, anything else = red-ish thin.
+            mood: ladder.length >= 3 && anchor ? 'green' : (anchor ? 'amber' : 'red'),
         } : null;
     }
 
@@ -226,9 +256,10 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
                 market: l.market, label: tipMarketLabel(l.market),
                 price: l.price, prices: _providerPrices(byFixture.get(l.id), l.market),
                 links: linksByFixture.get(l.id) ?? {},
-                prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: l.cellKey,
+                prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: cellKey(l),
                 card: l.card ?? 0,
                 kind: l.kind ?? 'safe',
+                tier_label: l.tierLabel ?? null,
                 reasoning: _reasoning(l),
                 outcome: null,
             };
@@ -318,10 +349,12 @@ export async function settleDailySlips() {
             catch (e) { debugLog(`daily-slip settle: unknown market key ${l.market} (${e.message})`); }
         }
         if (!changed) continue;
-        // Day `outcome` = the SAFE recommendation's strict result (the green-
-        // streak metric keeps its meaning); value cards ride cards_won only.
-        // Legacy/backfilled legs carry no kind and all count (unchanged).
-        const safeLegs = r.legs.filter(l => l.kind !== 'value');
+        // Day `outcome` = the ANCHOR card's strict result on v2 ladders (the
+        // flagship 1.5x rung keeps the green-streak meaning); pre-v2 rows
+        // fall back to the old safe-arm rule, and legacy/backfilled legs
+        // carry no kind and all count. Other tiers ride cards_won only.
+        const anchorLegs = r.legs.filter(l => l.kind === 'anchor');
+        const safeLegs = anchorLegs.length ? anchorLegs : r.legs.filter(l => l.kind !== 'value');
         const roll = slipOutcomeRollup((safeLegs.length ? safeLegs : r.legs).map(l => l.outcome ?? null));
         const patch = {
             legs: JSON.stringify(r.legs),

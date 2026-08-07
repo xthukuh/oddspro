@@ -238,3 +238,114 @@ export function slipStreaks(slips) {
     const denom = wins + losses;
     return { current, best, greenRate: denom ? wins / denom : 0, played };
 }
+
+// ---------------------------------------------------------------------------
+// GEN-2 VALUE LADDER (2026-08-08 owner directive; scripts/evolve-gen2.js,
+// 313 evaluated generations, deterministic coordinate descent + per-tier
+// refinement, train 25 / test 13 days, both-windows rule enforced).
+// Four tier cards per day: 1.5x anchor / 2x double / top-3 legs at >= 1.5
+// odds / EV-gated 5x grand. Replay verdict (guarded, full 38-day window):
+// any-green 83.8% of published days, best streak 13, anchor 64.9% @ 1.61x
+// (+1.7u), top3 33-53% @ 3.47x (positive every window), double 39.4% @ 2.07x,
+// grand publishes ONLY when the calibrated card EV clears grandEvFloor
+// (zero days on current cells - the 5x arm is below break-even at every
+// tried configuration; the gate keeps it honest and revivable as data grows).
+// Coherence by construction: one leg per fixture per card, a fixture reused
+// across cards may never contradict an already-taken leg, and no leg may
+// contradict the fixture's published TIP (the owner's O 1.5-vs-U 1.5 rule).
+// Selection universe: TIP-ELIGIBLE fixtures only (population parity with the
+// replay harness - the 2026-08-06 live misses were evidence-less fixtures
+// the harness never saw). Error feedback: production calibration cells plus
+// errorBoost x2 re-observation of published-leg misses.
+import { contradicts } from './ladder-rules.js';
+
+export const DEFAULT_GEN2 = {
+    rankBy: 'streak',
+    probFloorSafe: 0.80,
+    t1MinPrice: 1.1, t1MaxPrice: 1.35,
+    t2MinPrice: 1.2, t2MaxPrice: 1.35,
+    top3MaxPrice: 2.0, probFloorTop3: 0.65,
+    t5MinPrice: 1.5, t5MaxLegs: 6, probFloorGrand: 0.55, grandEvFloor: 1.25,
+    maxPerLeague: 99,
+    fixtureReuse: 0,
+    errorBoost: 2,
+    minCellN: 0,
+};
+
+export const GEN2_TIERS = (c = DEFAULT_GEN2) => ([
+    { name: 'anchor', label: 'Anchor 1.5x', target: 1.5, minPrice: c.t1MinPrice, maxPrice: c.t1MaxPrice, probFloor: c.probFloorSafe, maxLegs: 5, exact: 0, evFloor: 0 },
+    { name: 'double', label: 'Double 2x', target: 2.0, minPrice: c.t2MinPrice, maxPrice: c.t2MaxPrice, probFloor: c.probFloorSafe, maxLegs: 5, exact: 0, evFloor: 0 },
+    { name: 'top3', label: 'Top-3 value', target: 0, minPrice: 1.5, maxPrice: c.top3MaxPrice, probFloor: c.probFloorTop3, maxLegs: 3, exact: 3, evFloor: 0 },
+    { name: 'grand', label: 'Grand 5x', target: 5.0, minPrice: c.t5MinPrice, maxPrice: 99, probFloor: c.probFloorGrand, maxLegs: c.t5MaxLegs, exact: 0, evFloor: c.grandEvFloor },
+]);
+
+// rows: [{ id, league, menuLegs: [{market, price, prob}], eligible, tipMarket }]
+// cal: a leg-calibration calibrator (prob/cell). Returns tier cards:
+// [{ tier, label, target, legs: [{market, price, prob, calProb, cell, fixture, league}], product }]
+export function selectLadderCards(rows, cal, c = DEFAULT_GEN2) {
+    const cards = [];
+    const usedFixtures = new Set();
+    const takenByFixture = new Map();
+    const safeContradicts = (a, b) => { try { return contradicts(a, b); } catch { return true; } };
+    for (const tier of GEN2_TIERS(c)) {
+        const cands = [];
+        for (const r of rows) {
+            if (!r.eligible) continue;
+            let best = null;
+            for (const l of r.menuLegs) {
+                const price = Number(l.price);
+                if (!(price > 1) || price < tier.minPrice || price > tier.maxPrice) continue;
+                const cell = cal.cell(l);
+                if (c.minCellN > 0 && !(cell && cell.n >= c.minCellN)) continue;
+                const calProb = cal.prob(l);
+                if (calProb < tier.probFloor) continue;
+                const prior = takenByFixture.get(r.id);
+                if (prior && prior.some(m => safeContradicts(m, l.market))) continue;
+                if (r.tipMarket && safeContradicts(r.tipMarket, l.market) && r.tipMarket !== l.market) continue;
+                const cand = { market: l.market, price, prob: l.prob, calProb, cell, fixture: r.id, league: r.league ?? '' };
+                if (!best) { best = cand; continue; }
+                if (c.rankBy === 'eff') {
+                    if (_eff(cand) < _eff(best)) best = cand;
+                } else if (c.rankBy === 'streak') {
+                    const u = x => x.cell && x.cell.hit === x.cell.n ? x.cell.n : -1;
+                    if (u(cand) > u(best) || (u(cand) === u(best) && cand.calProb > best.calProb)) best = cand;
+                } else if (cand.calProb > best.calProb || (cand.calProb === best.calProb && cand.price < best.price)) best = cand;
+            }
+            if (best) cands.push(best);
+        }
+        cands.sort((a, b) => {
+            if (c.rankBy === 'streak') {
+                const u = x => x.cell && x.cell.hit === x.cell.n ? x.cell.n : -1;
+                if (u(b) !== u(a)) return u(b) - u(a);
+            }
+            if (c.rankBy === 'eff' && _eff(a) !== _eff(b)) return _eff(a) - _eff(b);
+            return (b.calProb - a.calProb) || (a.price - b.price) || (a.fixture - b.fixture);
+        });
+        const legs = [];
+        const perLeague = new Map();
+        let product = 1;
+        for (const l of cands) {
+            if (!c.fixtureReuse && usedFixtures.has(l.fixture)) continue;
+            if (legs.some(t => t.fixture === l.fixture)) continue;
+            const n = perLeague.get(l.league) ?? 0;
+            if (n >= c.maxPerLeague) continue;
+            legs.push(l); perLeague.set(l.league, n + 1); product *= l.price;
+            if (tier.exact ? legs.length >= tier.exact : (product >= tier.target && legs.length >= 2)) break;
+            if (legs.length >= tier.maxLegs) break;
+        }
+        let complete = tier.exact ? legs.length === tier.exact
+            : (product >= tier.target && legs.length >= 2);
+        if (complete && tier.evFloor > 0) {
+            const cardProb = legs.reduce((p, l) => p * l.calProb, 1);
+            if (cardProb * product < tier.evFloor) complete = false;
+        }
+        if (!complete) continue;
+        for (const l of legs) {
+            usedFixtures.add(l.fixture);
+            let list = takenByFixture.get(l.fixture); if (!list) takenByFixture.set(l.fixture, list = []);
+            list.push(l.market);
+        }
+        cards.push({ tier: tier.name, label: tier.label, target: tier.target, legs, product });
+    }
+    return cards;
+}

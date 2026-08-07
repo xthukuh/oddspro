@@ -38,13 +38,24 @@ const DETAIL_FIELDS = ['tip_breakdown', 'tip_ai_reason', 'tip_ai_review', 'hot_r
 // Tip sort/score - quantize to coarse buckets so ordering survives.
 const CONFIDENCE_STEP = 0.05;
 
+// Strip ONLY the heavy internal-reasoning JSON (no confidence quantizing) -
+// the API_DETAILS=off payload slim for signed-in tiers: a VITE_SHOW_DETAILS=0
+// production build never renders these fields, so shipping them (100-750 KB
+// on a busy date) is pure wire waste. ONE field list shared with the guest
+// redaction below so the two can never drift.
+export function stripDetails(row) {
+    if (!row) return row;
+    const out = { ...row };
+    for (const f of DETAIL_FIELDS) if (f in out) out[f] = null;
+    return out;
+}
+
 // Redact one hydrated queryRecords row for a role. Full-detail roles (and
 // null rows) pass through untouched; guests get a copy with the internal
 // reasoning stripped and confidence coarsened.
 export function redactRecordForRole(row, role) {
     if (!row || role !== 'guest') return row;
-    const out = { ...row };
-    for (const f of DETAIL_FIELDS) if (f in out) out[f] = null;
+    const out = stripDetails(row);
     if (out.tip_confidence != null) {
         out.tip_confidence = Number((Math.round(Number(out.tip_confidence) / CONFIDENCE_STEP) * CONFIDENCE_STEP).toFixed(2));
     }

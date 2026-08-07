@@ -176,6 +176,10 @@ const EnvSchema = z.object({
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.
     // Coercion shared with the offline-tested guard (src/db/migrate-rules.js).
     MIGRATE_ON_BOOT: z.string().default('0').transform(shouldMigrateOnBoot),
+    // Ship the per-row reasoning JSON (tip_breakdown/AI reviews/hot signals)
+    // to signed-in web tiers. Off = slim payloads for VITE_SHOW_DETAILS=0
+    // deployments; CLI/CSV/machine-bearer reads are never slimmed.
+    API_DETAILS: boolStr('1'),
     BOT_UA_FILTER_ENABLED: boolStr('0'),
     BOT_UA_EXTRA: z.string().default(''),   // comma-separated extra UA substrings to block
     BOT_UA_ALLOW: z.string().default(''),   // comma-separated UA substrings to exempt

@@ -160,6 +160,7 @@ export const SETTINGS_CATALOG = [
     { key: 'GEO_BATCH_LIMIT', type: 'int', group: 'geo', public: false, live: true, min: 1, max: 100, unit: 'IPs', label: 'Geo batch size', hint: 'IPs resolved per sweep (ip-api free batch cap is 100).' },
     { key: 'GEO_API_BATCH_URL', type: 'string', group: 'geo', public: false, live: true, pattern: '^https?://.+$', patternHint: 'http(s):// URL', label: 'Geo resolver URL', hint: 'Batch resolver endpoint; the default free ip-api.com tier is HTTP-only (visitor IPs go to a third party).' },
     // ---- Bot UA filter.
+    { key: 'API_DETAILS', type: 'boolean', group: 'bot', public: false, live: true, label: 'Ship tip internals over the API', hint: 'Off = strip the heavy per-row reasoning JSON (tip breakdown, AI reviews, hot signals) from signed-in web payloads - pair with a VITE_SHOW_DETAILS=0 build that never renders it. CLI/CSV and machine-bearer reads are never slimmed.' },
     { key: 'BOT_UA_FILTER_ENABLED', type: 'boolean', group: 'bot', public: false, live: true, label: 'Bot UA filter', hint: 'Block known AI-scraper/aggressive-crawler user agents site-wide (search engines exempt).' },
     { key: 'BOT_UA_EXTRA', type: 'string', group: 'bot', public: false, live: true, label: 'Blocked UA substrings', hint: 'Comma-separated user-agent substrings ADDED to the blocklist.' },
     { key: 'BOT_UA_ALLOW', type: 'string', group: 'bot', public: false, live: true, label: 'Exempt UA substrings', hint: 'Comma-separated user-agent substrings EXEMPTED from the blocklist.' },

@@ -535,11 +535,19 @@ app.get('/api/columns', async (req, res, next) => {
 let catalogWarmTimer = null;
 function startCatalogWarm() {
     if (catalogWarmTimer) return;
-    const warm = () => apiCache.warm('/api/columns', () => columnCatalog())
-        .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
+    const warm = () => {
+        apiCache.warm('/api/columns', () => columnCatalog())
+            .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
+        // magic-sort's whole-ledger strategy replay is the most expensive
+        // compute in the app (~25s local, worse on the shared host) and its
+        // memo is per-EAT-day - without this warm the first visitor after
+        // every process recycle or day-roll eats that stall. magicSortCached
+        // is a no-op while today's slot is warm.
+        magicSortCached().catch(e => console.warn(`[warm] magic-sort failed: ${e?.message ?? e}`));
+    };
     catalogWarmTimer = setInterval(warm, 30_000);
     catalogWarmTimer.unref?.();
-    warm(); // boot: pay the cold compute now, not on the first user request
+    warm(); // boot: pay the cold computes now, not on the first user request
 }
 function stopCatalogWarm() {
     if (!catalogWarmTimer) return;
@@ -571,7 +579,11 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         // The response memo key MUST carry the access tier - a guest
         // (redacted, date-clamped) body and a full one can never share a
         // slot, or one tier would be served the other's cached payload.
-        const tier = access && !access.fullDetail ? 'guest' : 'full';
+        // API_DETAILS=off slims the heavy reasoning JSON out of signed-in web
+        // payloads (a VITE_SHOW_DETAILS=0 prod build never renders it). The
+        // flag rides the tier key so a flip can't serve a stale shape.
+        const slimDetails = !effective('API_DETAILS');
+        const tier = access && !access.fullDetail ? 'guest' : (slimDetails && access ? 'slim' : 'full');
         // Key on the params that actually CHANGE the body, not on req.query
         // wholesale: spreading the raw query let `?nonce=1,2,3...` mint endless
         // distinct keys, each forcing a cold compute and evicting the 12-slot
@@ -592,6 +604,7 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
             // ?markets=all bypasses the catalog pivot allow-list (full pre-trim
             // payload); the req.query spread above already keys the cache on it.
             markets: markets === 'all' ? 'all' : null,
+            slimDetails,
         }));
     } catch (e) {
         next(e);

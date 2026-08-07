@@ -2,7 +2,7 @@ import { db } from './connection.js';
 import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKey } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
-import { redactRecordForRole } from './access-rules.js';
+import { redactRecordForRole, stripDetails } from './access-rules.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -230,7 +230,7 @@ function _coerceList(key, value, op) {
 //   per_page: 'all' disables pagination (the web table shows a whole date)
 //   markets: 'all' pivots every stored non-filter-only market key (the
 //   pre-trim behavior); default gates the pivot on the catalog allow-list
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null, markets = null } = {}) {
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null, markets = null, slimDetails = false } = {}) {
     const unpaged = per_page === 'all';
     page = unpaged ? 1 : Math.max(1, Number(page) || 1);
     per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
@@ -328,9 +328,13 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     // Redacted tiers (guests) lose the internal reasoning per row - pure
     // redactRecordForRole; full tiers (and access:null callers - the CLI/CSV
     // export and AUTH_ENABLED=0 installs) get the rows untouched.
+    // Redacted tiers first; then the API_DETAILS=off slim (stripDetails, no
+    // confidence quantizing) for the remaining full-detail web tiers. CLI/CSV
+    // and machine-bearer callers pass access:null AND slimDetails:false, so
+    // data consumers always get complete rows.
     const data = access && !access.fullDetail
         ? hydrated.map(r => redactRecordForRole(r, access.role))
-        : hydrated;
+        : (slimDetails && access ? hydrated.map(stripDetails) : hydrated);
     return {
         data,
         total: Number(total),

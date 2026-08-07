@@ -129,3 +129,71 @@ test('streaks: pending days do not break a run, void days are not green', () => 
     assert.equal(r.best, 1);
     assert.equal(r.played, 2);         // pending day not yet counted as played
 });
+
+// ---------------------------------------------------------------- gen-2 ladder
+import { DEFAULT_GEN2, GEN2_TIERS, selectLadderCards } from '../src/db/daily-slip-rules.js';
+
+// Stub calibrator: fixed prob per market prefix, cell from a lookup.
+const stubCal = (probs, cells = {}) => ({
+    prob: l => probs[l.market] ?? l.prob,
+    cell: l => cells[l.market] ?? null,
+});
+const row = (id, legs, { eligible = true, tipMarket = null, league = 'L' } = {}) =>
+    ({ id, league, menuLegs: legs, eligible, tipMarket });
+
+test('selectLadderCards: anchor closes at >=1.5 product from band legs, coherent by construction', () => {
+    const cal = stubCal({ 'U 4.5': 0.9, 'U 5.5': 0.88, 'GG': 0.85 });
+    const rows = [
+        row(1, [{ market: 'U 4.5', price: 1.25, prob: 0.8 }]),
+        row(2, [{ market: 'U 5.5', price: 1.25, prob: 0.8 }]),
+        row(3, [{ market: 'GG', price: 1.3, prob: 0.75 }]),
+    ];
+    const cards = selectLadderCards(rows, cal, { ...DEFAULT_GEN2, rankBy: 'prob' });
+    const anchor = cards.find(c => c.tier === 'anchor');
+    assert.ok(anchor, 'anchor publishes');
+    assert.ok(anchor.product >= 1.5 && anchor.legs.length >= 2);
+    // fixtureReuse 0: no fixture appears in two cards
+    const seen = new Set();
+    for (const c of cards) for (const l of c.legs) {
+        assert.ok(!seen.has(l.fixture), `fixture ${l.fixture} reused across cards`);
+        seen.add(l.fixture);
+    }
+});
+
+test('selectLadderCards: a leg contradicting the fixture tip is never taken', () => {
+    const cal = stubCal({ 'U 1.5': 0.95, 'U 4.5': 0.9 });
+    const rows = [
+        row(1, [{ market: 'U 1.5', price: 1.3, prob: 0.85 }], { tipMarket: 'O 1.5' }),
+        row(2, [{ market: 'U 4.5', price: 1.25, prob: 0.8 }]),
+        row(3, [{ market: 'U 4.5', price: 1.25, prob: 0.8 }]),
+    ];
+    const cards = selectLadderCards(rows, cal, { ...DEFAULT_GEN2, rankBy: 'prob' });
+    for (const c of cards) for (const l of c.legs) {
+        assert.notEqual(`${l.fixture}:${l.market}`, '1:U 1.5', 'O 1.5-tipped fixture took a U 1.5 leg');
+    }
+});
+
+test('selectLadderCards: top3 needs exactly three >=1.5 legs; grand blocked by the EV floor', () => {
+    const probs = { 'O 2.5': 0.66, 'GG': 0.66, '1X': 0.7, 'X2': 0.7 };
+    const legs15 = m => [{ market: m, price: 1.6, prob: 0.6 }];
+    // Only two >=1.5 candidates -> top3 must NOT publish.
+    let cards = selectLadderCards([
+        row(1, legs15('O 2.5')), row(2, legs15('GG')),
+    ], stubCal(probs), { ...DEFAULT_GEN2, rankBy: 'prob' });
+    assert.ok(!cards.some(c => c.tier === 'top3'));
+    // Three candidates -> publishes with product >= 1.5^3.
+    cards = selectLadderCards([
+        row(1, legs15('O 2.5')), row(2, legs15('GG')), row(3, legs15('1X')),
+    ], stubCal(probs), { ...DEFAULT_GEN2, rankBy: 'prob' });
+    const top3 = cards.find(c => c.tier === 'top3');
+    assert.ok(top3 && top3.legs.length === 3 && top3.product > 3.3);
+    // Grand: calProb product x price below the 1.25 EV floor -> no grand card.
+    assert.ok(!cards.some(c => c.tier === 'grand'), 'EV-gated grand must not publish on weak cells');
+});
+
+test('GEN2_TIERS: four rungs, anchor floor 1.5x, grand carries the EV gate', () => {
+    const tiers = GEN2_TIERS();
+    assert.deepEqual(tiers.map(t => t.name), ['anchor', 'double', 'top3', 'grand']);
+    assert.equal(tiers[0].target, 1.5);
+    assert.ok(tiers[3].evFloor > 0);
+});
