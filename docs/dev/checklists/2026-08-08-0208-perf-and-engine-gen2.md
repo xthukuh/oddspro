@@ -21,6 +21,6 @@ Spec: docs/dev/specs/2026-08-08-0208-perf-and-engine-gen2-design.md
 
 ## Added 2026-08-08 (owner): independent market-pattern investigation
 
-- [ ] D1. Wide-net investigation: odds markets vs outcomes over every settled fixture with pre-kickoff odds; multi-dimensional feature categorization; per-dimension information content; FORWARD-validated unbroken-streak cells (no selection bias)
-- [ ] D2. Vector-memory learner: per-day self-evaluating walk-forward engine (dimension-weight backprop on misses, anomaly quarantine, streak weaponization, accuracy-enforcement governor); high-count deterministic meta-search, both-windows rule
-- [ ] D3. If test-confirmed better than the gen-2 ladder ranking: bake as the fundamental ranking core + per-day self-evaluation stored on the timeline
+- [x] D1. DONE (121,846 legs / 38 days / 22 dimensions): systemic UNDER bias confirmed in BOTH half-windows (z 4.5 / 7.8) - the deepest inefficiency, already exploited by production cells; short bands underpriced-in-probability but margin-eaten; context-only dims carry ZERO information; 26 in-sample positive-ROI cells (led by under|Australia +14% n=2082) recorded for OOS audit; forward-validated streaks live in the 1.02-1.05 bands (O0.5|strong 99.5% fwd n=182)
+- [x] D2. DONE (scripts/evolve-vector.js, 156 generations): profit arm +17.5u train / -3.7u test = TRAIN MIRAGE, fails both-windows (in-sample country edges did not carry); search dropped group|country itself; surviving dims = group|band (1.74 - the production cell key, VALIDATED), group|devig, dir|ou; engine UNDERCLAIMS (59.3% claimed vs 64.4% realized)
+- [x] D3. Verdict per pre-committed rule: NO bake (both-windows failed); production calibration validated as the fundamental layer; vector machinery ledgered as the monthly re-audition (one command) as data grows; per-day SELF-CHECK chip shipped in DailyMultibet (claimed vs realized over settled legs, green when honest)

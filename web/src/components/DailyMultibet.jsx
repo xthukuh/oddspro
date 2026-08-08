@@ -177,6 +177,27 @@ export default function DailyMultibet({ onClose, signedIn, onSignIn }) {
                         <span className="rounded-lg bg-fill px-2 py-1 text-label">best <b className="tabular-nums">{s.best}</b></span>
                         <span className="rounded-lg bg-fill px-2 py-1 text-label">green days <b className="tabular-nums">{Math.round((s.greenRate ?? 0) * 100)}%</b></span>
                         <span className="rounded-lg bg-fill px-2 py-1 text-label-2">played <b className="tabular-nums">{s.played}</b></span>
+                        {(() => {
+                            // Per-day self-evaluation (claimed vs realized): the engine's
+                            // own calibrated claims audited against settled outcomes.
+                            let claimed = 0, hit = 0, n = 0;
+                            for (const d of days) {
+                                for (const l of (Array.isArray(d.legs) ? d.legs : [])) {
+                                    if (l.outcome !== 'hit' && l.outcome !== 'miss') continue;
+                                    if (typeof l.cal_prob !== 'number') continue;
+                                    claimed += l.cal_prob; n++;
+                                    if (l.outcome === 'hit') hit++;
+                                }
+                            }
+                            if (n < 30) return null;
+                            const c = Math.round(100 * claimed / n), r = Math.round(100 * hit / n);
+                            return (
+                                <span className={`rounded-lg px-2 py-1 ${r >= c ? 'bg-green/10 text-green' : 'bg-hot/10 text-hot'}`}
+                                    title={`Self-check over ${n} settled legs: the engine claimed an average ${c}% win chance; reality delivered ${r}%. At or above claim = honest calibration.`}>
+                                    self-check <b className="tabular-nums">{r}%</b> vs {c}% claimed
+                                </span>
+                            );
+                        })()}
                         {!teaserMode && (
                             <label className="ml-auto flex items-center gap-1.5 text-label-2 cursor-pointer select-none">
                                 <input type="checkbox" checked={allPrices} onChange={e => setAllPrices(e.target.checked)} />
