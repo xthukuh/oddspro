@@ -18,3 +18,9 @@ Spec: docs/dev/specs/2026-08-08-0208-perf-and-engine-gen2-design.md
 - [x] C1. Docs synced (CLAUDE.md current-state, QUICK-REFERENCE routines)
 - [ ] C2. OWNER GREEN LIGHT -> stop live server warning -> deploy (--db --app --web) -> restart -> smoke
 - [ ] C3. Re-tag v1.4.0 at the shipped HEAD (owner)
+
+## Added 2026-08-08 (owner): independent market-pattern investigation
+
+- [ ] D1. Wide-net investigation: odds markets vs outcomes over every settled fixture with pre-kickoff odds; multi-dimensional feature categorization; per-dimension information content; FORWARD-validated unbroken-streak cells (no selection bias)
+- [ ] D2. Vector-memory learner: per-day self-evaluating walk-forward engine (dimension-weight backprop on misses, anomaly quarantine, streak weaponization, accuracy-enforcement governor); high-count deterministic meta-search, both-windows rule
+- [ ] D3. If test-confirmed better than the gen-2 ladder ranking: bake as the fundamental ranking core + per-day self-evaluation stored on the timeline
