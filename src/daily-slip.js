@@ -18,12 +18,16 @@ import {
     DEFAULT_DAILY_SLIP, DEFAULT_GEN2, selectLadderCards,
     slipOutcomeRollup, slipStreaks,
 } from './db/daily-slip-rules.js';
+import {
+    DEFAULT_HUNT, makeHuntState, observeHuntLeg, selectHunterPicks, huntDayNum,
+} from './db/value-hunt.js';
+import { DEFAULT_MODEL, fitGoalModel, modelMarkets } from './db/goal-model.js';
 import { tipMarketLabel } from './db/magic-rules.js';
 import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
 
-export const ALGO_VERSION = 'v2.0-ladder-2026-08-08';   // gen-2 value ladder (see DEFAULT_GEN2 in daily-slip-rules.js)
+export const ALGO_VERSION = 'v2.1-hunter-2026-08-08';   // gen-2 ladder + value-hunt singles (DEFAULT_GEN2 + DEFAULT_HUNT)
 
 const CALIBRATION_WINDOW_DAYS = 90;
 // Recency decay (grid round 4, owner's error-feedback directive): identical
@@ -65,11 +69,10 @@ function _menusByFixture(rows, namesById) {
     return { menus, byFixture };
 }
 
-// Calibration feed: every settled menu leg of the final fixtures inside the
-// window strictly before `beforeDate` (EAT date string). All-prior-days
-// evidence; the walk-forward property of the backfill lives in the script,
-// which advances this cutoff day by day.
-export async function loadCalibrator(beforeDate, windowDays = CALIBRATION_WINDOW_DAYS) {
+// Shared settled-window loader: final fixtures + their settled menus inside
+// the window strictly before `beforeDate`. Feeds BOTH the leg calibrator and
+// the value-hunt cell state (one query pass, two consumers).
+async function _settledWindow(beforeDate, windowDays) {
     const fixtures = await db('fixtures as f')
         .join('teams as th', 'th.id', 'f.home_team_id')
         .join('teams as ta', 'ta.id', 'f.away_team_id')
@@ -83,13 +86,22 @@ export async function loadCalibrator(beforeDate, windowDays = CALIBRATION_WINDOW
             db.raw("DATE_FORMAT(f.kickoff, '%Y-%m-%d') as day"),
             'l.name as league',
             'th.name as home_name', 'ta.name as away_name');
-    if (!fixtures.length) return makeCalibrator({ halfLifeDays: CALIBRATION_HALF_LIFE_DAYS });
+    if (!fixtures.length) return { fixtures, menus: new Map() };
     const namesById = new Map(fixtures.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
     const rows = await db('odds_markets as om')
         .join('matches as m', 'm.id', 'om.match_id')
         .whereIn('m.fixture_id', fixtures.map(f => f.id))
         .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
     const { menus } = _menusByFixture(rows, namesById);
+    return { fixtures, menus };
+}
+
+// Calibration feed: every settled menu leg of the final fixtures inside the
+// window strictly before `beforeDate` (EAT date string). All-prior-days
+// evidence; the walk-forward property of the backfill lives in the script,
+// which advances this cutoff day by day.
+export async function loadCalibrator(beforeDate, windowDays = CALIBRATION_WINDOW_DAYS, window = null) {
+    const { fixtures, menus } = window ?? await _settledWindow(beforeDate, windowDays);
     const cal = makeCalibrator({ halfLifeDays: CALIBRATION_HALF_LIFE_DAYS });
     for (const f of fixtures) {
         for (const leg of menus.get(f.id) ?? []) {
@@ -123,6 +135,25 @@ export async function loadCalibrator(beforeDate, windowDays = CALIBRATION_WINDOW
         }
     }
     return cal;
+}
+
+// Value-hunt cell state from the same settled window: legs feed in day-ASC
+// order (walk-forward decay + streak tails). `window` lets the builder share
+// one _settledWindow fetch between this and loadCalibrator.
+export async function loadHuntState(beforeDate, windowDays = CALIBRATION_WINDOW_DAYS, window = null) {
+    const { fixtures, menus } = window ?? await _settledWindow(beforeDate, windowDays);
+    const state = makeHuntState();
+    const byDayAsc = [...fixtures].sort((a, b) => a.day < b.day ? -1 : a.day > b.day ? 1 : 0);
+    for (const f of byDayAsc) {
+        const legs = menus.get(f.id) ?? [];
+        const fx = { impliedOver: legs.find(l => l.market === 'O 2.5')?.prob ?? null };
+        for (const leg of legs) {
+            let outcome = null;
+            try { outcome = tipOutcome(leg.market, f.ft_home, f.ft_away); } catch { continue; }
+            observeHuntLeg(state, { ...leg, outcome }, fx, f.day);
+        }
+    }
+    return state;
 }
 
 // Per-provider prices for one canonical market key, from the fixture's raw
@@ -185,8 +216,8 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         .whereRaw('DATE(f.kickoff) = ?', [slipDate])
         .where('f.kickoff', '>', db.raw('NOW()'))
         .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
-        .select('f.id', 'f.kickoff', 'l.name as league',
-            'th.name as home_name', 'ta.name as away_name', 'fp.tip_market');
+        .select('f.id', 'f.kickoff', 'f.home_team_id', 'f.away_team_id', 'f.league_id',
+            'l.name as league', 'th.name as home_name', 'ta.name as away_name', 'fp.tip_market');
 
     const o = { ...DEFAULT_GEN2, ...(opts ?? {}) };
     let slip = null;
@@ -216,7 +247,8 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
             if (!m) linksByFixture.set(r.fixture_id, m = {});
             m[r.provider] = r.match_url;
         }
-        const cal = await loadCalibrator(slipDate);
+        const window = await _settledWindow(slipDate, CALIBRATION_WINDOW_DAYS);
+        const cal = await loadCalibrator(slipDate, CALIBRATION_WINDOW_DAYS, window);
         // v2.0 ladder: tier cards (anchor 1.5x / double 2x / top-3 >=1.5 /
         // EV-gated grand 5x) from the gen-2 baked config - coherent by
         // construction (one leg per fixture per card, no cross-card or
@@ -228,15 +260,41 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
             tipMarket: f.tip_market ?? null,
         }));
         const ladder = selectLadderCards(rows, cal, o);
-        const taken = ladder.flatMap((card, i) =>
-            card.legs.map(l => ({ ...l, id: l.fixture, card: i, kind: card.tier, tierLabel: card.label })));
+        // v2.1 Hunter singles (value-hunt.js): high-odds EV picks scored by
+        // the Dixon-Coles model + hunt cells + streak weapons; SINGLES, not
+        // a parlay - the settle keeps them out of the parlay rollups.
+        const huntState = await loadHuntState(slipDate, CALIBRATION_WINDOW_DAYS, window);
+        const history = await db('fixtures')
+            .whereIn('status', FINAL_STATUSES).whereNotNull('ft_home')
+            .select('home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff', 'league_id');
+        const model = fitGoalModel(history, Date.parse(`${slipDate}T00:00:00+03:00`), DEFAULT_MODEL);
+        const usedFixtures = new Set(ladder.flatMap(c => c.legs.map(l => l.fixture)));
+        const huntRows = rows.map(r => ({
+            ...r,
+            fx: { impliedOver: r.menuLegs.find(l => l.market === 'O 2.5')?.prob ?? null },
+            modelProbs: (() => {
+                const f = fxById.get(r.id);
+                try { return modelMarkets(model, f.home_team_id, f.away_team_id, f.league_id); } catch { return null; }
+            })(),
+        }));
+        const hunters = selectHunterPicks(huntRows, huntState, huntDayNum(slipDate), DEFAULT_HUNT, usedFixtures);
+        const taken = [
+            ...ladder.flatMap((card, i) =>
+                card.legs.map(l => ({ ...l, id: l.fixture, card: i, kind: card.tier, tierLabel: card.label }))),
+            ...hunters.map(h => ({
+                market: h.market, price: h.price, prob: h.prob, calProb: h.p, cell: null,
+                fixture: h.fixture, league: h.league, id: h.fixture,
+                card: ladder.length, kind: 'hunter', tierLabel: 'Hunter singles',
+                huntEv: h.ev, huntBand: h.band,
+            })),
+        ];
         const anchor = ladder.find(x => x.tier === 'anchor');
-        slip = ladder.length ? {
-            legs: taken, cards: ladder.length,
+        slip = (ladder.length || hunters.length) ? {
+            legs: taken, cards: ladder.length + (hunters.length ? 1 : 0),
             // Headline combined odds = the ANCHOR card (the 1.5x-floor rung
             // whose strict result is the day verdict); other tiers carry
             // their own products in the cards view.
-            combinedOdds: (anchor ?? ladder[0]).product,
+            combinedOdds: (anchor ?? ladder[0])?.product ?? 1,
             // Display mood from ladder completeness: all four rungs = green,
             // an anchor plus company = amber, anything else = red-ish thin.
             mood: ladder.length >= 3 && anchor ? 'green' : (anchor ? 'amber' : 'red'),
@@ -260,7 +318,10 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
                 card: l.card ?? 0,
                 kind: l.kind ?? 'safe',
                 tier_label: l.tierLabel ?? null,
-                reasoning: _reasoning(l),
+                ...(l.kind === 'hunter' ? { hunt_ev: +l.huntEv.toFixed(3), hunt_band: l.huntBand } : {}),
+                reasoning: l.kind === 'hunter'
+                    ? `Hunter single (${l.huntBand} band): ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)} - model+cells estimate ${_pct(l.calProb)} win chance vs the book's ${_pct(l.prob)}, claimed edge ${(100 * l.huntEv).toFixed(0)}%. A single stake, not a parlay leg; replay record: mid band +24.9% ROI over 37 days, high band positive but volatile.`
+                    : _reasoning(l),
                 outcome: null,
             };
         })),
@@ -345,7 +406,14 @@ export async function settleDailySlips() {
                 if (Number.isFinite(ko) && ko < retireBefore) { l.outcome = 'void'; changed = true; }
                 continue;
             }
-            try { l.outcome = tipOutcome(l.market, f.ft_home, f.ft_away); changed = true; }
+            try {
+                l.outcome = tipOutcome(l.market, f.ft_home, f.ft_away);
+                // The final score rides the leg (owner 2026-08-08): the UI
+                // shows "2-1" beside hit/miss so the line-vs-outcome story
+                // is visible on every slip line.
+                l.score = `${f.ft_home}-${f.ft_away}`;
+                changed = true;
+            }
             catch (e) { debugLog(`daily-slip settle: unknown market key ${l.market} (${e.message})`); }
         }
         if (!changed) continue;
@@ -364,6 +432,7 @@ export async function settleDailySlips() {
         // settled green; `outcome` keeps the STRICT all-cards meaning.
         const byCard = new Map();
         for (const l of r.legs) {
+            if (l.kind === 'hunter') continue;   // singles: never a parlay rollup
             const k = l.card ?? 0;
             let list = byCard.get(k); if (!list) byCard.set(k, list = []);
             list.push(l.outcome ?? null);

@@ -15,6 +15,8 @@ import { DEFAULT_LADDER, marketMenu } from '../src/db/ladder-rules.js';
 import { DEFAULT_MODEL } from '../src/db/goal-model.js';
 import { makeCalibrator, cellKey } from '../src/db/leg-calibration.js';
 import { DEFAULT_GEN2, selectLadderCards, slipOutcomeRollup } from '../src/db/daily-slip-rules.js';
+import { DEFAULT_HUNT, makeHuntState, observeHuntLeg, selectHunterPicks, huntDayNum } from '../src/db/value-hunt.js';
+import { fitGoalModel, modelMarkets } from '../src/db/goal-model.js';
 import { tipMarketLabel } from '../src/db/magic-rules.js';
 import { ALGO_VERSION } from '../src/daily-slip.js';
 
@@ -45,23 +47,40 @@ for (const f of raw.fixtures) {
     }).filter(l => l.price > 1 && l.prob != null && (l.outcome === 'hit' || l.outcome === 'miss'));
     if (!menuLegs.length) continue;
     let list = byDay.get(f.day); if (!list) byDay.set(f.day, list = []);
-    list.push({ id: f.id, day: f.day, league: f.league ?? '', menuLegs, eligible: eligible.has(f.id), tipMarket: tipByFixture.get(f.id) ?? null });
+    list.push({
+        id: f.id, day: f.day, league: f.league ?? '', menuLegs,
+        eligible: eligible.has(f.id), tipMarket: tipByFixture.get(f.id) ?? null,
+        fx: { impliedOver: menuLegs.find(l => l.market === 'O 2.5')?.prob ?? null },
+        home_team_id: f.home_team_id, away_team_id: f.away_team_id, league_id: f.league_id,
+    });
 }
 const days = [...byDay.keys()].sort();
 const [[{ today }]] = await db.raw("SELECT DATE_FORMAT(CURDATE(), '%Y-%m-%d') as today");
 
 const cal = makeCalibrator({ halfLifeDays: 30 });
+const huntState = makeHuntState();
+console.error('[gen2-backfill] fitting per-day goal models...');
+const modelByDay = new Map(days.map(day => [day, fitGoalModel(raw.history, Date.parse(`${day}T00:00:00+03:00`), cfg.model)]));
 const rows = [];
 let green = 0, played = 0;
 for (const day of days) {
     const dayRows = byDay.get(day) ?? [];
     let cards = null;
+    let hunters = [];
     if (day < today) {
         cards = selectLadderCards(dayRows, cal, DEFAULT_GEN2);
+        const model = modelByDay.get(day);
+        const usedFixtures = new Set(cards.flatMap(c => c.legs.map(l => l.fixture)));
+        const huntRows = dayRows.map(r => ({
+            ...r,
+            modelProbs: (() => { try { return modelMarkets(model, r.home_team_id, r.away_team_id, r.league_id); } catch { return null; } })(),
+        }));
+        hunters = selectHunterPicks(huntRows, huntState, huntDayNum(day), DEFAULT_HUNT, usedFixtures);
         const legs = cards.flatMap((card, i) => card.legs.map(l => {
             const f = fxById.get(l.fixture);
             const menu = dayRows.find(r => r.id === l.fixture);
             const outcome = menu?.menuLegs.find(m => m.market === l.market)?.outcome ?? null;
+            const score = f.ft_home != null && f.ft_away != null ? `${f.ft_home}-${f.ft_away}` : null;
             return {
                 fixture_id: l.fixture,
                 home: f.home_name, away: f.away_name, league: l.league,
@@ -73,7 +92,22 @@ for (const day of days) {
                 reasoning: l.cell
                     ? `${card.label} pick: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, calibrated ${(100 * l.calProb).toFixed(1)}% from ${l.cell.n.toFixed(0)} settled legs in its cell.`
                     : `${card.label} pick: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, book devig ${(100 * l.calProb).toFixed(1)}% (no cell evidence yet).`,
-                outcome,
+                outcome, score,
+            };
+        })).concat(hunters.map(h => {
+            const f = fxById.get(h.fixture);
+            const outcome = dayRows.find(r => r.id === h.fixture)?.menuLegs.find(m => m.market === h.market)?.outcome ?? null;
+            return {
+                fixture_id: h.fixture,
+                home: f.home_name, away: f.away_name, league: h.league,
+                kickoff: f.kickoff instanceof Date ? f.kickoff.toISOString() : f.kickoff,
+                market: h.market, label: tipMarketLabel(h.market),
+                price: h.price, prices: {}, links: {},
+                prob: h.prob, cal_prob: h.p, cell: null, cell_key: null,
+                card: cards.length, kind: 'hunter', tier_label: 'Hunter singles',
+                hunt_ev: +h.ev.toFixed(3), hunt_band: h.band,
+                reasoning: `Hunter single (${h.band} band): ${tipMarketLabel(h.market)} at ${h.price.toFixed(2)}, claimed edge ${(100 * h.ev).toFixed(0)}%.`,
+                outcome, score: f.ft_home != null ? `${f.ft_home}-${f.ft_away}` : null,
             };
         }));
         if (!legs.length) {
@@ -90,6 +124,7 @@ for (const day of days) {
             const roll = slipOutcomeRollup((anchorLegs.length ? anchorLegs : legs).map(l => l.outcome));
             const byCard = new Map();
             for (const l of legs) {
+                if (l.kind === 'hunter') continue;   // singles, never a parlay rollup
                 let list = byCard.get(l.card); if (!list) byCard.set(l.card, list = []);
                 list.push(l.outcome);
             }
@@ -100,11 +135,11 @@ for (const day of days) {
                 slip_date: day, status: 'published',
                 mood: cards.length >= 3 && anchor ? 'green' : (anchor ? 'amber' : 'red'),
                 legs: JSON.stringify(legs),
-                combined_odds: Math.round((anchor ?? cards[0]).product * 100) / 100,
+                combined_odds: Math.round(((anchor ?? cards[0])?.product ?? 1) * 100) / 100,
                 legs_total: legs.length,
                 legs_hit: legs.filter(l => l.outcome === 'hit').length,
                 outcome: roll.outcome,
-                cards_total: cards.length,
+                cards_total: cards.length + (hunters.length ? 1 : 0),
                 cards_won: [...byCard.values()].filter(list => slipOutcomeRollup(list).outcome === 'won').length,
                 algo_version: `${ALGO_VERSION}-backfill`, backfilled: 1,
                 computed_at: new Date(kicks[0]), settled_at: db.fn.now(),
@@ -112,7 +147,10 @@ for (const day of days) {
         }
     }
     // Walk-forward feed AFTER the day's cards; errorBoost on taken misses.
-    for (const r of dayRows) for (const l of r.menuLegs) cal.observe({ ...l, day, league: r.league });
+    for (const r of dayRows) for (const l of r.menuLegs) {
+        cal.observe({ ...l, day, league: r.league });
+        observeHuntLeg(huntState, l, r.fx, day);
+    }
     if (cards && DEFAULT_GEN2.errorBoost > 0) {
         for (const card of cards) for (const l of card.legs) {
             const outcome = byDay.get(day)?.find(r => r.id === l.fixture)?.menuLegs.find(m => m.market === l.market)?.outcome;
@@ -121,6 +159,17 @@ for (const day of days) {
         }
     }
 }
+
+let hN = 0, hHit = 0, hPnl = 0;
+for (const r of rows) {
+    if (r.status !== 'published') continue;
+    for (const l of JSON.parse(r.legs)) {
+        if (l.kind !== 'hunter' || (l.outcome !== 'hit' && l.outcome !== 'miss')) continue;
+        hN++;
+        if (l.outcome === 'hit') { hHit++; hPnl += l.price - 1; } else hPnl -= 1;
+    }
+}
+console.log(`[gen2-backfill] hunter singles: ${hN} legs, ${hN ? (100 * hHit / hN).toFixed(1) : 0}% hit, P&L ${hPnl.toFixed(1)}u (flat 1u).`);
 
 const anyGreenDays = rows.filter(r => {
     if (r.status !== 'published') return false;

@@ -1232,6 +1232,9 @@ export default function App() {
                                 ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" />
                                 : <IconRefresh />}
                         </button>
+                        <button onClick={() => setShowDailySlip(true)} aria-label="Daily MultiBet"
+                            title="Daily MultiBet - today's value ladder (Anchor 1.5x / Double 2x / Top-3 / Hunter singles) and its win-streak history. The site's daily product."
+                            className={navBtn + ' text-[15px] leading-none'}>📅</button>
                         <button onClick={() => setShowMagic(true)} aria-label="Magic sort"
                             title="Sort tips most-likely-to-win first (backtested ranking strategies)"
                             className={activeMagicIds.length ? navBtnActive : navBtn}>

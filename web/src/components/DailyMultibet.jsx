@@ -59,6 +59,12 @@ function Leg({ leg, allPrices }) {
             </div>
             <div className="flex items-center gap-2 text-[12px] text-label-2">
                 <span>{leg.label ?? leg.market}</span>
+                {leg.score && (
+                    <span className={`rounded px-1 tabular-nums font-semibold ${leg.outcome === 'hit' ? 'bg-green/10 text-green' : leg.outcome === 'miss' ? 'bg-miss/10 text-miss' : 'bg-fill text-label'}`}
+                        title={`Final score ${leg.score} - this line ${leg.outcome === 'hit' ? 'HIT' : leg.outcome === 'miss' ? 'MISSED' : 'settling'}`}>
+                        {leg.score} {leg.outcome === 'hit' ? '✓' : leg.outcome === 'miss' ? '✗' : ''}
+                    </span>
+                )}
                 <span className="text-label-3">{_kick(leg.kickoff)}</span>
                 {leg.cal_prob != null && <span className="ml-auto tabular-nums">{Math.round(leg.cal_prob * 100)}%</span>}
             </div>
@@ -81,6 +87,7 @@ const TIER_META = {
     top3: { label: 'Top-3 value', cls: 'text-hot', hint: 'The three safest markets at 1.5+ odds each (~3.4x combined). The replay-profitable value rung - positive every tested window.' },
     grand: { label: 'Grand 5x', cls: 'text-miss', hint: 'The 5x aspiration card - published ONLY when calibrated evidence clears the EV gate. Rare by design; a lottery arm, never a promise.' },
     value: { label: 'Value card', cls: 'text-hot', hint: 'Value arm: 1.5x-target card at real odds (legacy).' },
+    hunter: { label: 'Hunter singles', cls: 'text-accent', hint: 'High-odds SINGLE stakes (2.0-6.0), one per band, picked by the Dixon-Coles goal model + pattern cells + streak weapons. Each leg is its own bet, never a parlay. Replay: mid band +24.9% ROI over 37 days (train AND test positive); high band positive but volatile.' },
 };
 
 function DayCard({ d, today, allPrices }) {
@@ -119,14 +126,22 @@ function DayCard({ d, today, allPrices }) {
                         const meta = TIER_META[kind] ?? (legs.some(l => l.kind === 'value') ? TIER_META.value : null);
                         const settled = legs.every(l => l.outcome != null);
                         const won = settled && legs.every(l => l.outcome === 'hit' || l.outcome === 'void');
+                        const isSingles = kind === 'hunter';
+                        const singlesPnl = legs.reduce((s2, l) => l.outcome === 'hit' ? s2 + (Number(l.price) - 1) : l.outcome === 'miss' ? s2 - 1 : s2, 0);
                         return (
                             <div key={ci} className="mt-1.5">
                                 <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide">
                                     <span className={`font-semibold ${meta?.cls ?? 'text-label-3'}`} title={meta?.hint ?? 'Survival card.'}>
-                                        {(legs[0]?.tier_label ?? meta?.label ?? `Card ${ci + 1}`)} · {odds.toFixed(2)}x
+                                        {(legs[0]?.tier_label ?? meta?.label ?? `Card ${ci + 1}`)}{isSingles ? ` · ${legs.length} bet${legs.length > 1 ? 's' : ''}` : ` · ${odds.toFixed(2)}x`}
                                     </span>
-                                    {settled && (
+                                    {settled && !isSingles && (
                                         <span className={`font-bold ${won ? 'text-green' : 'text-miss'}`}>{won ? 'WON' : 'LOST'}</span>
+                                    )}
+                                    {isSingles && legs.some(l => l.outcome != null) && (
+                                        <span className={`font-bold ${singlesPnl >= 0 ? 'text-green' : 'text-miss'}`}
+                                            title="Singles profit at 1 unit per bet - each Hunter leg settles on its own.">
+                                            {singlesPnl >= 0 ? '+' : ''}{singlesPnl.toFixed(1)}u
+                                        </span>
                                     )}
                                 </div>
                                 {legs.map((l, i) => <Leg key={i} leg={l} allPrices={allPrices} />)}
