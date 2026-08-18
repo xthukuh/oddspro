@@ -17,6 +17,7 @@ let _lastCheck = null;
 let _lastError = null;
 let _attempts = 0;
 let _tickTimer = null;
+let _inflight = null; // shared promise while an attempt is in flight (re-entrancy guard)
 
 export function isWriter() {
     return _writer;
@@ -54,7 +55,21 @@ async function _releasePinnedConnection() {
 // whether this process is the writer after the attempt. Never throws -
 // any failure releases the pin, marks us non-writer, and the next tick
 // (or the next explicit call) starts over from a clean connection.
-export async function tryAcquireWriter() {
+//
+// Re-entrancy guard: overlapping calls (a slow DB making one tick overlap
+// the next, or a future manual "recheck now" caller) must never race on
+// the shared `_conn`/`_writer` state across the `await` points below - the
+// connection actually holding GET_LOCK could get overwritten out of `_conn`
+// and leaked, while the other call's cleanup releases the wrong connection.
+// All callers share one in-flight promise instead; a second call while one
+// is already running just awaits the first attempt's result.
+export function tryAcquireWriter() {
+    if (_inflight) return _inflight;
+    _inflight = _tryAcquireWriterOnce().finally(() => { _inflight = null; });
+    return _inflight;
+}
+
+async function _tryAcquireWriterOnce() {
     _attempts += 1;
     _lastCheck = Date.now();
     try {
@@ -88,6 +103,11 @@ export async function stopWriterLease() {
     if (_tickTimer) {
         clearInterval(_tickTimer);
         _tickTimer = null;
+    }
+    // Let any in-flight attempt settle first, so we never release the
+    // connection out from under it (or read a `_conn` it is mid-swap on).
+    if (_inflight) {
+        await _inflight;
     }
     if (_conn) {
         try {
