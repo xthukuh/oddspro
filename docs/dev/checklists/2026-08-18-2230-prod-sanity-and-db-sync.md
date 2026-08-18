@@ -21,3 +21,5 @@ Status values: pending / in progress / completed / blocked (owner).
 | 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | pending | Fable (production) |
 | 11 | Google Analytics tag missing on live | completed (ships with build 2) | root cause: `VITE_GA_ID` unset at build time (commented out in `.env.production`); set to G-2CNKRP1W0Q, test build injects the snippet. Owner: privacy page still says "no third-party analytics scripts". |
 | 12 | Owner pauses: stop/restart cPanel Node.js App during the build-2 apply | pending | agent pauses and hands over the exact moment |
+| 13 | Completion report + GA test greenlight to owner | pending | after build 2 is live |
+| 14 | Bonus assessment: decouple the always-running server.js from the source tree for hot-swaps | pending | proposal in the completion report (versioned app roots + `current` symlink, or writer/serve process split) |
