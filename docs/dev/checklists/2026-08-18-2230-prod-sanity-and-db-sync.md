@@ -11,11 +11,13 @@ Status values: pending / in progress / completed / blocked (owner).
 | 0d | Verify live light pass recovers (`light ok`, matches.updated_at moves) | completed | 21:00:57Z `light OK 10s`, 1844 matches refreshed, updated_at 2026-08-19 00:00:56 EAT |
 | 1 | meta table + src/meta.js | completed | c8a3795 |
 | 2 | writer lease | completed | 9a1a988 + 736c0a2 (re-entrancy guard) |
-| 3 | lease-gated schedulers + meta version | pending | Sonnet, Fable review |
+| 3 | lease-gated schedulers + meta version | completed | 564c859 |
 | 4 | follower-safe manual refresh + catalog from meta | pending | Sonnet, Fable review |
 | 5 | narrowed settle + stderr trim + refetch-fixtures | completed | 7d77c81; API-Football keeps the 21 inconsistent finals as-is |
-| 6 | scripts/lib remote + sync-rules (+ deploy-remote refactor) | pending | Sonnet |
+| 6 | scripts/lib remote + sync-rules (+ deploy-remote refactor) | completed | bc336a7 (review pending with 7) |
 | 7 | db-import.js | pending | Sonnet |
 | 8 | db-sync.js status/backup/pull/push + local brought current | pending | Sonnet build, Fable runs the live pulls |
 | 9 | hotfix-remote.js | pending | Sonnet |
 | 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | pending | Fable (production) |
+| 11 | Google Analytics tag missing on live | completed (ships with build 2) | root cause: `VITE_GA_ID` unset at build time (commented out in `.env.production`); set to G-2CNKRP1W0Q, test build injects the snippet. Owner: privacy page still says "no third-party analytics scripts". |
+| 12 | Owner pauses: stop/restart cPanel Node.js App during the build-2 apply | pending | agent pauses and hands over the exact moment |
