@@ -76,23 +76,66 @@ test('isLightDue is an elapsed-interval check; 0 disables', () => {
 });
 
 // shouldConsumeRefreshRequest: the writer tick's gate on a follower-queued
-// refresh_request (src/meta.js).
-test('shouldConsumeRefreshRequest accepts a well-shaped request when idle', () => {
-    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19', requested_at: 'x', by: 'follower' }, false), true);
-});
+// refresh_request (src/meta.js), applying the same freshness/cooldown guards
+// server.js's own POST /api/refresh handler applies to a writer-direct click.
+const NOW = new Date('2026-08-19T12:00:00Z').getTime();
 
-test('shouldConsumeRefreshRequest refuses while a job already holds the slot', () => {
-    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19' }, true), false);
+test('shouldConsumeRefreshRequest runs a well-shaped request with no guard state', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19', requested_at: 'x', by: 'follower' }, { nowMs: NOW }), 'run');
 });
 
 test('shouldConsumeRefreshRequest refuses an absent or malformed request', () => {
-    assert.equal(shouldConsumeRefreshRequest(null, false), false);
-    assert.equal(shouldConsumeRefreshRequest(undefined, false), false);
-    assert.equal(shouldConsumeRefreshRequest({}, false), false);
-    assert.equal(shouldConsumeRefreshRequest({ date: '' }, false), false);
-    assert.equal(shouldConsumeRefreshRequest({ date: '2026-8-19' }, false), false);   // strict zero-padding
-    assert.equal(shouldConsumeRefreshRequest({ date: 'not-a-date' }, false), false);
-    assert.equal(shouldConsumeRefreshRequest('2026-08-19', false), false);           // not an object
+    assert.equal(shouldConsumeRefreshRequest(null, { nowMs: NOW }), 'invalid');
+    assert.equal(shouldConsumeRefreshRequest(undefined, { nowMs: NOW }), 'invalid');
+    assert.equal(shouldConsumeRefreshRequest({}, { nowMs: NOW }), 'invalid');
+    assert.equal(shouldConsumeRefreshRequest({ date: '' }, { nowMs: NOW }), 'invalid');
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-8-19' }, { nowMs: NOW }), 'invalid');   // strict zero-padding
+    assert.equal(shouldConsumeRefreshRequest({ date: 'not-a-date' }, { nowMs: NOW }), 'invalid');
+    assert.equal(shouldConsumeRefreshRequest('2026-08-19', { nowMs: NOW }), 'invalid');           // not an object
+});
+
+test('shouldConsumeRefreshRequest skips fresh when the date was recently refreshed', () => {
+    const req = { date: '2026-08-19' };
+    // Refreshed 3 minutes ago, cache window 5 minutes - inside the window.
+    assert.equal(shouldConsumeRefreshRequest(req, {
+        nowMs: NOW, lastFreshMs: NOW - 3 * 60_000, cacheMinutes: 5,
+    }), 'fresh');
+    // Exactly at the boundary counts as still fresh (strict <, matches server.js).
+    assert.equal(shouldConsumeRefreshRequest(req, {
+        nowMs: NOW, lastFreshMs: NOW - 5 * 60_000 - 1, cacheMinutes: 5,
+    }), 'run');
+});
+
+test('shouldConsumeRefreshRequest ignores freshness when REFRESH_CACHE_MINUTES is off (0)', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19' }, {
+        nowMs: NOW, lastFreshMs: NOW - 1000, cacheMinutes: 0,
+    }), 'run');
+});
+
+test('shouldConsumeRefreshRequest skips cooldown when the last consumed run was too recent', () => {
+    const req = { date: '2026-08-19' };
+    // Last queued run started 4 minutes ago, cooldown 10 minutes - blocked.
+    assert.equal(shouldConsumeRefreshRequest(req, {
+        nowMs: NOW, lastManualMs: NOW - 4 * 60_000, cooldownMinutes: 10,
+    }), 'cooldown');
+    // Past the cooldown window - allowed.
+    assert.equal(shouldConsumeRefreshRequest(req, {
+        nowMs: NOW, lastManualMs: NOW - 11 * 60_000, cooldownMinutes: 10,
+    }), 'run');
+});
+
+test('shouldConsumeRefreshRequest ignores cooldown when REFRESH_COOLDOWN_MINUTES is off (0)', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19' }, {
+        nowMs: NOW, lastManualMs: NOW - 1000, cooldownMinutes: 0,
+    }), 'run');
+});
+
+test('shouldConsumeRefreshRequest checks freshness before cooldown', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19' }, {
+        nowMs: NOW,
+        lastFreshMs: NOW - 1000, cacheMinutes: 5,
+        lastManualMs: NOW - 1000, cooldownMinutes: 10,
+    }), 'fresh');
 });
 
 test('trimLogTail keeps content under the cap unchanged', () => {

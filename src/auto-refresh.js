@@ -53,15 +53,6 @@ export const refreshJob = {
     summary: null,
 };
 
-// Local mirror of the last version/success this PROCESS observed after a job
-// it ran itself - kept only for this instance's own bookkeeping/log lines.
-// The authoritative, cross-instance values are `warehouseVersion()`/
-// `lastSuccessMemo()` (src/meta.js) - `refreshStatus()` always answers from
-// those, never from these mirrors, so every instance (writer or follower)
-// reports the same numbers.
-let dataVersion = 0;
-let lastSuccess = null; // { at, mode, dates }
-
 // Success-only per-date freshness (date -> epoch ms). Backs the manual
 // cache-reuse answer. Deliberately SEPARATE from server.js's manual cooldown
 // map: auto runs must never stamp the cooldown, or a 10-minute light cadence
@@ -102,18 +93,27 @@ async function _storeColumnCatalog(mode) {
     await setMeta('column_catalog', await columnCatalog());
 }
 
+// Per-date: when the writer's tick last actually STARTED a job for a
+// consumed refresh_request. Deliberately a SEPARATE map from server.js's own
+// per-date manual-cooldown map (module-private there, only tracks a
+// writer-direct POST click) - the two paths get independent cooldown clocks,
+// but the SAME REFRESH_COOLDOWN_MINUTES knob and the same abuse-prevention
+// intent: a follower can't force a real sweep more than once per window by
+// clicking repeatedly, exactly like a writer-direct click can't.
+const lastQueuedManualMs = new Map();
+
 // Cross-instance manual-refresh handoff: a follower `src/server.js` instance
 // cannot run POST /api/refresh's job itself (a second writer would deadlock
 // on the same InnoDB gap locks the single-slot job guard exists to prevent -
 // see startJob above), so it stores the request in shared meta instead
 // (`refresh_request`, src/meta.js). The writer's own tick consumes it here,
 // at the top - before its own full/light due checks - so a follower-triggered
-// refresh starts within one 30s tick. Deliberately does NOT touch
-// server.js's per-date manual cooldown map (module-private there, and the
-// meta row is a single slot - a second follower click before this tick fires
-// just overwrites the pending request rather than queuing twice, which is
-// throttle enough for this handoff path). Never throws - a read/write hiccup
-// just means the request is retried on the next tick.
+// refresh starts within one 30s tick, gated by the SAME two guards
+// server.js's own POST handler applies to a writer-direct click:
+// REFRESH_CACHE_MINUTES (skip a date refreshed moments ago) and
+// REFRESH_COOLDOWN_MINUTES (skip a date consumed moments ago) - see pure
+// shouldConsumeRefreshRequest (src/db/auto-rules.js). Never throws - a
+// read/write hiccup just means the request is retried on the next tick.
 async function consumePendingRefreshRequest() {
     if (refreshJob.running) return;
     let request;
@@ -123,15 +123,34 @@ async function consumePendingRefreshRequest() {
         console.error('[auto] refresh_request read failed:', e?.message ?? e);
         return;
     }
-    if (!shouldConsumeRefreshRequest(request, refreshJob.running)) return;
+    if (!request) return; // nothing pending
+    const decision = shouldConsumeRefreshRequest(request, {
+        nowMs: Date.now(),
+        lastFreshMs: lastFreshAt(request.date),
+        lastManualMs: lastQueuedManualMs.get(request.date) ?? null,
+        cacheMinutes: effective('REFRESH_CACHE_MINUTES'),
+        cooldownMinutes: effective('REFRESH_COOLDOWN_MINUTES'),
+    });
+    if (decision === 'fresh' || decision === 'cooldown') {
+        console.info(`[auto] queued refresh for ${request.date} skipped: ${decision}`);
+    } else if (decision === 'invalid') {
+        console.warn('[auto] refresh_request malformed - dropping:', JSON.stringify(request));
+    }
     try {
-        // Clear BEFORE starting the job: if the clear itself fails, skip this
-        // tick rather than risk relaunching the same request every 30s.
+        // Clear the slot on EVERY outcome, not just 'run': a 'fresh'/
+        // 'cooldown' skip is a settled answer for THIS click (a later click
+        // gets its own fresh evaluation against then-current guard state,
+        // never a resurrected old one), and 'invalid' is unrecoverable
+        // garbage. Clearing BEFORE starting the job specifically: if the
+        // clear itself fails, skip this tick rather than risk relaunching
+        // the same request every 30s.
         await setMeta('refresh_request', null);
     } catch (e) {
         console.error('[auto] refresh_request clear failed:', e?.message ?? e);
         return;
     }
+    if (decision !== 'run') return;
+    lastQueuedManualMs.set(request.date, Date.now());
     startJob({
         mode: 'manual',
         dates: [request.date],
@@ -176,17 +195,18 @@ export function startJob({ mode, dates, run, onFinish = null }) {
             refreshJob.cancelled = outcome === 'cancelled';
             if (outcome === 'cancelled') refreshJob.error = null; // user abort, not a failure
             if (outcome === 'ok') {
-                dataVersion += 1;
-                lastSuccess = { at: refreshJob.finished_at, mode, dates };
                 for (const d of dates) lastFresh.set(d, Date.now());
                 // Cross-instance meta: bump the shared warehouse_version and
                 // record last_success so every instance's next refreshStatus()
-                // read sees this completion, not just this process's own
-                // mirror above. Best-effort - a meta-write hiccup must never
-                // throw into this finally block (the job already succeeded).
+                // read sees this completion - there is no per-process mirror
+                // to update here, `refreshStatus()` answers entirely from the
+                // meta memo (`warehouseVersion()`/`lastSuccessMemo()`, see
+                // src/meta.js) regardless of which instance ran the job.
+                // Best-effort - a meta-write hiccup must never throw into
+                // this finally block (the job already succeeded).
                 bumpWarehouseVersion().then(refreshMetaMemo)
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
-                setMeta('last_success', lastSuccess)
+                setMeta('last_success', { at: refreshJob.finished_at, mode, dates })
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
                 _storeColumnCatalog(mode)
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));

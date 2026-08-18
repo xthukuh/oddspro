@@ -48,14 +48,29 @@ export function refreshOutcome({ error, cancelRequested } = {}) {
     return 'ok';
 }
 
-// A pending cross-instance manual-refresh request (src/meta.js's
-// `refresh_request` key, written by a follower's POST /api/refresh - see
-// src/server.js) is only actionable when it is present, shaped like a real
-// request (a YYYY-MM-DD date), and no job currently holds the single slot.
-export function shouldConsumeRefreshRequest(request, jobRunning) {
-    if (jobRunning) return false;
-    if (!request || typeof request !== 'object') return false;
-    return /^\d{4}-\d{2}-\d{2}$/.test(String(request.date ?? ''));
+// Decide what to do with a pending cross-instance manual-refresh request
+// (src/meta.js's `refresh_request` key, written by a follower's POST
+// /api/refresh - see src/server.js). The writer's tick calls this only after
+// its own `refreshJob.running` early-return (see consumePendingRefreshRequest
+// in src/auto-refresh.js), so busy-slot is not this function's concern - it
+// judges shape plus the SAME two abuse guards server.js's own POST handler
+// applies to a writer-direct click, so a follower click can't bypass them
+// and force a real sweep every ~30s tick instead of once per cooldown:
+//   'invalid'  - absent/malformed request (no well-shaped YYYY-MM-DD date)
+//   'fresh'    - the date was refreshed within REFRESH_CACHE_MINUTES
+//   'cooldown' - the date's last CONSUMED queued run started within
+//                REFRESH_COOLDOWN_MINUTES (lastManualMs - see the caller's
+//                own `lastQueuedManualMs` map, separate from server.js's
+//                writer-direct cooldown map)
+//   'run'      - go ahead and start the job
+export function shouldConsumeRefreshRequest(request, {
+    nowMs = Date.now(), lastFreshMs = null, lastManualMs = null, cacheMinutes = 0, cooldownMinutes = 0,
+} = {}) {
+    if (!request || typeof request !== 'object') return 'invalid';
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(String(request.date ?? ''))) return 'invalid';
+    if (cacheMinutes > 0 && lastFreshMs != null && nowMs - lastFreshMs < cacheMinutes * 60_000) return 'fresh';
+    if (cooldownMinutes > 0 && lastManualMs != null && nowMs - lastManualMs < cooldownMinutes * 60_000) return 'cooldown';
+    return 'run';
 }
 
 // Self-truncating log: past maxBytes, keep the newest ~half starting at a
