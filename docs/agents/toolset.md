@@ -138,6 +138,32 @@
 - AI verdicts can never be backfilled: a grounded call on a played fixture retrieves the
   final score from the web — collection is strictly pre-kickoff, forward-only.
 
+### 3.8 Cross-instance meta + writer lease (verified 2026-08-18)
+- `meta` key/value table (`src/db/migrations/20260818000001_meta.js`) + `src/meta.js`:
+  shared `warehouse_version`/`last_success` state across the three concurrent live
+  `server.js` instances. One-off bump check: `node -e "import('./src/meta.js').then(async
+  m => { console.log(await m.bumpWarehouseVersion(), await m.bumpWarehouseVersion(), await
+  m.getMeta('warehouse_version')); const { closeDb } = await import('./src/db/connection.js');
+  await closeDb(); })"` → expect `1 2 2` the first run (each call is +1 on the stored int).
+- Single-writer lease (`src/db/lease.js`) over MariaDB `GET_LOCK('oddspro:writer', 0)` on a
+  connection PINNED for as long as the process holds it (`db.client.acquireConnection()` /
+  `.connection(conn)` / `db.client.releaseConnection(conn)`). `db.raw(...).connection(conn)`
+  returns the raw mysql2 `[rows, fields]` tuple, NOT bare rows — unwrap with `const [rows] =
+  await db.raw(...)`, a bare-rows assumption silently breaks `lockOutcome`.
+- **Live two-process check (verified):** process A —
+  `node -e "import('./src/db/lease.js').then(async m => { const ok = await
+  m.tryAcquireWriter(); console.log('A', ok, JSON.stringify(m.leaseStatus())); await new
+  Promise(r => setTimeout(r, 10000)); await m.stopWriterLease(); const { closeDb } = await
+  import('./src/db/connection.js'); await closeDb(); })"` started first (backgrounded);
+  process B — the same `tryAcquireWriter()` one-liner without the sleep, started ~2s later.
+  Result: A logs `[lease] writer gained` and `ok=true`; B gets `ok=false` with
+  `last_error:null` (a clean `held-elsewhere`, not a connection failure); after A's
+  `stopWriterLease()` releases the lock (`SELECT RELEASE_LOCK(?)`), a fresh process
+  re-acquires immediately — confirms no orphaned lock survives a clean stop.
+- GET_LOCK is re-entrant on the SAME connection: re-running it every tick while already
+  holding the lease returns 1 again and doubles as a liveness check on the pinned
+  connection, no separate renew logic needed.
+
 ## 4. What-to-use-when (analysis scripts — all read-only unless noted)
 
 | Question | Tool | Notes |
@@ -259,3 +285,6 @@ the shown bet). Sources: `docs/research/`.
   STANDING PRACTICE (user directive 2026-08-04): every command proven working in a session
   — including its nuances, prerequisites and the WHY — gets a dated entry here rather than
   being re-discovered later. This library is the proven-commands knowledge base.
+- 2026-08-18 — §3.8 append: `meta` table bump one-liner + the live two-process writer-lease
+  check (`GET_LOCK` acquire/held-elsewhere/release round trip), plus the
+  `db.raw(...).connection(conn)` returns `[rows, fields]` (not bare rows) gotcha.
