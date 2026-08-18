@@ -12,10 +12,10 @@ Status values: pending / in progress / completed / blocked (owner).
 | 1 | meta table + src/meta.js | completed | c8a3795 |
 | 2 | writer lease | completed | 9a1a988 + 736c0a2 (re-entrancy guard) |
 | 3 | lease-gated schedulers + meta version | completed | 564c859 |
-| 4 | follower-safe manual refresh + catalog from meta | pending | Sonnet, Fable review |
+| 4 | follower-safe manual refresh + catalog from meta | completed | 936f5c7 + d3b6773 (cooldown/fresh guards on queued refresh) |
 | 5 | narrowed settle + stderr trim + refetch-fixtures | completed | 7d77c81; API-Football keeps the 21 inconsistent finals as-is |
-| 6 | scripts/lib remote + sync-rules (+ deploy-remote refactor) | completed | bc336a7 (review pending with 7) |
-| 7 | db-import.js | pending | Sonnet |
+| 6 | scripts/lib remote + sync-rules (+ deploy-remote refactor) | completed | bc336a7 + 9cb60d0 |
+| 7 | db-import.js | completed | 27814f5 (full local round trip 385 s) |
 | 8 | db-sync.js status/backup/pull/push + local brought current | pending | Sonnet build, Fable runs the live pulls |
 | 9 | hotfix-remote.js | pending | Sonnet |
 | 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | pending | Fable (production) |
