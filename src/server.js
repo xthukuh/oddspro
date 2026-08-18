@@ -3,7 +3,7 @@ import compression from 'compression';
 import { existsSync, createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
-import { queryRecords, columnCatalog } from './db/records.js';
+import { queryRecords, columnCatalog, columnCatalogFromMeta } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { dailySlipPayload, dailyTimelinePayload } from './daily-slip.js';
 import { featureAllowed } from './db/feature-rules.js';
@@ -28,7 +28,7 @@ import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } fr
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
 import { isWriter, startWriterLease, stopWriterLease } from './db/lease.js';
-import { getMeta, refreshMetaMemo, startMetaPoll, stopMetaPoll, warehouseVersion } from './meta.js';
+import { setMeta, refreshMetaMemo, startMetaPoll, stopMetaPoll, warehouseVersion } from './meta.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
@@ -514,13 +514,16 @@ function _json(value, fallback) {
 // If-None-Match answers 304 with no body at all.
 const apiCache = makeJsonCache({
     max: 12, ttlMs: 10 * 60_000,
-    version: () => refreshStatus().data_version,
+    version: () => warehouseVersion(),
 });
 
-// GET /api/columns - column catalog (base + markets + stats) for settings UI
+// GET /api/columns - column catalog (base + markets + stats) for settings UI.
+// columnCatalogFromMeta serves the writer's shared-meta catalog on every
+// instance (writer included) rather than repeating the odds_markets scan per
+// process; the writer's own catalog warm below keeps that meta entry fresh.
 app.get('/api/columns', async (req, res, next) => {
     try {
-        await apiCache.send(req, res, '/api/columns', () => columnCatalog());
+        await apiCache.send(req, res, '/api/columns', () => columnCatalogFromMeta());
     } catch (e) {
         next(e);
     }
@@ -545,9 +548,7 @@ let catalogWarmTimer = null;
 function startCatalogWarm() {
     if (catalogWarmTimer) return;
     const warm = () => {
-        const load = isWriter()
-            ? () => columnCatalog()
-            : async () => (await getMeta('column_catalog')) ?? columnCatalog();
+        const load = isWriter() ? () => columnCatalog() : () => columnCatalogFromMeta();
         apiCache.warm('/api/columns', load)
             .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
         // magic-sort's whole-ledger strategy replay is the most expensive
@@ -1151,7 +1152,7 @@ const REFRESH_MAX_BEHIND_DAYS = 90;
 // are PER DATE (cache + cooldown), so walking distinct dates missed both -
 // steady quota drain plus continuous scraping whose realistic end state is an
 // IP ban that kills odds ingestion. Guests have no refresh button anyway.
-app.post('/api/refresh', requireAuth, (req, res) => {
+app.post('/api/refresh', requireAuth, async (req, res, next) => {
     if (!csrfOk(req, res)) return;
     const date = String(req.query.date ?? '');
     if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || isNaN(new Date(date).getTime())) {
@@ -1163,6 +1164,25 @@ app.post('/api/refresh', requireAuth, (req, res) => {
     const offset = Math.floor(new Date(`${date}T00:00:00+03:00`).getTime() / dayMs) - nowDay;
     if (offset > REFRESH_MAX_AHEAD_DAYS || offset < -REFRESH_MAX_BEHIND_DAYS) {
         return res.status(400).json({ error: 'Refresh date is outside the supported range.' });
+    }
+    // Multi-instance: only the writer (src/db/lease.js) may start the job -
+    // a follower running its own runDateRefresh would be a second writer
+    // hitting the exact InnoDB gap-lock deadlock the single-slot job guard
+    // exists to prevent. A follower instead hands the request to the writer
+    // via shared meta (`refresh_request`); the writer's own scheduler tick
+    // (src/auto-refresh.js's consumePendingRefreshRequest) consumes it and
+    // starts the job within one 30s tick. Deliberately skips the fresh/
+    // cooldown checks below - those read this PROCESS's local mirrors
+    // (lastFreshAt / refreshCooldown), which stay empty on a follower since
+    // it never runs jobs itself; the writer's own POST path still applies
+    // them normally.
+    if (!isWriter()) {
+        try {
+            await setMeta('refresh_request', { date, requested_at: new Date().toISOString(), by: 'follower' });
+        } catch (e) {
+            return next(e);
+        }
+        return res.status(202).json({ queued: true, writer: false });
     }
     if (refreshStatus().running) return res.status(409).json(refreshStatus());
     // Cache reuse: a recent successful run (auto or manual) already covered

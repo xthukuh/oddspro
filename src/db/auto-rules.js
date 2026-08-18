@@ -48,6 +48,16 @@ export function refreshOutcome({ error, cancelRequested } = {}) {
     return 'ok';
 }
 
+// A pending cross-instance manual-refresh request (src/meta.js's
+// `refresh_request` key, written by a follower's POST /api/refresh - see
+// src/server.js) is only actionable when it is present, shaped like a real
+// request (a YYYY-MM-DD date), and no job currently holds the single slot.
+export function shouldConsumeRefreshRequest(request, jobRunning) {
+    if (jobRunning) return false;
+    if (!request || typeof request !== 'object') return false;
+    return /^\d{4}-\d{2}-\d{2}$/.test(String(request.date ?? ''));
+}
+
 // Self-truncating log: past maxBytes, keep the newest ~half starting at a
 // line boundary, behind a truncation marker. Byte-approximate (log lines are
 // ASCII); nowIso is injectable for deterministic tests.

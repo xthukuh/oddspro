@@ -3,6 +3,7 @@ import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKe
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 import { redactRecordForRole, stripDetails } from './access-rules.js';
+import { getMeta } from '../meta.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -137,6 +138,19 @@ export async function columnCatalog() {
             })),
         ],
     };
+}
+
+// Multi-instance variant: the live host runs three concurrent server
+// processes, but only the writer (src/db/lease.js's isWriter()) ever needs to
+// run the odds_markets/fixture_statistics scan above - it persists the result
+// to shared meta on every ok refresh (src/auto-refresh.js's
+// _storeColumnCatalog). Every instance can serve THAT stored catalog instead
+// of repeating the scan, so /api/columns and the follower catalog warm both
+// call this rather than columnCatalog() directly.
+export async function columnCatalogFromMeta() {
+    const stored = await getMeta('column_catalog');
+    if (stored?.markets) { _pivotAllowed = new Set(stored.markets.map(c => c.key)); return stored; }
+    return columnCatalog(); // first boot ever / meta empty: compute (writer will persist on its next ok)
 }
 
 // Resolve a sort/filter key to an orderable SQL target, adding a LEFT JOIN

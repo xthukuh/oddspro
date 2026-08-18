@@ -5,6 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
+    shouldConsumeRefreshRequest,
 } from '../src/db/auto-rules.js';
 
 // refreshOutcome (F3): classify a finished refresh job.
@@ -72,6 +73,26 @@ test('isLightDue is an elapsed-interval check; 0 disables', () => {
     assert.equal(isLightDue(t0 + 10 * 60_000, t0, 10), true); // exact boundary
     assert.equal(isLightDue(t0 + 60 * 60_000, t0, 10), true);
     assert.equal(isLightDue(t0 + 60 * 60_000, t0, 0), false); // disabled
+});
+
+// shouldConsumeRefreshRequest: the writer tick's gate on a follower-queued
+// refresh_request (src/meta.js).
+test('shouldConsumeRefreshRequest accepts a well-shaped request when idle', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19', requested_at: 'x', by: 'follower' }, false), true);
+});
+
+test('shouldConsumeRefreshRequest refuses while a job already holds the slot', () => {
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-08-19' }, true), false);
+});
+
+test('shouldConsumeRefreshRequest refuses an absent or malformed request', () => {
+    assert.equal(shouldConsumeRefreshRequest(null, false), false);
+    assert.equal(shouldConsumeRefreshRequest(undefined, false), false);
+    assert.equal(shouldConsumeRefreshRequest({}, false), false);
+    assert.equal(shouldConsumeRefreshRequest({ date: '' }, false), false);
+    assert.equal(shouldConsumeRefreshRequest({ date: '2026-8-19' }, false), false);   // strict zero-padding
+    assert.equal(shouldConsumeRefreshRequest({ date: 'not-a-date' }, false), false);
+    assert.equal(shouldConsumeRefreshRequest('2026-08-19', false), false);           // not an object
 });
 
 test('trimLogTail keeps content under the cap unchanged', () => {

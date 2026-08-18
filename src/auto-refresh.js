@@ -1,5 +1,5 @@
 import { appendFileSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
-import { runStartPipeline } from './pipeline.js';
+import { runStartPipeline, runDateRefresh } from './pipeline.js';
 import { settleApisportsResults } from './apisports.js';
 import { fetchBetpawaGames } from './betpawa.js';
 import { fetchBetikaGames } from './betika.js';
@@ -11,12 +11,12 @@ import { settleDailySlips } from './daily-slip.js';
 import { settleUserSlips } from './user-slips.js';
 import { purgeExpiredAuth } from './auth.js';
 import { pruneTrackEvents } from './track.js';
-import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome } from './db/auto-rules.js';
+import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome, shouldConsumeRefreshRequest } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
 import { _date, _dtime, debugLog } from './utils.js';
 import { isWriter } from './db/lease.js';
-import { bumpWarehouseVersion, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
+import { bumpWarehouseVersion, getMeta, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
 import { columnCatalog } from './db/records.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
@@ -100,6 +100,43 @@ async function _storeColumnCatalog(mode) {
     if (mode !== 'full' && now - lastCatalogStoreMs < CATALOG_STORE_INTERVAL_MS) return;
     lastCatalogStoreMs = now;
     await setMeta('column_catalog', await columnCatalog());
+}
+
+// Cross-instance manual-refresh handoff: a follower `src/server.js` instance
+// cannot run POST /api/refresh's job itself (a second writer would deadlock
+// on the same InnoDB gap locks the single-slot job guard exists to prevent -
+// see startJob above), so it stores the request in shared meta instead
+// (`refresh_request`, src/meta.js). The writer's own tick consumes it here,
+// at the top - before its own full/light due checks - so a follower-triggered
+// refresh starts within one 30s tick. Deliberately does NOT touch
+// server.js's per-date manual cooldown map (module-private there, and the
+// meta row is a single slot - a second follower click before this tick fires
+// just overwrites the pending request rather than queuing twice, which is
+// throttle enough for this handoff path). Never throws - a read/write hiccup
+// just means the request is retried on the next tick.
+async function consumePendingRefreshRequest() {
+    if (refreshJob.running) return;
+    let request;
+    try {
+        request = await getMeta('refresh_request');
+    } catch (e) {
+        console.error('[auto] refresh_request read failed:', e?.message ?? e);
+        return;
+    }
+    if (!shouldConsumeRefreshRequest(request, refreshJob.running)) return;
+    try {
+        // Clear BEFORE starting the job: if the clear itself fails, skip this
+        // tick rather than risk relaunching the same request every 30s.
+        await setMeta('refresh_request', null);
+    } catch (e) {
+        console.error('[auto] refresh_request clear failed:', e?.message ?? e);
+        return;
+    }
+    startJob({
+        mode: 'manual',
+        dates: [request.date],
+        run: (onStep, shouldCancel) => runDateRefresh(request.date, onStep, shouldCancel),
+    });
 }
 
 // Claim the slot and fire `run(onStep)` without awaiting. Returns false when
@@ -299,9 +336,18 @@ export function startAutoRefresh() {
     // slot re-arms on the next EAT day.
     lastLightMs = now;
     lastFullKey = fullAt != null && eatMinutesOfDay(now) >= fullAt ? eatDateKey(now) : null;
-    const tick = () => {
+    // Async (consumePendingRefreshRequest awaits a meta read/write) - the
+    // in-flight guard stops an overlapping tick from double-consuming a
+    // pending request or racing startJob's slot check, and the outer
+    // try/catch/finally guarantees nothing ever throws out of the interval
+    // callback regardless of where an awaited step fails.
+    let tickInFlight = false;
+    const tick = async () => {
+        if (tickInFlight) return;
+        tickInFlight = true;
         try {
             if (!isWriter()) return; // only the writer instance schedules work
+            await consumePendingRefreshRequest();
             if (refreshJob.running) return;
             const nowMs = Date.now();
             if (isFullDue(nowMs, fullAt, lastFullKey)) {
@@ -325,6 +371,8 @@ export function startAutoRefresh() {
             }
         } catch (e) {
             console.error('[auto] tick failed:', e);
+        } finally {
+            tickInFlight = false;
         }
     };
     timer = setInterval(tick, 30_000);

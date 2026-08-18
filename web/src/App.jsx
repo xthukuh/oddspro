@@ -822,6 +822,15 @@ export default function App() {
         track(EV.REFRESH_CLICK);
         try {
             const body = await startRefresh(date);
+            if (body?.queued) {
+                // A follower server instance can't run the job itself (only
+                // the writer may - see src/server.js); it handed the request
+                // off to the writer instead. The slow refresh-status poll
+                // above already picks up the completion once it lands, so
+                // this is just a heads-up.
+                setNotice('Refresh queued on the writer instance, data will land within a minute.');
+                return;
+            }
             if (body?.fresh) {
                 // Server-side cache says this date was refreshed moments ago -
                 // no new run; just reload what we show and say so.
