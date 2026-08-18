@@ -95,6 +95,10 @@
 - Dump: `node scripts/db-export.js [--container <name>]` → `backups/oddspro_<ts>.sql.gz`
   (`mariadb-dump` preferred; no CREATE DATABASE — meant for phpMyAdmin import into an
   existing, differently-named DB).
+- Restore: `node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>]
+  --yes` (reverse of the dump above: gunzips on the fly into `mariadb`/`mysql` inside the
+  container; refuses without `--yes`, it OVERWRITES the target DB). Also importable:
+  `importDb({ inPath, container, database, preamble, onProgress })`.
 - Migrations: `npm run migrate` (forward-only). Remote host without SSH: `MIGRATE_ON_BOOT=1`
   self-migrates on restart (fail-fast).
 - `backups/` and `release/` are gitignored — dumps must never land in git.
@@ -271,6 +275,29 @@ the shown bet). Sources: `docs/research/`.
   fixtures' underlying data is genuinely inconsistent at the source), so the existing guarded
   `CASE WHEN` in the settle UPDATE (stores `NULL` for the second half instead of aborting on the
   UNSIGNED-column underflow) remains the correct permanent handling for this class of record.
+- 2026-08-19 - **deploy-remote.js refactor, dry-run equivalence proof (verified):**
+  `scripts/lib/remote.js` (ssh/sshInput/sshStreamUpload/sshStreamDownload/remoteConfig,
+  every fn taking `cfg` first) and `scripts/lib/sync-rules.js` (pure SYNC_TABLES/planPull/
+  dumpArgs/windowDeleteSql/statusRows/compareStatus + the moved `INSTANCE_TABLES`) were
+  extracted out of `deploy-remote.js`. Proof method: captured `node scripts/deploy-remote.js
+  --all --dry-run` stdout to a file BEFORE the refactor, re-ran the identical command AFTER,
+  normalized only the dump filename's embedded timestamp (`oddspro-deploy_<ts>`, the one
+  line that legitimately changes run-to-run), then `diff`'d: zero remaining differences.
+  Same idiom is reusable for any future pure-refactor of a script with observable CLI output.
+- 2026-08-19 - **db-import.js round trip, local Docker MariaDB (verified):** the live
+  `oddspro` DB is 2.25 GB uncompressed (98,832 fixtures / 36,871 matches / 7,281,925
+  odds_markets rows) but `mariadb-dump --compact` gzip's it down to ~114 MB (`node
+  scripts/db-export.js` took under a minute). Import (gunzip -> `docker exec -i -e
+  MYSQL_PWD=... mariadb mariadb -uroot <db>`) is the slow side: 114 MB round-tripped into a
+  scratch `oddspro_import_test` DB in 385s (~0.3 MB/s effective, INSERT-execution-bound, not
+  I/O-bound; expect several minutes for a full-DB import, plan the timeout accordingly).
+  Scratch DB created with `docker exec -e MYSQL_PWD=... mariadb mariadb -uroot -e "CREATE
+  DATABASE oddspro_import_test CHARACTER SET utf8mb4"` (the local `root` DB_USERNAME already
+  has CREATE privilege, no separate grant needed). Post-import `COUNT(*)` on fixtures/
+  matches/odds_markets matched the source exactly; scratch DB then dropped. Verifying a
+  `DROP DATABASE` actually happened needs the OUTPUT of `SHOW DATABASES LIKE '...'`, not its
+  exit code: the mysql/mariadb CLI exits 0 on a successful query even when it returns zero
+  rows, so `cmd && echo exists` is always true and silently lies.
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
 

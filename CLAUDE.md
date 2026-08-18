@@ -67,6 +67,9 @@ npm run package:deploy [-- --export-db] [-- --out-dir <dir>]
 node scripts/db-export.js [--container <name>]
                                     # standalone gzipped Docker-DB dump -> backups/ (phpMyAdmin-ready; also
                                     # exports exportDb() consumed by package:deploy --export-db)
+node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>] --yes
+                                    # the reverse of db-export.js: gunzip -> mariadb/mysql client inside the
+                                    # Docker container (OVERWRITES the target DB; refuses without --yes)
 node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seconds): anchoring effect,
                                     # AI-market dissent, dissent calibration over fixture_ai_insights
 

@@ -8,6 +8,8 @@
 //
 // Also importable: exportDb({ outPath, container }) runs the same dump to an
 // explicit path and throws on failure (used by package-deploy.js --export-db).
+// resolveContainer is exported too - scripts/db-import.js (the reverse
+// direction) reuses it so container resolution never drifts between the two.
 // Importing this module never runs the CLI (main-module gate at the bottom).
 
 import { spawnSync, spawn } from 'node:child_process';
@@ -17,7 +19,7 @@ import path from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { config } from '../src/config.js';
 
-function resolveContainer(explicit) {
+export function resolveContainer(explicit) {
     if (explicit) return explicit;
     const res = spawnSync('docker', ['ps', '--format', '{{.Names}}\t{{.Image}}\t{{.Ports}}'], { encoding: 'utf8' });
     if (res.status !== 0) throw new Error(`docker ps failed: ${res.stderr || res.error?.message}`);

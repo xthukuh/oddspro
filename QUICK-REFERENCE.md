@@ -199,6 +199,7 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Broadcast an SMS to users | Admin → Messaging: pick audience (filter or a Users-section selection) → live preview shows recipients · segments · **credits** → Send needs typing `SEND` + the previewed count. **Opted-out users are excluded always**, even from a hand-picked selection. `SMS_ENABLED=0` = dry run, no network. A sent campaign is frozen — send the remainder as a NEW campaign, never a re-send (M9) |
 | Campaign send refused 409 "audience grew" | Someone signed up/verified between your preview and confirm, so the send would reach people you never previewed and bill past the estimate. Re-preview and confirm the new count. Shrink (opt-outs/disables) proceeds silently — it stays a subset of what you approved (M9) |
 | DB backup | `node scripts/db-export.js [--container <name>]` → `backups/` (**mariadb-dump, never mysqldump**; phpMyAdmin-ready) |
+| DB restore (local) | `node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>] --yes` (**OVERWRITES** the target DB; refuses without `--yes`; streams gzip → gunzip → `mariadb`/`mysql` client) |
 | Changed-pepper recovery | `node scripts/reset-users.js --yes` (**DESTRUCTIVE** — wipes all users; dry-run without `--yes`) |
 | Rollback | `docs/DEPLOYMENT.md` §5 |
 
