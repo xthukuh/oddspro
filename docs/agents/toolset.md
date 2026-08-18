@@ -209,6 +209,24 @@ the shown bet). Sources: `docs/research/`.
 - 2026-08-07 — **InnoDB space reclaim (verified):** `UPDATE ... SET blob=NULL` frees
   nothing on disk; `OPTIMIZE TABLE` (recreate+analyze) is what returns it — matches
   went 1571 MB -> 11.6 MB after the metadata purge (whole DB 3.5 -> 1.9 GB).
+- 2026-08-18 — **Live-host read-only probe (verified):** `ssh oddspro` (alias of
+  `oddsprok@oddspro-p`; host `rs1.hpcnoc.com`, shared cPanel + LiteSpeed). Write the
+  probe as a bash script, `scp` it to `~/tmp/`, run it, delete it: DB creds come from
+  `~/oddspro-app-v1.4.0/.env` inside the remote script (`MYSQL_PWD=$(grep '^DB_PASSWORD='
+  .env | cut -d= -f2-)`), never on the local command line. Filter the ssh banner noise
+  with `grep -v "post-quantum\|store now\|openssh.com/pq"`. Live layout: app roots
+  `~/oddspro-app-v<ver>` (Passenger/lsnode via `public_html/.htaccess`, node at
+  `~/nodevenv/oddspro-app-v<ver>/22/bin/node`), app logs `logs/auto-refresh.log`
+  (self-truncating - only the LAST ~26 h of an error storm survive) + unbounded
+  `stderr.log`, DBs `oddsprok_prod_<ver_underscored>`. LiteSpeed runs SEVERAL `lsnode`
+  instances of the app concurrently (`ps -u $USER -o pid,etime,args | grep lsnode`), so
+  every in-process singleton (scheduler, AI worker, `data_version`, caches) is duplicated.
+  Long scans on `odds_markets` (8.7 M rows) get killed by the host ("Lost connection to
+  server during query"); the shared MariaDB restarts occasionally (ECONNREFUSED 3306,
+  `SHOW GLOBAL STATUS LIKE 'Uptime'`). Only gzip is available remotely (no zstd/xz).
+  Note: the harness classifier BLOCKS in-place edits of the live app over ssh
+  (compound cp/perl/touch); prepare the patched file locally and hand the owner one
+  `scp` + restart command instead.
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
 
