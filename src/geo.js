@@ -4,6 +4,7 @@ import { db } from './db/connection.js';
 import { parseGeoResult, planGeoBatch } from './db/geo-rules.js';
 import { refreshJob } from './auto-refresh.js';
 import { maintenanceActive } from './maintenance.js';
+import { isWriter } from './db/lease.js';
 
 // Background visitor-geo backfill. Each sweep discovers visitor IPs not yet in
 // the ip_geo cache, resolves the public ones via the geo provider (private/
@@ -112,6 +113,10 @@ let firstRun = null;
 let running = false;
 
 async function tick() {
+    // Multi-instance: only the writer runs the backfill (src/db/lease.js) -
+    // a follower's tick is a no-op, so the same visitor IPs are never
+    // resolved (and billed to the geo provider) three times over.
+    if (!isWriter()) return;
     // Skip while a refresh/export/import job holds the shared slot (same
     // check src/ai-worker.js's startAiWorker does against refreshJob before
     // calling drainAiReviews) - ip_geo is paginated via ORDER BY+LIMIT/OFFSET

@@ -27,6 +27,8 @@ import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js
 import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
+import { isWriter, startWriterLease, stopWriterLease } from './db/lease.js';
+import { getMeta, refreshMetaMemo, startMetaPoll, stopMetaPoll, warehouseVersion } from './meta.js';
 import {
     AuthError, publicUser, createUser, authenticate, mintSession, resolveSession,
     revokeSession, revokeAllForUser, issueOtp, resendOtp, verifyOtp, changePhone, updateProfile,
@@ -533,11 +535,20 @@ app.get('/api/columns', async (req, res, next) => {
 // body). Per-DATE payloads (/api/records) deliberately stay demand-computed:
 // availability varies by date and tier, so those entries are keyed per
 // (date, tier, version) and warming every combination would be waste.
+//
+// Multi-instance: only the writer runs the odds_markets scan (auto-refresh.js
+// persists it to shared meta on every ok completion, throttled). A follower
+// serves that persisted catalog instead - `?? columnCatalog()` is only the
+// fallback for the (unlikely) case meta is still empty, e.g. right after a
+// migration on a host that has never run the writer's ok path yet.
 let catalogWarmTimer = null;
 function startCatalogWarm() {
     if (catalogWarmTimer) return;
     const warm = () => {
-        apiCache.warm('/api/columns', () => columnCatalog())
+        const load = isWriter()
+            ? () => columnCatalog()
+            : async () => (await getMeta('column_catalog')) ?? columnCatalog();
+        apiCache.warm('/api/columns', load)
             .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
         // magic-sort's whole-ledger strategy replay is the most expensive
         // compute in the app (~25s local, worse on the shared host) and its
@@ -1235,8 +1246,14 @@ function deployedBuildId() {
     return _buildId.value;
 }
 
+// This IS the app's health/status route (no separate /api/health exists):
+// data_version/writer already ride refreshStatus() (src/auto-refresh.js), and
+// warehouse_version is added explicitly here too so a monitor can read the
+// shared cross-instance counter by its own name without depending on
+// data_version's meaning staying pinned to it.
 app.get('/api/refresh', (req, res) => res.json({
     ...refreshStatus(),
+    warehouse_version: warehouseVersion(),
     maintenance: maintenanceNow(),
     build: deployedBuildId(),
 }));
@@ -1325,8 +1342,18 @@ let server = null;
         trimStderrLog();
         await migrateOnBoot();
         await loadOverrides();
+        // Cross-instance meta memo: read once before listening (so the very
+        // first request already sees a real warehouse_version/last_success,
+        // not the cold 0/null default), then keep it warm on a 5s poll for
+        // the lifetime of the process.
+        await refreshMetaMemo();
+        startMetaPoll();
         server = app.listen(config.API_PORT, config.API_HOST, () => {
             console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
+            // Writer-lease attempt starts BEFORE the schedulers - they all
+            // gate on isWriter(), so starting it first means a fast lease
+            // grant is visible to their very first tick instead of a race.
+            startWriterLease();
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
@@ -1355,6 +1382,13 @@ function shutdown(why) {
     stopAiWorker();
     stopCatalogWarm();
     stopHaltWatch();
+    stopMetaPoll();
+    // Async (releases the pinned GET_LOCK connection) - fired without
+    // blocking the socket close below. Worst case the lock outlives this
+    // process by a few ms until MySQL auto-releases it on connection close
+    // (or a failed RELEASE_LOCK query, caught internally), so a sibling
+    // instance still picks up the lease within one 30s tick either way.
+    stopWriterLease().catch(e => console.error('[shutdown] writer-lease release failed:', e?.message ?? e));
     requestCancel(); // no-op when nothing is running
     // A broadcast must be drained too, not just the refresh job. Its slot is
     // separate, so shutdown used to run straight through a live send: the pool

@@ -12,6 +12,7 @@ import { eatDateKey } from './db/auto-rules.js';
 import { KICKOFF_SQL_EXPR } from './db/ai-rules.js';
 import { maintenanceActive } from './maintenance.js';
 import { refreshJob } from './auto-refresh.js';
+import { isWriter } from './db/lease.js';
 import { _batch, _progress, debugLog } from './utils.js';
 
 // Background AI-review worker: drains the hot-pick adjudications and tip
@@ -259,6 +260,9 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
 // 60s unref'd tick, started/stopped by server.js beside the other
 // schedulers. Skips while a refresh job holds the shared slot (belt +
 // braces - column ownership is the real race fix) or a drain is running.
+// Multi-instance: only the writer instance drains (src/db/lease.js) - a
+// follower's tick is a no-op, so AI calls are never billed twice for the
+// same pending row.
 let timer = null;
 
 export function startAiWorker() {
@@ -268,6 +272,7 @@ export function startAiWorker() {
         return;
     }
     timer = setInterval(() => {
+        if (!isWriter()) return;
         if (refreshJob.running || state.running) return;
         // Quiesce during a declared maintenance window: billing Gemini while
         // visitors are being served a 503 is a surprise nobody wants on the

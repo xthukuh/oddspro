@@ -15,6 +15,9 @@ import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, tri
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
 import { _date, _dtime, debugLog } from './utils.js';
+import { isWriter } from './db/lease.js';
+import { bumpWarehouseVersion, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
+import { columnCatalog } from './db/records.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
 // warehouse near real time without external cron - a cheap LIGHT pass every
@@ -23,6 +26,13 @@ import { _date, _dtime, debugLog } from './utils.js';
 // also owns the single-slot job state so auto and manual (POST /api/refresh)
 // runs literally share one guard - parallel refreshes would deadlock on
 // InnoDB delete+insert gap locks (same rule as `_batch` concurrency 1).
+//
+// Multi-instance: the live host runs three concurrent `src/server.js`
+// processes. Only the writer instance (src/db/lease.js's `isWriter()`) ticks
+// the scheduler - a follower's `tick()` returns immediately. `data_version`/
+// `last_success` used to be per-process; they now live in the shared `meta`
+// table (src/meta.js) so every instance answers the same freshness signal
+// regardless of which one actually ran the job.
 
 // Single-slot job state. `mode` distinguishes manual/light/full; `dates` is
 // the scope the run covers (the web client reloads only when its loaded date
@@ -43,9 +53,12 @@ export const refreshJob = {
     summary: null,
 };
 
-// Monotonic data version, bumped only on SUCCESSFUL completions - the web
-// app's slow poll compares it to decide "new data landed, silently reload".
-// Resets on restart (clients treat their first observation as baseline).
+// Local mirror of the last version/success this PROCESS observed after a job
+// it ran itself - kept only for this instance's own bookkeeping/log lines.
+// The authoritative, cross-instance values are `warehouseVersion()`/
+// `lastSuccessMemo()` (src/meta.js) - `refreshStatus()` always answers from
+// those, never from these mirrors, so every instance (writer or follower)
+// reports the same numbers.
 let dataVersion = 0;
 let lastSuccess = null; // { at, mode, dates }
 
@@ -60,13 +73,33 @@ const lastFresh = new Map();
 // simply runs the next pass (fail-open).
 let lastOddsScrapeMs = null;
 
+// Column-catalog persistence throttle (writer-only, see _storeColumnCatalog).
+let lastCatalogStoreMs = 0;
+const CATALOG_STORE_INTERVAL_MS = 30 * 60_000;
+
 export function lastFreshAt(date) {
     return lastFresh.get(date) ?? null;
 }
 
-// Poll payload: the job state plus the freshness signal.
+// Poll payload: the job state plus the SHARED freshness signal + writer flag.
+// data_version/last_success come from the meta memo (src/meta.js), not the
+// local mirrors above, so a follower instance reports exactly what the
+// writer last recorded.
 export function refreshStatus() {
-    return { ...refreshJob, data_version: dataVersion, last_success: lastSuccess };
+    return { ...refreshJob, data_version: warehouseVersion(), last_success: lastSuccessMemo(), writer: isWriter() };
+}
+
+// Persist the discovered column catalog to shared meta so follower instances
+// can serve it (src/server.js's startCatalogWarm) without running their own
+// odds_markets scan. Writer-only, throttled to once per 30 min - a light
+// pass every few minutes must not repeat the scan; the daily full sweep
+// always refreshes it. Best-effort - never throws into the job's finally.
+async function _storeColumnCatalog(mode) {
+    if (!isWriter()) return;
+    const now = Date.now();
+    if (mode !== 'full' && now - lastCatalogStoreMs < CATALOG_STORE_INTERVAL_MS) return;
+    lastCatalogStoreMs = now;
+    await setMeta('column_catalog', await columnCatalog());
 }
 
 // Claim the slot and fire `run(onStep)` without awaiting. Returns false when
@@ -109,6 +142,17 @@ export function startJob({ mode, dates, run, onFinish = null }) {
                 dataVersion += 1;
                 lastSuccess = { at: refreshJob.finished_at, mode, dates };
                 for (const d of dates) lastFresh.set(d, Date.now());
+                // Cross-instance meta: bump the shared warehouse_version and
+                // record last_success so every instance's next refreshStatus()
+                // read sees this completion, not just this process's own
+                // mirror above. Best-effort - a meta-write hiccup must never
+                // throw into this finally block (the job already succeeded).
+                bumpWarehouseVersion().then(refreshMetaMemo)
+                    .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
+                setMeta('last_success', lastSuccess)
+                    .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
+                _storeColumnCatalog(mode)
+                    .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
             }
             const secs = Math.round((Date.now() - startedMs) / 1000);
             _log(`${mode} ${outcome.toUpperCase()} ${secs}s dates=${dates.join(',') || '-'}`
@@ -236,10 +280,13 @@ let timer = null;
 let lastLightMs = 0;
 let lastFullKey = null;
 
-// Start the scheduler: one coarse 30s tick decides what is due. Skips while
-// any job (manual included) holds the slot; every tick is exception-proof so
-// a failed run never kills the interval. unref'd - the timer alone must not
-// hold the process open during shutdown.
+// Start the scheduler: one coarse 30s tick decides what is due. Every tick
+// first checks isWriter() - on the multi-instance host only one process ever
+// runs the scheduler at a time; a follower's tick is a no-op until it wins
+// the lease (src/db/lease.js). Skips while any job (manual included) holds
+// the slot; every tick is exception-proof so a failed run never kills the
+// interval. unref'd - the timer alone must not hold the process open during
+// shutdown.
 export function startAutoRefresh() {
     // AUTO_REFRESH_ENABLED + AUTO_FULL_AT are read ONCE here (restart-required
     // catalog entries); AUTO_LIGHT_MINUTES + AUTO_FULL_DAYS are read per tick
@@ -254,6 +301,7 @@ export function startAutoRefresh() {
     lastFullKey = fullAt != null && eatMinutesOfDay(now) >= fullAt ? eatDateKey(now) : null;
     const tick = () => {
         try {
+            if (!isWriter()) return; // only the writer instance schedules work
             if (refreshJob.running) return;
             const nowMs = Date.now();
             if (isFullDue(nowMs, fullAt, lastFullKey)) {
