@@ -252,7 +252,12 @@ export async function settleApisportsResults() {
     }, 2);
 
     // Settle linked matches from final fixtures (fixtures are canonical):
-    // copy authoritative scores + set the completed flag.
+    // copy authoritative scores + set the completed flag. The second-half
+    // split is guarded: the score columns are UNSIGNED, and API-Football
+    // occasionally publishes a final with half-time > full-time (awarded
+    // games, data glitches - fixture 1556592 froze the live light pass for
+    // three days on 2026-08-16 with ER_DATA_OUT_OF_RANGE). An inconsistent
+    // pair stores NULL for the second half instead of aborting the whole pass.
     const finalsIn = FINAL_STATUSES.map(() => '?').join(',');
     const [settled] = await db.raw(
         `UPDATE matches m JOIN fixtures f ON m.fixture_id = f.id
@@ -260,8 +265,10 @@ export async function settleApisportsResults() {
              m.away_score_fulltime = COALESCE(f.ft_away, f.goals_away),
              m.home_score_first_half = f.ht_home,
              m.away_score_first_half = f.ht_away,
-             m.home_score_second_half = COALESCE(f.ft_home, f.goals_home) - f.ht_home,
-             m.away_score_second_half = COALESCE(f.ft_away, f.goals_away) - f.ht_away,
+             m.home_score_second_half = CASE WHEN COALESCE(f.ft_home, f.goals_home) >= f.ht_home
+                 THEN COALESCE(f.ft_home, f.goals_home) - f.ht_home END,
+             m.away_score_second_half = CASE WHEN COALESCE(f.ft_away, f.goals_away) >= f.ht_away
+                 THEN COALESCE(f.ft_away, f.goals_away) - f.ht_away END,
              m.completed_at = COALESCE(m.completed_at, NOW())
          WHERE f.status IN (${finalsIn})`,
         FINAL_STATUSES
