@@ -8,7 +8,7 @@ Status values: pending / in progress / completed / blocked (owner).
 | 0a | Live probe + findings F1-F10 | completed | 2026-08-18 22:00-23:00 EAT |
 | 0b | Guarded settle SQL on main (0ab87e1) | completed | suite 942/942 |
 | 0c | Interim hotfix on live v1.4.0 file + one instance restarted | completed | 20:45Z; two stale instances still on old code (owner: kill or cPanel Restart) |
-| 0d | Verify live light pass recovers (`light ok`, matches.updated_at moves) | in progress | first pass of the patched instance pending |
+| 0d | Verify live light pass recovers (`light ok`, matches.updated_at moves) | completed | 21:00:57Z `light OK 10s`, 1844 matches refreshed, updated_at 2026-08-19 00:00:56 EAT |
 | 1 | meta table + src/meta.js | pending | Sonnet |
 | 2 | writer lease | pending | Sonnet |
 | 3 | lease-gated schedulers + meta version | pending | Sonnet, Fable review |
