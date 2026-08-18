@@ -15,6 +15,17 @@ import dotenv from 'dotenv';
 
 export const fmtMB = b => `${(b / 1048576).toFixed(1)} MB`;
 
+// Mask the DB password in any printed/logged command line - dry-run echoes
+// and thrown-error messages both embed `cfg.MYSQL_ENV` (MYSQL_PWD='<pass>')
+// verbatim inside the command text, and that text used to reach the console
+// in plaintext. Only what's PRINTED is touched here; the real `cmd`/`input`
+// handed to spawn/spawnSync (what's actually executed over ssh) never goes
+// through this function.
+function redact(cfg, text) {
+    if (!cfg || !cfg.DB_PASS || !text) return text;
+    return text.split(cfg.DB_PASS).join('***');
+}
+
 // Reads .env.deploy (gitignored) layered over the same defaults
 // deploy-remote.js has always used. `version` (package.json's version, read
 // by the caller - keeping filesystem reads of package.json out of this
@@ -41,11 +52,11 @@ export function remoteConfig({ version }) {
 
 // Run a remote command, capturing (or inheriting) stdout/stderr.
 export function ssh(cfg, cmd, { capture = true, allowFail = false, dry = false } = {}) {
-    if (dry) { console.log(`[dry-run] ssh: ${cmd}`); return { status: 0, stdout: '' }; }
+    if (dry) { console.log(`[dry-run] ssh: ${redact(cfg, cmd)}`); return { status: 0, stdout: '' }; }
     const r = spawnSync('ssh', ['-o', 'BatchMode=yes', cfg.SSH_TARGET, cmd],
         { encoding: 'utf8', stdio: capture ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'inherit', 'inherit'], maxBuffer: 64 * 1048576 });
     if (r.status !== 0 && !allowFail) {
-        throw new Error(`remote command failed (${r.status}): ${cmd}\n${(r.stderr || '').trim()}`);
+        throw new Error(`remote command failed (${r.status}): ${redact(cfg, cmd)}\n${redact(cfg, (r.stderr || '').trim())}`);
     }
     return { status: r.status, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
 }
@@ -55,27 +66,32 @@ export function ssh(cfg, cmd, { capture = true, allowFail = false, dry = false }
 // remote shell.
 export function sshInput(cfg, cmd, input, { allowFail = false, dry = false } = {}) {
     if (dry) {
-        console.log(`[dry-run] ssh(stdin ${input.length}B): ${cmd}\n${input.split('\n').map(l => `    | ${l}`).join('\n')}`);
+        console.log(`[dry-run] ssh(stdin ${input.length}B): ${redact(cfg, cmd)}\n${redact(cfg, input).split('\n').map(l => `    | ${l}`).join('\n')}`);
         return { status: 0, stdout: '' };
     }
     const r = spawnSync('ssh', ['-o', 'BatchMode=yes', cfg.SSH_TARGET, cmd],
         { encoding: 'utf8', input, maxBuffer: 64 * 1048576 });
     if (r.status !== 0 && !allowFail) {
-        throw new Error(`remote command failed (${r.status}): ${cmd}\n${(r.stderr || '').trim()}`);
+        throw new Error(`remote command failed (${r.status}): ${redact(cfg, cmd)}\n${redact(cfg, (r.stderr || '').trim())}`);
     }
     return { status: r.status, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
 }
 
 // Stream a local file into `remoteCmd`'s stdin with a byte-progress meter
-// (total known up front from the local file size).
+// (total known up front from the local file size). Rejects (never crashes
+// the process) on a source-read failure or a remote-side non-zero exit;
+// `child.stdin`'s own 'error' listener swallows the EPIPE that fires when
+// the remote side closes early - the 'close' handler below reports the real
+// failure from the captured exit code + stderr.
 export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false } = {}) {
-    if (dry) { console.log(`[dry-run] stream ${localFile} -> ssh: ${remoteCmd}`); return Promise.resolve(); }
+    if (dry) { console.log(`[dry-run] stream ${localFile} -> ssh: ${redact(cfg, remoteCmd)}`); return Promise.resolve(); }
     const total = statSync(localFile).size;
     const started = Date.now();
     let sent = 0, lastDraw = 0;
     const child = spawn('ssh', ['-o', 'BatchMode=yes', cfg.SSH_TARGET, remoteCmd], { stdio: ['pipe', 'inherit', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', d => stderr += d);
+    child.stdin.on('error', () => {}); // EPIPE if the remote side exits early - 'close' below reports the real failure
     const src = createReadStream(localFile, { highWaterMark: 1048576 });
     src.on('data', chunk => {
         sent += chunk.length;
@@ -91,12 +107,14 @@ export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false 
     });
     src.pipe(child.stdin);
     return new Promise((resolve, reject) => {
-        child.on('error', e => reject(new Error(`ssh failed to start: ${e.message}`)));
-        child.on('close', code => {
-            process.stdout.write('\n');
-            if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${stderr.trim()}`));
+        let settled = false;
+        const finish = fn => { if (settled) return; settled = true; process.stdout.write('\n'); fn(); };
+        src.on('error', e => finish(() => { child.kill(); reject(new Error(`${label} failed: reading "${localFile}": ${e.message}`)); }));
+        child.on('error', e => finish(() => reject(new Error(`ssh failed to start: ${e.message}`))));
+        child.on('close', code => finish(() => {
+            if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${redact(cfg, stderr.trim())}`));
             else resolve();
-        });
+        }));
     });
 }
 
@@ -104,9 +122,11 @@ export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false 
 // the reverse of sshStreamUpload, for pulling a remote dump down (db-sync's
 // job). Total is unknown up front (the remote side never reports a
 // Content-Length), so the meter shows bytes received + throughput + elapsed
-// time rather than a percentage/ETA.
+// time rather than a percentage/ETA. Rejects (never crashes the process) on
+// a destination-write failure (disk full, permission denied) or a
+// remote-side non-zero exit.
 export function sshStreamDownload(cfg, remoteCmd, localFile, label, { dry = false } = {}) {
-    if (dry) { console.log(`[dry-run] ssh: ${remoteCmd} -> ${localFile}`); return Promise.resolve(); }
+    if (dry) { console.log(`[dry-run] ssh: ${redact(cfg, remoteCmd)} -> ${localFile}`); return Promise.resolve(); }
     const started = Date.now();
     let received = 0, lastDraw = 0;
     const child = spawn('ssh', ['-o', 'BatchMode=yes', cfg.SSH_TARGET, remoteCmd], { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -125,11 +145,13 @@ export function sshStreamDownload(cfg, remoteCmd, localFile, label, { dry = fals
     });
     child.stdout.pipe(out);
     return new Promise((resolve, reject) => {
-        child.on('error', e => reject(new Error(`ssh failed to start: ${e.message}`)));
-        child.on('close', code => {
-            process.stdout.write('\n');
-            if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${stderr.trim()}`));
+        let settled = false;
+        const finish = fn => { if (settled) return; settled = true; process.stdout.write('\n'); fn(); };
+        out.on('error', e => finish(() => { child.kill(); reject(new Error(`${label} failed: writing "${localFile}": ${e.message}`)); }));
+        child.on('error', e => finish(() => reject(new Error(`ssh failed to start: ${e.message}`))));
+        child.on('close', code => finish(() => {
+            if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${redact(cfg, stderr.trim())}`));
             else resolve();
-        });
+        }));
     });
 }

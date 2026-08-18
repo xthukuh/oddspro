@@ -140,8 +140,14 @@ export function importPreamble() {
 // cascades - see the migration's ON DELETE CASCADE) but a windowed matches
 // pull DOES need a DELETE first: REPLACE only overwrites rows that reappear
 // in the dump, it can never remove a row that vanished on the remote (e.g. a
-// bookmaker market pulled from the board). Every other table stays
-// REPLACE-only (live rows overwrite, nothing is ever deleted locally).
+// bookmaker market pulled from the board). This function returns null for
+// every other table, but that does NOT mean nothing is ever deleted for
+// them: a full-mode dump's --add-drop-table recreates the table wholesale
+// (DROP TABLE then CREATE TABLE - every existing row goes with it), and a
+// windowed dump's --no-create-info/--replace never deletes a row outside
+// the window, it only overwrites/inserts rows that reappear (live wins by
+// design). This helper's null return only means "no EXTRA delete step is
+// needed beyond what the dump mode itself already does".
 export function windowDeleteSql(table, since, until) {
     if (table === 'matches') {
         assertDate('since', since);
