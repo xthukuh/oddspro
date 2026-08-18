@@ -248,7 +248,9 @@ The committed `.env.example` is now the authoritative template: it lists only th
 
 **A stale line is harmless but misleading** — the zod schema strips unknown keys, and a known-but-now-catalogued key is simply outranked by any DB override. The risk is human: someone edits a `.env` line that the DB is overriding and concludes the setting is broken. Leftover `HUMAN_*` / `VITE_HUMAN_POW` lines (§8.1) fall in the same category — dead weight, safe to delete.
 
-## 10. DB export / import from the admin UI (M10)
+## 10. DB export / import from the admin UI (M10) — ⚠ STALE, machinery removed
+
+**This whole section describes the M10 admin transfer UI (`/api/admin/db/*`, `scripts/db-sync-export.js`/`scripts/db-sync-import.js`, `SYNC_IMPORT_ON_BOOT`), which was removed in the 2026-08-07 core-focus trim (see `CLAUDE.md`'s current-state note) — git history has it, `main` does not.** The ongoing local↔host data path today is **§11 below** (`scripts/db-sync.js`). Kept here only as an as-built record of what M10 was; do not follow it against a live host.
 
 **Admin → Database** exports and imports the warehouse over `/api/admin/db/*` (admin session only) as chunked NDJSON+gzip. This is the ongoing local↔host data path; the one-time `scripts/db-export.js` + phpMyAdmin route in §3 is still how you seed a brand-new host.
 
@@ -278,3 +280,16 @@ The same machinery, packaged for the deploy flow — for shipping locally-correc
 4. The apply is **upsert-only** — it inserts/updates bundle rows and never deletes destination rows.
 
 Local restore of any bundle: `node scripts/db-sync-import.js <dir|zip> [--skip t1,t2] [--no-safety] --yes` (dry-run without `--yes`; run with the serve process stopped).
+
+## 11. Keeping local current with the live warehouse
+
+`node scripts/db-sync.js` (2026-08-19) pulls the live host's warehouse tables down into the local Docker DB over SSH — `mariadb-dump | gzip -9` streamed down, then imported locally; the live host is read-only for this path (dumps and SELECTs only). It supersedes the removed §10 machinery for the local↔host direction.
+
+- **`status`** — side-by-side local vs. live: row counts + MB per synced table, 7-day match coverage by day/provider, freshness, and the `knex_migrations` head on both sides. Read-only, safe to run any time.
+- **`pull [--tables a,b] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--full] [--dry-run] [--yes] [--force]`** — **live wins outright.** Canonical/derived tables REPLACE local rows; the `matches`/`odds_markets` pair additionally runs a windowed `DELETE` first (a vanished remote row must actually disappear locally, not just fail to update). `--full` on a table drops and recreates it wholesale from the live copy — **any row that exists only locally is discarded**, not merged. Default window (no `--since`/`--full`): the last 3 days, which covers the routine daily catch-up. Aborts on a `knex_migrations` head mismatch unless `--force` — before forcing, check what the newer migrations actually touch (`git log --oneline <remote-head>..<local-head> -- src/db/migrations`); if none of them alter a synced table's schema, forcing is safe. Every pulled table also lands a dated copy under `backups/sync/` (kept, doubles as a backup).
+- **`push --tables a,b [--since ...] [--until ...] [--dry-run] [--yes]`** — the mirror direction (local → live), implemented in full but this repo's operating rule is **dry-run only**: the live host stays read-only for us. Requires an explicit `--tables` list (no default set) and never touches `INSTANCE_TABLES`.
+- **`backup --remote-db <name> [--dry-run]`** — a gzipped `mariadb-dump` of *any* database on the live host (not just the deploy target — useful for retiring an old/dead DB) into `backups/remote_<name>_<ts>.sql.gz`, verified locally with `gzip -t`.
+
+**⚠ `--full` is destructive to local-only rows.** A live pull tested against this host's actual data found several tables where the local dev DB had *more* rows than live (independent local pipeline/enrichment runs, e.g. `fixture_ai_insights`, `fixture_statistics`, `fixture_events`, `fixture_players`) — a `--full` pull on those tables drops the local-only rows to match live exactly, with no undo short of an earlier whole-DB backup. Prefer the windowed default for routine catch-up; reach for `--full` per table deliberately, and take a local `node scripts/db-export.js` snapshot first if the table might carry local-only history worth keeping.
+
+The password never appears in anything the command prints — dry-run previews and error messages mask it as `MYSQL_PWD='***'`.

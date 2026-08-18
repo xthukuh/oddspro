@@ -10,6 +10,8 @@
 // explicit path and throws on failure (used by package-deploy.js --export-db).
 // resolveContainer is exported too - scripts/db-import.js (the reverse
 // direction) reuses it so container resolution never drifts between the two.
+// resolveDumpBinary is exported for scripts/db-sync.js's `push` command
+// (single-table local dumps reuse the same mariadb-dump/mysqldump detection).
 // Importing this module never runs the CLI (main-module gate at the bottom).
 
 import { spawnSync, spawn } from 'node:child_process';
@@ -36,7 +38,9 @@ export function resolveContainer(explicit) {
         + 'Pass --container <name> explicitly. Lookup: docker ps --format "table {{.Names}}\\t{{.Image}}\\t{{.Ports}}"');
 }
 
-function resolveDumpBinary(container) {
+// Exported so scripts/db-sync.js's `push` command can dump a single table the
+// same way (same binary-detection rule, no second drifting copy).
+export function resolveDumpBinary(container) {
     const inspect = spawnSync('docker', ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8' });
     if (inspect.status !== 0) throw new Error(`no container named "${container}" - check "docker ps".`);
     if (inspect.stdout.trim() !== 'true') throw new Error(`container "${container}" exists but isn't running.`);

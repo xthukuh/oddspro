@@ -70,6 +70,23 @@ node scripts/db-export.js [--container <name>]
 node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>] --yes
                                     # the reverse of db-export.js: gunzip -> mariadb/mysql client inside the
                                     # Docker container (OVERWRITES the target DB; refuses without --yes)
+node scripts/db-sync.js status [--json]
+                                    # side-by-side local vs live host: row counts + MB per SYNC_TABLE,
+                                    # 7-day match coverage by day/provider, freshness, migration head
+node scripts/db-sync.js pull [--tables a,b] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--full] [--dry-run] [--yes] [--force]
+                                    # per table: remote mariadb-dump | gzip -9 streamed down to
+                                    # backups/sync/<table>_<stamp>.sql.gz (kept, doubles as a backup), then
+                                    # windowed matches DELETE (trio only) + local import (--replace, kicks
+                                    # in kickoff>NOW() freeze the same way the app itself never violates it).
+                                    # LIVE WINS: pull only ever overwrites/extends local, never the reverse.
+                                    # Default window (no --since/--full): today-3d .. today+8d EAT. Aborts on
+                                    # a knex_migrations head mismatch unless --force. Read-only on the host.
+node scripts/db-sync.js push --tables a,b [--since ...] [--until ...] [--dry-run] [--yes]
+                                    # mirror of pull (local -> remote); implemented in full but this repo's
+                                    # operating rule is dry-run only - the live host stays read-only for us
+node scripts/db-sync.js backup --remote-db <name> [--dry-run]
+                                    # gz dump of ANY remote DB (not just the deploy target) -> backups/
+                                    # remote_<name>_<stamp>.sql.gz; verified locally with gzip -t
 node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seconds): anchoring effect,
                                     # AI-market dissent, dissent calibration over fixture_ai_insights
 

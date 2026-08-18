@@ -200,6 +200,8 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Campaign send refused 409 "audience grew" | Someone signed up/verified between your preview and confirm, so the send would reach people you never previewed and bill past the estimate. Re-preview and confirm the new count. Shrink (opt-outs/disables) proceeds silently — it stays a subset of what you approved (M9) |
 | DB backup | `node scripts/db-export.js [--container <name>]` → `backups/` (**mariadb-dump, never mysqldump**; phpMyAdmin-ready) |
 | DB restore (local) | `node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>] --yes` (**OVERWRITES** the target DB; refuses without `--yes`; streams gzip → gunzip → `mariadb`/`mysql` client) |
+| Keep local current with live | `node scripts/db-sync.js status` (side-by-side counts/freshness/migration head) then `pull [--tables a,b] [--since YYYY-MM-DD] [--full] --yes` (**LIVE WINS** — `--full` on a table drops+recreates it wholesale, discarding any row that only exists locally; default window pulls the last 3 days). Aborts on a `knex_migrations` head mismatch unless `--force` — check what changed between the two heads before forcing. Every pulled table also lands a dated copy in `backups/sync/` |
+| Backup ANY remote DB | `node scripts/db-sync.js backup --remote-db <name>` → `backups/remote_<name>_<ts>.sql.gz` (works on dead/legacy DBs too, not just the deploy target) |
 | Changed-pepper recovery | `node scripts/reset-users.js --yes` (**DESTRUCTIVE** — wipes all users; dry-run without `--yes`) |
 | Rollback | `docs/DEPLOYMENT.md` §5 |
 

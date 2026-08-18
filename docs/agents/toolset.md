@@ -300,6 +300,67 @@ the shown bet). Sources: `docs/research/`.
   rows, so `cmd && echo exists` is always true and silently lies.
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
+- 2026-08-19 — **`.env.deploy` `DEPLOY_SSH` was stale (fixed):** it read `oddsprok@oddspro-p`,
+  which resolves nowhere on this machine (`ssh: Could not resolve hostname oddspro-p`). The
+  working path is the `~/.ssh/config` alias `Host oddspro` (`oddspro.ke:1980`, verified
+  `ssh oddspro` -> `rs1.hpcnoc.com`/`oddsprok`). Updated `.env.deploy` (gitignored, not in any
+  commit) to `DEPLOY_SSH=oddspro`. If a fresh checkout's `.env.deploy` ever reintroduces the
+  old literal, swap it for the alias rather than debugging DNS.
+- 2026-08-19 — **`db-sync.js status`/`backup`/`pull` first live runs (verified):** `status`
+  against `oddsprok_prod_1_4_0` completed in seconds (4 sshInput round trips) and printed a
+  correct side-by-side (row counts/MB per SYNC_TABLE, 7-day match coverage, freshness,
+  migration head). `backup --remote-db` on both dead DBs: `oddsprok_prod` -> 19.0 MB gz in
+  31.1s, `oddsprok_prod_1_3_0` -> 31.0 MB gz in 34.1s, both `gzip -t` clean (far smaller than
+  the 2.7/4.8 GB raw-size estimates in memory — actual on-disk size was stale). `pull --full`
+  on the 5 small canonical tables (leagues/teams/*_aliases/standings) and a windowed
+  `pull --since 2026-08-01` of the default 17-table set both ran clean: matches +12,509,
+  odds_markets +1.85M rows in 178s for just the 26-day window (22.8 MB gz). **Found and fixed
+  two real bugs while doing this** (see the two entries below) - a live dry run is worth more
+  than a code read for a script like this.
+- 2026-08-19 — **`sshInput`/`ssh`'s thrown Error embeds the raw remote command, password
+  included (bug class, worth knowing for any future ssh-wrapper caller):** `scripts/lib/
+  remote.js`'s `ssh()`/`sshInput()` interpolate `cmd` verbatim into the Error message on a
+  non-zero exit (`remote command failed (...): ${cmd}`). Any caller that builds `cmd` from
+  `cfg.MYSQL_ENV` (which embeds `MYSQL_PWD='<real password>'`) and lets that Error reach a
+  console.error/die() unmodified prints the live DB password in plaintext. Caught live: a
+  hostname-resolution failure on the very first `db-sync.js status` run printed the password
+  before the fix. `db-sync.js`'s fix (two layers): every call site wraps `sshInput` in a
+  `safeSshInput` that masks the message before rethrowing, AND the top-level catch masks
+  again via a cached `cfg` as defense in depth. `deploy-remote.js` has the SAME underlying
+  exposure in its own `ssh`/`sshInput` error paths (its `die(e.message)` prints unmasked) -
+  not fixed there (out of this task's scope), worth fixing if that script's error path is
+  ever hit for real.
+- 2026-08-19 — **mysql2 DATE/DATETIME round-trip: use the Date's LOCAL getters, never
+  `.toISOString()` (bug, found + fixed in `db-sync.js`):** mysql2 parses a DATE/DATETIME
+  result using the Node process's OWN local timezone as the `Date` constructor's frame
+  (`new Date(y, m, d, ...)`), so the object's local getters (`getFullYear`/`getMonth`/
+  `getDate`) recover the exact literal value MySQL returned, regardless of what timezone the
+  process happens to run in. `.toISOString()` renders in UTC instead, which silently loses a
+  calendar day whenever the local UTC offset crosses midnight - confirmed live: this exact bug
+  shifted EVERY day in `db-sync.js status`'s 7-day match-coverage table back by one against
+  the remote side (which reads its `DATE()` result as a plain string, no `Date` round-trip at
+  all: `local[day] === remote[day+1]` for every provider, every day). Diagnosed by comparing
+  three read paths for the identical SQL against the identical local DB: knex `db.raw()`
+  (wrong, `.toISOString()`-sliced), `docker exec ... mariadb -N -B` (right, matched remote),
+  and a one-off script logging the raw `Date` object's `.toString()` vs `.toISOString()` side
+  by side (`Fri Aug 21 2026 00:00:00 GMT+0300` vs `2026-08-20T21:00:00.000Z` for the SAME
+  value) - that comparison is the fast way to confirm this class of bug anywhere else in the
+  codebase that might slice `.toISOString()` off a knex-returned DATE/DATETIME.
+- 2026-08-19 — **`pull --full` genuinely discards local-only rows (by design, confirmed
+  live, worth remembering before reaching for `--full` casually):** a full-mode dump uses
+  `--add-drop-table` (`scripts/lib/sync-rules.js`'s `dumpArgs`), so the local table is dropped
+  and recreated with EXACTLY the remote's current full row set. Live-verified this is not
+  hypothetical: `fixture_statistics`/`fixture_events`/`fixture_lineups`/`fixture_players`/
+  `fixture_predictions`/`fixture_api_predictions`/`fixture_ai_insights`/`daily_slips` all had
+  MORE rows locally than on the remote BEFORE any `--full` pull (independent local
+  pipeline/enrichment runs), and a `--full` pull on them dropped 200-14,000+ rows each back
+  down to the remote's exact count - including locally-generated `fixture_ai_insights` rows,
+  which cost real OpenRouter credits to produce. No undo short of an earlier whole-DB backup
+  (`node scripts/db-export.js`). `odds_markets` was deliberately left un-full-pulled this
+  session for exactly this reason (see the task-8 report) even though status showed remote
+  unambiguously ahead there (so a full pull would likely be a net gain, not a loss) - the
+  point stands for future runs: check direction (`status`) before reaching for `--full` on a
+  table, and prefer the windowed default for routine catch-up.
 
 ## 6. Doc & knowledge topology
 
