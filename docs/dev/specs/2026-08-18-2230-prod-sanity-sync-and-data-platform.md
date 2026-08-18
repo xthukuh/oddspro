@@ -1,9 +1,10 @@
-# Production sanity, DB sync, and the odds data platform (DRAFT brief)
+# Production sanity, DB sync, and the odds data platform (spec)
 
-Status: DRAFT, awaiting owner decisions (section 5). Written 2026-08-18 ~22:30 EAT
-after a read-only probe of the live host over `ssh oddspro`. This document is the
-stitched-together version of the owner's 2026-08-18 request; once the decisions are
-made it becomes the spec and a plan/checklist pair with the same stamp follows.
+Status: APPROVED brief with owner decisions (section 5), 2026-08-18. Written after a
+read-only probe of the live host over `ssh oddspro`. This document is the
+stitched-together version of the owner's 2026-08-18 request; the plan/checklist pair
+with the same stamp (`docs/dev/plans/`, `docs/dev/checklists/`) tracks execution.
+Workstreams C-F get their own detailed spec each before implementation.
 
 ## 1. The request, restated as one path
 
@@ -155,8 +156,14 @@ A (sanity) -> B (sync, then bring local current) -> C (economy, measured) -> D
 (snapshots + scheduler) -> E (platform + API) -> F (skill). Each gets its own
 plan/checklist; A and B start immediately after the decisions below.
 
-## 5. Decisions needed from the owner
-D1 Live fix path: redeploy `main` under v1.4.0 (build 2, retag) vs cherry-picked file hotfixes only.
-D2 Warehouse truth for the sync: union both sides by natural key (recommended) vs live wins outright.
-D3 Dead databases `oddsprok_prod` + `oddsprok_prod_1_3_0` (7.4 GB): drop after a compressed backup vs keep.
-D4 Retention for the market long tail in snapshots/history: keep everything compact vs prune the non-canonical tail after N days.
+## 5. Owner decisions (taken 2026-08-18 ~23:40 EAT)
+- **D1 Live fix path: redeploy `main` as v1.4.0 build 2** (`deploy-remote --app --web`, never `--db`; same app dir and DB name; retag v1.4.0 at the shipped HEAD). The interim 2-line hotfix was applied to the live v1.4.0 file at 20:45Z the same evening (backup `src/apisports.js.orig-v1.4.0` on the host).
+- **D2 Warehouse truth: LIVE WINS OUTRIGHT.** Local is a mirror of live for every warehouse and derived-ledger table; local-only rows (Aug 17-20 bookmaker rows, local prediction rows) are discarded on the first pull. This removes the natural-key/id-remap merge from the sync tool: bookmaker trio and ledgers are transferred as whole-table (or date-scoped delete+reload) replaces from live. `push` stays possible only for explicitly named tables and never runs by default.
+- **D3 Dead databases: back up (gzip to local `backups/`), verify, then DROP** `oddsprok_prod` and `oddsprok_prod_1_3_0`.
+- **D4 Retention: keep everything, compact.** No pruning of the market long tail; growth is bounded by dictionary encoding, delta snapshots and blob compression, and measured monthly.
+- Standing operating rule from the same conversation: delegate less-intense work (verification loops, well-specified implementation with tests, doc sync) to cheaper models; the main model keeps design, production-touching and correctness-critical work.
+
+## 6. Consequences for the program
+- B (sync) simplifies to `db-sync.js status | pull [--tables ...] [--since d] | push --tables ...` over `db-export`/`db-import` primitives; table classes stay (instance tables never move); the bookmaker trio is reloaded per date window (`DELETE ... WHERE start_time in window` then load) so a routine daily pull is small; a first-time or `--full` pull replaces whole tables.
+- A6 becomes: `hotfix-remote.js` for file-level emergencies (kept small) + the build-2 redeploy for A2-A4.
+- C keeps the compaction items; the retention tiers item is dropped.
