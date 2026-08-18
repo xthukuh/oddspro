@@ -26,11 +26,18 @@
 // Remote boundary (owner ruling 2026-08-07): destructive operations only
 // inside public_html and deployment-only targets (the versioned app root and
 // the deploy-target database). Nothing else is ever deleted.
+//
+// The ssh/config plumbing lives in scripts/lib/remote.js and the shared
+// INSTANCE_TABLES list in scripts/lib/sync-rules.js (2026-08-19 refactor) so
+// a future scripts/db-sync.js reuses both instead of a second, drifting copy.
 
-import { spawn, spawnSync } from 'node:child_process';
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
+import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
+import {
+    remoteConfig, ssh as sshRemote, sshInput as sshInputRemote, sshStreamUpload as sshStreamUploadRemote, fmtMB,
+} from './lib/remote.js';
+import { INSTANCE_TABLES } from './lib/sync-rules.js';
 
 const REPO_ROOT = process.cwd();
 const args = process.argv.slice(2);
@@ -46,95 +53,29 @@ if (!doDb && !doApp && !doWeb) {
     process.exit(1);
 }
 
+function die(msg) { console.error(`[deploy] ERROR: ${msg}`); process.exit(1); }
+
 // ---- config -----------------------------------------------------------------
 const version = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
-const dep = existsSync('.env.deploy') ? dotenv.parse(readFileSync('.env.deploy', 'utf8')) : {};
-const SSH_TARGET = dep.DEPLOY_SSH || 'oddsprok@oddspro-p';
-const REMOTE_HOME = dep.DEPLOY_REMOTE_HOME || '/home2/oddsprok';
-const APP_DIR = dep.DEPLOY_APP_DIR || `${REMOTE_HOME}/oddspro-app-v${version}`;
-const WEB_DIR = dep.DEPLOY_WEB_DIR || `${REMOTE_HOME}/public_html`;
-const DB_NAME = dep.DEPLOY_DB_NAME || `oddsprok_prod_${version.replace(/\./g, '_')}`;
-const DB_USER = dep.DEPLOY_DB_USER || 'oddsprok_root';
-const DB_PASS = dep.DEPLOY_DB_PASSWORD ?? '';
-const NODE_PATH_PREFIX = dep.DEPLOY_NODE_BIN || `${REMOTE_HOME}/.nvm/versions/node/v24.18.0/bin`;
-const TMP_DIR = `${REMOTE_HOME}/tmp/deploy`;
+let cfg;
+try {
+    cfg = remoteConfig({ version });
+} catch (e) {
+    die(e.message);
+}
+const { SSH_TARGET, REMOTE_HOME, APP_DIR, WEB_DIR, DB_NAME, DB_USER, NODE_BIN: NODE_PATH_PREFIX, TMP_DIR, MYSQL_ENV } = cfg;
 
 // Instance-unique tables: NEVER shipped on subsequent deploys (remote records
 // win); TRUNCATED after a --fresh import so the server starts brand-new.
-// `settings` is deliberately NOT here - it ships on fresh (carrying the
-// migrated .env policy) and is excluded from subsequent dumps below.
-const INSTANCE_TABLES = [
-    'users', 'sessions', 'otp_codes', 'user_prefs', 'personal_access_tokens',
-    'user_slips', 'visits', 'visitors', 'visit_sessions', 'visitor_devices',
-    'visit_events', 'ip_geo', 'admin_audit',
-    'sms_templates', 'sms_campaigns', 'sms_campaign_recipients',
-];
+// `settings` is deliberately NOT in INSTANCE_TABLES - it ships on fresh
+// (carrying the migrated .env policy) and is excluded from subsequent dumps
+// only here, alongside the shared instance list.
 const SUBSEQUENT_IGNORES = [...INSTANCE_TABLES, 'settings'];
 
-function die(msg) { console.error(`[deploy] ERROR: ${msg}`); process.exit(1); }
-const fmtMB = b => `${(b / 1048576).toFixed(1)} MB`;
-
-// ---- ssh helpers ------------------------------------------------------------
-// Remote commands run under `bash -c` via ssh. DB password goes through the
-// environment of the remote command (single-quoted; no single quotes allowed).
-if (DB_PASS.includes("'")) die('DEPLOY_DB_PASSWORD may not contain single quotes (remote quoting).');
-const MYSQL_ENV = `MYSQL_PWD='${DB_PASS}'`;
-
-function ssh(cmd, { capture = true, allowFail = false } = {}) {
-    if (DRY) { console.log(`[dry-run] ssh: ${cmd}`); return { status: 0, stdout: '' }; }
-    const r = spawnSync('ssh', ['-o', 'BatchMode=yes', SSH_TARGET, cmd],
-        { encoding: 'utf8', stdio: capture ? ['ignore', 'pipe', 'pipe'] : ['ignore', 'inherit', 'inherit'], maxBuffer: 64 * 1048576 });
-    if (r.status !== 0 && !allowFail) {
-        die(`remote command failed (${r.status}): ${cmd}\n${(r.stderr || '').trim()}`);
-    }
-    return { status: r.status, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
-}
-
-// Run a remote command feeding `input` on stdin - used for every SQL snippet
-// so quoting hazards (a scrypt hash's $-runs, backticks) never touch the
-// remote shell.
-function sshInput(cmd, input, { allowFail = false } = {}) {
-    if (DRY) { console.log(`[dry-run] ssh(stdin ${input.length}B): ${cmd}\n${input.split('\n').map(l => `    | ${l}`).join('\n')}`); return { status: 0, stdout: '' }; }
-    const r = spawnSync('ssh', ['-o', 'BatchMode=yes', SSH_TARGET, cmd],
-        { encoding: 'utf8', input, maxBuffer: 64 * 1048576 });
-    if (r.status !== 0 && !allowFail) {
-        die(`remote command failed (${r.status}): ${cmd}\n${(r.stderr || '').trim()}`);
-    }
-    return { status: r.status, stdout: (r.stdout || '').trim(), stderr: (r.stderr || '').trim() };
-}
-
-// Stream a local file into `remoteCmd`'s stdin with a byte-progress meter.
-function sshStream(localFile, remoteCmd, label) {
-    if (DRY) { console.log(`[dry-run] stream ${localFile} -> ssh: ${remoteCmd}`); return Promise.resolve(); }
-    const total = statSync(localFile).size;
-    const started = Date.now();
-    let sent = 0, lastDraw = 0;
-    const child = spawn('ssh', ['-o', 'BatchMode=yes', SSH_TARGET, remoteCmd], { stdio: ['pipe', 'inherit', 'pipe'] });
-    let stderr = '';
-    child.stderr.on('data', d => stderr += d);
-    const src = createReadStream(localFile, { highWaterMark: 1048576 });
-    src.on('data', chunk => {
-        sent += chunk.length;
-        const now = Date.now();
-        if (now - lastDraw > 250 || sent === total) {
-            lastDraw = now;
-            const pct = (sent / total * 100).toFixed(1);
-            const secs = (now - started) / 1000;
-            const rate = sent / Math.max(secs, 0.001) / 1048576;
-            const eta = rate > 0 ? Math.max(0, (total - sent) / (rate * 1048576)) : 0;
-            process.stdout.write(`\r[deploy] ${label}: ${pct}%  ${fmtMB(sent)}/${fmtMB(total)}  ${rate.toFixed(2)} MB/s  ETA ${Math.ceil(eta)}s   `);
-        }
-    });
-    src.pipe(child.stdin);
-    return new Promise((resolve, reject) => {
-        child.on('error', e => reject(new Error(`ssh failed to start: ${e.message}`)));
-        child.on('close', code => {
-            process.stdout.write('\n');
-            if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${stderr.trim()}`));
-            else resolve();
-        });
-    });
-}
+// ---- ssh helpers (bound to this run's cfg/DRY, same call shape as before) --
+const ssh = (cmd, opts = {}) => sshRemote(cfg, cmd, { dry: DRY, ...opts });
+const sshInput = (cmd, input, opts = {}) => sshInputRemote(cfg, cmd, input, { dry: DRY, ...opts });
+const sshStream = (localFile, remoteCmd, label, opts = {}) => sshStreamUploadRemote(cfg, localFile, remoteCmd, label, { dry: DRY, ...opts });
 
 // ---- release artifacts ------------------------------------------------------
 function latestRelease() {
@@ -254,10 +195,14 @@ async function stepWeb(rel) {
 }
 
 // ---- run --------------------------------------------------------------------
-console.log(`[deploy] target ${SSH_TARGET}  version v${version}  db ${DB_NAME}${DRY ? '  (DRY RUN)' : ''}`);
-const rel = latestRelease();
-if (rel) console.log(`[deploy] release stamp ${rel.stamp}`);
-if (doDb) await stepDb();
-if (doApp) await stepApp(rel);
-if (doWeb) await stepWeb(rel);
-console.log('\n[deploy] done.');
+try {
+    console.log(`[deploy] target ${SSH_TARGET}  version v${version}  db ${DB_NAME}${DRY ? '  (DRY RUN)' : ''}`);
+    const rel = latestRelease();
+    if (rel) console.log(`[deploy] release stamp ${rel.stamp}`);
+    if (doDb) await stepDb();
+    if (doApp) await stepApp(rel);
+    if (doWeb) await stepWeb(rel);
+    console.log('\n[deploy] done.');
+} catch (e) {
+    die(e.message);
+}
