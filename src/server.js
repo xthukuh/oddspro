@@ -1,6 +1,6 @@
 import express from 'express';
 import compression from 'compression';
-import { existsSync, createReadStream, statSync, readFileSync } from 'node:fs';
+import { existsSync, createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
 import { queryRecords, columnCatalog } from './db/records.js';
@@ -17,6 +17,7 @@ import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, 
 import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
 import { db, closeDb } from './db/connection.js';
 import { describeMigrationResult } from './db/migrate-rules.js';
+import { trimLogTail } from './db/auto-rules.js';
 import { dbOverview, dbHealth } from './db-info.js';
 import { bearerMatches } from './crypto-utils.js';
 import { isBlockedUserAgent, AI_ROBOTS_TXT } from './bot-rules.js';
@@ -1289,6 +1290,27 @@ async function migrateOnBoot() {
     console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
 }
 
+// The host redirects the app's stderr to <app root>/stderr.log with no
+// rotation - on a long-lived Passenger process it grows unbounded (seen at
+// 2.5 MB on the live host). Trim it at boot with the same self-truncating
+// tail idiom auto-refresh.js uses for its own log. `effective()` here reads
+// only the config default (loadOverrides() hasn't run yet at this point in
+// boot) - that's fine, AUTO_LOG_MAX_KB is rarely overridden and a stale
+// threshold on one boot is harmless. Best-effort: a trim failure must never
+// block boot.
+function trimStderrLog() {
+    const file = path.join(process.cwd(), 'stderr.log');
+    try {
+        if (!existsSync(file)) return;
+        const maxBytes = effective('AUTO_LOG_MAX_KB') * 8 * 1024;
+        if (statSync(file).size <= maxBytes) return;
+        writeFileSync(file, trimLogTail(readFileSync(file, 'utf8'), maxBytes));
+        console.info(`[boot] stderr.log trimmed to ${Math.round(maxBytes / 1024)} KB`);
+    } catch (e) {
+        console.warn('[boot] stderr trim skipped:', e.message);
+    }
+}
+
 let server = null;
 (async () => {
     try {
@@ -1300,6 +1322,7 @@ let server = null;
             console.error('[halt] .HALT file present in the app root - refusing to start. Delete it to boot.');
             process.exit(1);
         }
+        trimStderrLog();
         await migrateOnBoot();
         await loadOverrides();
         server = app.listen(config.API_PORT, config.API_HOST, () => {

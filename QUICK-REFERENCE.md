@@ -61,6 +61,10 @@ Semantics authority: `CLAUDE.md` `## Commands` (names duplicated here, annotatio
 | `sms balance\|delivery <id>\|send <phone> <text>` | SMS provider ops |
 
 Analysis-script chooser (backtests, mines, scorecards): `docs/agents/toolset.md` §4.
+Stuck `results` settle (ft<ht inconsistency, e.g. an awarded-game data glitch): `node
+scripts/refetch-fixtures.js --ids <a,b,c>` (or `--inconsistent` to auto-select every affected
+final fixture) force-refetches from API-Football then re-runs the settle pass, printing
+before/after `ht/ft/goals` and which ids changed; details in `docs/agents/toolset.md` §5.
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).

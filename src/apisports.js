@@ -258,6 +258,13 @@ export async function settleApisportsResults() {
     // games, data glitches - fixture 1556592 froze the live light pass for
     // three days on 2026-08-16 with ER_DATA_OUT_OF_RANGE). An inconsistent
     // pair stores NULL for the second half instead of aborting the whole pass.
+    // Narrowed to rows that actually changed (2026-08-18): the unqualified
+    // WHERE rewrote every linked final match on every light pass (~13k rows
+    // locally, ~49k on the live host, every 15 min) even when nothing about
+    // the fixture had moved. The NULL-safe <=> comparisons below make the
+    // UPDATE a no-op for a match already settled to the current fixture
+    // values - a genuinely-corrected score (e.g. a post-refetch fix) still
+    // matches and updates normally.
     const finalsIn = FINAL_STATUSES.map(() => '?').join(',');
     const [settled] = await db.raw(
         `UPDATE matches m JOIN fixtures f ON m.fixture_id = f.id
@@ -270,7 +277,12 @@ export async function settleApisportsResults() {
              m.away_score_second_half = CASE WHEN COALESCE(f.ft_away, f.goals_away) >= f.ht_away
                  THEN COALESCE(f.ft_away, f.goals_away) - f.ht_away END,
              m.completed_at = COALESCE(m.completed_at, NOW())
-         WHERE f.status IN (${finalsIn})`,
+         WHERE f.status IN (${finalsIn})
+           AND (m.completed_at IS NULL
+                OR NOT (m.home_score_fulltime <=> COALESCE(f.ft_home, f.goals_home)
+                    AND m.away_score_fulltime <=> COALESCE(f.ft_away, f.goals_away)
+                    AND m.home_score_first_half <=> f.ht_home
+                    AND m.away_score_first_half <=> f.ht_away))`,
         FINAL_STATUSES
     );
 
@@ -302,6 +314,28 @@ export async function settleApisportsResults() {
         fallback_completed: fallback.affectedRows ?? 0,
         quota_remaining: apisportsQuotaRemaining(),
     };
+}
+
+// Force-refetch a specific set of API-Football fixture ids (e.g. the
+// half-time/full-time-inconsistent fixtures the settle guard now stores as
+// NULL for the second half - a manual re-poll sometimes finds API-Football
+// has since corrected the record). Mirrors the /fixtures?ids= batching in
+// settleApisportsResults; the caller is expected to run
+// settleApisportsResults() afterwards to re-propagate any corrected scores
+// into matches. Read-write (bills quota), CLI-only - not part of any sweep.
+export async function refetchFixtureIds(ids) {
+    const list = [...new Set(ids.map(id => String(id)))];
+    const groups = [];
+    for (let i = 0; i < list.length; i += 20) {
+        groups.push(list.slice(i, i + 20).join('-'));
+    }
+    let saved = 0;
+    await _batch(groups, async group => {
+        const items = await _get('/fixtures', { ids: group, timezone: TIMEZONE });
+        const counts = await _saveFixtureItems(items);
+        saved += counts.fixtures;
+    }, 2);
+    return { requested: list.length, saved };
 }
 
 // --- deep stats (statistics / lineups / events, fetch-once per final fixture) ---

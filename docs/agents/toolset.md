@@ -253,6 +253,24 @@ the shown bet). Sources: `docs/research/`.
   Note: the harness classifier BLOCKS in-place edits of the live app over ssh
   (compound cp/perl/touch); prepare the patched file locally and hand the owner one
   `scp` + restart command instead.
+- 2026-08-18 - **Narrowed settle UPDATE + refetch tool (verified):** `settleApisportsResults()`'s
+  `matches` settle UPDATE (`src/apisports.js`) used to rewrite every linked final match on every
+  light pass regardless of whether anything changed (13,021 rows locally, ~49k live). Added a
+  `NULL`-safe `<=>` guard to the WHERE clause so the UPDATE is a no-op once a match already
+  matches its fixture. Verified with the rolled-back-transaction replay idiom: open
+  `const trx = await db.transaction()`, run the SQL via `trx.raw(sql, FINAL_STATUSES)` twice,
+  compare `affectedRows`, then `await trx.rollback()` + `await closeDb()`, never commits, safe
+  against a live/shared DB. Local result: the OLD unqualified UPDATE (same query minus the new
+  WHERE fragment) touched 13,021 rows every time; the NEW narrowed UPDATE touched 0 both runs
+  (nothing had actually drifted). Companion recovery tool `node scripts/refetch-fixtures.js
+  --ids <a,b,c>` (or `--inconsistent`, auto-selecting every `FINAL_STATUSES` fixture where
+  `COALESCE(ft,goals) < ht` on either side) force-refetches from API-Football then re-runs
+  `settleApisportsResults()`, printing before/after `ht/ft/goals` tables and which ids changed.
+  Live run against the 21 fixtures flagged by `--inconsistent` locally: all 21 came back from
+  API-Football with the SAME inconsistent ht>ft pair (not a transient upstream glitch, these
+  fixtures' underlying data is genuinely inconsistent at the source), so the existing guarded
+  `CASE WHEN` in the settle UPDATE (stores `NULL` for the second half instead of aborting on the
+  UNSIGNED-column underflow) remains the correct permanent handling for this class of record.
 - Cross-refs: second-writer deadlocks → memory-bank #3/#22; web 500 = API down → #17;
   `cmd | tee log` masks exit codes (verify long runs by reading the output tail) → #14.
 
@@ -288,3 +306,6 @@ the shown bet). Sources: `docs/research/`.
 - 2026-08-18: §3.8 append: `meta` table bump one-liner + the live two-process writer-lease
   check (`GET_LOCK` acquire/held-elsewhere/release round trip), plus the
   `db.raw(...).connection(conn)` returns `[rows, fields]` (not bare rows) gotcha.
+- 2026-08-18: §5 append: narrowed `settleApisportsResults()` settle UPDATE (NULL-safe `<=>`
+  guard, verified 13,021 → 0 rows locally) + `scripts/refetch-fixtures.js` recovery tool + the
+  rolled-back-transaction replay idiom for safely verifying a SQL change against a live/shared DB.

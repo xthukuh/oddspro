@@ -20,6 +20,10 @@ node src/index.js betpawa [date]    # scrape BetPawa odds → DB, then auto-link
 node src/index.js betika [date]     # scrape Betika odds → DB, then auto-link
 node src/index.js fixtures [date]   # API-Football fixtures for date → DB, then auto-link
 node src/index.js results           # refresh unfinished past-kickoff fixtures; settle scores; mark matches completed
+node scripts/refetch-fixtures.js --ids <a,b,c> | --inconsistent
+                                    # force-refetch specific API-Football fixture ids (or auto-select every
+                                    # FINAL_STATUSES fixture with an ft<ht inconsistency) then re-run the settle
+                                    # pass; prints before/after ht/ft/goals and which ids changed
 node src/index.js link [provider]   # correlate bookmaker matches ↔ canonical fixtures
 node src/index.js stats             # statistics + lineups + events for final correlated fixtures (fetch-once)
 node src/index.js standings         # refresh league tables for correlated leagues
