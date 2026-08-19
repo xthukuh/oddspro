@@ -2,14 +2,16 @@
 // config/.env). Bookmaker odds are view-once (docs/research/2026-08-19-odds-
 // durability-and-outage-damage.md) - a silent stop in the light pass costs
 // prices nobody can ever recover. scripts/collection-watchdog.js reads the
-// freshness signal (MAX(matches.updated_at)) straight from the warehouse and
-// asks collectionVerdict what it means; all clocks are epoch ms so tests
-// control time (the auto-rules.js convention).
+// dedicated `last_odds_at` freshness signal (src/meta.js, bumped only by a
+// successful odds save - see resolveOddsSignal below for why) and asks
+// collectionVerdict what it means; all clocks are epoch ms so tests control
+// time (the auto-rules.js convention).
 
-// Classify the collection freshness signal. `lastOddsMs` = the most recent
-// matches.updated_at, or null if odds have never been collected.
-// `fixturesNearby` = how many fixtures kick off within the +-6h window (see
-// the caller's SQL) - the context that decides how urgent a stale signal is:
+// Classify the collection freshness signal. `lastOddsMs` = the resolved odds
+// freshness timestamp (see resolveOddsSignal), or null if odds have never
+// been collected. `fixturesNearby` = how many fixtures kick off within the
+// +-6h window (see the caller's SQL) - the context that decides how urgent a
+// stale signal is:
 // a quiet slate legitimately has nothing to scrape, so it gets a much longer
 // leash than a busy one. Total and order-independent; tolerant of a null
 // lastOddsMs (treated as maximally stale WHEN fixtures are nearby - there is
@@ -60,4 +62,49 @@ export function nextStaleStreak(state, prevCount = 0) {
 // returns to 'ok', so a NEW stale streak alerts again).
 export function shouldAlert(streakCount, alertAfter, alreadyAlerted) {
     return Number(streakCount) >= Number(alertAfter) && !alreadyAlerted;
+}
+
+// CRITICAL FIX (fix round 1, 2026-08-19): choose the freshness signal
+// collectionVerdict is fed. MAX(matches.updated_at) is ALSO bumped by
+// src/link.js's fixture_id writes and src/apisports.js's results-settle
+// completed_at writes, both independent of odds scraping - a
+// both-bookmakers-broken outage with results/link still healthy would never
+// trip 'stale' if that column were the signal, which defeats the watchdog's
+// whole purpose. src/auto-refresh.js instead stamps a DEDICATED
+// `last_odds_at` meta key, bumped ONLY on a successful odds save. This
+// resolver prefers that stamp whenever it exists - even if it is OLDER than
+// the matches.updated_at fallback, since a newer results/link write must
+// never mask a genuinely stalled odds scrape - and falls back to
+// MAX(matches.updated_at) ONLY while the meta key has never been set at all
+// (a fresh deploy, or before the very first successful odds pass; note this
+// also correctly degrades to "always use the fallback" for a host that runs
+// with the light pass permanently disabled, since last_odds_at would then
+// never exist).
+export function resolveOddsSignal({ lastOddsAtMs = null, fallbackMs = null } = {}) {
+    if (lastOddsAtMs != null && Number.isFinite(Number(lastOddsAtMs))) {
+        return { ms: Number(lastOddsAtMs), source: 'last_odds_at' };
+    }
+    const fb = fallbackMs != null && Number.isFinite(Number(fallbackMs)) ? Number(fallbackMs) : null;
+    return { ms: fb, source: 'matches.updated_at (fallback - no last_odds_at yet)' };
+}
+
+// Cap on consecutive-stale runs that may still attempt a recovery restart
+// (Task 5, fix round 1, 2026-08-19). Past this many, a restart is clearly not
+// fixing anything - bouncing the app forever would just be noise, so
+// shouldRestart refuses and the script keeps alerting only.
+export const MAX_RESTART_ATTEMPTS = 5;
+
+// Whether this stale run should attempt the recovery restart: capped by a
+// per-run cooldown (so a stuck stale state does not bounce the app every
+// cron tick forever) AND abandoned completely once `maxAttempts` consecutive
+// stale runs have passed without recovering - escalation (shouldAlert) is
+// independent and keeps firing regardless of this decision. `lastRestartMs`
+// is the previous restart attempt's timestamp (null = never attempted, so
+// the very first stale run always restarts).
+export function shouldRestart({
+    streakCount = 0, lastRestartMs = null, nowMs = Date.now(), cooldownMinutes = 30, maxAttempts = MAX_RESTART_ATTEMPTS,
+} = {}) {
+    if (Number(streakCount) > Number(maxAttempts)) return false;
+    if (lastRestartMs == null || !Number.isFinite(Number(lastRestartMs))) return true;
+    return (Number(nowMs) - Number(lastRestartMs)) >= Number(cooldownMinutes) * 60_000;
 }

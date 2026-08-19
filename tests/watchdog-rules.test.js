@@ -2,7 +2,7 @@
 // are epoch ms so tests control time (the auto-rules.js convention).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { collectionVerdict, nextStaleStreak, shouldAlert } from '../src/db/watchdog-rules.js';
+import { collectionVerdict, nextStaleStreak, shouldAlert, resolveOddsSignal, shouldRestart, MAX_RESTART_ATTEMPTS } from '../src/db/watchdog-rules.js';
 
 const NOW = new Date('2026-08-19T12:00:00Z').getTime();
 
@@ -84,4 +84,69 @@ test('shouldAlert fires once the streak reaches the threshold and not already al
 
 test('shouldAlert does not re-fire once already alerted for the streak', () => {
     assert.equal(shouldAlert(5, 3, true), false);
+});
+
+// resolveOddsSignal (CRITICAL fix, fix round 1, 2026-08-19): pick the
+// dedicated last_odds_at meta stamp over the MAX(matches.updated_at)
+// fallback whenever it exists at all, even if it reads OLDER than the
+// fallback - a fresher results/link write must never mask a genuinely
+// stalled odds scrape.
+test('resolveOddsSignal prefers last_odds_at when present', () => {
+    const r = resolveOddsSignal({ lastOddsAtMs: NOW - 100 * 60_000, fallbackMs: NOW - 5 * 60_000 });
+    assert.equal(r.ms, NOW - 100 * 60_000);
+    assert.equal(r.source, 'last_odds_at');
+});
+
+test('resolveOddsSignal prefers last_odds_at even when it is OLDER than the fallback', () => {
+    // This is the whole point of the fix: a fresher matches.updated_at (from
+    // results/link, unrelated to odds) must not mask a stale odds signal.
+    const r = resolveOddsSignal({ lastOddsAtMs: NOW - 400 * 60_000, fallbackMs: NOW - 1 * 60_000 });
+    assert.equal(r.ms, NOW - 400 * 60_000);
+    assert.equal(r.source, 'last_odds_at');
+});
+
+test('resolveOddsSignal falls back to matches.updated_at only when last_odds_at has never been set', () => {
+    const r = resolveOddsSignal({ lastOddsAtMs: null, fallbackMs: NOW - 5 * 60_000 });
+    assert.equal(r.ms, NOW - 5 * 60_000);
+    assert.match(r.source, /fallback/);
+});
+
+test('resolveOddsSignal is total against missing/non-finite inputs', () => {
+    assert.equal(resolveOddsSignal({}).ms, null);
+    assert.equal(resolveOddsSignal({ lastOddsAtMs: NaN, fallbackMs: NaN }).ms, null);
+    assert.equal(resolveOddsSignal().ms, null);
+});
+
+// shouldRestart (Task 5, fix round 1): cap recovery restarts by a per-run
+// cooldown and abandon them entirely past MAX_RESTART_ATTEMPTS consecutive
+// stale runs (escalation is independent and unaffected by this).
+test('shouldRestart allows the very first attempt (no prior restart recorded)', () => {
+    assert.equal(shouldRestart({ streakCount: 1, lastRestartMs: null, nowMs: NOW }), true);
+});
+
+test('shouldRestart blocks a repeat attempt inside the cooldown window', () => {
+    assert.equal(shouldRestart({
+        streakCount: 2, lastRestartMs: NOW - 10 * 60_000, nowMs: NOW, cooldownMinutes: 30,
+    }), false);
+});
+
+test('shouldRestart allows a repeat attempt once the cooldown has passed', () => {
+    assert.equal(shouldRestart({
+        streakCount: 3, lastRestartMs: NOW - 31 * 60_000, nowMs: NOW, cooldownMinutes: 30,
+    }), true);
+    // Exact boundary counts as passed (>=).
+    assert.equal(shouldRestart({
+        streakCount: 3, lastRestartMs: NOW - 30 * 60_000, nowMs: NOW, cooldownMinutes: 30,
+    }), true);
+});
+
+test('shouldRestart stops entirely once the streak exceeds MAX_RESTART_ATTEMPTS, regardless of cooldown', () => {
+    assert.equal(shouldRestart({ streakCount: MAX_RESTART_ATTEMPTS, lastRestartMs: null, nowMs: NOW }), true);
+    assert.equal(shouldRestart({ streakCount: MAX_RESTART_ATTEMPTS + 1, lastRestartMs: null, nowMs: NOW }), false);
+    assert.equal(shouldRestart({ streakCount: 999, lastRestartMs: null, nowMs: NOW }), false);
+});
+
+test('shouldRestart honors a custom maxAttempts override', () => {
+    assert.equal(shouldRestart({ streakCount: 2, lastRestartMs: null, nowMs: NOW, maxAttempts: 2 }), true);
+    assert.equal(shouldRestart({ streakCount: 3, lastRestartMs: null, nowMs: NOW, maxAttempts: 2 }), false);
 });

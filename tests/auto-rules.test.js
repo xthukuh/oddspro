@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
-    shouldConsumeRefreshRequest, summarizeSteps,
+    shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
 } from '../src/db/auto-rules.js';
 
 // refreshOutcome (F3): classify a finished refresh job.
@@ -67,6 +67,98 @@ test('summarizeSteps reports partial when some steps failed and some succeeded',
         { step: 'betpawa odds', ok: true },
         { step: 'betika odds', ok: false, error: 'timeout' },
     ]), 'partial');
+});
+
+// makeStepGuard (fix round 1, 2026-08-19): the extracted, injectable guard
+// behind lightRefresh's guardStep. The regression that matters most here is a
+// swallowed cancel - a cancel signal from checkCancel must propagate OUT of
+// the guard uncaught (never recorded as a step failure), while an ordinary
+// Error thrown by the step's own work must be captured and never escape.
+test('makeStepGuard lets a cancel thrown by checkCancel propagate uncaught, unrecorded', async () => {
+    const results = [];
+    const guard = makeStepGuard({ results, checkCancel: () => { throw new Error('cancelled'); } });
+    await assert.rejects(() => guard('some step', async () => 'unused'), /cancelled/);
+    assert.deepEqual(results, []); // never recorded as a step failure
+});
+
+test('makeStepGuard captures an ordinary step failure into results without throwing', async () => {
+    const results = [];
+    const failures = [];
+    const guard = makeStepGuard({ results, onFailure: (label, message) => failures.push([label, message]) });
+    const out = await guard('flaky step', async () => { throw new Error('boom'); });
+    assert.equal(out, undefined);
+    assert.deepEqual(results, [{ step: 'flaky step', ok: false, error: 'boom' }]);
+    assert.deepEqual(failures, [['flaky step', 'boom']]);
+});
+
+test('makeStepGuard records success and resolves to the step function\'s return value', async () => {
+    const results = [];
+    const guard = makeStepGuard({ results });
+    const out = await guard('ok step', async () => 42);
+    assert.equal(out, 42);
+    assert.deepEqual(results, [{ step: 'ok step', ok: true }]);
+});
+
+test('makeStepGuard calls checkCancel with the label BEFORE the step function ever runs', async () => {
+    const seen = [];
+    const results = [];
+    const guard = makeStepGuard({ results, checkCancel: label => seen.push(label) });
+    await guard('labelled', async () => { seen.push('fn ran'); return 'x'; });
+    assert.deepEqual(seen, ['labelled', 'fn ran']);
+});
+
+test('makeStepGuard never calls the step function when checkCancel throws', async () => {
+    const results = [];
+    let fnCalled = false;
+    const guard = makeStepGuard({ results, checkCancel: () => { throw new Error('cancelled'); } });
+    await assert.rejects(() => guard('x', async () => { fnCalled = true; }));
+    assert.equal(fnCalled, false);
+});
+
+// hasDataBearingSuccess (Task 4, fix round 1): only results/per-provider odds
+// count as "the warehouse actually collected something new".
+test('hasDataBearingSuccess is true when results or either provider succeeded', () => {
+    assert.equal(hasDataBearingSuccess([{ step: 'results', ok: true }]), true);
+    assert.equal(hasDataBearingSuccess([{ step: 'betpawa odds', ok: true }]), true);
+    assert.equal(hasDataBearingSuccess([{ step: 'betika odds', ok: true }]), true);
+});
+
+test('hasDataBearingSuccess is false when only link/settle-picks/idle-check succeeded', () => {
+    assert.equal(hasDataBearingSuccess([
+        { step: 'results', ok: false, error: 'boom' },
+        { step: 'betpawa odds', ok: false, error: 'boom' },
+        { step: 'betika odds', ok: false, error: 'boom' },
+        { step: 'odds idle check', ok: true },
+        { step: 'link', ok: true },
+        { step: 'settle picks', ok: true },
+    ]), false);
+});
+
+test('hasDataBearingSuccess is false on empty/null/undefined input', () => {
+    assert.equal(hasDataBearingSuccess([]), false);
+    assert.equal(hasDataBearingSuccess(null), false);
+    assert.equal(hasDataBearingSuccess(undefined), false);
+});
+
+// shouldStampFreshness (Task 4, fix round 1): 'ok' always stamps; 'partial'
+// only stamps when a data-bearing step actually succeeded; everything else
+// (error/cancelled) never stamps.
+test('shouldStampFreshness always stamps on ok, regardless of summary', () => {
+    assert.equal(shouldStampFreshness('ok', null), true);
+    assert.equal(shouldStampFreshness('ok', {}), true);
+    assert.equal(shouldStampFreshness('ok', { data_bearing_ok: false }), true);
+});
+
+test('shouldStampFreshness on partial defers to summary.data_bearing_ok', () => {
+    assert.equal(shouldStampFreshness('partial', { data_bearing_ok: true }), true);
+    assert.equal(shouldStampFreshness('partial', { data_bearing_ok: false }), false);
+    assert.equal(shouldStampFreshness('partial', {}), false);
+    assert.equal(shouldStampFreshness('partial', null), false);
+});
+
+test('shouldStampFreshness never stamps on error or cancelled', () => {
+    assert.equal(shouldStampFreshness('error', { data_bearing_ok: true }), false);
+    assert.equal(shouldStampFreshness('cancelled', { data_bearing_ok: true }), false);
 });
 
 const utc = iso => new Date(iso).getTime();

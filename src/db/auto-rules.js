@@ -75,6 +75,61 @@ export function summarizeSteps(results) {
     return 'partial';
 }
 
+// Guarded step executor for lightRefresh (fix round 1, 2026-08-19: extracted
+// so the cancel-vs-failure split is independently testable without spinning
+// up the DB/config-backed lightRefresh itself - the regression that matters
+// most here is a swallowed cancel, which would make the cancel button a lie).
+// `checkCancel(label)` runs OUTSIDE the try, so anything it throws (the
+// cooperative-cancel signal) propagates OUT of the returned guard uncaught,
+// aborting the whole pass immediately - only `fn`'s own thrown Error is
+// captured: pushed to `results` as `{ step, ok:false, error }` and reported
+// via `onFailure(label, message)`, and the guard resolves to `undefined`
+// rather than rejecting. A success pushes `{ step, ok:true }` and resolves to
+// `fn`'s return value. `results` is mutated in place (the same array
+// lightRefresh later hands to summarizeSteps/hasDataBearingSuccess).
+export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () => {} } = {}) {
+    return async function guardStep(label, fn) {
+        checkCancel(label); // may throw - e.g. a cancel - never caught here
+        try {
+            const result = await fn();
+            results.push({ step: label, ok: true });
+            return result;
+        } catch (e) {
+            const message = String(e?.message ?? e);
+            results.push({ step: label, ok: false, error: message });
+            onFailure(label, message);
+            return undefined;
+        }
+    };
+}
+
+// Which guarded light-pass steps count as "the warehouse actually collected
+// something new" (Task 4, fix round 1, 2026-08-19). 'link' and 'settle picks'
+// (and the 'odds idle check' bookkeeping step) only correlate or grade data
+// that was already there - a pass where every data-bearing step failed and
+// only those succeeded moved nothing forward and must not be reported fresh.
+const DATA_BEARING_STEP_RE = /^(results|betpawa odds|betika odds)$/;
+
+export function hasDataBearingSuccess(stepResults) {
+    return Array.isArray(stepResults) && stepResults.some(r => r?.ok && DATA_BEARING_STEP_RE.test(r?.step));
+}
+
+// Whether a finished job should stamp per-date freshness (lastFresh) and bump
+// the shared warehouse_version (Task 4, fix round 1, 2026-08-19). 'ok' always
+// qualifies - the 'results' step is unconditionally guarded first in every
+// light pass, so an 'ok' verdict (zero guarded-step failures) necessarily
+// includes a data-bearing success already; full/manual jobs carry no
+// steps_verdict at all and are only ever 'ok'/'error'/'cancelled'. A
+// 'partial' light pass qualifies ONLY when `summary.data_bearing_ok` is true
+// (see hasDataBearingSuccess above) - a pass where results and both
+// providers' odds all failed, and only link/settle-picks succeeded against
+// stale data, collected nothing new and must not stamp freshness.
+export function shouldStampFreshness(outcome, summary = null) {
+    if (outcome === 'ok') return true;
+    if (outcome === 'partial') return summary?.data_bearing_ok === true;
+    return false;
+}
+
 // Decide what to do with a pending cross-instance manual-refresh request
 // (src/meta.js's `refresh_request` key, written by a follower's POST
 // /api/refresh - see src/server.js). The writer's tick calls this only after

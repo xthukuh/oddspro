@@ -224,6 +224,12 @@ const EnvSchema = z.object({
     WATCHDOG_STALE_MINUTES: z.coerce.number().min(1).default(45),
     WATCHDOG_QUIET_STALE_MINUTES: z.coerce.number().min(1).default(240),
     WATCHDOG_ALERT_AFTER: z.coerce.number().int().min(1).default(3),
+    // Restart-attempt cooldown (fix round 1, 2026-08-19): a repeat 'stale'
+    // reading must not bounce the app every cron tick - at most one restart
+    // per this many minutes, and the script gives up on restarting entirely
+    // (keeps alerting) past MAX_RESTART_ATTEMPTS (5, src/db/watchdog-rules.js)
+    // consecutive stale runs.
+    WATCHDOG_RESTART_COOLDOWN_MINUTES: z.coerce.number().min(0).default(30),
     // Visitor geo backfill (src/geo.js): a background sweep resolves each newly
     // seen visitor IP to country/region and caches the result per-IP (ip_geo),
     // marking unresolvable/private IPs so they're never re-queried. Default

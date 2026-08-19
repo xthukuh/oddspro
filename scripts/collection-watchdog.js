@@ -13,15 +13,25 @@
 // Run from cron every ~15 minutes, from the app root:
 //   node scripts/collection-watchdog.js
 //
-// Reads MAX(matches.updated_at) (the freshness signal every odds write bumps)
-// plus how many fixtures kick off within +-6h for context, classifies the
-// reading via the pure src/db/watchdog-rules.js#collectionVerdict, and on a
-// 'stale' verdict: logs loudly to logs/watchdog.log (self-truncating like
-// src/auto-refresh.js's own job log), touches tmp/restart.txt so Passenger
-// recycles the app (one recovery attempt per run, never more, never on
-// 'ok'/'idle'), and after WATCHDOG_ALERT_AFTER consecutive stale runs sends
-// one SMS to the admin via the existing SMS seam. Consecutive-stale count and
-// the alert flag persist in logs/watchdog-state.json across cron runs.
+// Freshness signal (fix round 1, 2026-08-19 - see resolveOddsSignal in
+// src/db/watchdog-rules.js for the full rationale): the PRIMARY signal is the
+// dedicated `last_odds_at` meta key, bumped ONLY by src/auto-refresh.js on a
+// successful per-provider odds save. MAX(matches.updated_at) is also bumped
+// by results-settle and link writes that have nothing to do with odds, so a
+// both-providers-broken outage with results/link still healthy would never
+// trip 'stale' if that column were read directly - it is used here ONLY as a
+// fallback for the window before the very first successful odds pass (a
+// fresh deploy, or a light pass that has never once completed).
+//
+// Classifies the reading via the pure src/db/watchdog-rules.js#collectionVerdict,
+// and on a 'stale' verdict: logs loudly to logs/watchdog.log (self-truncating
+// like src/auto-refresh.js's own job log), and - capped by
+// WATCHDOG_RESTART_COOLDOWN_MINUTES and abandoned entirely past
+// MAX_RESTART_ATTEMPTS consecutive stale runs (shouldRestart) - touches
+// tmp/restart.txt so Passenger recycles the app. After WATCHDOG_ALERT_AFTER
+// consecutive stale runs it sends one SMS to the admin via the existing SMS
+// seam. Consecutive-stale count, the one-shot alert flag and the last restart
+// timestamp persist in logs/watchdog-state.json across cron runs.
 //
 // This is cron: it NEVER exits non-zero (a non-zero exit mails the operator
 // noise on every quiet-slate tick) and NEVER throws - main() is wrapped, the
@@ -32,8 +42,9 @@ import { mkdirSync, readFileSync, writeFileSync, statSync, appendFileSync } from
 import path from 'node:path';
 import { db, closeDb } from '../src/db/connection.js';
 import { loadOverrides, effective } from '../src/settings.js';
+import { getMeta } from '../src/meta.js';
 import { trimLogTail } from '../src/db/auto-rules.js';
-import { collectionVerdict, nextStaleStreak, shouldAlert } from '../src/db/watchdog-rules.js';
+import { collectionVerdict, nextStaleStreak, shouldAlert, resolveOddsSignal, shouldRestart, MAX_RESTART_ATTEMPTS } from '../src/db/watchdog-rules.js';
 import { sendSms } from '../src/sms/index.js';
 
 const LOG_FILE = path.join(process.cwd(), 'logs', 'watchdog.log');
@@ -69,9 +80,10 @@ function readState() {
         return {
             consecutiveStale: Number.isFinite(parsed?.consecutiveStale) ? parsed.consecutiveStale : 0,
             alerted: Boolean(parsed?.alerted),
+            lastRestartMs: Number.isFinite(parsed?.lastRestartMs) ? parsed.lastRestartMs : null,
         };
     } catch {
-        return { consecutiveStale: 0, alerted: false };
+        return { consecutiveStale: 0, alerted: false, lastRestartMs: null };
     }
 }
 
@@ -123,8 +135,16 @@ async function main() {
     // WATCHDOG_STALE_MINUTES via Admin -> Settings must see it apply here too.
     await loadOverrides();
 
+    // Primary signal: the dedicated last_odds_at meta stamp. Fallback: the
+    // warehouse-wide odds write timestamp, used ONLY while last_odds_at has
+    // never been set (see resolveOddsSignal's doc comment for why the two
+    // are not interchangeable once last_odds_at exists).
+    const lastOddsAtIso = await getMeta('last_odds_at');
+    const lastOddsAtMs = lastOddsAtIso ? Date.parse(lastOddsAtIso) : null;
     const [{ last } = {}] = await db('matches').select(db.raw('MAX(updated_at) as last'));
-    const lastOddsMs = last ? new Date(last).getTime() : null;
+    const fallbackMs = last ? new Date(last).getTime() : null;
+    const signal = resolveOddsSignal({ lastOddsAtMs, fallbackMs });
+
     const [{ c: fixturesNearby } = {}] = await db('fixtures')
         .whereRaw('kickoff BETWEEN NOW() - INTERVAL 6 HOUR AND NOW() + INTERVAL 6 HOUR')
         .select(db.raw('COUNT(*) as c'));
@@ -132,13 +152,16 @@ async function main() {
     const staleMinutes = Number(effective('WATCHDOG_STALE_MINUTES'));
     const quietStaleMinutes = Number(effective('WATCHDOG_QUIET_STALE_MINUTES'));
     const alertAfter = Number(effective('WATCHDOG_ALERT_AFTER'));
+    const restartCooldownMinutes = Number(effective('WATCHDOG_RESTART_COOLDOWN_MINUTES'));
 
     const verdict = collectionVerdict({
-        lastOddsMs, nowMs: Date.now(), fixturesNearby: Number(fixturesNearby) || 0, staleMinutes, quietStaleMinutes,
+        lastOddsMs: signal.ms, nowMs: Date.now(), fixturesNearby: Number(fixturesNearby) || 0, staleMinutes, quietStaleMinutes,
     });
 
+    // The signal source is ALWAYS printed so a stale reading is never
+    // ambiguous about what it was computed from.
     console.log(`[watchdog] state=${verdict.state} minutes=${verdict.minutes ?? 'n/a'} `
-        + `fixturesNearby=${Number(fixturesNearby) || 0} reason="${verdict.reason}"`);
+        + `fixturesNearby=${Number(fixturesNearby) || 0} signal=${signal.source} reason="${verdict.reason}"`);
 
     const prev = readState();
     const streak = nextStaleStreak(verdict.state, prev.consecutiveStale);
@@ -149,19 +172,34 @@ async function main() {
     const alerted = verdict.state === 'ok' ? false : prev.alerted;
 
     if (verdict.state !== 'stale') {
-        writeState({ consecutiveStale: streak, alerted });
+        writeState({ consecutiveStale: streak, alerted, lastRestartMs: prev.lastRestartMs });
         return;
     }
 
-    _log(`STALE - odds collection stalled ${verdict.minutes ?? '?'} minutes (${verdict.reason}); consecutive=${streak}`);
-    touchRestartFile(`stalled ${verdict.minutes ?? '?'}m, consecutive=${streak}`);
+    _log(`STALE - odds collection stalled ${verdict.minutes ?? '?'} minutes (${verdict.reason}); `
+        + `signal=${signal.source}; consecutive=${streak}`);
+
+    // Recovery restart: capped by a per-run cooldown and abandoned entirely
+    // past MAX_RESTART_ATTEMPTS consecutive stale runs - a restart loop that
+    // is not working must not keep bouncing the app. Escalation below is
+    // independent and keeps firing regardless.
+    let lastRestartMs = prev.lastRestartMs;
+    if (shouldRestart({ streakCount: streak, lastRestartMs: prev.lastRestartMs, nowMs: Date.now(), cooldownMinutes: restartCooldownMinutes })) {
+        const ok = touchRestartFile(`stalled ${verdict.minutes ?? '?'}m, consecutive=${streak}`);
+        if (ok) lastRestartMs = Date.now();
+    } else {
+        const why = streak > MAX_RESTART_ATTEMPTS
+            ? `consecutive streak ${streak} exceeds the ${MAX_RESTART_ATTEMPTS}-attempt cap - restarting is not fixing this, alerting only`
+            : `cooldown active (${restartCooldownMinutes}m, last restart ${prev.lastRestartMs ? new Date(prev.lastRestartMs).toISOString() : 'never'})`;
+        _log(`recovery SKIPPED: ${why}`);
+    }
 
     let nextAlerted = alerted;
     if (shouldAlert(streak, alertAfter, alerted)) {
         await escalate(verdict.minutes);
         nextAlerted = true;
     }
-    writeState({ consecutiveStale: streak, alerted: nextAlerted });
+    writeState({ consecutiveStale: streak, alerted: nextAlerted, lastRestartMs });
 }
 
 (async () => {
