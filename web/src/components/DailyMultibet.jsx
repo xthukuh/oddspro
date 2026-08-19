@@ -154,7 +154,7 @@ function DayCard({ d, today, allPrices }) {
     );
 }
 
-export default function DailyMultibet({ onClose, signedIn, onSignIn }) {
+export default function DailyMultibet({ onClose, premium, onSignIn }) {
     const [data, setData] = useState(null);
     const [error, setError] = useState(null);
     const [allPrices, setAllPrices] = useState(false);
@@ -224,7 +224,7 @@ export default function DailyMultibet({ onClose, signedIn, onSignIn }) {
                 {teaserMode && (
                     <div className="mx-6 mb-2 rounded-xl bg-accent-soft px-3 py-2 text-[13px] text-label">
                         Sign in to see the legs and reasoning behind each day's card.{' '}
-                        {!signedIn && onSignIn && (
+                        {!premium && onSignIn && (
                             <button onClick={onSignIn} className="cursor-pointer font-semibold text-accent hover:underline">Sign in</button>
                         )}
                     </div>

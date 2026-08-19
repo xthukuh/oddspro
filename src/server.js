@@ -584,7 +584,7 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         // same slot as the explicit YYYY-MM-DD the web client sends.
         const day = date === 'all' ? 'all' : _dtime(date || new Date()).slice(0, 10);
         const access = config.AUTH_ENABLED && !bearerMatches(req.get('authorization'), MACHINE_BEARERS)
-            ? accessFromUser(req.user)
+            ? accessFromUser(req.user, { guestPremium: effective('GUEST_PREMIUM') })
             : null;
         if (access && !access.canFuture && !guestDateAllowed(day, _dtime(new Date()).slice(0, 10))) {
             return res.status(403).json({ error: 'Sign in to see upcoming games.', auth_required: true });
@@ -640,10 +640,14 @@ app.get('/api/hotpicks', async (req, res, next) => {
 // Daily MultiBet (engine-v2, spec 2026-08-06-0100). Premium seam v1: guests
 // get a TEASER (day mood/counts/streaks, no legs, no reasoning); signed-in
 // users get the full card. Machine bearers and AUTH_ENABLED=0 stay legacy
-// full-access, the /api/records access idiom.
+// full-access, the /api/records access idiom. GUEST_PREMIUM opens the full
+// card to every guest too (owner decision: guests with the flag on get the
+// FULL Daily MultiBet timeline) - featureAllowed still owns the signed-in
+// tier decision, unchanged.
 function _dailySlipFull(req) {
     if (!config.AUTH_ENABLED) return true;
     if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return true;
+    if (!req.user && effective('GUEST_PREMIUM')) return true;
     return featureAllowed(req.user ?? null, 'daily_multibet');
 }
 const _slipTeaser = s => s && ({

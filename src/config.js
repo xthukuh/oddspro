@@ -262,6 +262,13 @@ const EnvSchema = z.object({
     ADMIN_SEED_PIN: z.string().regex(/^\d{4}$/, 'ADMIN_SEED_PIN must be exactly 4 digits (login requires a 4-digit PIN)').default('0000'),
     // Master switch for the whole user-accounts feature (routes/middleware).
     AUTH_ENABLED: boolStr('1'),
+    // Guest premium (Phase 8 extension): when on, a signed-out visitor gets
+    // the same tip detail/reasoning, future dates, Daily MultiBet timeline and
+    // Sure Bets a signed-in user gets - see src/db/access-rules.js. Account-
+    // bound features (saved/shareable slips, prefs sync, admin) stay gated on
+    // an actual session regardless of this flag. Default OFF; the owner flips
+    // it live via Admin -> Settings once ready.
+    GUEST_PREMIUM: boolStr('0'),
     // Opaque DB session lifetime; PIN lockout policy (src/auth-rules.js).
     SESSION_TTL_DAYS: z.coerce.number().min(0.01).default(30),
     PIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),   // wrong PINs before lockout

@@ -77,8 +77,10 @@ export default function MagicMenu({
                     <div className="px-2 py-1 text-sm text-label-3">No settled tips to rank yet.</div>
                 )}
                 {/* Sure bets (2026-07-17 spec) - a FILTER, not a sort: the daily
-                    top-10 safe list. Signed-in only: guest rows are redacted
-                    (no tip_breakdown), so the gates cannot evaluate. */}
+                    top-10 safe list. Premium only (signed in, or a GUEST_PREMIUM
+                    guest): a plain guest's rows are redacted (no tip_breakdown),
+                    so the gates cannot evaluate. `signedIn` here is actually the
+                    caller's `premium` value - see App.jsx. */}
                 <div className="mt-2 pt-2 border-t border-separator-2">
                     {signedIn ? (
                         <div className={`px-3 py-2.5 rounded-xl ${sureBets ? 'bg-accent-soft' : ''}`}>

@@ -1,19 +1,31 @@
-// Guest-vs-normal access rules (v1.1.0 Phase 8). Pure, zero imports -
-// offline-testable. The server is authoritative: src/server.js computes the
-// access descriptor from the (optional) session user and src/db/records.js
-// applies it - the web client's guest date clamp / detail hide is UX sugar
-// over the same rules, never the enforcement.
+// Guest-vs-normal access rules (v1.1.0 Phase 8, GUEST_PREMIUM extension).
+// Pure, zero imports - offline-testable. The server is authoritative:
+// src/server.js computes the access descriptor from the (optional) session
+// user and src/db/records.js applies it - the web client's guest date clamp
+// / detail hide is UX sugar over the same rules, never the enforcement.
 //
-// Tiers: a missing user = guest (past/today only, redacted detail); any
-// signed-in user = full (future dates + tip internals). AUTH_ENABLED=0
-// installs and API_TOKEN/ADMIN_TOKEN machine bearers never reach these rules
-// (access stays null = the legacy everyone-sees-everything behavior).
+// Tiers: a missing user = guest (past/today only, redacted detail unless
+// GUEST_PREMIUM is on); any signed-in user = full (future dates + tip
+// internals). AUTH_ENABLED=0 installs and API_TOKEN/ADMIN_TOKEN machine
+// bearers never reach these rules (access stays null = the legacy
+// everyone-sees-everything behavior).
+//
+// GUEST_PREMIUM (admin-editable, settings group auth-policy, default off):
+// when the caller passes opts.guestPremium truthy, a signed-out visitor gets
+// canFuture/fullDetail like a signed-in user - the SAME dates and tip
+// reasoning, no redaction. The role STAYS 'guest' regardless: account-bound
+// features (saved/shareable slips, prefs sync, admin) gate on role/session
+// elsewhere and must never open just because this detail flag is on.
 
 // Access descriptor for a session user (or null/undefined = guest).
 // role: 'guest' | 'normal' | 'admin'; canFuture: may load dates after today;
 // fullDetail: receives tip_breakdown / AI reasoning / exact confidence.
-export function accessFromUser(user) {
-    if (!user) return { role: 'guest', canFuture: false, fullDetail: false };
+// opts.guestPremium: GUEST_PREMIUM setting, only consulted for guests.
+export function accessFromUser(user, opts = {}) {
+    if (!user) {
+        const premium = Boolean(opts.guestPremium);
+        return { role: 'guest', canFuture: premium, fullDetail: premium };
+    }
     return { role: user.role === 'admin' ? 'admin' : 'normal', canFuture: true, fullDetail: true };
 }
 

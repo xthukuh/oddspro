@@ -15,6 +15,26 @@ test('accessFromUser: no user = guest, signed-in = full, admin keeps its role', 
     assert.equal(accessFromUser({ id: 4, role: 'weird' }).canFuture, true);
 });
 
+test('accessFromUser: GUEST_PREMIUM opens canFuture/fullDetail for guests, role stays guest', () => {
+    // No user, flag off (default / absent opts) - unchanged from the base case.
+    assert.deepEqual(accessFromUser(null), { role: 'guest', canFuture: false, fullDetail: false });
+    assert.deepEqual(accessFromUser(null, {}), { role: 'guest', canFuture: false, fullDetail: false });
+    assert.deepEqual(accessFromUser(null, { guestPremium: false }), { role: 'guest', canFuture: false, fullDetail: false });
+    // No user, flag ON - both detail gates open, but the role is STILL 'guest':
+    // account-bound features (saved slips, prefs sync, admin) gate on role/
+    // session elsewhere and must never open just because this flag is on.
+    assert.deepEqual(accessFromUser(null, { guestPremium: true }), { role: 'guest', canFuture: true, fullDetail: true });
+    assert.deepEqual(accessFromUser(undefined, { guestPremium: true }), { role: 'guest', canFuture: true, fullDetail: true });
+    // Truthy-but-not-boolean values coerce (effective() may hand back whatever
+    // the settings cache coerced, but this keeps the function defensive).
+    assert.equal(accessFromUser(null, { guestPremium: 1 }).canFuture, true);
+    // Signed-in users are UNCHANGED by the flag in either state, normal or admin.
+    assert.deepEqual(accessFromUser({ id: 1, role: 'normal' }, { guestPremium: true }), { role: 'normal', canFuture: true, fullDetail: true });
+    assert.deepEqual(accessFromUser({ id: 2, role: 'admin' }, { guestPremium: true }), { role: 'admin', canFuture: true, fullDetail: true });
+    assert.deepEqual(accessFromUser({ id: 1, role: 'normal' }, { guestPremium: false }), { role: 'normal', canFuture: true, fullDetail: true });
+    assert.deepEqual(accessFromUser({ id: 2, role: 'admin' }, { guestPremium: false }), { role: 'admin', canFuture: true, fullDetail: true });
+});
+
 test('guestDateAllowed: past/today yes, future no, all-dates delegated to SQL', () => {
     const today = '2026-07-15';
     assert.equal(guestDateAllowed('2026-07-14', today), true);  // past
@@ -79,4 +99,25 @@ test('redactRecordForRole: full-detail roles and null rows pass through untouche
     assert.equal(redactRecordForRole(row, 'normal'), row); // same reference - no copy
     assert.equal(redactRecordForRole(row, 'admin'), row);
     assert.equal(redactRecordForRole(null, 'guest'), null);
+});
+
+// redactRecordForRole itself keys ONLY on role - it has no idea a caller's
+// 'guest' descriptor might carry fullDetail:true (GUEST_PREMIUM). The actual
+// contract lives one level up, in src/db/records.js's caller: `access &&
+// !access.fullDetail ? hydrated.map(r => redactRecordForRole(r, access.role))
+// : hydrated` (records.js:349-351) - redaction is only APPLIED when
+// fullDetail is false, regardless of role. This test proves a premium
+// guest's descriptor (role 'guest', fullDetail true from accessFromUser)
+// takes the untouched branch of that real contract, exactly like a signed-in
+// user's - never that redactRecordForRole treats role 'guest' as exempt.
+test('records.js contract: a premium-guest access descriptor skips redaction (keys on fullDetail, not role)', () => {
+    const row = fullRow();
+    const plainGuest = accessFromUser(null, { guestPremium: false });
+    const premiumGuest = accessFromUser(null, { guestPremium: true });
+    assert.equal(premiumGuest.role, 'guest'); // role never flips, per the GUEST_PREMIUM contract
+    // Mirrors records.js's exact conditional (queryRecords, `const data = ...`)
+    const applyRecordsContract = (r, access) => (access && !access.fullDetail ? redactRecordForRole(r, access.role) : r);
+    assert.notEqual(applyRecordsContract(row, plainGuest).tip_breakdown, row.tip_breakdown); // redacted (null)
+    assert.equal(applyRecordsContract(row, premiumGuest), row); // NOT redacted - same reference, fullDetail true
+    assert.deepEqual(applyRecordsContract(row, premiumGuest).tip_breakdown, row.tip_breakdown);
 });

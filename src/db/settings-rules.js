@@ -134,6 +134,7 @@ export const SETTINGS_CATALOG = [
     // ---- Auth policy (creds/pepper stay .env-only; AUTH_ENABLED stays a boot
     // switch - an admin flipping it from inside a session would saw off the
     // branch the settings UI sits on).
+    { key: 'GUEST_PREMIUM', type: 'boolean', group: 'auth-policy', public: true, live: true, label: 'Guest premium access', hint: 'Grants signed-out visitors future dates, full tip reasoning, the Daily MultiBet timeline and Sure Bets - accounts are still required for saved/shareable slips and prefs sync.' },
     { key: 'SESSION_TTL_DAYS', type: 'number', group: 'auth-policy', public: false, live: true, min: 0.01, unit: 'days', label: 'Session lifetime', hint: 'How long a sign-in session lasts before it expires.' },
     { key: 'PIN_MAX_ATTEMPTS', type: 'int', group: 'auth-policy', public: false, live: true, min: 1, unit: 'tries', label: 'PIN attempts', hint: 'Wrong PIN entries before the account locks out.' },
     { key: 'PIN_LOCKOUT_MINUTES', type: 'int', group: 'auth-policy', public: false, live: true, min: 1, unit: 'min', label: 'PIN lockout', hint: 'Lockout duration after too many wrong PINs.' },

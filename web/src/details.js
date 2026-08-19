@@ -11,10 +11,12 @@ export const showDetails = v => v !== '0' && v !== 'false';
 
 export const SHOW_DETAILS = showDetails(import.meta.env.VITE_SHOW_DETAILS);
 
-// Session-aware details gate (Phase 8): guests never see the reasoning
-// surfaces, whatever the build flag says - mirroring the server, which
-// redacts their /api/records rows anyway (src/db/access-rules.js). One
-// policy, one place; components read this instead of SHOW_DETAILS directly.
+// Session-aware details gate (Phase 8, GUEST_PREMIUM extension): a guest
+// sees the reasoning surfaces only when the server granted them premium
+// access (GUEST_PREMIUM on) - mirroring the server, which only skips
+// redacting their /api/records rows in that case (src/db/access-rules.js).
+// Any signed-in user still qualifies via `premium`. One policy, one place;
+// components read this instead of SHOW_DETAILS directly.
 export function useShowDetails() {
-    return SHOW_DETAILS && !(useSession()?.isGuest ?? false);
+    return SHOW_DETAILS && (useSession()?.premium ?? false);
 }

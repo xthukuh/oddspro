@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
     signup, login, verifyOtp, resendOtp, changePhone, logout as apiLogout, fetchMe, updateProfile,
-    forgotPin as apiForgotPin, resetPin as apiResetPin, pinChangeOtp as apiPinChangeOtp,
+    forgotPin as apiForgotPin, resetPin as apiResetPin, pinChangeOtp as apiPinChangeOtp, getSettings,
 } from '../api.js';
 import { getSessionToken, setSessionToken, clearSessionToken } from './sessionToken.js';
 import { syncOnLogin, pushPrefs, syncNow, clearCursor, startAutoSync } from './prefsSync.js';
@@ -37,7 +37,19 @@ export default function SessionProvider({ children }) {
     // signup/change-phone/resend - the verify view seeds its resend-cooldown
     // countdown and its "code sent" / "send failed" notice from it.
     const [otpHint, setOtpHint] = useState(null);
+    // GUEST_PREMIUM (public setting, GET /api/settings): fetched once on
+    // mount so a signed-out visitor's `premium` derivation below can flip on
+    // without a session. Defaults false and stays false on ANY fetch failure -
+    // this is UX only (the server enforces the real gate per-request), so it
+    // must never throw or block rendering.
+    const [guestPremium, setGuestPremium] = useState(false);
     const hydratedRef = useRef(false); // StrictMode mounts effects twice - hydrate once
+
+    useEffect(() => {
+        getSettings()
+            .then(s => setGuestPremium(Boolean(s?.GUEST_PREMIUM)))
+            .catch(() => {}); // best-effort - guestPremium stays false
+    }, []);
 
     useEffect(() => {
         if (hydratedRef.current) return;
@@ -85,6 +97,12 @@ export default function SessionProvider({ children }) {
         token,
         status,
         isGuest: !user,
+        // premium: true for any signed-in user, or a guest when GUEST_PREMIUM
+        // is on server-side. Components use this INSTEAD of isGuest/signedIn
+        // to gate the premium surfaces (tip detail, future dates, Daily
+        // MultiBet, Sure Bets); account-bound features keep checking
+        // user/isGuest directly - this flag never opens those.
+        premium: !!user || guestPremium,
         role: user?.role ?? null,
         view,
         otpHint,
@@ -183,7 +201,7 @@ export default function SessionProvider({ children }) {
                 return null;
             }
         },
-    }), [user, token, status, view, otpHint]);
+    }), [user, token, status, view, otpHint, guestPremium]);
 
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }
