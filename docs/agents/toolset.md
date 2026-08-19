@@ -437,6 +437,25 @@ the shown bet). Sources: `docs/research/`.
   later (`build` went from null to `1.4.0+mszeyz65`). This is the route for a one-file
   production fix that must not wait for a release.
 
+- 2026-08-19 - **AI verdicts: two separate failures, only one of them ours.** After the owner
+  topped up OpenRouter, HTTP 402 stopped and 24 hot verdicts landed within four minutes,
+  draining the upcoming hot queue. The remaining log noise was a genuine parse bug: our own
+  `extractJson` used a greedy `/\{[\s\S]*\}/`, which spans from the FIRST brace anywhere in a
+  reply to the LAST, so any prose brace before the JSON produced one unparseable blob and the
+  verdict was dropped after the call had already been billed. Fixed by matching brace PAIRS with
+  a string-aware stack scan (candidates tried last-first, so a model that restates the schema
+  before answering still parses) plus `response_format: {type:'json_object'}` on the request.
+  Live A/B on `openai/gpt-5.6-luna`: JSON mode does NOT cost grounding citations (5 of 5 both
+  ways) and long grounded replies finish cleanly (`finish_reason: stop`, 3.9 KB), so the
+  original theory of token truncation was wrong - check `finish_reason` before believing it.
+  **Honest status: the fix is proven by unit tests and live A/B, NOT yet by production traffic**,
+  because the queue had already drained when it shipped; the next real test is the batch after
+  the 05:00 EAT full sweep. Diagnosis one-liner that settled it: post to
+  `/chat/completions` directly and print `choices[0].finish_reason` + `usage`.
+  **Why the worker can look idle and be correct:** tip reviews need `tip_confidence >=
+  TIP_AI_MIN_CONFIDENCE` (0.75) and live's best upcoming tip was 0.7154, so zero were due;
+  hot reviews were all already verdicted. Check those two counts before suspecting the worker.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) — architecture + commands + invariants; authoritative for any harness.
