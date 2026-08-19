@@ -167,3 +167,43 @@ plan/checklist; A and B start immediately after the decisions below.
 - B (sync) simplifies to `db-sync.js status | pull [--tables ...] [--since d] | push --tables ...` over `db-export`/`db-import` primitives; table classes stay (instance tables never move); the bookmaker trio is reloaded per date window (`DELETE ... WHERE start_time in window` then load) so a routine daily pull is small; a first-time or `--full` pull replaces whole tables.
 - A6 becomes: `hotfix-remote.js` for file-level emergencies (kept small) + the build-2 redeploy for A2-A4.
 - C keeps the compaction items; the retention tiers item is dropped.
+
+## 7. Hot-swap assessment (owner ask, 2026-08-19)
+
+Question: can the always-running `src/server.js` be decoupled from the source tree so
+changes hot-swap without breaking a running instance?
+
+What today's deploy showed. Passenger's app root is a VERSIONED directory
+(`~/oddspro-app-v1.4.0`) named in `public_html/.htaccess`, and `deploy-remote --app`
+extracts the new zip OVER that live directory. Three consequences, all observed:
+files change under a running process (any late `await import(...)` can mix versions);
+cPanel's Stop does not kill the running `lsnode` processes, so old-code instances keep
+serving and, before this release, kept running their own schedulers; and the switch
+itself (`.htaccess`) is rewritten by both the web deploy and the cPanel Start/Stop
+buttons, which is how the site went down for a few minutes today.
+
+Proposal, in two independent steps.
+
+**Step 1: release directories behind a stable symlink (atomic swap).**
+`~/releases/<stamp>/` receives the zip and its `npm install --omit=dev`, untouched by
+any running process. `~/oddspro-app-current` is a symlink flipped with `ln -sfn` once
+the release is complete, then `touch current/tmp/restart.txt`. `PassengerAppRoot` points
+at `~/oddspro-app-current` FOREVER, so `.htaccess` stops changing between deploys and
+the app root stops moving with the version number. Rollback becomes a symlink flip plus
+a restart, seconds rather than a re-upload. Keep the last three releases, prune older.
+Caveat to verify on this host: Passenger resolves the app root at process start, so the
+flip only takes effect on the restart we already perform.
+
+**Step 2: split the writer out of the web process.**
+`src/server.js` becomes HTTP only; a new `src/worker.js` entry point boots config,
+settings and meta, takes the writer lease, and runs the schedulers, AI worker and geo
+backfill. The lease shipped in this release is what makes the split safe and small:
+whichever process holds `oddspro:writer` does the work, so the web tier can be recycled
+by LiteSpeed at will (it already is) without touching the pipeline, and the worker can
+be restarted on its own cadence. On a host without systemd the worker is a cron-launched
+singleton (`flock -n ~/tmp/worker.lock node src/worker.js`), which also survives the
+Passenger idle-shutdown that currently puts the scheduler to sleep with the app.
+
+Recommendation: step 1 next (small, removes the `.htaccess` and torn-tree hazards), step
+2 with workstream D, when the kickoff-anchored scheduler makes the writer's cadence
+genuinely independent of web traffic.
