@@ -41,11 +41,38 @@ export function isLightDue(nowMs, lastLightMs, lightMinutes) {
 
 // Classify a finished refresh job (F3). A user CANCEL wins over any error the
 // cooperative abort threw - it's an intentional stop, not a failure - and only
-// a clean 'ok' run bumps the data version / freshness stamps.
-export function refreshOutcome({ error, cancelRequested } = {}) {
+// a clean 'ok' run bumps the data version / freshness stamps. 'partial' (Task
+// A, 2026-08-19 durability pass) surfaces a light-pass run where some guarded
+// steps failed and some succeeded (summary.steps_verdict, set by lightRefresh
+// via summarizeSteps below) - still useful work, so it is treated like 'ok'
+// for freshness-stamping purposes at the call site, but the log line honestly
+// says 'partial' instead of masking the failures as a clean run.
+export function refreshOutcome({ error, cancelRequested, summary } = {}) {
     if (cancelRequested) return 'cancelled';
     if (error) return 'error';
+    if (summary?.steps_verdict === 'partial') return 'partial';
     return 'ok';
+}
+
+// Classify a light pass's per-step outcomes (Task A: per-step isolation so one
+// step's failure can never cascade into skipping every later step - see
+// docs/research/2026-08-19-odds-durability-and-outage-damage.md). `results` is
+// an array of { step, ok, error? } entries pushed by lightRefresh's guardStep
+// helper for each independently-isolated step (results settle, per-provider
+// odds, link, settle picks) - the already-best-effort tail steps (daily/user
+// slip settle, auth purge, track prune) are not represented here, they keep
+// their own try/catch and never abort the pass either way. Total and
+// order-independent:
+//   'ok'      - every step that ran succeeded (including no steps at all)
+//   'partial' - at least one step succeeded and at least one failed
+//   'error'   - every step that ran failed (a total pass failure)
+export function summarizeSteps(results) {
+    const list = Array.isArray(results) ? results : [];
+    if (!list.length) return 'ok';
+    const failed = list.filter(r => !r?.ok).length;
+    if (failed === 0) return 'ok';
+    if (failed === list.length) return 'error';
+    return 'partial';
 }
 
 // Decide what to do with a pending cross-instance manual-refresh request

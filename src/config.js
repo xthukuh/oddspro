@@ -214,6 +214,16 @@ const EnvSchema = z.object({
     // Manual POST /api/refresh answered `200 {fresh:true}` (no re-run) when the
     // date was successfully refreshed - any mode - within this window. 0 = off.
     REFRESH_CACHE_MINUTES: z.coerce.number().min(0).default(5),
+    // Stalled-collection watchdog (scripts/collection-watchdog.js, Task B of the
+    // 2026-08-19 durability pass - see docs/research/2026-08-19-odds-durability-
+    // and-outage-damage.md). Cron-run every ~15 min on the live host; reads
+    // MAX(matches.updated_at) and classifies it via src/db/watchdog-rules.js
+    // #collectionVerdict. WATCHDOG_STALE_MINUTES gates a busy slate (fixtures
+    // kicking off nearby); WATCHDOG_QUIET_STALE_MINUTES is the much longer leash
+    // for a genuinely empty slate with nothing to scrape.
+    WATCHDOG_STALE_MINUTES: z.coerce.number().min(1).default(45),
+    WATCHDOG_QUIET_STALE_MINUTES: z.coerce.number().min(1).default(240),
+    WATCHDOG_ALERT_AFTER: z.coerce.number().int().min(1).default(3),
     // Visitor geo backfill (src/geo.js): a background sweep resolves each newly
     // seen visitor IP to country/region and caches the result per-IP (ip_geo),
     // marking unresolvable/private IPs so they're never re-queried. Default

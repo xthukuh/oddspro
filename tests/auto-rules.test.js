@@ -5,7 +5,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
-    shouldConsumeRefreshRequest,
+    shouldConsumeRefreshRequest, summarizeSteps,
 } from '../src/db/auto-rules.js';
 
 // refreshOutcome (F3): classify a finished refresh job.
@@ -21,6 +21,52 @@ test('refreshOutcome reports error when a run threw without a cancel', () => {
 test('refreshOutcome treats a cancel as cancelled even if the abort threw', () => {
     assert.equal(refreshOutcome({ error: 'cancelled', cancelRequested: true }), 'cancelled');
     assert.equal(refreshOutcome({ error: null, cancelRequested: true }), 'cancelled');
+});
+
+// refreshOutcome (Task A, 2026-08-19): 'partial' surfaces a light pass where
+// some guarded steps failed and some succeeded, via summary.steps_verdict.
+test('refreshOutcome reports partial from a partial-steps summary', () => {
+    assert.equal(refreshOutcome({ error: null, cancelRequested: false, summary: { steps_verdict: 'partial' } }), 'partial');
+});
+
+test('refreshOutcome lets error/cancelled win over a partial-steps summary', () => {
+    assert.equal(refreshOutcome({ error: 'boom', summary: { steps_verdict: 'partial' } }), 'error');
+    assert.equal(refreshOutcome({ cancelRequested: true, summary: { steps_verdict: 'partial' } }), 'cancelled');
+});
+
+test('refreshOutcome ignores a non-partial or absent steps_verdict', () => {
+    assert.equal(refreshOutcome({ summary: { steps_verdict: 'ok' } }), 'ok');
+    assert.equal(refreshOutcome({ summary: {} }), 'ok');
+    assert.equal(refreshOutcome({ summary: null }), 'ok');
+});
+
+// summarizeSteps (Task A): classify a light pass's guarded per-step outcomes.
+test('summarizeSteps reports ok when every step succeeded, or none ran', () => {
+    assert.equal(summarizeSteps([{ step: 'results', ok: true }, { step: 'link', ok: true }]), 'ok');
+    assert.equal(summarizeSteps([]), 'ok');
+    assert.equal(summarizeSteps(null), 'ok');
+    assert.equal(summarizeSteps(undefined), 'ok');
+});
+
+test('summarizeSteps reports error only when every step that ran failed', () => {
+    assert.equal(summarizeSteps([{ step: 'results', ok: false, error: 'boom' }]), 'error');
+    assert.equal(summarizeSteps([
+        { step: 'results', ok: false, error: 'a' },
+        { step: 'link', ok: false, error: 'b' },
+    ]), 'error');
+});
+
+test('summarizeSteps reports partial when some steps failed and some succeeded', () => {
+    assert.equal(summarizeSteps([
+        { step: 'results', ok: false, error: 'boom' },
+        { step: 'betpawa odds', ok: true },
+        { step: 'betika odds', ok: true },
+    ]), 'partial');
+    // Order independent.
+    assert.equal(summarizeSteps([
+        { step: 'betpawa odds', ok: true },
+        { step: 'betika odds', ok: false, error: 'timeout' },
+    ]), 'partial');
 });
 
 const utc = iso => new Date(iso).getTime();

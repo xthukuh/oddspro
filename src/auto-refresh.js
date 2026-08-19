@@ -11,7 +11,7 @@ import { settleDailySlips } from './daily-slip.js';
 import { settleUserSlips } from './user-slips.js';
 import { purgeExpiredAuth } from './auth.js';
 import { pruneTrackEvents } from './track.js';
-import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome, shouldConsumeRefreshRequest } from './db/auto-rules.js';
+import { parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome, shouldConsumeRefreshRequest, summarizeSteps } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
 import { _date, _dtime, debugLog } from './utils.js';
@@ -194,7 +194,11 @@ export function startJob({ mode, dates, run, onFinish = null }) {
             refreshJob.finished_at = new Date().toISOString();
             refreshJob.cancelled = outcome === 'cancelled';
             if (outcome === 'cancelled') refreshJob.error = null; // user abort, not a failure
-            if (outcome === 'ok') {
+            // 'partial' (Task A) still moved data - a light pass where some
+            // guarded steps failed and some succeeded still stamps freshness,
+            // exactly like a clean 'ok' run; only 'error' (every guarded step
+            // failed) and 'cancelled' withhold the stamp.
+            if (outcome === 'ok' || outcome === 'partial') {
                 for (const d of dates) lastFresh.set(d, Date.now());
                 // Cross-instance meta: bump the shared warehouse_version and
                 // record last_success so every instance's next refreshStatus()
@@ -212,8 +216,10 @@ export function startJob({ mode, dates, run, onFinish = null }) {
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
             }
             const secs = Math.round((Date.now() - startedMs) / 1000);
+            const failedSteps = refreshJob.summary?.step_failures?.map(f => f.step) ?? [];
             _log(`${mode} ${outcome.toUpperCase()} ${secs}s dates=${dates.join(',') || '-'}`
-                + (outcome === 'error' ? ` error=${refreshJob.error}` : ''));
+                + (outcome === 'error' ? ` error=${refreshJob.error}` : '')
+                + (outcome === 'partial' && failedSteps.length ? ` failed=${failedSteps.join(',')}` : ''));
             refreshJob.cancelRequested = false; // clear for the next job
             try {
                 onFinish?.(refreshJob);
@@ -239,6 +245,22 @@ export function requestCancel() {
 // stats/history/snapshots/predictions/AI (those belong to the full sweep and
 // manual date refreshes). Completed matches are excluded from odds scraping
 // pre-fetch, and past dates are never touched.
+//
+// Task A (2026-08-19 durability pass, docs/research/2026-08-19-odds-durability-
+// and-outage-damage.md): bookmaker odds are the only irreplaceable data this
+// pipeline touches, so no earlier step may ever cost a collection window
+// again. The 2026-08-16 outage was exactly that: the results-settle statement
+// threw, and because the pass was a plain sequence, every step after it -
+// including both providers' odds scraping - simply never ran, for three days.
+// Every step below (results settle, per-provider odds, link, settle picks) is
+// now independently guarded via guardStep: a throw is caught, recorded and
+// logged, and the pass continues to the next step regardless. The ORDER is
+// unchanged on purpose (results-first still lets completed matches shrink the
+// scrapers' per-game detail requests) - only the failure-cascades-forward
+// behaviour is gone. A cooperative cancel (_step's shouldCancel() throw) stays
+// OUTSIDE every guarded try/catch, so it still aborts the whole pass
+// immediately exactly as before - guardStep only isolates a STEP'S OWN work,
+// never the cancel check that precedes it.
 export async function lightRefresh(onStep = null, shouldCancel = null) {
     const today = _dtime(_date()).substring(0, 10);
     const _step = label => {
@@ -248,51 +270,84 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     };
     const summary = { date: today };
 
-    _step('results');
-    const r = await settleApisportsResults();
-    summary.refreshed = r.refreshed;
-    summary.settled = r.settled;
+    // Per-step outcomes for the guarded steps only (summarizeSteps below) -
+    // the already-best-effort tail (daily/user slip settle, auth purge, track
+    // prune) keeps its own try/catch and is not represented here.
+    const stepResults = [];
+    const guardStep = async (label, fn) => {
+        _step(label); // cancel check runs OUTSIDE the try - never swallowed
+        try {
+            const result = await fn();
+            stepResults.push({ step: label, ok: true });
+            return result;
+        } catch (e) {
+            const message = String(e?.message ?? e);
+            stepResults.push({ step: label, ok: false, error: message });
+            console.error(`[light] ${label} failed:`, message);
+            return undefined;
+        }
+    };
+
+    const r = await guardStep('results', () => settleApisportsResults());
+    if (r) {
+        summary.refreshed = r.refreshed;
+        summary.settled = r.settled;
+    }
 
     // Kickoff-proximity backoff + idle awareness (odds-refresh-rules), knobs
     // late-read per pass. The idle lookahead is clamped to the first tier
     // boundary so an idle skip can never starve the near-kickoff
-    // always-refresh guarantee that keeps is_stale detection current.
+    // always-refresh guarantee that keeps is_stale detection current. A
+    // failure here (only the DB read can realistically throw - the pure
+    // parse/decision helpers are fail-open by construction) degrades to
+    // "assume active" rather than "assume idle": if we can't tell whether the
+    // slate is quiet, the safe direction is to attempt the scrape, never to
+    // silently skip it.
     const nowMs = Date.now();
     const tiers = parseOddsTiers(effective('ODDS_REFRESH_TIERS'));
     const lookKnob = Number(effective('AUTO_IDLE_LOOKAHEAD_MINUTES'));
     const firstTier = tiers?.[0]?.upToMin ?? 0;
-    const todayMatches = (await db('matches')
-        .where('start_time', '>=', `${today} 00:00:00`)
-        .where('start_time', '<=', `${today} 23:59:59`)
-        .select('completed_at',
-            db.raw("DATE_FORMAT(start_time, '%Y-%m-%dT%H:%i:%s+03:00') as start_iso")))
-        .map(x => ({ startMs: Date.parse(x.start_iso), completed: x.completed_at != null }));
-    const idle = lightPassIdle(nowMs, todayMatches, {
-        lookaheadMin: lookKnob > 0 && Number.isFinite(firstTier) ? Math.max(lookKnob, firstTier) : lookKnob,
-        idleEveryMin: Number(effective('AUTO_IDLE_EVERY_MINUTES')),
-        lastOddsPassMs: lastOddsScrapeMs,
-    });
+    const idle = (await guardStep('odds idle check', async () => {
+        const todayMatches = (await db('matches')
+            .where('start_time', '>=', `${today} 00:00:00`)
+            .where('start_time', '<=', `${today} 23:59:59`)
+            .select('completed_at',
+                db.raw("DATE_FORMAT(start_time, '%Y-%m-%dT%H:%i:%s+03:00') as start_iso")))
+            .map(x => ({ startMs: Date.parse(x.start_iso), completed: x.completed_at != null }));
+        return lightPassIdle(nowMs, todayMatches, {
+            lookaheadMin: lookKnob > 0 && Number.isFinite(firstTier) ? Math.max(lookKnob, firstTier) : lookKnob,
+            idleEveryMin: Number(effective('AUTO_IDLE_EVERY_MINUTES')),
+            lastOddsPassMs: lastOddsScrapeMs,
+        });
+    })) ?? { skip: false, reason: 'idle-check-failed-assume-active' };
     summary.odds_pass = idle.reason;
     if (idle.skip) {
         _step('odds skipped (idle - nothing in-play, next kickoff far)');
     } else {
         lastOddsScrapeMs = nowMs;
+        // The single most valuable line in this task: a failure scraping ONE
+        // provider must not prevent the OTHER from being scraped, so each
+        // provider is its own guarded step.
         for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
-            _step(`${provider} odds`);
-            const ex = await oddsExcludeIds(provider, `${today} 00:00:00`, { tiers, nowMs: Date.now() });
-            const c = await saveMatches(await fetcher(today, ex.ids));
-            summary[provider] = { saved: c.inserted + c.updated, skipped: c.skipped, markets: c.markets, backoff_skipped: ex.backoff };
-            debugLog(`[light] ${provider}: excluded ${ex.completed} completed + ${ex.backoff} fresh-under-backoff`);
+            const res = await guardStep(`${provider} odds`, async () => {
+                const ex = await oddsExcludeIds(provider, `${today} 00:00:00`, { tiers, nowMs: Date.now() });
+                const c = await saveMatches(await fetcher(today, ex.ids));
+                debugLog(`[light] ${provider}: excluded ${ex.completed} completed + ${ex.backoff} fresh-under-backoff`);
+                return { c, ex };
+            });
+            if (res) {
+                summary[provider] = { saved: res.c.inserted + res.c.updated, skipped: res.c.skipped, markets: res.c.markets, backoff_skipped: res.ex.backoff };
+            }
         }
 
-        _step('link');
-        await linkMatches();
+        await guardStep('link', () => linkMatches());
     }
 
-    _step('settle picks');
-    const s = await settleHotPicks();
-    summary.picks_settled = s.settled;
-    summary.tips_settled = s.tips_settled;
+    const s = await guardStep('settle picks', () => settleHotPicks());
+    if (s) {
+        summary.picks_settled = s.settled;
+        summary.tips_settled = s.tips_settled;
+    }
 
     // Daily MultiBet slips settle on the same cadence (pure SQL + rollup, no
     // fetches); best-effort like the auth purge - never fails the refresh.
@@ -321,6 +376,18 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
         if (pruned) summary.track_events_pruned = pruned;
     } catch (e) {
         console.error('[light] track prune failed:', e?.message ?? e);
+    }
+
+    // Final verdict over the guarded steps (results, odds idle check,
+    // per-provider odds, link, settle picks). 'partial' is a normal return -
+    // useful work happened, so the job still stamps freshness (see startJob's
+    // finally) - but 'error' (every guarded step failed) throws so the job's
+    // own outcome classification (refreshOutcome) honestly reports the pass
+    // as a failure instead of a silent 'ok'.
+    summary.step_failures = stepResults.filter(x => !x.ok).map(({ step, error }) => ({ step, error }));
+    summary.steps_verdict = summarizeSteps(stepResults);
+    if (summary.steps_verdict === 'error') {
+        throw new Error(`light pass: every step failed (${summary.step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);
     }
     return summary;
 }

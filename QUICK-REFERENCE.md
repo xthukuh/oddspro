@@ -196,6 +196,7 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 |---|---|
 | Daily sweep | in-process (serve); optional cron backup ≥ 1h from `AUTO_FULL_AT` — Windows task `oddspro-pipeline` 08:00 / `scripts/pipeline-cron.sh` |
 | Cron-only host | run `node src/index.js aireview` after each sweep (else AI verdicts stop) |
+| Stalled-collection watchdog | cron every ~15 min: `node scripts/collection-watchdog.js` — flags stalled odds collection (`WATCHDOG_STALE_MINUTES`/`WATCHDOG_QUIET_STALE_MINUTES`), touches `tmp/restart.txt` to recycle Passenger, SMS-alerts the admin after `WATCHDOG_ALERT_AFTER` consecutive stale runs. Never exits non-zero; log in `logs/watchdog.log` |
 | Emergency stop | create `.HALT` in the app root — running serve exits ≤ ~30s, boot refused; delete to resume |
 | Scheduled maintenance window | Admin → Dashboard "Maintenance" card (or Admin → Settings group `maintenance`): toggle + EAT start/end + message. Guests: banner pre-window, full-screen notice + API 503 during; admins/bearers bypass; auto-expires at end (M14) |
 | User management (rescue a user) | Admin → Users: disable/enable, unlock, manual phone-verify (SMS-failure fallback), force PIN change, Reset PIN → temp PIN shown ONCE (user must change it at next sign-in). Self-disable/demote and last-admin removal are blocked (M8). Self-service alternative: Forgot PIN below (M13) |

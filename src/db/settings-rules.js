@@ -73,6 +73,11 @@ export const SETTINGS_CATALOG = [
     // Read once when the scheduler starts -> restart required.
     { key: 'AUTO_REFRESH_ENABLED', type: 'boolean', group: 'refresh', public: false, live: false, label: 'Auto-refresh scheduler', hint: 'Master switch for the in-process scheduler (light passes + daily full sweep). Restart to apply.' },
     { key: 'AUTO_FULL_AT', type: 'string', group: 'refresh', public: false, live: false, pattern: P_TIME, patternHint: 'HH:mm (EAT), off, or blank', label: 'Daily full sweep time', hint: 'EAT wall-clock time for the daily full pipeline; off/blank disables. Restart to apply.' },
+    // ---- Stalled-collection watchdog (scripts/collection-watchdog.js, cron-run
+    // every ~15 min). Late-read at run time - no restart needed.
+    { key: 'WATCHDOG_STALE_MINUTES', type: 'number', group: 'refresh', public: false, live: true, min: 1, unit: 'min', label: 'Watchdog: stale floor (busy)', hint: 'With fixtures scheduled nearby, flag collection stalled once odds are older than this.' },
+    { key: 'WATCHDOG_QUIET_STALE_MINUTES', type: 'number', group: 'refresh', public: false, live: true, min: 1, unit: 'min', label: 'Watchdog: stale floor (quiet)', hint: 'With no fixtures scheduled nearby, only flag collection stalled after this much longer leash - an empty slate legitimately has nothing to scrape.' },
+    { key: 'WATCHDOG_ALERT_AFTER', type: 'int', group: 'refresh', public: false, live: true, min: 1, unit: 'runs', label: 'Watchdog: alert after', hint: 'Consecutive stale watchdog runs before it sends one SMS to the admin.' },
     // ---- Pipeline / ingestion floors (M6).
     { key: 'APISPORTS_MIN_REMAINING', type: 'int', group: 'pipeline', public: false, live: true, min: 0, unit: 'requests', label: 'API-Football quota floor', hint: 'Halt API-Football fetching when the daily quota remaining drops to this floor.' },
     { key: 'LINK_MIN_CONFIDENCE', type: 'number', group: 'pipeline', public: false, live: true, min: 0, max: 1, label: 'Link confidence floor', hint: 'Minimum fuzzy-match score to correlate a bookmaker match to a fixture (plus the 0.05 runner-up margin).' },
