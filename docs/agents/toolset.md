@@ -361,6 +361,55 @@ the shown bet). Sources: `docs/research/`.
   unambiguously ahead there (so a full pull would likely be a net gain, not a loss) - the
   point stands for future runs: check direction (`status`) before reaching for `--full` on a
   table, and prefer the windowed default for routine catch-up.
+- 2026-08-19 — **`gzip -t` is NOT a completeness check (Round 1 fix, live-verified twice):**
+  the live host kills a long-running remote `mariadb-dump` connection mid-stream, but `gzip`
+  on the remote closes ITS OWN output cleanly regardless - the resulting file is a perfectly
+  valid, perfectly truncated gzip stream. `gzip -t` verifies the gzip FRAME, never that
+  mariadb-dump actually finished. Caught for real: `oddsprok_prod`'s first backup attempt died
+  mid-INSERT inside `matches` with zero `odds_markets` rows at all, and `gzip -t` passed
+  anyway. **The fix (`scripts/db-sync.js` + `scripts/lib/sync-rules.js`'s `dumpLooksComplete`):
+  check for mariadb-dump's own trailer** (`-- Dump completed on ...`, only ever written after
+  a clean exit - so backup dumps skip `--compact`, which suppresses it) **or an explicit marker
+  of our own** (pull dumps keep `--compact` for size, so the remote command appends
+  `-- oddspro-sync: complete` itself, ONLY after mariadb-dump exits 0: `(mariadb-dump ... &&
+  echo '...') | gzip -9` under `set -o pipefail` via a `bash -c` wrapper, so a killed dump's
+  non-zero exit survives the pipe into gzip instead of being swallowed by gzip's own success).
+  Read the tail by streaming the file through `zlib`'s `createGunzip()` and keeping only the
+  last ~2 KB decompressed - never load a multi-hundred-MB dump into memory just to check its
+  end.
+  **Playbook for "is this a real backup?":** `node scripts/db-sync.js backup --remote-db
+  <name>` now does this automatically per table/chunk and prints a completeness table
+  (planned chunk-row-sum vs a final remote `COUNT(*)`, per table) before declaring success -
+  trust that table, not a bare "the command exited 0". A fatal abort renames the partial
+  output to `<file>.partial` so it can never be mistaken for a finished backup. For an OLDER
+  file made before this fix existed, there is no retroactive check possible other than
+  re-running the backup - `gzip -t` on it proves nothing about completeness, only that the
+  bytes it does contain aren't corrupt.
+  **Row count alone cannot predict when a table is "too big"**: `matches` in `oddsprok_prod`
+  is only 26,670 rows - nowhere near `BACKUP_CHUNK_SIZE` (100000) - but carries a ~39 KB
+  `metadata` blob per row, and three flat retries of the whole table died at the identical
+  ~20-30 MB / ~25-30 s mark every time (`mariadb-dump: Error 2013: Lost connection to server
+  during query`). The general fix is adaptive, not a bigger row-count guess: on a completeness
+  failure that survives 3 retries, `downloadWithBisection` (shared by `backup` and `pull`)
+  bisects the table's id range and retries each half recursively, bottoming out only when the
+  range can't be split further. Live result: `matches` succeeded in 5 bisected pieces;
+  `odds_markets`'s 509 pre-planned id-range chunks all matched their planned counts exactly
+  with zero bisection needed (they were already small enough). `pull` needed the identical
+  fallback for a table it had never pre-chunked at all: `odds_markets`'s normal WINDOWED dump
+  (`match_id IN (SELECT id FROM matches WHERE ...)`, a subquery predicate - slower to evaluate
+  per row than a direct id range, and it failed even earlier as a result, at row ~179,590 on
+  the first retry) fell back to bisected pieces and completed. **This is proof, not
+  speculation, that the ORIGINAL (pre-Round-1) windowed `odds_markets` pull earlier in this
+  session had silently imported a truncated table**: local's windowed `COUNT(*)` for the exact
+  same predicate came up ~3M rows short of remote's (1,852,723 vs 4,910,118) - re-pulling with
+  the fixed code closed the gap. **Profiling a whole DB before backing it up must be batched,
+  not per-table:** an initial per-table-loop implementation (PK check + count + min/max, 3
+  round trips x N tables, each `ssh` invocation paying full connection-setup latency with no
+  multiplexing) measured live at several minutes just to PLAN a 25-table backup, before any
+  data moved; batching PK shape into one `information_schema.columns` query and counts into
+  one `UNION ALL` per batch of ~100 (`profileRemoteDatabase`/`batchedChunkCounts`) cut that to
+  16 seconds. Aggregate reads (COUNT/MIN/MAX) are cheap to batch even across hundreds of
+  chunks - the risk this whole fix is about is bulk DATA transfer, not read aggregates.
 
 ## 6. Doc & knowledge topology
 
