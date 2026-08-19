@@ -9,6 +9,7 @@ import { withRetry } from './db/retry-rules.js';
 import { isRetryableApiError } from './db/net-rules.js';
 import { buildEventRows } from './apisports-events.js';
 import { buildStandingRows } from './apisports-standings.js';
+import { buildFixtureItemRows } from './apisports-fixtures.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -34,43 +35,6 @@ const ApiEnvelope = z.object({
     results: z.number(),
     paging: z.object({ current: z.number(), total: z.number() }),
     response: z.array(z.any()),
-});
-
-// Nullable score pair
-const ScorePair = z.object({
-    home: z.number().nullable(),
-    away: z.number().nullable(),
-});
-
-// Consumed fields of a /fixtures response item
-const FixtureItem = z.object({
-    fixture: z.object({
-        id: z.number(),
-        date: z.string(), // ISO with TZ offset (requested timezone)
-        referee: z.string().nullable().optional(),
-        venue: z.object({ name: z.string().nullable().optional() }).partial().nullable().optional(),
-        status: z.object({ short: z.string(), elapsed: z.number().nullable().optional() }),
-    }),
-    league: z.object({
-        id: z.number(),
-        name: z.string(),
-        type: z.string().optional(),
-        country: z.string().optional(),
-        logo: z.string().nullable().optional(),
-        season: z.number(),
-        round: z.string().nullable().optional(),
-    }),
-    teams: z.object({
-        home: z.object({ id: z.number(), name: z.string(), logo: z.string().nullable().optional() }),
-        away: z.object({ id: z.number(), name: z.string(), logo: z.string().nullable().optional() }),
-    }),
-    goals: ScorePair,
-    score: z.object({
-        halftime: ScorePair,
-        fulltime: ScorePair,
-        extratime: ScorePair,
-        penalty: ScorePair,
-    }),
 });
 
 // Track daily quota from response headers; halt cleanly at the configured floor.
@@ -140,55 +104,15 @@ export function apisportsQuotaRemaining() {
     return _remaining;
 }
 
-// "2026-07-02T15:00:00+03:00" -> "2026-07-02 15:00:00" (requested-TZ wall time)
-function _isoToDatetime(iso) {
-    return String(iso).substring(0, 19).replace('T', ' ');
-}
-
-// Map a validated fixture item to upsert rows
-function _fixtureRows(item) {
-    const f = item.fixture, l = item.league, t = item.teams;
-    return {
-        league: { id: l.id, name: l.name, type: l.type ?? null, country: l.country ?? null, logo: l.logo ?? null },
-        teams: [
-            { id: t.home.id, name: t.home.name, logo: t.home.logo ?? null },
-            { id: t.away.id, name: t.away.name, logo: t.away.logo ?? null },
-        ],
-        fixture: {
-            id: f.id,
-            league_id: l.id,
-            season: l.season,
-            round: l.round ?? null,
-            kickoff: _isoToDatetime(f.date),
-            home_team_id: t.home.id,
-            away_team_id: t.away.id,
-            status: f.status.short,
-            elapsed: f.status.elapsed ?? null,
-            goals_home: item.goals.home,
-            goals_away: item.goals.away,
-            ht_home: item.score.halftime.home,
-            ht_away: item.score.halftime.away,
-            ft_home: item.score.fulltime.home,
-            ft_away: item.score.fulltime.away,
-            et_home: item.score.extratime.home,
-            et_away: item.score.extratime.away,
-            pen_home: item.score.penalty.home,
-            pen_away: item.score.penalty.away,
-            venue: f.venue?.name ?? null,
-            referee: f.referee ?? null,
-            metadata: JSON.stringify(item),
-        },
-    };
-}
-
-// Upsert fixture items (leagues + teams first for FK integrity)
+// Upsert fixture items (leagues + teams first for FK integrity). Parsing +
+// aggregation is delegated to the pure src/apisports-fixtures.js: a raw item
+// that fails validation is skipped and logged rather than thrown - the same
+// per-item-isolation fix already applied to standings/events, closing the
+// last cascading-throw gap in the fixtures path (2026-08-16 outage class).
 async function _saveFixtureItems(items) {
-    const leagues = new Map(), teams = new Map(), fixtures = [];
-    for (const raw of items) {
-        const { league, teams: tt, fixture } = _fixtureRows(FixtureItem.parse(raw));
-        leagues.set(league.id, league);
-        for (const t of tt) teams.set(t.id, t);
-        fixtures.push(fixture);
+    const { leagues, teams, fixtures, skipped } = buildFixtureItemRows(items);
+    if (skipped.length) {
+        console.warn(`[apisports] ${skipped.length} fixture items skipped (unparseable)`);
     }
     // These idempotent upserts can deadlock against a concurrent process's
     // warehouse write (a 2nd serve/CLI/cron) on the shared leagues/teams/fixtures
@@ -371,9 +295,30 @@ const LineupItem = z.object({
     substitutes: z.array(z.object({ player: _PlayerObj })).nullable().optional(),
 });
 
+// Parse each raw item against `schema`, skipping (and counting) any that
+// fail rather than letting one malformed team record (e.g. a missing
+// statistics array) throw and discard the OTHER team's valid data in the
+// same response - the same per-item-isolation fix as apisports-events.js /
+// apisports-standings.js, applied to the statistics/lineups parsers.
+function _parseEach(schema, rawItems, label) {
+    const parsed = [];
+    let skipped = 0;
+    for (const raw of rawItems) {
+        try {
+            parsed.push(schema.parse(raw));
+        } catch {
+            skipped++;
+        }
+    }
+    if (skipped) {
+        console.warn(`[apisports] ${label}: ${skipped} item(s) skipped (unparseable)`);
+    }
+    return parsed;
+}
+
 // Replace + flag one fixture's team statistics. Returns row count.
 async function _fetchFixtureStatistics(fixture_id, giveup) {
-    const items = (await _get('/fixtures/statistics', { fixture: fixture_id })).map(i => StatisticsItem.parse(i));
+    const items = _parseEach(StatisticsItem, await _get('/fixtures/statistics', { fixture: fixture_id }), 'statistics');
     const rows = [];
     for (const item of items) {
         for (const s of item.statistics) {
@@ -396,7 +341,7 @@ async function _fetchFixtureStatistics(fixture_id, giveup) {
 
 // Replace + flag one fixture's lineups + players. Returns counts.
 async function _fetchFixtureLineups(fixture_id, giveup) {
-    const items = (await _get('/fixtures/lineups', { fixture: fixture_id })).map(i => LineupItem.parse(i));
+    const items = _parseEach(LineupItem, await _get('/fixtures/lineups', { fixture: fixture_id }), 'lineups');
     const lineups = [], players = [];
     for (const item of items) {
         lineups.push({
@@ -500,23 +445,32 @@ export async function fetchApisportsHistory() {
     const fetchedTeams = new Set(); // a team with several upcoming fixtures costs one call
     const tick = _progress('API-Football - team history');
     await _batch(targets, async (f, i, len) => {
-        const items = [];
-        for (const team of [f.home_team_id, f.away_team_id]) {
-            if (fetchedTeams.has(team)) continue;
-            fetchedTeams.add(team);
-            items.push(...await _get('/fixtures', { team, last, timezone: TIMEZONE }));
+        try {
+            const items = [];
+            for (const team of [f.home_team_id, f.away_team_id]) {
+                if (fetchedTeams.has(team)) continue;
+                fetchedTeams.add(team);
+                items.push(...await _get('/fixtures', { team, last, timezone: TIMEZONE }));
+            }
+            // No `last` cap: the full meeting history backs the all-time h2h_count
+            items.push(...await _get('/fixtures/headtohead', {
+                h2h: `${f.home_team_id}-${f.away_team_id}`, timezone: TIMEZONE,
+            }));
+            // Only finished games are history. headtohead also returns future
+            // meetings; saving those would leak never-settling fixtures into the
+            // results action's per-id refresh set.
+            const finished = items.filter(it => FINAL_STATUSES.includes(it?.fixture?.status?.short));
+            const saved = await _saveFixtureItems(finished);
+            counts.saved += saved.fixtures;
+            await db('fixtures').where('id', f.id).update({ history_fetched_at: db.fn.now() });
+        } catch (e) {
+            // One fixture's malformed API payload must not abort the whole sweep.
+            // Data-shape errors (zod) are logged and skipped - the fixture stays
+            // unflagged and is retried next run. Everything else (quota floor,
+            // network) still propagates so the run halts cleanly and saves progress.
+            if (!(e instanceof z.ZodError)) throw e;
+            console.warn(`API-Football - team history: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
         }
-        // No `last` cap: the full meeting history backs the all-time h2h_count
-        items.push(...await _get('/fixtures/headtohead', {
-            h2h: `${f.home_team_id}-${f.away_team_id}`, timezone: TIMEZONE,
-        }));
-        // Only finished games are history. headtohead also returns future
-        // meetings; saving those would leak never-settling fixtures into the
-        // results action's per-id refresh set.
-        const finished = items.filter(it => FINAL_STATUSES.includes(it?.fixture?.status?.short));
-        const saved = await _saveFixtureItems(finished);
-        counts.saved += saved.fixtures;
-        await db('fixtures').where('id', f.id).update({ history_fetched_at: db.fn.now() });
         tick(len);
     }, 1); // serial: repo convention for DB-writing batches
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
@@ -563,30 +517,39 @@ export async function fetchApisportsPredictions() {
     const counts = { fixtures: targets.length, saved: 0 };
     const tick = _progress('API-Football - predictions');
     await _batch(targets, async (f, i, len) => {
-        const items = await _get('/predictions', { fixture: f.id });
-        const p = items.length ? PredictionItem.parse(items[0]).predictions : null;
-        await db.transaction(async trx => {
-            if (p) {
-                await trx('fixture_api_predictions').insert({
-                    fixture_id: f.id,
-                    advice: p.advice ?? null,
-                    percent_home: _percent(p.percent?.home),
-                    percent_draw: _percent(p.percent?.draw),
-                    percent_away: _percent(p.percent?.away),
-                    under_over: p.under_over == null ? null : String(p.under_over),
-                    goals_home: p.goals?.home == null ? null : String(p.goals.home),
-                    goals_away: p.goals?.away == null ? null : String(p.goals.away),
-                    raw: JSON.stringify(items[0]),
-                }).onConflict('fixture_id').merge([
-                    'advice', 'percent_home', 'percent_draw', 'percent_away',
-                    'under_over', 'goals_home', 'goals_away', 'raw',
-                ]);
-                counts.saved++;
-            }
-            // Flag even on an empty response - fetch-once; a fixture without a
-            // prediction is simply neutral downstream.
-            await trx('fixtures').where('id', f.id).update({ predictions_fetched_at: db.fn.now() });
-        });
+        try {
+            const items = await _get('/predictions', { fixture: f.id });
+            const p = items.length ? PredictionItem.parse(items[0]).predictions : null;
+            await db.transaction(async trx => {
+                if (p) {
+                    await trx('fixture_api_predictions').insert({
+                        fixture_id: f.id,
+                        advice: p.advice ?? null,
+                        percent_home: _percent(p.percent?.home),
+                        percent_draw: _percent(p.percent?.draw),
+                        percent_away: _percent(p.percent?.away),
+                        under_over: p.under_over == null ? null : String(p.under_over),
+                        goals_home: p.goals?.home == null ? null : String(p.goals.home),
+                        goals_away: p.goals?.away == null ? null : String(p.goals.away),
+                        raw: JSON.stringify(items[0]),
+                    }).onConflict('fixture_id').merge([
+                        'advice', 'percent_home', 'percent_draw', 'percent_away',
+                        'under_over', 'goals_home', 'goals_away', 'raw',
+                    ]);
+                    counts.saved++;
+                }
+                // Flag even on an empty response - fetch-once; a fixture without a
+                // prediction is simply neutral downstream.
+                await trx('fixtures').where('id', f.id).update({ predictions_fetched_at: db.fn.now() });
+            });
+        } catch (e) {
+            // One fixture's malformed API payload must not abort the whole sweep.
+            // Data-shape errors (zod) are logged and skipped - the fixture stays
+            // unflagged and is retried next run. Everything else (quota floor,
+            // network) still propagates so the run halts cleanly and saves progress.
+            if (!(e instanceof z.ZodError)) throw e;
+            console.warn(`API-Football - predictions: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
+        }
         tick(len);
     }, 1); // serial: repo convention for DB-writing batches
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
