@@ -167,6 +167,11 @@ node scripts/deploy-remote.js --app --web     # code-only redeploy
                                               # (--dry-run prints every remote command)
 ```
 
+Emergency single-file fix (no release build): `node scripts/hotfix-remote.js <file...>
+[--from <dir>] [--restart] [--dry-run]` — remote-backs-up (`.orig-<stamp>`), uploads,
+`node --check`s `.js`/`.mjs`/`.cjs` (auto-restores + dies on a syntax error), prints the
+rollback command; detail `docs/DEPLOYMENT.md` §5.1.
+
 Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Restart**
 (with `MIGRATE_ON_BOOT=1` this applies any new migration first). Smoke test (§2.5).
 
