@@ -215,14 +215,23 @@ test('M6 secrets/boot switches stay OUT of the catalog by construction', () => {
     }
 });
 
-test('M6 public subset is EXACTLY the SAFE_* keys plus GUEST_PREMIUM (no other key leaked public)', () => {
+test('M6 public subset is EXACTLY the SAFE_* keys plus the two guest-premium knobs', () => {
     const pub = SETTINGS_CATALOG.filter(e => e.public).map(e => e.key).sort();
-    // GUEST_PREMIUM MUST be public: the client needs to see it (web/src/auth/
-    // SessionProvider.jsx reads it via GET /api/settings) to open the premium
-    // surfaces for a signed-out visitor.
-    assert.deepEqual(pub, ['GUEST_PREMIUM', 'SAFE_MAX_PER_DAY', 'SAFE_MAX_PRICE', 'SAFE_MIN_AGREEMENT',
-        'SAFE_MIN_H2H', 'SAFE_MIN_MARKET_SETTLED', 'SAFE_MIN_PARTS', 'SAFE_MIN_SAMPLES',
-        'SAFE_STRATEGY']);
+    // Both guest-premium knobs MUST be public: the client resolves the feature
+    // map from them (web/src/auth/SessionProvider.jsx reads GET /api/settings
+    // and feeds featureMap()) so it renders exactly what the server ships.
+    assert.deepEqual(pub, ['GUEST_PREMIUM', 'GUEST_PREMIUM_EXCEPT', 'SAFE_MAX_PER_DAY', 'SAFE_MAX_PRICE',
+        'SAFE_MIN_AGREEMENT', 'SAFE_MIN_H2H', 'SAFE_MIN_MARKET_SETTLED', 'SAFE_MIN_PARTS',
+        'SAFE_MIN_SAMPLES', 'SAFE_STRATEGY']);
+});
+
+test('GUEST_PREMIUM_EXCEPT: the per-feature clawback is a live, public, auth-policy string', () => {
+    const e = SETTINGS_CATALOG.find(x => x.key === 'GUEST_PREMIUM_EXCEPT');
+    assert.ok(e, 'GUEST_PREMIUM_EXCEPT must be admin-editable');
+    assert.equal(e.type, 'string');
+    assert.equal(e.public, true);
+    assert.equal(e.live, true);
+    assert.equal(e.group, 'auth-policy');
 });
 
 test('GUEST_PREMIUM: boolean, public, live, group auth-policy', () => {

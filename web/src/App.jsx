@@ -586,10 +586,15 @@ export default function App() {
     // (their rows lack tip_breakdown; the magic sheet shows a sign-in nudge) -
     // UNLESS the session is premium (signed in, or GUEST_PREMIUM opened it for
     // this guest too - their rows carry tip_breakdown same as a signed-in tier).
-    const premium = !!session?.premium;
+    // Per-surface gates come from the shared registry (src/db/feature-rules.js)
+    // via session.features, so re-gating one surface later never means hunting
+    // `premium` checks through the component tree.
+    const canSureBets = !!session?.features?.sure_bets;
+    const canFutureDates = !!session?.features?.future_dates;
+    const canDailySlip = !!session?.features?.daily_multibet;
     const surePicks = useMemo(
-        () => (premium ? sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS) : []),
-        [premium, visibleData, cal],
+        () => (canSureBets ? sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS) : []),
+        [canSureBets, visibleData, cal],
     );
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
@@ -628,7 +633,7 @@ export default function App() {
         // Sure bets: same membership idiom as Safe-only - all provider rows of
         // a listed fixture survive; independent of the Safe-only toggle (both
         // on = AND; Sure bets ⊆ safe pool, so Sure bets effectively wins).
-        if (sureBets && premium) {
+        if (sureBets && canSureBets) {
             const ids = new Set(surePicks.map(e => e.row.api_id));
             out = out.filter(r => ids.has(r.api_id));
         }
@@ -636,7 +641,7 @@ export default function App() {
         // enabled provider); loaded rows are already the enabled providers.
         if (oneEach) out = applyOneOfEach(out, orderedProviders);
         return out;
-    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, riskGate, activeMagicIds, effectiveSafe, safeOnly, safePicks, sureBets, premium, surePicks, oneEach, orderedProviders]);
+    }, [visibleData, clientFilters, filterColumns, hideHits, hideMiss, noMiss, riskGate, activeMagicIds, effectiveSafe, safeOnly, safePicks, sureBets, canSureBets, surePicks, oneEach, orderedProviders]);
     // Day-level hit-rate scoreboard: computed over the whole loaded selection
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
@@ -1143,7 +1148,7 @@ export default function App() {
     // clamped calendar at mount. A premium guest (GUEST_PREMIUM on) is exempt -
     // the server already opens future dates for them, so clamping here would
     // just be a UI lie on top of a working request.
-    const guestClamp = !!session?.isGuest && !premium && session?.status === 'ready';
+    const guestClamp = !!session?.isGuest && !canFutureDates && session?.status === 'ready';
     const MAX_DATE = guestClamp ? TODAY : new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
     // date can be '' (All dates) - anchor the chevrons on today then.
     const PREV_DATE = new Date(new Date(date || TODAY).setHours(13) - DAY_MS).toISOString().substring(0,10);
@@ -1306,7 +1311,7 @@ export default function App() {
                 <ViewPills
                     showCompleted={showCompleted} hideHits={hideHits} hideMiss={hideMiss}
                     noMiss={noMiss} safeOnly={safeOnly} oneEach={oneEach} filterCount={filterCount}
-                    sureBets={sureBets && premium} sureCount={surePicks.length}
+                    sureBets={sureBets && canSureBets} sureCount={surePicks.length}
                     sureCap={DEFAULT_SURE_BETS.maxPerDay} onSureBets={saveSureBets}
                     hideSelected={hideSelected} hideUnselected={keepSelected}
                     riskGate={riskGate} riskGateActive={activeMagicIds.length > 0 || safeOnly}
@@ -1435,14 +1440,14 @@ export default function App() {
                 <MagicMenu data={magicData} error={magicError} activeIds={activeMagicIds}
                     onToggle={id => { onToggleMagic(id); setShowMagic(false); }}
                     onClearMagic={onClearMagic} onClose={() => setShowMagic(false)}
-                    signedIn={premium} sureBets={sureBets} sureCount={surePicks.length}
+                    signedIn={canSureBets} sureBets={sureBets} sureCount={surePicks.length}
                     sureCap={DEFAULT_SURE_BETS.maxPerDay} slipSize={DEFAULT_SURE_BETS.slipSize}
                     onSureBets={saveSureBets} onTopSlip={seedTopSlip}
                     onDailySlip={() => { setShowMagic(false); setShowDailySlip(true); }} />
             )}
 
             {showDailySlip && (
-                <DailyMultibet onClose={() => setShowDailySlip(false)} premium={premium}
+                <DailyMultibet onClose={() => setShowDailySlip(false)} premium={canDailySlip}
                     onSignIn={() => { setShowDailySlip(false); session?.openAuth('signin'); }} />
             )}
 

@@ -291,6 +291,11 @@ const EnvSchema = z.object({
     // an actual session regardless of this flag. Default OFF; the owner flips
     // it live via Admin -> Settings once ready.
     GUEST_PREMIUM: boolStr('0'),
+    // Per-feature clawback on top of GUEST_PREMIUM: a CSV of src/db/feature-
+    // rules.js keys that stay signed-in-only even while guest premium is on
+    // (e.g. 'methodology'). Empty = the master switch opens everything it
+    // governs. Account-bound features ignore both knobs by construction.
+    GUEST_PREMIUM_EXCEPT: z.string().default(''),
     // Opaque DB session lifetime; PIN lockout policy (src/auth-rules.js).
     SESSION_TTL_DAYS: z.coerce.number().min(0.01).default(30),
     PIN_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(5),   // wrong PINs before lockout

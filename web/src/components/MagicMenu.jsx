@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import Sheet, { SheetClose, PinToggle } from './Sheet.jsx';
-import { useShowDetails } from '../details.js';
+import { useShowMethodology } from '../details.js';
 
 // Magic-sort sheet: pick one or more backtest-ranked tip-sorting strategies
 // (GET /api/magic-sort) to reorder the table most-likely-to-win first. Stats
@@ -23,7 +23,9 @@ export default function MagicMenu({
     onDailySlip,
 }) {
     // Session-aware: methodology prose + backtest numbers hide for guests
-    const showDetails = useShowDetails();
+    // Methodology prose + per-strategy backtest numbers: its own registry
+    // feature, so it can be re-gated without touching the tip reasoning.
+    const showDetails = useShowMethodology();
     const strategies = data?.strategies ?? [];
     const sample = data?.sample;
     const active = new Set(activeIds ?? []);

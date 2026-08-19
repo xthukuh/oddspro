@@ -1,5 +1,6 @@
 // Guest-vs-normal access rules (v1.1.0 Phase 8, GUEST_PREMIUM extension).
-// Pure, zero imports - offline-testable. The server is authoritative:
+// Pure apart from ONE sanctioned cross-pure import (src/db/feature-rules.js,
+// the premium registry) - still offline-testable. The server is authoritative:
 // src/server.js computes the access descriptor from the (optional) session
 // user and src/db/records.js applies it - the web client's guest date clamp
 // / detail hide is UX sugar over the same rules, never the enforcement.
@@ -17,16 +18,19 @@
 // features (saved/shareable slips, prefs sync, admin) gate on role/session
 // elsewhere and must never open just because this detail flag is on.
 
+import { featureAllowed } from './feature-rules.js';
+
 // Access descriptor for a session user (or null/undefined = guest).
 // role: 'guest' | 'normal' | 'admin'; canFuture: may load dates after today;
 // fullDetail: receives tip_breakdown / AI reasoning / exact confidence.
 // opts.guestPremium: GUEST_PREMIUM setting, only consulted for guests.
 export function accessFromUser(user, opts = {}) {
-    if (!user) {
-        const premium = Boolean(opts.guestPremium);
-        return { role: 'guest', canFuture: premium, fullDetail: premium };
-    }
-    return { role: user.role === 'admin' ? 'admin' : 'normal', canFuture: true, fullDetail: true };
+    // The two access axes ARE registry features - projected here rather than
+    // re-decided, so a gating change lands in feature-rules.js alone.
+    const canFuture = featureAllowed(user ?? null, 'future_dates', opts);
+    const fullDetail = featureAllowed(user ?? null, 'tip_reasoning', opts);
+    if (!user) return { role: 'guest', canFuture, fullDetail };
+    return { role: user.role === 'admin' ? 'admin' : 'normal', canFuture, fullDetail };
 }
 
 // Whether a no-future tier may load this display day. `day` is 'all' or

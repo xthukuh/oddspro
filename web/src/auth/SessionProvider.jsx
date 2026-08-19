@@ -6,6 +6,7 @@ import {
 import { getSessionToken, setSessionToken, clearSessionToken } from './sessionToken.js';
 import { syncOnLogin, pushPrefs, syncNow, clearCursor, startAutoSync } from './prefsSync.js';
 import { parseAdminHash } from '../admin/useAdminRoute.js';
+import { featureMap } from '../../../src/db/feature-rules.js';
 
 // Session context for the whole SPA (main.jsx wraps <App/> in this). Holds the
 // signed-in user + token, hydrates a stored token via GET /api/auth/me on
@@ -43,12 +44,18 @@ export default function SessionProvider({ children }) {
     // this is UX only (the server enforces the real gate per-request), so it
     // must never throw or block rendering.
     const [guestPremium, setGuestPremium] = useState(false);
+    // GUEST_PREMIUM_EXCEPT (public setting): CSV of premium features held back
+    // from guests even while the master switch is on. Same best-effort load.
+    const [guestExcept, setGuestExcept] = useState('');
     const hydratedRef = useRef(false); // StrictMode mounts effects twice - hydrate once
 
     useEffect(() => {
         getSettings()
-            .then(s => setGuestPremium(Boolean(s?.GUEST_PREMIUM)))
-            .catch(() => {}); // best-effort - guestPremium stays false
+            .then(s => {
+                setGuestPremium(Boolean(s?.GUEST_PREMIUM));
+                setGuestExcept(String(s?.GUEST_PREMIUM_EXCEPT ?? ''));
+            })
+            .catch(() => {}); // best-effort - the policy stays fully closed
     }, []);
 
     useEffect(() => {
@@ -97,12 +104,17 @@ export default function SessionProvider({ children }) {
         token,
         status,
         isGuest: !user,
-        // premium: true for any signed-in user, or a guest when GUEST_PREMIUM
-        // is on server-side. Components use this INSTEAD of isGuest/signedIn
-        // to gate the premium surfaces (tip detail, future dates, Daily
-        // MultiBet, Sure Bets); account-bound features keep checking
-        // user/isGuest directly - this flag never opens those.
+        // premium: the coarse "has premium access at all" flag. DEPRECATED as
+        // a gate - it cannot express per-surface policy. Read `features` (or
+        // useFeature()) instead; this stays for the sign-in nudges that only
+        // need to know whether ANY upsell is worth showing.
         premium: !!user || guestPremium,
+        // Resolved premium surfaces for THIS session, from the same pure
+        // registry the server gates on (src/db/feature-rules.js) - components
+        // read this via useFeature()/useShowDetails() instead of inventing
+        // their own isGuest/signedIn test. Account-bound features stay false
+        // for guests no matter how the settings are configured.
+        features: featureMap(user, { guestPremium, guestExcept }),
         role: user?.role ?? null,
         view,
         otpHint,
@@ -201,7 +213,7 @@ export default function SessionProvider({ children }) {
                 return null;
             }
         },
-    }), [user, token, status, view, otpHint, guestPremium]);
+    }), [user, token, status, view, otpHint, guestPremium, guestExcept]);
 
     return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
 }

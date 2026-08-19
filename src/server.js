@@ -568,6 +568,15 @@ function stopCatalogWarm() {
     catalogWarmTimer = null;
 }
 
+// Premium policy options for the feature registry (src/db/feature-rules.js).
+// Read live on every call so an Admin -> Settings flip takes effect without a
+// restart, like every other `live:true` knob. ONE helper, so no route can gate
+// on a different policy than its neighbours.
+const featureOpts = () => ({
+    guestPremium: effective('GUEST_PREMIUM'),
+    guestExcept: effective('GUEST_PREMIUM_EXCEPT'),
+});
+
 // GET /api/records?date=YYYY-MM-DD&page=&per_page=&sort=[{key,dir}]&filters=[{key,op,value}]
 // date defaults to today; pass date=all for every date.
 //
@@ -584,7 +593,7 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         // same slot as the explicit YYYY-MM-DD the web client sends.
         const day = date === 'all' ? 'all' : _dtime(date || new Date()).slice(0, 10);
         const access = config.AUTH_ENABLED && !bearerMatches(req.get('authorization'), MACHINE_BEARERS)
-            ? accessFromUser(req.user, { guestPremium: effective('GUEST_PREMIUM') })
+            ? accessFromUser(req.user, featureOpts())
             : null;
         if (access && !access.canFuture && !guestDateAllowed(day, _dtime(new Date()).slice(0, 10))) {
             return res.status(403).json({ error: 'Sign in to see upcoming games.', auth_required: true });
@@ -637,18 +646,16 @@ app.get('/api/hotpicks', async (req, res, next) => {
     }
 });
 
-// Daily MultiBet (engine-v2, spec 2026-08-06-0100). Premium seam v1: guests
-// get a TEASER (day mood/counts/streaks, no legs, no reasoning); signed-in
-// users get the full card. Machine bearers and AUTH_ENABLED=0 stay legacy
-// full-access, the /api/records access idiom. GUEST_PREMIUM opens the full
-// card to every guest too (owner decision: guests with the flag on get the
-// FULL Daily MultiBet timeline) - featureAllowed still owns the signed-in
-// tier decision, unchanged.
+// Daily MultiBet (engine-v2, spec 2026-08-06-0100). Premium seam: a caller
+// without the `daily_multibet` feature gets a TEASER (day mood/counts/streaks,
+// no legs, no reasoning). Who qualifies is now the registry's call alone
+// (src/db/feature-rules.js) - GUEST_PREMIUM opens the full card to guests, and
+// naming `daily_multibet` in GUEST_PREMIUM_EXCEPT closes it again without a
+// deploy. Machine bearers and AUTH_ENABLED=0 stay legacy full-access.
 function _dailySlipFull(req) {
     if (!config.AUTH_ENABLED) return true;
     if (bearerMatches(req.get('authorization'), MACHINE_BEARERS)) return true;
-    if (!req.user && effective('GUEST_PREMIUM')) return true;
-    return featureAllowed(req.user ?? null, 'daily_multibet');
+    return featureAllowed(req.user ?? null, 'daily_multibet', featureOpts());
 }
 const _slipTeaser = s => s && ({
     date: s.date, status: s.status, mood: s.mood, legs_total: s.legs_total,
@@ -732,7 +739,7 @@ app.post('/api/slips', requireAuth, express.json({ limit: '64kb' }), async (req,
 
 app.get('/api/slips/code/:code', requireAuth, async (req, res, next) => {
     try {
-        if (!featureAllowed(req.user, 'slip_sharing')) return res.status(403).json({ error: 'Slip sharing is not available.' });
+        if (!featureAllowed(req.user, 'slip_sharing', featureOpts())) return res.status(403).json({ error: 'Slip sharing is not available.' });
         const slip = await getSlipByCode(req.params.code);
         if (!slip) return res.status(404).json({ error: 'No slip with that code.' });
         res.json({ slip });
