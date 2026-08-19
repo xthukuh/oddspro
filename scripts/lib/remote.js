@@ -12,6 +12,7 @@
 import { spawn, spawnSync } from 'node:child_process';
 import { createReadStream, createWriteStream, existsSync, readFileSync, statSync } from 'node:fs';
 import dotenv from 'dotenv';
+import { transferVerdict } from './sync-rules.js';
 
 export const fmtMB = b => `${(b / 1048576).toFixed(1)} MB`;
 
@@ -83,6 +84,16 @@ export function sshInput(cfg, cmd, input, { allowFail = false, dry = false } = {
 // `child.stdin`'s own 'error' listener swallows the EPIPE that fires when
 // the remote side closes early - the 'close' handler below reports the real
 // failure from the captured exit code + stderr.
+//
+// WARNING (2026-08-19 truncated-upload incident): this function's progress
+// meter and its resolved Promise both reflect bytes SENT into the local ssh
+// stdin pipe, never bytes the remote side actually committed to disk. A
+// connection reset mid-stream can print "100.0%" and exit 0 while the file
+// on the host is truncated - observed for real, a 2.4 MB zip landed at
+// exactly 512 KB. Only use this for a TRUE pipe target with no landed file
+// to stat (e.g. `gunzip | mysql` in db-sync.js). For placing an actual file
+// on the remote filesystem, use `sshUploadFile` below instead - it verifies
+// the remote byte count after transfer and retries on a mismatch.
 export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false } = {}) {
     if (dry) { console.log(`[dry-run] stream ${localFile} -> ssh: ${redact(cfg, remoteCmd)}`); return Promise.resolve(); }
     const total = statSync(localFile).size;
@@ -116,6 +127,85 @@ export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false 
             else resolve();
         }));
     });
+}
+
+// Single-quote a remote path for use inside a `stat -c %s '<path>'` shell
+// string. Refuses (rather than escapes) a path containing a single quote -
+// none of this codebase's remote paths ever need one, and it's not worth a
+// quoting bug on this route.
+function shQuote(p) {
+    if (p.includes("'")) throw new Error(`sshUploadFile: remote path contains a single quote (refusing): ${p}`);
+    return `'${p}'`;
+}
+
+// One `scp` attempt: localFile -> `${cfg.SSH_TARGET}:${remotePath}`. Spawned
+// directly (no shell), so the path is never interpolated into a command
+// string - scp gets it as a plain argv entry. scp's own progress meter goes
+// to stderr, which is passed straight through to the terminal AND captured
+// so a failure can report redacted stderr.
+function scpOnce(cfg, localFile, remotePath) {
+    return new Promise((resolve, reject) => {
+        const child = spawn('scp', ['-o', 'BatchMode=yes', localFile, `${cfg.SSH_TARGET}:${remotePath}`],
+            { stdio: ['ignore', 'inherit', 'pipe'] });
+        let stderr = '';
+        child.stderr.on('data', d => { stderr += d; process.stderr.write(d); });
+        child.on('error', e => reject(new Error(`scp failed to start: ${e.message}`)));
+        child.on('close', code => {
+            if (code !== 0) reject(new Error(`scp exited (${code}): ${redact(cfg, stderr.trim())}`));
+            else resolve();
+        });
+    });
+}
+
+// Place a local file on the remote filesystem via `scp`, then VERIFY it by
+// comparing a remote `stat -c %s` against the local byte count - the fix for
+// the 2026-08-19 truncated-upload incident (see sshStreamUpload's warning
+// above: a 100%-reported transfer left a 512 KB file on the host against a
+// 2.4 MB local original, because the meter never asked the remote side what
+// it actually wrote). This verification is the point of the function and
+// runs even when scp itself exits 0. On a mismatch the whole transfer is
+// retried (a fresh scp, not a resume) up to 3 attempts total with a short
+// backoff, since the observed cause was a transient connection reset; each
+// retry is logged on its own line. The file is left in place on a final
+// failure so it can be inspected rather than silently discarded.
+export async function sshUploadFile(cfg, localFile, remotePath, label, { dry = false } = {}) {
+    if (dry) {
+        console.log(`[dry-run] scp ${localFile} -> ${cfg.SSH_TARGET}:${remotePath} (verified via remote stat -c %s)`);
+        return;
+    }
+    const localBytes = statSync(localFile).size;
+    const remoteQuoted = shQuote(remotePath);
+    const maxAttempts = 3;
+    let lastErr;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        if (attempt > 1) {
+            const backoffSecs = attempt; // 2s, 3s - short, since the failure mode is a transient reset
+            console.log(`[deploy] ${label}: retry ${attempt}/${maxAttempts} in ${backoffSecs}s (previous attempt: ${lastErr.message})`);
+            await new Promise(r => setTimeout(r, backoffSecs * 1000));
+        }
+        console.log(`[deploy] ${label}: started (${fmtMB(localBytes)})...`);
+        try {
+            await scpOnce(cfg, localFile, remotePath);
+        } catch (e) {
+            lastErr = e;
+            continue;
+        }
+        const stat = ssh(cfg, `stat -c %s ${remoteQuoted}`, { allowFail: true });
+        let remoteBytes = NaN;
+        if (stat.status === 0) {
+            const n = Number(stat.stdout);
+            if (Number.isFinite(n)) remoteBytes = n;
+        }
+        const verdict = transferVerdict(localBytes, remoteBytes);
+        if (verdict.ok) {
+            console.log(`[deploy] ${label}: verified ${remoteBytes} bytes on remote.`);
+            return;
+        }
+        lastErr = new Error(`${label}: transfer verification failed after upload (local ${localBytes}B, remote `
+            + `${Number.isFinite(remoteBytes) ? `${remoteBytes}B` : 'unknown'}) - ${verdict.reason} - `
+            + `file left in place at ${remotePath} for inspection`);
+    }
+    throw lastErr;
 }
 
 // Stream `remoteCmd`'s stdout into a local file with a byte-progress meter -

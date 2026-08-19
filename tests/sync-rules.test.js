@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import {
     INSTANCE_TABLES, SYNC_TABLES, planPull, dumpArgs, importPreamble, windowDeleteSql,
     statusRows, compareStatus, dumpLooksComplete, OWN_DUMP_MARKER, BACKUP_CHUNK_SIZE,
-    planIdChunks,
+    planIdChunks, transferVerdict,
 } from '../scripts/lib/sync-rules.js';
 
 const SINCE = '2026-08-01';
@@ -265,4 +265,46 @@ test('planIdChunks throws when minId > maxId', () => {
 
 test('BACKUP_CHUNK_SIZE is 100000', () => {
     assert.equal(BACKUP_CHUNK_SIZE, 100000);
+});
+
+// ---- transferVerdict -------------------------------------------------------
+// 2026-08-19 truncated-upload incident: a "100.0%" progress meter and a
+// zero exit code from the local pipe never proved the remote side committed
+// every byte. transferVerdict is the pure size-comparison decision that
+// scripts/lib/remote.js's sshUploadFile runs against a post-transfer
+// `stat -c %s` on the remote file.
+
+test('transferVerdict: equal sizes is ok', () => {
+    const v = transferVerdict(2563664, 2563664);
+    assert.equal(v.ok, true);
+    assert.equal(v.reason, null);
+});
+
+test('transferVerdict: remote smaller than local (the observed truncation) is not ok, both sizes in the reason', () => {
+    const v = transferVerdict(2563664, 524288);
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /2563664/);
+    assert.match(v.reason, /524288/);
+});
+
+test('transferVerdict: remote larger than local is not ok, both sizes in the reason', () => {
+    const v = transferVerdict(1000, 1500);
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /1000/);
+    assert.match(v.reason, /1500/);
+});
+
+test('transferVerdict: NaN remote (a failed stat) is not ok', () => {
+    const v = transferVerdict(1000, NaN);
+    assert.equal(v.ok, false);
+    assert.match(v.reason, /could not be determined/);
+});
+
+test('transferVerdict: non-numeric remote (undefined/string) is not ok', () => {
+    assert.equal(transferVerdict(1000, undefined).ok, false);
+    assert.equal(transferVerdict(1000, Infinity).ok, false);
+});
+
+test('transferVerdict throws on a non-finite localBytes', () => {
+    assert.throws(() => transferVerdict(NaN, 1000), /localBytes/);
 });

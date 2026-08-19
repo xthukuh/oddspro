@@ -35,7 +35,8 @@ import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import dotenv from 'dotenv';
 import {
-    remoteConfig, ssh as sshRemote, sshInput as sshInputRemote, sshStreamUpload as sshStreamUploadRemote, fmtMB,
+    remoteConfig, ssh as sshRemote, sshInput as sshInputRemote, sshStreamUpload as sshStreamUploadRemote,
+    sshUploadFile as sshUploadFileRemote, fmtMB,
 } from './lib/remote.js';
 import { INSTANCE_TABLES } from './lib/sync-rules.js';
 
@@ -76,6 +77,7 @@ const SUBSEQUENT_IGNORES = [...INSTANCE_TABLES, 'settings'];
 const ssh = (cmd, opts = {}) => sshRemote(cfg, cmd, { dry: DRY, ...opts });
 const sshInput = (cmd, input, opts = {}) => sshInputRemote(cfg, cmd, input, { dry: DRY, ...opts });
 const sshStream = (localFile, remoteCmd, label, opts = {}) => sshStreamUploadRemote(cfg, localFile, remoteCmd, label, { dry: DRY, ...opts });
+const sshUpload = (localFile, remotePath, label, opts = {}) => sshUploadFileRemote(cfg, localFile, remotePath, label, { dry: DRY, ...opts });
 
 // ---- release artifacts ------------------------------------------------------
 function latestRelease() {
@@ -153,7 +155,7 @@ async function stepApp(rel) {
     console.log(`\n[deploy] === APP -> ${APP_DIR} ===`);
     if (!rel) die('no complete release artifact set in release/ - run: npm run package:deploy');
     ssh(`mkdir -p ${TMP_DIR} ${APP_DIR}`);
-    await sshStream(rel.app, `cat > ${TMP_DIR}/app.zip`, `upload ${path.basename(rel.app)}`);
+    await sshUpload(rel.app, `${TMP_DIR}/app.zip`, `upload ${path.basename(rel.app)}`);
     console.log('[deploy] extracting backend...');
     ssh(`unzip -oq ${TMP_DIR}/app.zip -d ${APP_DIR}`);
 
@@ -179,7 +181,7 @@ async function stepWeb(rel) {
     console.log(`\n[deploy] === WEB -> ${WEB_DIR} ===`);
     if (!rel) die('no complete release artifact set in release/ - run: npm run package:deploy');
     ssh(`mkdir -p ${TMP_DIR}`);
-    await sshStream(rel.web, `cat > ${TMP_DIR}/web.zip`, `upload ${path.basename(rel.web)}`);
+    await sshUpload(rel.web, `${TMP_DIR}/web.zip`, `upload ${path.basename(rel.web)}`);
 
     // Backup: v<prev>-web.tar.gz per the owner's naming; timestamp suffix when
     // taken already. prev = highest oddspro-app-v* on the host that isn't us.

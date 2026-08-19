@@ -269,6 +269,31 @@ export function dumpLooksComplete(tailText) {
     return tailText.includes(NATIVE_DUMP_MARKER) || tailText.includes(OWN_DUMP_MARKER);
 }
 
+// --- transfer verification -----------------------------------------------
+// 2026-08-19 truncated-upload incident: `sshStreamUpload`'s progress meter
+// counts bytes fed into the local ssh stdin pipe, not bytes the remote side
+// actually committed to disk - a connection reset mid-stream printed
+// "100.0% 2.4 MB/2.4 MB" while the file on the host stopped at exactly
+// 512 KB. `transferVerdict` is the pure decision this exposes: compare the
+// local file's byte count against what a remote `stat -c %s` reports AFTER
+// the transfer, so file placement can be verified rather than trusted on a
+// zero exit code alone. Used by `scripts/lib/remote.js`'s `sshUploadFile`.
+export function transferVerdict(localBytes, remoteBytes) {
+    if (!Number.isFinite(localBytes)) {
+        throw new Error(`transferVerdict: localBytes must be a finite number (got ${JSON.stringify(localBytes)})`);
+    }
+    if (!Number.isFinite(remoteBytes)) {
+        return { ok: false, reason: `remote size could not be determined (stat reported ${JSON.stringify(remoteBytes)}); local is ${localBytes}B` };
+    }
+    if (remoteBytes < localBytes) {
+        return { ok: false, reason: `remote file is smaller than local: local ${localBytes}B, remote ${remoteBytes}B` };
+    }
+    if (remoteBytes > localBytes) {
+        return { ok: false, reason: `remote file is larger than local: local ${localBytes}B, remote ${remoteBytes}B` };
+    }
+    return { ok: true, reason: null };
+}
+
 // --- chunked backup planning -------------------------------------------------
 // A single mariadb-dump invocation covering millions of rows is exactly the
 // kind of long-running remote query the host was found killing. Splitting a

@@ -31,7 +31,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
-import { remoteConfig, ssh as sshRemote, sshStreamUpload as sshStreamUploadRemote } from './lib/remote.js';
+import { remoteConfig, ssh as sshRemote, sshUploadFile as sshUploadFileRemote } from './lib/remote.js';
 
 const REPO_ROOT = process.cwd();
 const args = process.argv.slice(2);
@@ -69,7 +69,7 @@ try {
 const { SSH_TARGET, APP_DIR, NODE_BIN } = cfg;
 
 const ssh = (cmd, opts = {}) => sshRemote(cfg, cmd, { dry: DRY, ...opts });
-const sshStream = (localFile, remoteCmd, label, opts = {}) => sshStreamUploadRemote(cfg, localFile, remoteCmd, label, { dry: DRY, ...opts });
+const sshUpload = (localFile, remotePath, label, opts = {}) => sshUploadFileRemote(cfg, localFile, remotePath, label, { dry: DRY, ...opts });
 
 function utcStamp() {
     const d = new Date();
@@ -175,8 +175,11 @@ async function patchOne(item) {
     // every file that reached this point, on every exit path.
     rollbacks.push({ file, hadBackup, backupPath, remotePath });
 
-    // 2. Upload.
-    await sshStream(source, `mkdir -p ${q(remoteDir)} && cat > ${q(remotePath)}`, `upload ${file}`);
+    // 2. Upload: mkdir first as its own remote call, then a byte-count-
+    // verified file placement (scripts/lib/remote.js's sshUploadFile - see
+    // its doc comment for why a streamed `cat >` alone isn't trustworthy).
+    ssh(`mkdir -p ${q(remoteDir)}`);
+    await sshUpload(source, remotePath, `upload ${file}`);
 
     // 3. Syntax-check JS uploads; auto-restore + die loudly on failure.
     if (isJs) {
