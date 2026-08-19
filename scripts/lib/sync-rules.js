@@ -242,3 +242,61 @@ export function compareStatus(local, remote) {
 
     return rows;
 }
+
+// --- dump completeness -------------------------------------------------------
+// Round 1 fix (2026-08-19): a shared cPanel host was found live to KILL a
+// long-running remote mariadb-dump connection mid-stream (matches/
+// odds_markets on the two dead DBs) - gzip closes its OWN output cleanly
+// regardless, so `gzip -t` passes on a truncated file. `gzip -t` verifies
+// the GZIP FRAME is intact, never that the SQL inside is the whole dump.
+// The real signal is mariadb-dump's own completion marker: it writes
+// `-- Dump completed on <date> (<version>)` as its LAST line, but only when
+// it exits 0 - a killed connection never gets to print it. `--compact`
+// (used for every pull dump, to keep them small/fast) suppresses that
+// native line, so pull dumps carry an explicit marker of our own instead,
+// appended by the remote shell ONLY after mariadb-dump itself exits 0 (see
+// db-sync.js's buildRemoteDumpCmd: `(mariadb-dump ... && echo '<marker>') |
+// gzip -9` under `set -o pipefail`, so a killed dump propagates a non-zero
+// exit through the whole pipe instead of gzip silently reporting success).
+export const OWN_DUMP_MARKER = '-- oddspro-sync: complete';
+const NATIVE_DUMP_MARKER = '-- Dump completed on';
+
+// tailText: the last ~2 KB of the DECOMPRESSED dump (db-sync.js reads this
+// by streaming the file through zlib and keeping only the tail - the file
+// itself can be gigabytes, this check must never load it all into memory).
+export function dumpLooksComplete(tailText) {
+    if (typeof tailText !== 'string' || !tailText.length) return false;
+    return tailText.includes(NATIVE_DUMP_MARKER) || tailText.includes(OWN_DUMP_MARKER);
+}
+
+// --- chunked backup planning -------------------------------------------------
+// A single mariadb-dump invocation covering millions of rows is exactly the
+// kind of long-running remote query the host was found killing. Splitting a
+// big table's data into bounded PK-range chunks (each its own short-lived
+// remote invocation, independently retried/verified) keeps every individual
+// remote query short enough to finish before a connection-kill threshold.
+export const BACKUP_CHUNK_SIZE = 100000;
+
+// Split an inclusive [minId, maxId] id range (a table's MIN(id)/MAX(id),
+// queried remotely) into consecutive half-open [from, to) ranges of at most
+// chunkSize ids each - the last range absorbs the remainder. minId/maxId
+// null (empty table, or no qualifying rows) -> []. Ranges use `id >= from
+// AND id < to`, matching the `--where=` clause db-sync.js builds per chunk.
+export function planIdChunks({ minId, maxId, chunkSize }) {
+    if (minId == null || maxId == null) return [];
+    if (!Number.isFinite(minId) || !Number.isFinite(maxId)) {
+        throw new Error(`planIdChunks: minId/maxId must be finite numbers (got ${minId}, ${maxId})`);
+    }
+    if (!Number.isFinite(chunkSize) || chunkSize <= 0) {
+        throw new Error(`planIdChunks: chunkSize must be a positive number (got ${chunkSize})`);
+    }
+    if (minId > maxId) throw new Error(`planIdChunks: minId (${minId}) must be <= maxId (${maxId})`);
+    const chunks = [];
+    let from = minId;
+    while (from <= maxId) {
+        const to = Math.min(from + chunkSize, maxId + 1);
+        chunks.push({ from, to });
+        from = to;
+    }
+    return chunks;
+}

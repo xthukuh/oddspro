@@ -6,7 +6,8 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     INSTANCE_TABLES, SYNC_TABLES, planPull, dumpArgs, importPreamble, windowDeleteSql,
-    statusRows, compareStatus,
+    statusRows, compareStatus, dumpLooksComplete, OWN_DUMP_MARKER, BACKUP_CHUNK_SIZE,
+    planIdChunks,
 } from '../scripts/lib/sync-rules.js';
 
 const SINCE = '2026-08-01';
@@ -180,4 +181,88 @@ test('compareStatus marks migration name lag lexicographically', () => {
     const remote = { tables: [], freshness: {}, migration: { name: '20260810000000_b.js' } };
     const rows = compareStatus(local, remote);
     assert.equal(rows.find(r => r.key === 'migration').marker, '<');
+});
+
+// ---- dumpLooksComplete ---------------------------------------------------------
+// Round 1 fix: `gzip -t` verifies the gzip FRAME, never that mariadb-dump
+// actually finished - a shared host killing the connection mid-stream still
+// closes gzip's output cleanly. These tests pin the completeness contract.
+
+test('dumpLooksComplete is true when the native mariadb-dump trailer is present', () => {
+    const tail = '...\nINSERT INTO `x` VALUES (1,2,3);\n-- Dump completed on 2026-08-19 12:00:00\n';
+    assert.equal(dumpLooksComplete(tail), true);
+});
+
+test('dumpLooksComplete is true when our own --compact marker is present', () => {
+    const tail = `...\nINSERT INTO \`x\` VALUES (1,2,3);\n${OWN_DUMP_MARKER}\n`;
+    assert.equal(dumpLooksComplete(tail), true);
+});
+
+test('dumpLooksComplete is false on a truncated tail (mid-INSERT, no trailer)', () => {
+    const tail = "...\nINSERT INTO `matches` (`id`,`metadata`) VALUES (1,'{\"partial";
+    assert.equal(dumpLooksComplete(tail), false);
+});
+
+test('dumpLooksComplete is false on empty/non-string input', () => {
+    assert.equal(dumpLooksComplete(''), false);
+    assert.equal(dumpLooksComplete(null), false);
+    assert.equal(dumpLooksComplete(undefined), false);
+});
+
+test('dumpLooksComplete only matches a trailer inside the given tail, not elsewhere', () => {
+    // Sanity: the function trusts its input is already "the tail" - it does
+    // no seeking itself. A trailer-shaped string anywhere in the given text
+    // counts (the caller is responsible for handing it a bounded tail).
+    assert.equal(dumpLooksComplete('-- Dump completed on X'), true);
+});
+
+// ---- planIdChunks ---------------------------------------------------------------
+
+test('planIdChunks: empty table (null minId/maxId) yields no chunks', () => {
+    assert.deepEqual(planIdChunks({ minId: null, maxId: null, chunkSize: BACKUP_CHUNK_SIZE }), []);
+    assert.deepEqual(planIdChunks({ minId: null, maxId: 5, chunkSize: BACKUP_CHUNK_SIZE }), []);
+    assert.deepEqual(planIdChunks({ minId: 1, maxId: null, chunkSize: BACKUP_CHUNK_SIZE }), []);
+});
+
+test('planIdChunks: exact multiple of chunkSize splits evenly, half-open ranges', () => {
+    const chunks = planIdChunks({ minId: 1, maxId: 200000, chunkSize: 100000 });
+    assert.deepEqual(chunks, [{ from: 1, to: 100001 }, { from: 100001, to: 200001 }]);
+});
+
+test('planIdChunks: remainder produces a final smaller chunk', () => {
+    const chunks = planIdChunks({ minId: 1, maxId: 250000, chunkSize: 100000 });
+    assert.deepEqual(chunks, [
+        { from: 1, to: 100001 },
+        { from: 100001, to: 200001 },
+        { from: 200001, to: 250001 },
+    ]);
+});
+
+test('planIdChunks: a single-row table (minId === maxId) yields one chunk', () => {
+    assert.deepEqual(planIdChunks({ minId: 42, maxId: 42, chunkSize: 100000 }), [{ from: 42, to: 43 }]);
+});
+
+test('planIdChunks: a range smaller than chunkSize yields one chunk covering it exactly', () => {
+    assert.deepEqual(planIdChunks({ minId: 10, maxId: 50, chunkSize: 100000 }), [{ from: 10, to: 51 }]);
+});
+
+test('planIdChunks: chunks tile the whole range with no gaps or overlaps', () => {
+    const chunks = planIdChunks({ minId: 1, maxId: 999999, chunkSize: 100000 });
+    for (let i = 1; i < chunks.length; i++) assert.equal(chunks[i].from, chunks[i - 1].to);
+    assert.equal(chunks[0].from, 1);
+    assert.equal(chunks[chunks.length - 1].to, 1000000);
+});
+
+test('planIdChunks throws on a non-positive or non-finite chunkSize', () => {
+    assert.throws(() => planIdChunks({ minId: 1, maxId: 10, chunkSize: 0 }), /chunkSize/);
+    assert.throws(() => planIdChunks({ minId: 1, maxId: 10, chunkSize: -5 }), /chunkSize/);
+    assert.throws(() => planIdChunks({ minId: 1, maxId: 10, chunkSize: NaN }), /chunkSize/);
+});
+
+test('planIdChunks throws when minId > maxId', () => {
+    assert.throws(() => planIdChunks({ minId: 10, maxId: 1, chunkSize: 100000 }), /minId/);
+});
+
+test('BACKUP_CHUNK_SIZE is 100000', () => {
+    assert.equal(BACKUP_CHUNK_SIZE, 100000);
 });
