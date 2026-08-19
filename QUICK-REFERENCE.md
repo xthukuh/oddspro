@@ -229,6 +229,9 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Frozen ledger / fetch-once: never rewrite settled rows or refetch immutable data | the scoreboard is honest by construction — `docs/engine/02-DATA-PIPELINE.md` |
 | Odds market identity = `type_name`, never `type_id` | Betika reuses ids across different markets |
 | Secrets live in `.env` only | never in git |
+| **Live host runs three concurrent `lsnode` app instances** — only the `GET_LOCK` lease holder (`isWriter()`, `src/db/lease.js`) schedules/writes; the other two serve reads only | a follower running its own scheduler/AI worker would double-bill and gap-lock-deadlock the same rows it warns about above |
+| `gzip -t` alone is NOT a completeness check on a dump | a shared host killing the remote connection mid-dump still lets `gzip` close its own output cleanly (`scripts/db-sync.js`'s `dumpLooksComplete`) |
+| Never run `node scripts/deploy-remote.js --db` (or `--all --fresh`) against the live host outside a genuine first deploy | it overwrites the warehouse; routine fixes are `--app --web` only (`docs/DEPLOYMENT.md` §4a.1) |
 
 ## 4. Definitions
 
@@ -295,7 +298,7 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | Term | Meaning (mechanism) | Source |
 |---|---|---|
 | Light pass / full sweep | 10-min today-only refresh vs the daily 12-step pipeline | `docs/engine/01-SYSTEM.md` |
-| `data_version` | monotonic counter bumped on successful refresh; keys the response cache + client silent reloads | `src/auto-refresh.js` |
+| `data_version` | shared `meta.warehouse_version` (cross-instance since 2026-08-19, not a per-process counter) bumped on successful refresh; keys the response cache + client silent reloads | `src/meta.js`, `src/auto-refresh.js` |
 | Fetch-once | immutable API detail fetched at most once per fixture (`*_fetched_at` flags) | `docs/engine/02-DATA-PIPELINE.md` |
 | Stale odds | vanished market kept flagged with its last-seen price (it IS the historical price) | `src/db/odds-diff.js` |
 | Alias | learned provider→canonical team/league name mapping — the linking fast-path | `src/link.js` |

@@ -147,6 +147,71 @@ Still manual in cPanel: creating/pointing the Node.js app (Application
 Manager) at the new versioned root and Restart - a shared-hosting shell
 cannot script Passenger registration.
 
+### 4a.1 v1.4.0 build 2 routine (same version, no release)
+
+For a `main` fix that must ship without bumping the package version (the
+2026-08-18/19 production-sanity pass: guarded settle SQL, the writer-lease +
+`meta` multi-instance fix, `db-sync`/`hotfix-remote` tooling) — same app dir
+and DB name as the last v1.4.0 deploy, `--app --web` only, `--db` is NEVER
+run against a live host that already has real data on it.
+
+**Prerequisites:**
+- `.env.production` must carry a real `VITE_GA_ID` (the GA snippet is baked
+  into `web/dist/index.html` at build time; a commented-out/missing value
+  silently ships a site with no analytics — this is how the tag went
+  missing on the 2026-08-07 build).
+- `MIGRATE_ON_BOOT=1` on the host, so the app self-applies the new `meta`
+  table migration (`20260818000001_meta`) on the next Restart — no SSH
+  migration step needed.
+
+**Steps, in order:**
+
+```sh
+npm test                                    # confirm the suite is green first
+npm run build:web                           # verify gtag('config', ...) appears in
+                                             # web/dist/index.html (grep for VITE_GA_ID's
+                                             # value) - do not ship a build with no GA tag
+git tag -f v1.4.0 <HEAD>                    # package:deploy will NOT move an existing
+git push origin v1.4.0 --force              # tag that isn't at HEAD - retag explicitly
+                                             # first (build 2 keeps the SAME version)
+npm run package:deploy                      # release/oddspro-app_<ts>.zip + web zip
+```
+
+Then: **owner STOPS the cPanel Node.js App** (Setup Node.js App → Stop —
+one lease holder must fully release `GET_LOCK('oddspro:writer')` before the
+new code lands, so the first instance to boot after Restart wins it cleanly).
+
+```sh
+node scripts/deploy-remote.js --app --web   # code only - NEVER --db against live
+```
+
+Then: **owner STARTS the app** (Setup Node.js App → Start), then send one
+warm-up request (`curl` the site root or `/api/refresh`) so Passenger boots
+the first worker before real traffic arrives.
+
+**Verify, in order:**
+1. `logs/auto-refresh.log` (or the Setup Node.js App log) shows exactly ONE
+   `[lease] writer gained` line across the app's instances — a second or
+   third one means the lease is being contended/flapping, not held cleanly.
+2. `GET /api/refresh` returns the same `warehouse_version` on repeated
+   requests hitting different LiteSpeed instances (no separate `/api/health`
+   route exists — `GET /api/refresh` doubles as the health/status endpoint
+   and carries both `data_version`/`warehouse_version` and `writer`).
+3. Within one light-pass cycle, `meta.column_catalog` is populated
+   (`SELECT v FROM meta WHERE k='column_catalog'` via phpMyAdmin, or confirm
+   `/api/columns` answers fast on a follower instance without its own
+   `odds_markets` scan in the logs).
+4. View-source shows the GA snippet with the real `VITE_GA_ID`.
+
+**Rollback:** the previous `oddspro-app-v1.4.0` directory on the host is a
+plain overwrite target, not a versioned backup - `deploy-remote.js --app`
+extracts in place. Before running the routine, keep the previous
+`release/oddspro-app_<ts>.zip` locally (the pre-build-2 one) so a bad build 2
+can be re-extracted the same way. For a single-file emergency instead of a
+full rollback, `scripts/hotfix-remote.js` already prints the exact
+`cp <file>.orig-<stamp> <file>` rollback line for every file it touches
+(§5.1) - reuse that line directly rather than re-running the whole routine.
+
 ### 4b. Manual via File Manager (fallback)
 
 For any future change:
