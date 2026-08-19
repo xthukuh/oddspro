@@ -25,3 +25,5 @@ Status values: pending / in progress / completed / blocked (owner).
 | 14 | Hot-swap assessment | completed | spec section 7: releases/ + `current` symlink, then split the writer into its own process |
 | 15 | Deploy traps found live and fixed | completed | `.htaccess` wipe (6b55f40), surviving old-code `lsnode` instances (killed), `build-id.txt` split-layout lookup (5d88e79, shipped via hotfix-remote) |
 | 16 | OpenRouter out of credits (HTTP 402) | blocked (owner) | 3,696 failed AI reviews, zero landing; rules-based tips unaffected |
+| 19 | Dead DBs dropped | completed | backups verified independently (gzip -t, CREATE TABLE counts 25/33, trailer, at-risk delta rows present) then `DROP DATABASE`; 7.4 GB freed, live untouched |
+| 20 | Passenger idle-shutdown stopped the scheduler | completed | no passes 12:57-14:41 UTC; keep-alive cron `*/5` installed (crontab was empty); durable fix = writer-process split, spec section 7 |

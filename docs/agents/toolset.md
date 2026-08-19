@@ -456,6 +456,27 @@ the shown bet). Sources: `docs/research/`.
   TIP_AI_MIN_CONFIDENCE` (0.75) and live's best upcoming tip was 0.7154, so zero were due;
   hot reviews were all already verdicted. Check those two counts before suspecting the worker.
 
+- 2026-08-19 - **Dead-DB drop, and how a backup was actually proven before it (verified):**
+  `oddsprok_prod` (2.7 GB, 25 tables) and `oddsprok_prod_1_3_0` (4.8 GB, 33 tables) were dropped
+  after `node scripts/db-sync.js backup --remote-db <name>` produced completeness-verified dumps
+  (156 MB / 282 MB gz; the 1_3_0 run took 7207 s and needed bisected retries on `matches`, whose
+  ~39 KB metadata blobs keep losing the connection). Trusting the tool's own completeness table
+  is not enough for an irreversible drop: verify independently with `gzip -t`, `gzip -dc | grep
+  -c '^CREATE TABLE'` against the live table count, the dump trailer in the last 2 KB, AND a
+  spot-check that the AT-RISK rows are really inside (`gzip -dc f.gz | grep -c '(<id>,'`).
+  **Neither dead DB was a subset of live** - `_1_3_0` held 730 fixtures and 60 settled tip rows
+  absent from `_1_4_0`, `oddsprok_prod` held 505 - so "it is an old copy" is never a safe
+  assumption; measure the delta with a LEFT JOIN across schemas first. Freed 7.4 GB.
+- 2026-08-19 - **Passenger idle-shutdown silently stops the pipeline (verified, fixed):**
+  `logs/auto-refresh.log` showed light passes at 12:42 and 12:57 UTC and then NOTHING until
+  14:41, when an incoming request respawned the app. LiteSpeed had idled the process out and the
+  in-process scheduler slept with it, so on a quiet site the warehouse only refreshes when a
+  human visits. The host's own crontab was EMPTY. Fix installed: `*/5 * * * * curl -s -o
+  /dev/null --max-time 30 https://oddspro.ke/api/refresh` (the host resolves its own hostname
+  over HTTPS in 0.17 s; `http://127.0.0.1` with a Host header 404s, LiteSpeed vhost routing).
+  Check cadence with `grep -c "light OK" logs/auto-refresh.log` twice, minutes apart, not by
+  reading the tail once. The durable fix is the writer-process split (spec section 7).
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) — architecture + commands + invariants; authoritative for any harness.
