@@ -103,12 +103,20 @@ export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () 
     };
 }
 
-// Which guarded light-pass steps count as "the warehouse actually collected
-// something new" (Task 4, fix round 1, 2026-08-19). 'link' and 'settle picks'
-// (and the 'odds idle check' bookkeeping step) only correlate or grade data
-// that was already there - a pass where every data-bearing step failed and
-// only those succeeded moved nothing forward and must not be reported fresh.
-const DATA_BEARING_STEP_RE = /^(results|betpawa odds|betika odds)$/;
+// Which guarded steps count as "the warehouse actually collected something
+// new" (Task 4, fix round 1, 2026-08-19; extended to the full pipeline's
+// per-date labels in the 2026-08-19 round-2 durability pass). 'link' and
+// 'settle picks' (and the 'odds idle check' bookkeeping step) only correlate
+// or grade data that was already there - a pass where every data-bearing step
+// failed and only those succeeded moved nothing forward and must not be
+// reported fresh. PREFIX match (no trailing $) rather than exact, so the full
+// sweep's per-date-per-provider labels ('betpawa odds 2026-08-20', 'betika
+// odds 2026-08-21', ...) still count while the light pass's bare labels
+// ('results', 'betpawa odds', 'betika odds') keep matching exactly as before -
+// canonical fixtures ('fixtures 2026-08-20' in the full sweep) deliberately
+// stay excluded, since they are cheaply refetchable and not the view-once
+// asset this guarantee protects.
+const DATA_BEARING_STEP_RE = /^(results|betpawa odds|betika odds)/;
 
 export function hasDataBearingSuccess(stepResults) {
     return Array.isArray(stepResults) && stepResults.some(r => r?.ok && DATA_BEARING_STEP_RE.test(r?.step));
@@ -167,6 +175,28 @@ export function shouldConsumeRefreshRequest(request, {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(request.date ?? ''))) return 'invalid';
     if (cacheMinutes > 0 && lastFreshMs != null && nowMs - lastFreshMs < cacheMinutes * 60_000) return 'fresh';
     if (cooldownMinutes > 0 && lastManualMs != null && nowMs - lastManualMs < cooldownMinutes * 60_000) return 'cooldown';
+    return 'run';
+}
+
+// Decide whether the writer's tick should attempt today's full sweep (Task 2,
+// 2026-08-19 durability round 2: src/pipeline.js's runStartPipeline never
+// participated in the per-step isolation lightRefresh got in round 1, and
+// startAutoRefresh stamped lastFullKey at START - so a throw in an early step
+// (the same results-settle throw that caused the 2026-08-16 outage) burned
+// the whole EAT day: no retry until tomorrow, and the full sweep is the ONLY
+// thing that fetches odds for FUTURE dates). Now lastKey is stamped by the
+// caller ONLY when the run actually succeeds or partially succeeds with a
+// data-bearing step (see auto-refresh.js's onFinish, mirroring
+// shouldStampFreshness) - a total failure no longer burns the day outright.
+// To stop a persistently broken sweep retrying every ~30s tick forever, the
+// caller also tracks an attempt count that resets whenever dayKey changes
+// (fullAttemptsDayKey in auto-refresh.js) and caps retries at maxAttempts.
+//   'done'      - dayKey already has a completed (success/partial) sweep
+//   'exhausted' - maxAttempts already spent for dayKey with no completed sweep
+//   'run'       - go ahead and attempt the sweep (caller increments attempts)
+export function fullSweepAttemptVerdict({ dayKey, lastKey = null, attempts = 0, maxAttempts = 3 } = {}) {
+    if (dayKey === lastKey) return 'done';
+    if (maxAttempts > 0 && attempts >= maxAttempts) return 'exhausted';
     return 'run';
 }
 

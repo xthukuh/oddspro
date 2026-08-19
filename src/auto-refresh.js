@@ -14,7 +14,7 @@ import { pruneTrackEvents } from './track.js';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
-    hasOddsSaveData,
+    hasOddsSaveData, fullSweepAttemptVerdict,
 } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
@@ -431,6 +431,16 @@ let timer = null;
 let lastLightMs = 0;
 let lastFullKey = null;
 
+// Task 2 (2026-08-19 durability pass round 2): retry state for a failing full
+// sweep. fullAttempts counts attempts made for fullAttemptsDayKey (reset
+// whenever the EAT day changes); lastFullKey is now stamped ONLY when a sweep
+// finishes ok/partial-with-data (see the tick's onFinish below), not at
+// start, so a failed sweep no longer burns the whole EAT day outright - see
+// fullSweepAttemptVerdict (src/db/auto-rules.js) for the pure decision.
+let fullAttempts = 0;
+let fullAttemptsDayKey = null;
+let fullExhaustedLoggedKey = null; // avoid re-logging 'exhausted' every 30s tick
+
 // Start the scheduler: one coarse 30s tick decides what is due. Every tick
 // first checks isWriter() - on the multi-instance host only one process ever
 // runs the scheduler at a time; a follower's tick is a no-op until it wins
@@ -465,16 +475,53 @@ export function startAutoRefresh() {
             if (refreshJob.running) return;
             const nowMs = Date.now();
             if (isFullDue(nowMs, fullAt, lastFullKey)) {
-                // Stamp at START: one attempt per EAT day even on failure -
-                // no retry storms of an expensive sweep (failures land in the
-                // log; the next light pass still keeps data moving).
-                lastFullKey = eatDateKey(nowMs);
-                const fullDays = effective('AUTO_FULL_DAYS');
-                startJob({
-                    mode: 'full',
-                    dates: _sweepDates(fullDays),
-                    run: (onStep, shouldCancel) => runStartPipeline(fullDays, onStep, shouldCancel),
-                });
+                // Task 2 (2026-08-19 round 2): lastFullKey is no longer
+                // stamped here at START (that used to burn the whole EAT day
+                // on ANY failure, including the exact results-throw that
+                // caused the 2026-08-16 outage). Instead: reset the attempt
+                // counter at the EAT day boundary, ask the pure verdict
+                // whether today still has retries left, and only stamp
+                // lastFullKey in onFinish once the run actually lands
+                // ok/partial-with-data - a failed attempt just consumes one
+                // of AUTO_FULL_MAX_ATTEMPTS and the next tick tries again.
+                const dayKey = eatDateKey(nowMs);
+                if (dayKey !== fullAttemptsDayKey) {
+                    fullAttemptsDayKey = dayKey;
+                    fullAttempts = 0;
+                }
+                const maxAttempts = effective('AUTO_FULL_MAX_ATTEMPTS');
+                const verdict = fullSweepAttemptVerdict({ dayKey, lastKey: lastFullKey, attempts: fullAttempts, maxAttempts });
+                if (verdict === 'run') {
+                    fullAttempts += 1;
+                    const fullDays = effective('AUTO_FULL_DAYS');
+                    startJob({
+                        mode: 'full',
+                        dates: _sweepDates(fullDays),
+                        run: (onStep, shouldCancel) => runStartPipeline(fullDays, onStep, shouldCancel),
+                        onFinish: job => {
+                            // Only a completed sweep (ok, or partial with a
+                            // data-bearing step) uses up the day - a total
+                            // 'error' or a user/shutdown 'cancelled' leaves
+                            // lastFullKey untouched so the next tick can
+                            // retry (bounded by maxAttempts above). Built from
+                            // job.cancelled/job.error/job.summary rather than
+                            // re-deriving refreshOutcome(job) here: by the
+                            // time onFinish runs, startJob's finally block has
+                            // already reset job.cancelRequested to false for
+                            // the NEXT job, so re-feeding refreshOutcome the
+                            // live object would misread a cancelled run as ok.
+                            const outcome = refreshOutcome({ error: job.error, cancelRequested: job.cancelled, summary: job.summary });
+                            if (outcome === 'ok' || (outcome === 'partial' && job.summary?.data_bearing_ok)) {
+                                lastFullKey = dayKey;
+                            }
+                        },
+                    });
+                } else if (verdict === 'exhausted' && fullExhaustedLoggedKey !== dayKey) {
+                    fullExhaustedLoggedKey = dayKey;
+                    const msg = `full sweep EXHAUSTED ${maxAttempts} attempt(s) for ${dayKey} without success - waiting for the next EAT day`;
+                    console.error(`[auto] ${msg}`);
+                    _log(msg);
+                }
             } else if (isLightDue(nowMs, lastLightMs, effective('AUTO_LIGHT_MINUTES'))) {
                 lastLightMs = nowMs;
                 startJob({

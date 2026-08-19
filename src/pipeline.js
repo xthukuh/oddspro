@@ -7,12 +7,11 @@ import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
 import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
+import { makeStepGuard, summarizeSteps, hasDataBearingSuccess } from './db/auto-rules.js';
 import { _date, _dtime, debugLog } from './utils.js';
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
-
-const STEPS = 13;
 
 // Full ingestion pipeline (default `npm run start` action). Step order is
 // chosen to minimize server hits:
@@ -29,6 +28,19 @@ const STEPS = 13;
 //   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4);
 //   12. AI enrichment (M4.1, collection only, off by default) - the anchored
 //       call needs the tip hot picks (11) just wrote, so this MUST run last.
+//
+// Task 1 (2026-08-19 durability pass round 2, docs/research/2026-08-19-odds-
+// durability-and-outage-damage.md section 4.2): lightRefresh got per-step
+// isolation in round 1 (makeStepGuard, src/db/auto-rules.js) but this
+// function - the ONLY thing that fetches odds for FUTURE dates - never did.
+// A throw in an early step (results, exactly the step that caused the
+// 2026-08-16 outage) used to skip every step after it, including every
+// remaining date's odds scrape, for up to 24h until the next scheduled sweep.
+// Every step below is now independently guarded via guardStep: a throw is
+// caught, recorded and logged, and the pass continues. The ORDER is
+// unchanged. Fixtures and odds are guarded PER DATE (odds additionally per
+// provider) - the highest-value line in this pass - so one date or one
+// provider failing cannot cost the others within the same phase.
 export async function runStartPipeline(days_ahead_ = null, onStep = null, shouldCancel = null) {
     // parseInt: null/undefined parse to NaN (Number(null) would be 0)
     const n = parseInt(days_ahead_, 10);
@@ -37,79 +49,103 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     const dates = [...Array(days_ahead + 1)].map((_, i) =>
         _dtime(new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)).substring(0, 10)
     );
+    const totalSteps = 3 * dates.length + 10; // dates.length x (fixtures + betpawa + betika) + 10 single-shot phases
     let step = 0;
     const pipelineStarted = Date.now();
     let stepStarted = pipelineStarted;
     const _step = label => {
         if (typeof shouldCancel === 'function' && shouldCancel()) throw new Error('cancelled');
-        if (step) debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
-        console.debug(`\n[start ${++step}/${STEPS}] ${label}`);
+        if (step) debugLog(`step ${step}/${totalSteps} done in ${Date.now() - stepStarted}ms`);
+        console.debug(`\n[start ${++step}/${totalSteps}] ${label}`);
         if (typeof onStep === 'function') onStep(label);
         stepStarted = Date.now();
     };
     console.debug(`[start] Full pipeline - ${dates.length} date(s): ${dates.join(', ')}...`);
 
-    _step('API-Football fixtures (canonical base records)');
+    // Per-step outcomes for every guarded unit below. checkCancel runs
+    // OUTSIDE guardStep's try (see makeStepGuard), so the cooperative-cancel
+    // throw always propagates uncaught and aborts the whole run immediately -
+    // only an ordinary step Error is captured into stepResults.
+    const stepResults = [];
+    const guardStep = makeStepGuard({
+        results: stepResults,
+        checkCancel: _step,
+        onFailure: (label, message) => console.error(`[start] ${label} failed:`, message),
+    });
+
     for (const dt of dates) {
-        const c = await fetchApisportsFixtures(dt);
-        console.debug(`[+] fixtures ${dt}: ${c.fixtures} fixtures, ${c.leagues} leagues, ${c.teams} teams upserted (quota remaining: ${c.quota_remaining}).`);
+        await guardStep(`fixtures ${dt}`, async () => {
+            const c = await fetchApisportsFixtures(dt);
+            console.debug(`[+] fixtures ${dt}: ${c.fixtures} fixtures, ${c.leagues} leagues, ${c.teams} teams upserted (quota remaining: ${c.quota_remaining}).`);
+        });
     }
 
-    _step('results (settle finished fixtures, complete matches)');
-    const r = await settleApisportsResults();
-    console.debug(`[+] results: ${r.refreshed} fixtures refreshed, ${r.settled} matches settled, ${r.fallback_completed} fallback-completed (quota remaining: ${r.quota_remaining}).`);
+    const r = await guardStep('results (settle finished fixtures, complete matches)', () => settleApisportsResults());
+    if (r) console.debug(`[+] results: ${r.refreshed} fixtures refreshed, ${r.settled} matches settled, ${r.fallback_completed} fallback-completed (quota remaining: ${r.quota_remaining}).`);
 
+    // The single most valuable line in this task: a failure fetching one
+    // provider's odds for one date must not prevent every other provider/date
+    // combination from being scraped, so each (provider, date) pair is its
+    // own guarded unit. The exclusion query is recomputed per date INSIDE the
+    // guard (cheap) rather than hoisted, so a failure there is isolated too
+    // and can never abort the whole provider's date loop.
     for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
-        _step(`${provider} odds`);
-        const exclude = await completedMatchIds(provider, `${dates[0]} 00:00:00`);
         for (const dt of dates) {
-            const games = await fetcher(dt, exclude);
-            const c = await saveMatches(games);
-            console.debug(`[+] ${provider} ${dt}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
+            await guardStep(`${provider} odds ${dt}`, async () => {
+                const exclude = await completedMatchIds(provider, `${dates[0]} 00:00:00`);
+                const c = await saveMatches(await fetcher(dt, exclude));
+                console.debug(`[+] ${provider} ${dt}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
+            });
         }
     }
 
-    _step('link (correlate bookmaker matches to fixtures)');
-    await linkMatches();
+    await guardStep('link (correlate bookmaker matches to fixtures)', () => linkMatches());
 
-    _step('deep stats (final correlated fixtures, fetch-once)');
-    const s = await fetchApisportsStats();
-    console.debug(`[+] stats: ${s.fixtures} fixtures processed - ${s.statistics} statistics, ${s.lineups} lineups (${s.players} players), ${s.events} events (quota remaining: ${s.quota_remaining}).`);
+    const s = await guardStep('deep stats (final correlated fixtures, fetch-once)', () => fetchApisportsStats());
+    if (s) console.debug(`[+] stats: ${s.fixtures} fixtures processed - ${s.statistics} statistics, ${s.lineups} lineups (${s.players} players), ${s.events} events (quota remaining: ${s.quota_remaining}).`);
 
-    _step('standings (correlated leagues)');
-    const t = await fetchApisportsStandings();
-    console.debug(`[+] standings: ${t.leagues} league/seasons, ${t.rows} rows saved, ${t.empty} without tables (quota remaining: ${t.quota_remaining}).`);
+    const t = await guardStep('standings (correlated leagues)', () => fetchApisportsStandings());
+    if (t) console.debug(`[+] standings: ${t.leagues} league/seasons, ${t.rows} rows saved, ${t.empty} without tables (quota remaining: ${t.quota_remaining}).`);
 
-    _step('team history (upcoming correlated fixtures, fetch-once)');
-    const h = await fetchApisportsHistory();
-    console.debug(`[+] history: ${h.fixtures} fixtures processed, ${h.saved} historical fixtures saved (quota remaining: ${h.quota_remaining}).`);
+    const h = await guardStep('team history (upcoming correlated fixtures, fetch-once)', () => fetchApisportsHistory());
+    if (h) console.debug(`[+] history: ${h.fixtures} fixtures processed, ${h.saved} historical fixtures saved (quota remaining: ${h.quota_remaining}).`);
 
-    _step('pre-match snapshots (upsert upcoming, freeze past)');
-    const p = await updatePrematchSnapshots();
-    console.debug(`[+] prematch: ${p.written} snapshots upserted.`);
+    const p = await guardStep('pre-match snapshots (upsert upcoming, freeze past)', () => updatePrematchSnapshots());
+    if (p) console.debug(`[+] prematch: ${p.written} snapshots upserted.`);
 
-    _step('API predictions (upcoming correlated fixtures, fetch-once)');
-    const a = await fetchApisportsPredictions();
-    console.debug(`[+] predictions: ${a.fixtures} fixtures processed, ${a.saved} predictions saved (quota remaining: ${a.quota_remaining}).`);
+    const a = await guardStep('API predictions (upcoming correlated fixtures, fetch-once)', () => fetchApisportsPredictions());
+    if (a) console.debug(`[+] predictions: ${a.fixtures} fixtures processed, ${a.saved} predictions saved (quota remaining: ${a.quota_remaining}).`);
 
-    _step('hot picks (rules; AI reviews run in the background worker)');
-    const k = await updateHotPicks();
-    console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI reviews pending: ${k.pending_reviews.hot} hot, ${k.pending_reviews.tips} tips - worker/aireview drains them).`);
+    const k = await guardStep('hot picks (rules; AI reviews run in the background worker)', () => updateHotPicks());
+    if (k) console.debug(`[+] hotpicks: ${k.settled} settled (${k.tips_settled} tips), ${k.written} evaluated, ${k.hot} hot, ${k.tips} tips (AI reviews pending: ${k.pending_reviews.hot} hot, ${k.pending_reviews.tips} tips - worker/aireview drains them).`);
 
-    _step('daily multibet slip (settle pending, build today\'s card)');
-    const dsSettle = await settleDailySlips();
-    const ds = await buildDailySlip();
-    console.debug(`[+] dailyslip: ${dsSettle.settled} settled; today ${ds.frozen ? 'frozen'
-        : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.legs} legs @ ${ds.slip.combined_odds}x`}.`);
+    await guardStep('daily multibet slip (settle pending, build today\'s card)', async () => {
+        const dsSettle = await settleDailySlips();
+        const ds = await buildDailySlip();
+        console.debug(`[+] dailyslip: ${dsSettle.settled} settled; today ${ds.frozen ? 'frozen'
+            : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.legs} legs @ ${ds.slip.combined_odds}x`}.`);
+    });
 
-    _step('AI enrichment (upcoming correlated fixtures; collection only)');
-    const e = await enrichFixtures();
-    console.debug(`[+] enrich: ${e.fixtures} fixtures, ${e.written} insights, ${e.errors} errors.`);
+    const e = await guardStep('AI enrichment (upcoming correlated fixtures; collection only)', () => enrichFixtures());
+    if (e) console.debug(`[+] enrich: ${e.fixtures} fixtures, ${e.written} insights, ${e.errors} errors.`);
 
-    debugLog(`step ${step}/${STEPS} done in ${Date.now() - stepStarted}ms`);
+    debugLog(`step ${step}/${totalSteps} done in ${Date.now() - stepStarted}ms`);
     debugLog(`total pipeline time ${Date.now() - pipelineStarted}ms`);
-    console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}).`);
-    return { dates, quota_remaining: apisportsQuotaRemaining() };
+
+    // Final verdict over every guarded step (mirrors lightRefresh). 'partial'
+    // is a normal return - real work may have landed - so step 2's retry
+    // decision (fullSweepAttemptVerdict) and shouldStampFreshness both key
+    // off data_bearing_ok rather than the verdict alone; 'error' (every
+    // guarded step failed) throws so the run is honestly classified as a
+    // failure by refreshOutcome instead of silently reporting 'ok'.
+    const step_failures = stepResults.filter(x => !x.ok).map(({ step: stepName, error }) => ({ step: stepName, error }));
+    const steps_verdict = summarizeSteps(stepResults);
+    const data_bearing_ok = hasDataBearingSuccess(stepResults);
+    console.debug(`\n[start] Done - ${dates[0]} .. ${dates[dates.length - 1]} (quota remaining: ${apisportsQuotaRemaining()}, verdict: ${steps_verdict}).`);
+    if (steps_verdict === 'error') {
+        throw new Error(`full pipeline: every step failed (${step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);
+    }
+    return { dates, quota_remaining: apisportsQuotaRemaining(), step_failures, steps_verdict, data_bearing_ok };
 }
 
 // On-demand single-date refresh (web UI refresh button): fixtures, results
@@ -118,6 +154,12 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
 // history + pre-match snapshots. Standings stay owned by the full pipeline -
 // a league-wide sweep is out of scope for one date. `onStep` gets each step
 // label (job progress for the API).
+//
+// Task 1 (2026-08-19 durability pass round 2): same per-step isolation as
+// runStartPipeline above, via the SAME makeStepGuard - a throw in one step
+// (fixtures, results, either provider's odds, ...) no longer skips the rest.
+// Single date, so "each provider's odds fetch per date its own guarded unit"
+// already holds with one guard per provider (no further date nesting needed).
 export async function runDateRefresh(date_, onStep = null, shouldCancel = null) {
     const dt = _dtime(_date(date_)).substring(0, 10);
     const today = _dtime(_date()).substring(0, 10);
@@ -136,50 +178,65 @@ export async function runDateRefresh(date_, onStep = null, shouldCancel = null) 
     };
     const summary = { date: dt };
 
-    _step('fixtures');
-    summary.fixtures = (await fetchApisportsFixtures(dt)).fixtures;
+    // Same guardStep idiom as lightRefresh/runStartPipeline: checkCancel
+    // (=_step) runs OUTSIDE the try, so a cancel always aborts the whole run
+    // uncaught; only an ordinary step Error is captured into stepResults.
+    const stepResults = [];
+    const guardStep = makeStepGuard({
+        results: stepResults,
+        checkCancel: _step,
+        onFailure: (label, message) => console.error(`[refresh ${dt}] ${label} failed:`, message),
+    });
+
+    const fx = await guardStep('fixtures', () => fetchApisportsFixtures(dt));
+    if (fx) summary.fixtures = fx.fixtures;
 
     if (dt <= today) {
-        _step('results');
-        const r = await settleApisportsResults();
-        summary.settled = r.settled;
+        const r = await guardStep('results', () => settleApisportsResults());
+        if (r) summary.settled = r.settled;
     }
 
     for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
-        _step(`${provider} odds`);
-        const exclude = await completedMatchIds(provider, `${dt} 00:00:00`);
-        const c = await saveMatches(await fetcher(dt, exclude));
-        summary[provider] = { saved: c.inserted + c.updated, skipped: c.skipped, markets: c.markets };
+        const res = await guardStep(`${provider} odds`, async () => {
+            const exclude = await completedMatchIds(provider, `${dt} 00:00:00`);
+            return saveMatches(await fetcher(dt, exclude));
+        });
+        if (res) summary[provider] = { saved: res.inserted + res.updated, skipped: res.skipped, markets: res.markets };
     }
 
-    _step('link');
-    await linkMatches();
+    await guardStep('link', () => linkMatches());
 
     if (dt <= today) {
-        _step('deep stats');
-        summary.stats = (await fetchApisportsStats()).fixtures;
+        const st = await guardStep('deep stats', () => fetchApisportsStats());
+        if (st) summary.stats = st.fixtures;
     }
 
     if (dt >= today) {
         // Upcoming fixtures only: past dates are frozen (and already fetched).
         // Snapshots copy whatever standings exist - standings stay owned by
         // the full pipeline, matching what the live view would have shown.
-        _step('team history');
-        summary.history = (await fetchApisportsHistory()).fixtures;
+        const h = await guardStep('team history', () => fetchApisportsHistory());
+        if (h) summary.history = h.fixtures;
 
-        _step('pre-match snapshots');
-        summary.prematch = (await updatePrematchSnapshots()).written;
+        const p = await guardStep('pre-match snapshots', () => updatePrematchSnapshots());
+        if (p) summary.prematch = p.written;
 
-        _step('API predictions');
-        summary.predictions = (await fetchApisportsPredictions()).saved;
+        const a = await guardStep('API predictions', () => fetchApisportsPredictions());
+        if (a) summary.predictions = a.saved;
 
-        _step('hot picks');
-        summary.hotpicks = (await updateHotPicks()).hot;
+        const k = await guardStep('hot picks', () => updateHotPicks());
+        if (k) summary.hotpicks = k.hot;
     }
 
     if (lastLabel) debugLog(`refresh ${dt}: ${lastLabel} done in ${Date.now() - stepStarted}ms`);
     debugLog(`refresh ${dt}: total time ${Date.now() - refreshStarted}ms`);
     summary.quota_remaining = apisportsQuotaRemaining();
+    summary.step_failures = stepResults.filter(x => !x.ok).map(({ step, error }) => ({ step, error }));
+    summary.steps_verdict = summarizeSteps(stepResults);
+    summary.data_bearing_ok = hasDataBearingSuccess(stepResults);
     console.debug(`[refresh ${dt}] Done - ${JSON.stringify(summary)}`);
+    if (summary.steps_verdict === 'error') {
+        throw new Error(`date refresh ${dt}: every step failed (${summary.step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);
+    }
     return summary;
 }

@@ -197,6 +197,12 @@ const EnvSchema = z.object({
     AUTO_LIGHT_MINUTES: z.coerce.number().int().min(0).default(10), // 0 = light mode off
     AUTO_FULL_AT: z.string().default('06:00'),                      // ''/off = full mode off
     AUTO_FULL_DAYS: z.coerce.number().int().min(0).default(5),      // days ahead for the daily sweep
+    // A full sweep that errors or partially fails (per-step isolation, Task 2,
+    // 2026-08-19 durability round 2) may retry this many times the SAME EAT
+    // day before the scheduler gives up until the next day; the attempt count
+    // resets at the EAT day boundary. A sweep that succeeds (or partially
+    // succeeds with a data-bearing step) always stops retries immediately.
+    AUTO_FULL_MAX_ATTEMPTS: z.coerce.number().int().min(1).default(3),
     // Kickoff-proximity decaying backoff for per-game odds DETAIL fetches
     // (light pass only; full sweep + manual refresh bypass). CSV
     // `upToMin:maxAgeMin` tiers, `*` catch-all; 'off'/invalid = never skip.

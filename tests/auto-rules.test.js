@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
-    hasOddsSaveData,
+    hasOddsSaveData, fullSweepAttemptVerdict,
 } from '../src/db/auto-rules.js';
 
 // refreshOutcome (F3): classify a finished refresh job.
@@ -139,6 +139,24 @@ test('hasDataBearingSuccess is false on empty/null/undefined input', () => {
     assert.equal(hasDataBearingSuccess([]), false);
     assert.equal(hasDataBearingSuccess(null), false);
     assert.equal(hasDataBearingSuccess(undefined), false);
+});
+
+// hasDataBearingSuccess (round 2, 2026-08-19): the regex is now a PREFIX
+// match so the full sweep's per-date-per-provider labels count too, while
+// canonical fixtures (cheaply refetchable, not view-once) stay excluded.
+test('hasDataBearingSuccess matches the full sweep\'s per-date odds labels', () => {
+    assert.equal(hasDataBearingSuccess([{ step: 'betpawa odds 2026-08-20', ok: true }]), true);
+    assert.equal(hasDataBearingSuccess([{ step: 'betika odds 2026-08-21', ok: true }]), true);
+    assert.equal(hasDataBearingSuccess([{ step: 'results', ok: true }]), true); // bare label still matches
+});
+
+test('hasDataBearingSuccess still excludes fixtures and non-data-bearing steps under the prefix match', () => {
+    assert.equal(hasDataBearingSuccess([
+        { step: 'fixtures 2026-08-20', ok: true },
+        { step: 'link', ok: true },
+        { step: 'odds idle check', ok: true },
+        { step: 'settle picks', ok: true },
+    ]), false);
 });
 
 // shouldStampFreshness (Task 4, fix round 1): 'ok' always stamps; 'partial'
@@ -301,6 +319,35 @@ test('shouldConsumeRefreshRequest checks freshness before cooldown', () => {
         lastFreshMs: NOW - 1000, cacheMinutes: 5,
         lastManualMs: NOW - 1000, cooldownMinutes: 10,
     }), 'fresh');
+});
+
+// fullSweepAttemptVerdict (Task 2, 2026-08-19 durability round 2): decides
+// whether the writer's tick should attempt today's full sweep, given a
+// success-only lastKey (dayKey of the last completed sweep) and a per-day
+// attempt cap.
+test('fullSweepAttemptVerdict says done once the day already has a completed sweep', () => {
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: '2026-08-19', attempts: 0, maxAttempts: 3 }), 'done');
+    // Even a fresh attempts=0 counter can't override an already-completed day.
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: '2026-08-19', attempts: 5, maxAttempts: 3 }), 'done');
+});
+
+test('fullSweepAttemptVerdict runs when the day is not yet completed and attempts remain', () => {
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: null, attempts: 0, maxAttempts: 3 }), 'run');
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: '2026-08-18', attempts: 2, maxAttempts: 3 }), 'run');
+});
+
+test('fullSweepAttemptVerdict exhausts once attempts reach maxAttempts without a completed sweep', () => {
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: null, attempts: 3, maxAttempts: 3 }), 'exhausted');
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: '2026-08-18', attempts: 4, maxAttempts: 3 }), 'exhausted');
+});
+
+test('fullSweepAttemptVerdict treats maxAttempts <= 0 as unlimited retries', () => {
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', lastKey: null, attempts: 999, maxAttempts: 0 }), 'run');
+});
+
+test('fullSweepAttemptVerdict defaults to a fresh, capped-at-3 attempt when fields are omitted', () => {
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19' }), 'run');
+    assert.equal(fullSweepAttemptVerdict({ dayKey: '2026-08-19', attempts: 3 }), 'exhausted');
 });
 
 test('trimLogTail keeps content under the cap unchanged', () => {
