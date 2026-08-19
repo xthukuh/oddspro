@@ -46,11 +46,37 @@ high score that two fixtures share is ambiguity, not confidence.
 | `MIN_MARGIN` | 0.05 | required gap to the runner-up (code constant) |
 | Provider order | betpawa → betika | betika (no ids) additionally scores against betpawa matches already linked to a candidate — the richer provider seeds the poorer one |
 
-Confident links cache `team_aliases` / `league_aliases` per provider; the alias fast-path
-(both names known) skips scoring entirely, so correlation gets faster and more accurate as
-data grows. Inspect failures by running `node src/index.js link` and reading the near-miss
+Confident links cache `team_aliases` per provider; the alias fast-path (both team names known)
+skips scoring entirely, so correlation gets faster and more accurate as data grows.
+`league_aliases` is also written on a confident link, but it is **write-only**: it is read only
+to skip a redundant INSERT, never to score, scope or short-circuit a match (open finding F6,
+`docs/research/2026-08-19-linker-and-apisports-audit.md` - either the table starts earning its
+keep as the scoping signal the wide, unscoped candidate pool currently lacks, or the write is
+removed). Inspect failures by running `node src/index.js link` and reading the near-miss
 log lines.
+
+## Claim contest (one match per provider)
+
+A canonical fixture may be held by at most one match per provider at a time. Before a link is
+written, `_linkProvider` checks whether the target fixture is already claimed by another match
+of the same provider (`src/db/link-rules.js`'s pure `claimVerdict`): the listing whose
+`start_time` sits closest to the canonical kickoff keeps the link; a tie keeps the incumbent
+(no churn); an unparseable clock never evicts a claim, since unlinking on a guess would destroy
+a good link. The loser is unlinked and any scores it inherited from the fixture are cleared -
+`completed_at` is left alone, it is a one-way door and reopening a dead `provider_match_id`
+would only buy pointless odds requests.
+
+This exists because API-Football reschedules a fixture by moving its kickoff, and the
+bookmaker then relists the game under a new `provider_match_id` at the new time. Without the
+contest, the OLD listing kept its `fixture_id`, and because the settle pass joins on
+`m.fixture_id = f.id` it stamped the eventual score onto every claimant - so the stale listing
+displayed a result under its original, never-played date. Found 2026-08-19: 103 duplicate
+`(provider, fixture_id)` claims warehouse-wide, 93 carrying a score from the wrong fixture,
+drifts of 3 to 32 days (`docs/research/2026-08-19-linker-and-apisports-audit.md`).
+`scripts/repair-duplicate-claims.js` applies the same rule to repair an already-corrupted
+warehouse (dry-run by default, idempotent).
 
 ---
 *Update this chapter when: the similarity components, normalization, acceptance thresholds,
-candidate window, or provider order change (`src/link.js`).*
+candidate window, provider order, or the claim-contest rule change (`src/link.js`,
+`src/db/link-rules.js`).*

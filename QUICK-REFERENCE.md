@@ -65,6 +65,10 @@ Stuck `results` settle (ft<ht inconsistency, e.g. an awarded-game data glitch): 
 scripts/refetch-fixtures.js --ids <a,b,c>` (or `--inconsistent` to auto-select every affected
 final fixture) force-refetches from API-Football then re-runs the settle pass, printing
 before/after `ht/ft/goals` and which ids changed; details in `docs/agents/toolset.md` §5.
+Duplicate link-claim repair (a reschedule left a stale bookmaker listing holding the fixture,
+back-dating the eventual score): `node scripts/repair-duplicate-claims.js [--yes] [--limit N]`
+keeps, per (provider, fixture), the listing closest to the canonical kickoff and unlinks the
+rest, clearing the scores they inherited; dry-run by default, idempotent.
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
