@@ -1,5 +1,6 @@
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
+import { claimVerdict } from './db/link-rules.js';
 
 // Correlation order matters: betpawa first (richer identifiers), betika last so
 // it can additionally score against betpawa records already linked to a fixture.
@@ -110,7 +111,7 @@ async function _candidates(start_time) {
         .join('leagues as l', 'l.id', 'f.league_id')
         .whereRaw('f.kickoff BETWEEN ? - INTERVAL 30 MINUTE AND ? + INTERVAL 30 MINUTE', [start_time, start_time])
         .select(
-            'f.id', 'f.league_id',
+            'f.id', 'f.league_id', 'f.kickoff',
             'th.id as home_id', 'th.name as home_name',
             'ta.id as away_id', 'ta.name as away_name',
             'l.name as league_name', 'l.country as league_country',
@@ -124,7 +125,7 @@ async function _linkProvider(provider) {
         .whereNull('fixture_id')
         .whereNull('completed_at')
         .select('id', 'start_time', 'home_team_name', 'away_team_name', 'competition_name', 'category_name');
-    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0 };
+    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, errors: 0 };
     if (!rows.length) return counts;
 
     // Alias caches (learned from previous confident links)
@@ -142,60 +143,104 @@ async function _linkProvider(provider) {
     }
 
     for (const m of rows) {
-        const candidates = await _candidates(m.start_time);
-        if (!candidates.length) {
-            counts.unmatched++;
-            continue;
-        }
+        // Per-row isolation (2026-08-19 audit F8): none of the three writes
+        // below is deadlock-retried, and without this guard a single row's
+        // transient DB error aborted the whole provider AND - because
+        // linkMatches runs providers sequentially - every provider after it.
+        // The pass is idempotent, so skipping one row costs nothing but one
+        // cycle: it is simply re-examined next pass.
+        try {
+            const candidates = await _candidates(m.start_time);
+            if (!candidates.length) {
+                counts.unmatched++;
+                continue;
+            }
 
-        // 1) alias fast-path: both team names already known
-        let hit = null, viaAlias = false;
-        const ah = teamAliases.get(m.home_team_name), aa = teamAliases.get(m.away_team_name);
-        if (ah && aa) {
-            hit = candidates.find(c => c.home_id === ah && c.away_id === aa) ?? null;
-            viaAlias = !!hit;
-        }
+            // 1) alias fast-path: both team names already known
+            let hit = null, viaAlias = false;
+            const ah = teamAliases.get(m.home_team_name), aa = teamAliases.get(m.away_team_name);
+            if (ah && aa) {
+                hit = candidates.find(c => c.home_id === ah && c.away_id === aa) ?? null;
+                viaAlias = !!hit;
+            }
 
-        // 2) fuzzy confidence scoring with runner-up margin
-        if (!hit) {
-            let best = null, second = 0;
-            for (const c of candidates) {
-                const conf = _confidence(m, c, betpawaByFixture.get(c.id));
-                if (!best || conf > best.conf) {
-                    second = best?.conf ?? 0;
-                    best = { c, conf };
-                } else if (conf > second) {
-                    second = conf;
+            // 2) fuzzy confidence scoring with runner-up margin
+            if (!hit) {
+                let best = null, second = 0;
+                for (const c of candidates) {
+                    const conf = _confidence(m, c, betpawaByFixture.get(c.id));
+                    if (!best || conf > best.conf) {
+                        second = best?.conf ?? 0;
+                        best = { c, conf };
+                    } else if (conf > second) {
+                        second = conf;
+                    }
+                }
+                if (best && best.conf >= effective('LINK_MIN_CONFIDENCE') && (best.conf - second) >= MIN_MARGIN) {
+                    hit = best.c;
+                } else if (best && best.conf >= 0.5) {
+                    console.debug(`[link] ${provider} near-miss (${best.conf.toFixed(3)}): `
+                        + `"${m.home_team_name} v ${m.away_team_name}" ~ "${best.c.home_name} v ${best.c.away_name}"`);
                 }
             }
-            if (best && best.conf >= effective('LINK_MIN_CONFIDENCE') && (best.conf - second) >= MIN_MARGIN) {
-                hit = best.c;
-            } else if (best && best.conf >= 0.5) {
-                console.debug(`[link] ${provider} near-miss (${best.conf.toFixed(3)}): `
-                    + `"${m.home_team_name} v ${m.away_team_name}" ~ "${best.c.home_name} v ${best.c.away_name}"`);
+
+            if (!hit) {
+                counts.unmatched++;
+                continue;
             }
-        }
 
-        if (!hit) {
-            counts.unmatched++;
-            continue;
-        }
+            // 3) contest the claim BEFORE writing. One canonical fixture may be
+            // held by at most one match per provider: when API-Football reschedules
+            // a fixture the bookmaker relists the game under a new
+            // provider_match_id, and if the old listing keeps the link the settle
+            // pass (which joins on m.fixture_id = f.id) stamps the eventual score
+            // onto BOTH - showing a result under the ORIGINAL, never-played date.
+            // The listing whose start_time sits closest to the canonical kickoff
+            // wins; see src/db/link-rules.js for the (offline-tested) rule.
+            const claim = await db('matches')
+                .where('provider', provider).where('fixture_id', hit.id)
+                .select('id', 'start_time').first();
+            const verdict = claimVerdict({ existing: claim ?? null, incoming: m, kickoff: hit.kickoff });
+            if (verdict === 'skip') {
+                counts.claims_skipped++;
+                continue;   // deliberately no alias learning - we did not link
+            }
+            if (verdict === 'replace') {
+                // Unlink the stale listing AND clear the scores it inherited from
+                // the fixture: leaving them behind is exactly the visible
+                // corruption this guard exists to remove. completed_at is left
+                // alone - it is a one-way door (see the fetch-throttling
+                // invariant), and reopening a dead provider_match_id would only
+                // buy pointless odds requests.
+                await db('matches').where('id', claim.id).update({
+                    fixture_id: null,
+                    home_score_fulltime: null, away_score_fulltime: null,
+                    home_score_first_half: null, away_score_first_half: null,
+                    home_score_second_half: null, away_score_second_half: null,
+                });
+                counts.claims_replaced++;
+                console.debug(`[link] ${provider}: match ${claim.id} lost fixture ${hit.id} to ${m.id} (reschedule)`);
+            }
 
-        // 3) persist link + learn aliases for future exact-match correlation
-        await db('matches').where('id', m.id).update({ fixture_id: hit.id });
-        await db('team_aliases').insert([
-            { team_id: hit.home_id, provider, alias_name: m.home_team_name },
-            { team_id: hit.away_id, provider, alias_name: m.away_team_name },
-        ]).onConflict(['provider', 'alias_name']).ignore();
-        teamAliases.set(m.home_team_name, hit.home_id);
-        teamAliases.set(m.away_team_name, hit.away_id);
-        const comp = m.competition_name || m.category_name;
-        if (comp && !leagueAliases.has(comp)) {
-            await db('league_aliases').insert({ league_id: hit.league_id, provider, alias_name: comp })
-                .onConflict(['provider', 'alias_name']).ignore();
-            leagueAliases.set(comp, hit.league_id);
+            // 4) persist link + learn aliases for future exact-match correlation
+            await db('matches').where('id', m.id).update({ fixture_id: hit.id });
+            await db('team_aliases').insert([
+                { team_id: hit.home_id, provider, alias_name: m.home_team_name },
+                { team_id: hit.away_id, provider, alias_name: m.away_team_name },
+            ]).onConflict(['provider', 'alias_name']).ignore();
+            teamAliases.set(m.home_team_name, hit.home_id);
+            teamAliases.set(m.away_team_name, hit.away_id);
+            const comp = m.competition_name || m.category_name;
+            if (comp && !leagueAliases.has(comp)) {
+                await db('league_aliases').insert({ league_id: hit.league_id, provider, alias_name: comp })
+                    .onConflict(['provider', 'alias_name']).ignore();
+                leagueAliases.set(comp, hit.league_id);
+            }
+            viaAlias ? counts.alias_linked++ : counts.fuzzy_linked++;
+        } catch (e) {
+            counts.errors++;
+            console.error(`[link] ${provider} row ${m.id} failed: ${e?.message ?? e}`);
         }
-        viaAlias ? counts.alias_linked++ : counts.fuzzy_linked++;
     }
     return counts;
 }
@@ -206,10 +251,22 @@ export async function linkMatches(provider_ = null) {
     const providers = provider_ ? [provider_] : PROVIDER_ORDER;
     const report = {};
     for (const provider of providers) {
-        report[provider] = await _linkProvider(provider);
+        // Provider isolation: betpawa throwing must never mean betika is
+        // skipped entirely for the pass (the same cascade class that cost
+        // three days of odds on 2026-08-16).
+        try {
+            report[provider] = await _linkProvider(provider);
+        } catch (e) {
+            report[provider] = { error: String(e?.message ?? e) };
+            console.error(`[link] ${provider} pass failed: ${e?.message ?? e}`);
+            continue;
+        }
         const c = report[provider];
         console.debug(`[link] ${provider}: ${c.examined} examined, ${c.alias_linked} via alias, `
-            + `${c.fuzzy_linked} fuzzy-linked, ${c.unmatched} unmatched.`);
+            + `${c.fuzzy_linked} fuzzy-linked, ${c.unmatched} unmatched`
+            + `${c.claims_replaced ? `, ${c.claims_replaced} reschedule claims replaced` : ''}`
+            + `${c.claims_skipped ? `, ${c.claims_skipped} claims skipped` : ''}`
+            + `${c.errors ? `, ${c.errors} row errors` : ''}.`);
     }
     return report;
 }
