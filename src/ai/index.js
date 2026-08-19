@@ -23,7 +23,11 @@ export function getProvider(name) {
 
 // Route one enrichment task to its provider+model. Throws on failure; callers
 // fail open (the pipeline never depends on the AI being up).
-export async function callModel({ task, prompt, cfg = config }) {
+// `json` asks the provider for a strict JSON reply. Every structured caller in
+// this codebase (adjudicators, enrichment facts/blind/anchored) parses the
+// reply as JSON, so it defaults ON; `AI_JSON_MODE=0` turns it off without a
+// deploy if a future model rejects the parameter.
+export async function callModel({ task, prompt, cfg = config, json = cfg.AI_JSON_MODE !== false }) {
     const { provider, model, grounded } = resolveTask(task, cfg);
-    return { ...(await getProvider(provider).complete({ model, prompt, grounded })), provider, model, grounded };
+    return { ...(await getProvider(provider).complete({ model, prompt, grounded, json })), provider, model, grounded };
 }

@@ -3,7 +3,7 @@
 // normalization and grounding-citation collection. Pure module - no .env.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseAiReply, parseVerdict } from '../src/ai-parse.js';
+import { parseAiReply, parseVerdict, extractJson } from '../src/ai-parse.js';
 
 // Minimal envelope factory: reply text (+ optional grounding chunks)
 const envelope = (text, grounding) => ({
@@ -101,4 +101,39 @@ test('parseAiReply still composes envelope + verdict identically after the split
         [{ web: { uri: 'https://x', title: 't' } }]));
     assert.equal(out.verdict, 'veto');
     assert.deepEqual(out.sources, [{ title: 't', uri: 'https://x' }]);
+});
+
+// extractJson hardening (2026-08-19): production logged a run of
+// "Expected ',' or '}' after property value" failures because the old greedy
+// /\{[\s\S]*\}/ spanned from the first brace anywhere in the reply to the last.
+test('extractJson ignores a prose preamble that itself contains braces', () => {
+    const reply = 'I will answer in the shape {probability, verdict} as asked.\n'
+        + '{"verdict":"confirm","reason":"ok"}';
+    assert.deepEqual(extractJson(reply), { verdict: 'confirm', reason: 'ok' });
+});
+
+test('extractJson takes the last object when the model restates then answers', () => {
+    const reply = '{"schema":"example"}\nHere is the verdict:\n{"verdict":"veto","reason":"r"}';
+    assert.deepEqual(extractJson(reply), { verdict: 'veto', reason: 'r' });
+});
+
+test('extractJson keeps braces and escaped quotes inside string values', () => {
+    const reply = '```json\n{"reason":"the model said {\\"x\\":1} verbatim","verdict":"confirm"}\n```';
+    assert.deepEqual(extractJson(reply),
+        { reason: 'the model said {"x":1} verbatim', verdict: 'confirm' });
+});
+
+test('extractJson parses nested objects and arrays', () => {
+    const reply = 'prose {\n{"verdict":"confirm","checks":[{"name":"a","finding":"f"}]}';
+    assert.deepEqual(extractJson(reply).checks, [{ name: 'a', finding: 'f' }]);
+});
+
+test('extractJson throws on a reply the model cut mid-object', () => {
+    assert.throws(() => extractJson('{"verdict":"confirm","reason":"cut off here'),
+        /carried no JSON object/);
+});
+
+test('extractJson error quotes a bounded slice of the offending reply', () => {
+    const junk = `{"a":${'x'.repeat(900)}}`;
+    assert.throws(() => extractJson(junk), e => e.message.length < 700);
 });

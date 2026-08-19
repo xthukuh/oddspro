@@ -60,12 +60,60 @@ export function extractGeminiText(data) {
     return { text, sources };
 }
 
-// First JSON object in a reply (tolerates markdown code fences), parsed.
-// Throws when there is none - callers fail open.
+// Every BALANCED top-level {...} span in a reply, in the order they appear.
+// Brace counting is string-aware (a brace inside a JSON string value, and an
+// escaped quote inside it, must not move the depth), which a regex cannot do.
+// Unterminated spans are dropped: a reply the model cut mid-object yields no
+// candidate rather than a fragment.
+function objectSpans(text) {
+    const spans = [];
+    const open = [];
+    let inString = false, escaped = false;
+    for (let i = 0; i < text.length; i++) {
+        const ch = text[i];
+        if (inString) {
+            if (escaped) escaped = false;
+            else if (ch === '\\') escaped = true;
+            else if (ch === '"') inString = false;
+            continue;
+        }
+        if (ch === '"') inString = true;
+        else if (ch === '{') open.push(i);
+        else if (ch === '}' && open.length) spans.push(text.slice(open.pop(), i + 1));
+    }
+    // Emitted when each pair CLOSES, so an object always follows the children
+    // nested inside it, and a stray unclosed brace in prose (`... shape { ...`)
+    // cannot swallow the object that follows it.
+    return spans;
+}
+
+// The reply's JSON object, parsed. Tolerates markdown fences, a prose preamble
+// (including one containing braces, e.g. a model restating the schema before
+// answering), and trailing commentary.
+//
+// Until 2026-08-19 this was a greedy `/\{[\s\S]*\}/`, which spans from the
+// FIRST brace anywhere in the reply to the LAST one. A grounded adjudicator
+// reply that mentioned a brace before its JSON therefore produced one
+// unparseable blob, and live logged a stream of "Expected ',' or '}' after
+// property value" failures with every verdict silently dropped. Candidates are
+// now tried LAST-first, because a model that restates the schema and then
+// answers puts the real answer last.
+// Throws when nothing parses - callers fail open.
 export function extractJson(text) {
-    const m = /\{[\s\S]*\}/.exec(String(text));
-    if (!m) throw new Error(`AI reply carried no JSON object: ${text}`);
-    return JSON.parse(m[0]);
+    const raw = String(text);
+    const spans = objectSpans(raw);
+    if (!spans.length) throw new Error(`AI reply carried no JSON object: ${raw}`);
+    let lastError = null;
+    for (let i = spans.length - 1; i >= 0; i--) {
+        try {
+            return JSON.parse(spans[i]);
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    // The reply is quoted (bounded) because this error is the only place the
+    // offending text is ever visible: the worker fails open and keeps nothing.
+    throw new Error(`AI reply carried no parseable JSON object (${lastError?.message ?? 'unknown'}): ${raw.slice(0, 400)}`);
 }
 
 // Text-level verdict decode: raw reply text -> fenced-JSON verdict (T3

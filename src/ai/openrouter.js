@@ -26,12 +26,18 @@ export function enabled() {
     return Boolean(config.OPENROUTER_API_KEY);
 }
 
-export async function complete({ model, prompt, grounded = false }) {
+export async function complete({ model, prompt, grounded = false, json = false }) {
     const body = {
         model,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0,
     };
+    // Strict JSON mode: the model must emit a syntactically valid object, so a
+    // structured caller never has to mine prose for it. Live-verified on
+    // openai/gpt-5.6-luna both plain and with the web plugin (2026-08-19,
+    // after a run of "Expected ',' or '}' after property value" parse
+    // failures that silently dropped every hot-pick verdict).
+    if (json) body.response_format = { type: 'json_object' };
     if (grounded) {
         body.plugins = [{
             id: 'web',
@@ -50,8 +56,15 @@ export async function complete({ model, prompt, grounded = false }) {
             timeout: 90_000, // grounded calls run searches before answering
         },
     ), RETRY);
-    const message = res.data?.choices?.[0]?.message;
+    const choice = res.data?.choices?.[0];
+    const message = choice?.message;
     const text = message?.content;
+    // A reply cut off at the token ceiling is a distinct failure from a bad
+    // one: say so, instead of letting the caller report a confusing JSON
+    // syntax error at whatever character the model stopped on.
+    if (choice?.finish_reason === 'length') {
+        throw new Error(`OpenRouter reply was truncated at the model's token limit (${text?.length ?? 0} chars)`);
+    }
     if (typeof text !== 'string' || !text.trim()) {
         throw new Error('OpenRouter reply carried no message content');
     }
