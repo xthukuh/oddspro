@@ -1,4 +1,4 @@
-export const TERMS_VERSION = '2026-07-19';
+export const TERMS_VERSION = '2026-08-19';
 
 export const OPERATOR = {
     name: 'Oddspro',
@@ -9,7 +9,7 @@ export const OPERATOR = {
 export const PRIVACY = {
     slug: 'privacy',
     title: 'Privacy Policy',
-    updated: '2026-07-19',
+    updated: '2026-08-19',
     sections: [
         {
             id: 'who-we-are',
@@ -33,6 +33,7 @@ export const PRIVACY = {
                 '- Coarse geolocation (country and region only) derived from your IP address using a third-party IP-geolocation lookup',
                 '- The page you landed on and, where available, the referring site',
                 '- In-app feature-usage events, such as opening the help panel or applying a filter, recorded as short event names only, never free-text content',
+                '- Aggregate usage measurement through Google Analytics 4, which sets its own cookies in your browser and reports pages viewed, device and browser type, and approximate location derived from your IP address to Google on our behalf',
                 'Account data (collected only if you sign up):',
                 '- Your phone number',
                 '- A securely hashed version of your 4-digit PIN (we never store or see your PIN in plain text)',
@@ -48,7 +49,7 @@ export const PRIVACY = {
                 'Under the Kenya Data Protection Act, 2019, we must have a lawful basis for every way we use your data. We rely on the following:',
                 '- Consent: for sending you optional announcement or marketing SMS messages, and for using your coarse location for aggregate traffic reporting. You can withdraw this consent at any time.',
                 '- Contract: to create and operate your account, verify your phone number, keep you signed in, and sync your saved preferences across devices, we need to process your phone number, PIN hash and session data.',
-                '- Legitimate interest: we process anonymous visitor analytics and feature-usage events to understand how the site is used, detect abuse, and improve reliability and performance, in ways that do not unreasonably affect your privacy.',
+                '- Legitimate interest: we process anonymous visitor analytics and feature-usage events, including aggregate audience measurement through Google Analytics, to understand how the site is used, detect abuse, and improve reliability and performance, in ways that do not unreasonably affect your privacy. You can opt out of Google Analytics at any time, as described under Cookies and Local Storage.',
                 'We do not use your data to make automated decisions that produce legal or similarly significant effects on you.',
             ],
         },
@@ -65,7 +66,8 @@ export const PRIVACY = {
             id: 'cookies-and-storage',
             title: 'Cookies and Local Storage',
             body: [
-                'Oddspro does not use tracking cookies and does not run any third-party advertising or analytics scripts.',
+                'Oddspro runs no advertising scripts and shows no ads. We do run one third-party analytics script, Google Analytics 4, to measure how the site is used in aggregate. It sets its own cookies in your browser, with names beginning "_ga", and reports usage data to Google on our behalf.',
+                'You can stop Google Analytics from collecting your data without losing any Oddspro feature: install Google\'s official opt-out browser add-on, block analytics cookies in your browser settings, or use a content blocker. The site works exactly the same either way.',
                 'We use your browser\'s local storage and session storage to remember things like your anonymous visitor identifier, your saved view settings, your signed-in session, and your betslip drafts. This data stays on your device and is only sent to our server when needed to load or sync your preferences.',
             ],
         },
@@ -77,8 +79,10 @@ export const PRIVACY = {
                 'We share limited data with a small number of service providers strictly to operate Oddspro:',
                 '- Bonga SMS, to deliver OTP and, where you have opted in, announcement SMS messages to your phone number',
                 '- A third-party IP-geolocation service, to resolve visitor IP addresses into a country and region for aggregate traffic reporting',
+                '- Google, for Google Analytics 4 audience measurement',
                 '- Our hosting provider, which stores our database and serves the website',
                 'These providers only receive the minimum data needed to perform their function and are not permitted to use it for their own purposes.',
+                'Google Analytics data is processed on Google servers outside Kenya, including in the United States, under Google\'s own data protection terms. No account data (your phone number, email address or PIN hash) is ever sent to Google.',
                 'We may also disclose data if required to do so by Kenyan law or a valid legal request.',
             ],
         },
