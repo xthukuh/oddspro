@@ -1248,21 +1248,35 @@ app.post('/api/refresh/cancel', requireAdminDual, (req, res) => {
 // assets. Cached with an mtime check (bounded to one stat per 10s) so a
 // frontend-only redeploy is noticed WITHOUT restarting the backend - which is
 // exactly how this host is updated. Absent file = null = feature off.
-const BUILD_ID_FILE = path.resolve('web', 'dist', 'build-id.txt');
+// Candidate locations, first hit wins: the single-tree layout (dev, and any
+// host serving the bundle from the app itself) and the SPLIT cPanel layout,
+// where the backend lives in ~/oddspro-app-v<ver> and the built frontend in the
+// sibling ~/public_html. Only the first path existed until 2026-08-19, so live
+// always answered build:null and open tabs never learned a new bundle shipped.
+// WEB_DIST_DIR overrides both when a host uses neither layout.
+const BUILD_ID_FILES = [
+    ...(process.env.WEB_DIST_DIR ? [path.resolve(process.env.WEB_DIST_DIR, 'build-id.txt')] : []),
+    path.resolve('web', 'dist', 'build-id.txt'),
+    path.resolve('..', 'public_html', 'build-id.txt'),
+];
 let _buildId = { value: null, mtime: 0, checkedAt: 0 };
 function deployedBuildId() {
     const now = Date.now();
     if (now - _buildId.checkedAt < 10_000) return _buildId.value;
     _buildId.checkedAt = now;
-    try {
-        const mtime = statSync(BUILD_ID_FILE).mtimeMs;
-        if (mtime !== _buildId.mtime) {
-            _buildId.mtime = mtime;
-            _buildId.value = readFileSync(BUILD_ID_FILE, 'utf8').trim() || null;
+    for (const file of BUILD_ID_FILES) {
+        try {
+            const mtime = statSync(file).mtimeMs;
+            if (mtime !== _buildId.mtime) {
+                _buildId.mtime = mtime;
+                _buildId.value = readFileSync(file, 'utf8').trim() || null;
+            }
+            return _buildId.value;
+        } catch {
+            // try the next layout
         }
-    } catch {
-        _buildId.value = null;   // no build stamp (dev, or backend-only deploy)
     }
+    _buildId.value = null;   // no build stamp anywhere (dev, or backend-only deploy)
     return _buildId.value;
 }
 
