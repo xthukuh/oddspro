@@ -18,7 +18,7 @@ Status values: pending / in progress / completed / blocked (owner).
 | 7 | db-import.js | completed | 27814f5 (full local round trip 385 s) |
 | 8 | db-sync.js status/backup/pull/push + local brought current | pending | Sonnet build, Fable runs the live pulls |
 | 9 | hotfix-remote.js | completed | af50887 + 95d8e88 |
-| 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | in progress | LIVE 2026-08-19 12:05Z, verified (one writer, GA, build id); dead-DB drop gated on the _1_3_0 backup |
+| 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | completed | LIVE 2026-08-19 12:05Z, verified (one writer, GA, build id); dead-DB drop gated on the _1_3_0 backup |
 | 11 | Google Analytics tag missing on live | completed (ships with build 2) | root cause: `VITE_GA_ID` unset at build time (commented out in `.env.production`); set to G-2CNKRP1W0Q, test build injects the snippet. Owner: privacy page still says "no third-party analytics scripts". |
 | 12 | Owner pauses for the cPanel app stop/restart | completed | owner stopped; agent deployed + restored .htaccess + recycled stale instances |
 | 13 | Completion report + GA test greenlight to owner | completed | GA live (G-2CNKRP1W0Q); greenlight given |
@@ -30,3 +30,8 @@ Status values: pending / in progress / completed / blocked (owner).
 | 22 | GUEST_PREMIUM: guests get tips, stats, Daily MultiBet, Sure Bets | completed | 24551bf, reviewed (no Critical/Important; account-bound surfaces structurally unreachable). Deployed + flipped ON live with API_DETAILS off; browser-verified signed out: future dates, exact confidence, full card ladder, Sure Bets, methodology still hidden |
 | 23 | Class A historical backfill (immutable API facts) | completed | 212 stuck fixtures refetched, 130 resolved (263 -> 133, remainder is upstream PST/NS truth), 38 matches settled; deep stats run: 108 fixtures, 216 stats + 21 lineups + 613 events, events gap 54 -> 3, ALL 88 residual stat gaps sit inside the normal 48h retry window (no real gap left); 3 pending tips graded |
 | 24 | Outage damage + durability documented | completed | docs/research/2026-08-19-odds-durability-and-outage-damage.md: ~2 days of bookmaker prices unrecoverable (Aug 17: 203 rows, Aug 18: 57 vs 1000-3000 normal), why API-Football data is not at risk, 5 protections shipped, ranked remaining gaps, SaaS moat scoped to workstream E |
+| 25 | Ingestion audit + collector defects fixed | completed | 0dc7d1d + 91582e8: betpawa truncated-page silence, empty-snapshot stale-bomb, lying odds heartbeat, one-bad-match-kills-the-day, and the full sweep's missing step isolation (it alone fetches future-date odds). Report: docs/research/2026-08-19-ingestion-pipeline-audit.md |
+| 26 | Verified file uploads in deploy tooling | completed | 6409ffc after a live 2.4 MB upload landed as 512 KB with the meter reading 100%; now scp + remote byte check + retries, proven on the next deploy ("verified 2536353 bytes") |
+| 27 | Docs housekeeping | completed | f0f4df8: four completed efforts' dev files retired (owner-approved), docs/dev holds only the active effort |
+| 28 | NOT covered: apisports.js and link.js audits | open | both audit agents died on API errors; link.js is the higher risk (a confident wrong link teaches a permanent alias) |
+| 29 | NOT fixed: no statement/pool-acquire timeout | open | knexfile sets only pool min/max; a runaway query can hold a connection and starve collection |
