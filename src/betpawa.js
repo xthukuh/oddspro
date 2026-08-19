@@ -2,6 +2,7 @@ import axios from 'axios';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { withRetry } from './db/retry-rules.js';
 import { isRetryableApiError } from './db/net-rules.js';
+import { listPageOutcome, listPageDone } from './db/collector-rules.js';
 
 // Get axios client instance
 const BetpawaClient = axios.create({
@@ -153,7 +154,7 @@ export async function fetchBetpawaGames(date_=null, exclude_=null) {
     // fault - retried, and thrown if every attempt fails. `done` may only be
     // computed from a genuinely successful, well-shaped response.
     let count = 0, buffer = [], _next = async (skip=0) => {
-        let arr = await withRetry(async () => {
+        const outcome = await withRetry(async () => {
             const res = await BetpawaClient.get('/events/lists/by-queries?q=' + encodeURIComponent(
                 '{"queries":[{'
                 + '"query":{"eventType":"UPCOMING","categories":["2"],"zones":{},"hasOdds":true,'
@@ -163,17 +164,22 @@ export async function fetchBetpawaGames(date_=null, exclude_=null) {
                 + `"take":${take}`
                 + '}]}'
             ));
-            const list = res.data?.responses?.[0]?.responses;
-            if (!Array.isArray(list)) {
+            // A well-formed envelope with no inner `responses` key is the API
+            // saying "no results", NOT a broken page: BetPawa omits the key
+            // rather than returning []. Only a body we genuinely cannot read is
+            // retried and ultimately thrown. See src/db/collector-rules.js.
+            const outcome = listPageOutcome(res.data);
+            if (outcome.status === 'malformed') {
                 throw Object.assign(
                     new Error(`BetPawa list page malformed response body (skip=${skip})`),
                     { malformedBody: true },
                 );
             }
-            return list;
+            return outcome;
         }, { tries: 4, base: 1500, isRetryable: e => isRetryableApiError(e) || e?.malformedBody === true });
+        let arr = outcome.items;
         const len = arr.length;
-        let done = len < take;
+        let done = listPageDone(outcome, take);
         count += len;
         if (limit > 0 && count >= limit) {
             arr = arr.splice(0, len - (len - (count - limit)));
