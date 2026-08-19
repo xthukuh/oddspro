@@ -171,6 +171,10 @@ async function stepApp(rel) {
     console.log(`[deploy] verify: remote app version ${check.stdout.replace('\n', ', ')} node_modules entries.`);
 }
 
+// Files inside public_html that belong to the HOST, not to our build. They are
+// carried across the wipe (see stepWeb).
+const HOST_OWNED = ['.htaccess', '.well-known'];
+
 async function stepWeb(rel) {
     console.log(`\n[deploy] === WEB -> ${WEB_DIR} ===`);
     if (!rel) die('no complete release artifact set in release/ - run: npm run package:deploy');
@@ -188,10 +192,29 @@ async function stepWeb(rel) {
     }
     console.log(`[deploy] backing up public_html -> ${backup} ...`);
     ssh(`tar -czf ${backup} -C ${WEB_DIR} .`);
+
+    // Host-owned files that live in public_html but are NOT part of our build:
+    // the CloudLinux/Passenger config (without it the Node app stops serving and
+    // the site 404s, verified the hard way on 2026-08-19) and the ACME webroot.
+    // The wipe below deletes dotfiles too, so they are parked and put back.
+    console.log('[deploy] preserving host-owned files (.htaccess, .well-known)...');
+    ssh(`rm -rf ${TMP_DIR}/keep && mkdir -p ${TMP_DIR}/keep`);
+    for (const keep of HOST_OWNED) {
+        ssh(`test -e ${WEB_DIR}/${keep} && cp -a ${WEB_DIR}/${keep} ${TMP_DIR}/keep/ || true`, { allowFail: true });
+    }
     console.log('[deploy] wiping public_html and extracting the new build...');
     ssh(`find ${WEB_DIR} -mindepth 1 -delete && unzip -oq ${TMP_DIR}/web.zip -d ${WEB_DIR}`);
-    const check = ssh(`ls ${WEB_DIR} | head -10; test -f ${WEB_DIR}/index.html && echo INDEX_OK`);
+    // Restore only what the new build did not itself provide.
+    for (const keep of HOST_OWNED) {
+        ssh(`test -e ${TMP_DIR}/keep/${keep} && test ! -e ${WEB_DIR}/${keep} && cp -a ${TMP_DIR}/keep/${keep} ${WEB_DIR}/ || true`, { allowFail: true });
+    }
+    const check = ssh(`ls -a ${WEB_DIR} | head -12; test -f ${WEB_DIR}/index.html && echo INDEX_OK; test -f ${WEB_DIR}/.htaccess && echo HTACCESS_OK || echo HTACCESS_MISSING`);
     console.log(`[deploy] verify:\n${check.stdout}`);
+    if (!DRY && !check.stdout.includes('HTACCESS_OK')) {
+        console.warn('[deploy] WARNING: public_html has no .htaccess. On this cPanel host that file carries the'
+            + ' Passenger config, and without it every /api route 404s. Start (or Restart) the Node.js App in cPanel'
+            + ' to have it rewritten, then re-check https://oddspro.ke/api/refresh.');
+    }
 }
 
 // ---- run --------------------------------------------------------------------
