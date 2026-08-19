@@ -410,6 +410,32 @@ the shown bet). Sources: `docs/research/`.
   one `UNION ALL` per batch of ~100 (`profileRemoteDatabase`/`batchedChunkCounts`) cut that to
   16 seconds. Aggregate reads (COUNT/MIN/MAX) are cheap to batch even across hundreds of
   chunks - the risk this whole fix is about is bulk DATA transfer, not read aggregates.
+- 2026-08-19 - **v1.4.0 build 2 live deploy: three traps, all hit for real.** (1) **The web
+  step wipes `public_html/.htaccess`, and on this host that file IS the Passenger config.**
+  `find public_html -mindepth 1 -delete` takes dotfiles; without the CloudLinux Passenger
+  block every `/api` route 404s and the Node app never starts. Worse, the tar.gz backup taken
+  moments earlier is NOT a rescue: cPanel's own **Stop App removes the Passenger block from
+  `.htaccess` first**, so a backup taken while stopped contains only the ENV VARS block.
+  Restore = write the block back (`PassengerAppRoot`/`PassengerBaseURI`/`PassengerNodejs`
+  (`~/nodevenv/oddspro-app-v<ver>/22/bin/node`)/`PassengerAppType node`/`PassengerStartupFile
+  src/server.js`) or click Start in cPanel, which rewrites it. FIXED in `scripts/deploy-remote.js`
+  (`HOST_OWNED = ['.htaccess', '.well-known']` parked in tmp across the wipe, restored unless
+  the build ships its own, plus a loud HTACCESS_MISSING warning). (2) **cPanel's Stop does NOT
+  kill the running `lsnode` processes.** Two instances with 2-3 day uptimes kept serving, kept
+  running their OWN schedulers on PRE-deploy code (no writer lease), and answered `/api/refresh`
+  while the new build was already on disk: the "warehouse_version stays 0 but odds are being
+  written" symptom. Always `ps -u $USER -o pid,etime,args | grep "[l]snode"` after a deploy and
+  `kill` anything whose etime predates it, then re-warm with one request. (3) **`build-id.txt`
+  was never found in production**: the server only looked at `web/dist/build-id.txt`, which does
+  not exist in the SPLIT layout (backend `~/oddspro-app-v<ver>`, frontend `~/public_html`), so
+  `/api/refresh` always answered `build:null` and the client's stale-bundle reload never fired.
+  Fixed to walk `WEB_DIST_DIR` -> `web/dist` -> `../public_html`.
+- 2026-08-19 - **`scripts/hotfix-remote.js` first live run (verified):** `node
+  scripts/hotfix-remote.js src/server.js --restart` backed the remote file up to
+  `src/server.js.orig-<stamp>`, streamed the new one, ran the host's `node --check`, touched
+  `tmp/restart.txt`, and printed the exact per-file rollback command. Fix confirmed live ~16 s
+  later (`build` went from null to `1.4.0+mszeyz65`). This is the route for a one-file
+  production fix that must not wait for a release.
 
 ## 6. Doc & knowledge topology
 
