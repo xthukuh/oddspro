@@ -27,3 +27,4 @@ Status values: pending / in progress / completed / blocked (owner).
 | 16 | OpenRouter out of credits (HTTP 402) | blocked (owner) | 3,696 failed AI reviews, zero landing; rules-based tips unaffected |
 | 19 | Dead DBs dropped | completed | backups verified independently (gzip -t, CREATE TABLE counts 25/33, trailer, at-risk delta rows present) then `DROP DATABASE`; 7.4 GB freed, live untouched |
 | 20 | Passenger idle-shutdown stopped the scheduler | completed | no passes 12:57-14:41 UTC; keep-alive cron `*/5` installed (crontab was empty); durable fix = writer-process split, spec section 7 |
+| 22 | GUEST_PREMIUM: guests get tips, stats, Daily MultiBet, Sure Bets | completed | 24551bf, reviewed (no Critical/Important; account-bound surfaces structurally unreachable). Deployed + flipped ON live with API_DETAILS off; browser-verified signed out: future dates, exact confidence, full card ladder, Sure Bets, methodology still hidden |
