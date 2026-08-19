@@ -18,8 +18,8 @@ Status values: pending / in progress / completed / blocked (owner).
 | 7 | db-import.js | completed | 27814f5 (full local round trip 385 s) |
 | 8 | db-sync.js status/backup/pull/push + local brought current | pending | Sonnet build, Fable runs the live pulls |
 | 9 | hotfix-remote.js | completed | af50887 + 95d8e88 |
-| 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | pending | Fable (production) |
+| 10 | ship v1.4.0 build 2, verify, drop dead DBs, docs | blocked (owner) | release 20260819_013316 built, tag at HEAD locally; waiting for owner to stop the cPanel app |
 | 11 | Google Analytics tag missing on live | completed (ships with build 2) | root cause: `VITE_GA_ID` unset at build time (commented out in `.env.production`); set to G-2CNKRP1W0Q, test build injects the snippet. Owner: privacy page still says "no third-party analytics scripts". |
-| 12 | Owner pauses: stop/restart cPanel Node.js App during the build-2 apply | pending | agent pauses and hands over the exact moment |
+| 12 | Owner pauses: stop/restart cPanel Node.js App during the build-2 apply | blocked (owner) | PAUSED HERE: stop the app, then I deploy, then you start it |
 | 13 | Completion report + GA test greenlight to owner | pending | after build 2 is live |
 | 14 | Bonus assessment: decouple the always-running server.js from the source tree for hot-swaps | pending | proposal in the completion report (versioned app roots + `current` symlink, or writer/serve process split) |
