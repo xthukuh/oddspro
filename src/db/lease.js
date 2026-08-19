@@ -50,6 +50,40 @@ async function _releasePinnedConnection() {
     }
 }
 
+// Ends the pinned connection's underlying MySQL session instead of just
+// returning it to the pool. Use this whenever we cannot be sure the
+// connection - and the named lock its session may still hold - is actually
+// healthy: a MariaDB *server-level* error (query killed, resource limit
+// hit) can leave the TCP session alive while still owning
+// `oddspro:writer`, and a plain `releaseConnection` would hand that live,
+// lock-holding session back into the pool, where it can sit idle for the
+// rest of the process's life. Destroying it closes the session, so
+// MariaDB frees every lock it held server-side. It is also what correctly
+// releases the lock on a clean shutdown: GET_LOCK is called every tick
+// while we already hold it (see the module comment), and MariaDB
+// increments a per-name counter on each successful GET_LOCK - a single
+// RELEASE_LOCK only decrements it by one, so after more than one tick it
+// would leave the lock held. Never throws - the connection may already be
+// dead. The (now-dead) connection is still handed back to the pool so
+// tarn's bookkeeping stays correct; knex's `validateConnection` rejects it
+// on the pool's next acquire and tarn's destroyer callback closes it for
+// good.
+async function _destroyPinnedConnection() {
+    if (!_conn) return;
+    const conn = _conn;
+    _conn = null;
+    try {
+        conn.destroy?.();
+    } catch {
+        // already dead
+    }
+    try {
+        db.client.releaseConnection(conn);
+    } catch {
+        // ignore - the connection may already be dead
+    }
+}
+
 // One attempt: acquire (or renew) the lock on the pinned connection,
 // pinning a fresh connection first if we don't hold one yet. Returns
 // whether this process is the writer after the attempt. Never throws -
@@ -86,7 +120,11 @@ async function _tryAcquireWriterOnce() {
         _lastError = null;
     } catch (e) {
         _lastError = e?.message || String(e);
-        await _releasePinnedConnection();
+        // Destroy rather than release: a server-level error (e.g. the
+        // connection hit `max_queries_per_hour`, or was `KILL QUERY`'d) can
+        // leave the session alive and still holding `oddspro:writer` - see
+        // `_destroyPinnedConnection`.
+        await _destroyPinnedConnection();
         _applyTransition('error');
     }
     return _writer;
@@ -104,19 +142,16 @@ export async function stopWriterLease() {
         clearInterval(_tickTimer);
         _tickTimer = null;
     }
-    // Let any in-flight attempt settle first, so we never release the
+    // Let any in-flight attempt settle first, so we never destroy the
     // connection out from under it (or read a `_conn` it is mid-swap on).
     if (_inflight) {
         await _inflight;
     }
-    if (_conn) {
-        try {
-            await db.raw('SELECT RELEASE_LOCK(?)', [WRITER_LOCK]).connection(_conn);
-        } catch {
-            // ignore - releasing a lock on a dead connection is a no-op anyway
-        }
-        await _releasePinnedConnection();
-    }
+    // Destroy the pinned connection rather than issuing a single
+    // RELEASE_LOCK - see `_destroyPinnedConnection` for why one
+    // RELEASE_LOCK cannot be trusted to fully release a lock re-acquired
+    // every tick.
+    await _destroyPinnedConnection();
     _writer = false;
     _since = null;
 }

@@ -1324,7 +1324,26 @@ app.use((err, req, res, next) => { // eslint-disable-line no-unused-vars
 async function migrateOnBoot() {
     if (!config.MIGRATE_ON_BOOT) return; // no-op default
     console.debug('[migrate] MIGRATE_ON_BOOT set - running knex migrate:latest...');
-    console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
+    // The host boots three server instances near-simultaneously. knex's
+    // migrator takes a row lock (`knex_migrations_lock`) for the duration of
+    // `migrate.latest()` and throws a `MigrationLocked` error with no retry
+    // of its own when another instance already holds it - with a real
+    // migration to apply (lock held for the create+seed, not microseconds)
+    // the two losing instances would otherwise fail-fast and Passenger would
+    // respawn them into 500s. Retry with jitter so the losers don't wake up
+    // and collide on the same retry; any other error stays fail-fast.
+    const maxAttempts = 6;
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+        try {
+            console.debug(`[migrate] ${describeMigrationResult(await db.migrate.latest())}`);
+            return;
+        } catch (err) {
+            if (err?.name !== 'MigrationLocked' || attempt >= maxAttempts) throw err;
+            const delayMs = 2_000 + Math.round(Math.random() * 3_000);
+            console.debug(`[migrate] migration table locked by another instance (attempt ${attempt}/${maxAttempts}) - retrying in ${Math.round(delayMs / 1000)}s...`);
+            await new Promise((resolve) => setTimeout(resolve, delayMs));
+        }
+    }
 }
 
 // The host redirects the app's stderr to <app root>/stderr.log with no

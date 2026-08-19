@@ -10,12 +10,13 @@
 //   node scripts/db-sync.js status [--json]
 //   node scripts/db-sync.js pull [--tables a,b] [--since YYYY-MM-DD] [--until YYYY-MM-DD]
 //                                [--full] [--dry-run] [--yes] [--force]
-//   node scripts/db-sync.js push --tables a,b [--since ...] [--until ...] [--dry-run] [--yes]
+//   node scripts/db-sync.js push --tables a,b [--since ...] [--until ...] [--full]
+//                                [--dry-run] [--yes] [--confirm PUSH] [--force]
 //   node scripts/db-sync.js backup --remote-db <name> [--dry-run]
 //
 // pull/push default window (neither --since nor --full given): since =
 // today-3d, until = today+8d (EAT) - the routine daily catch-up range that
-// also covers upcoming fixtures. status/pull compare `MAX(name) FROM
+// also covers upcoming fixtures. status/pull/push compare `MAX(name) FROM
 // knex_migrations` on both sides first and abort on a mismatch unless
 // --force (a schema-behind side can silently misinterpret a REPLACE).
 //
@@ -26,15 +27,20 @@
 //
 // push is implemented in full but this repo's operating rule is that it is
 // only ever invoked with --dry-run - the live host stays read-only for us.
+// A real run needs --yes AND a typed --confirm PUSH on top of --tables;
+// per table it dumps locally, verifies the dump is COMPLETE, and only then
+// deletes the live window and uploads (never delete-before-verify).
 //
-// Every downloaded dump (pull's per-table dumps, backup's schema pass and
-// per-table/chunk data dumps) is verified complete before it's trusted for
-// anything - `gzip -t` alone is NOT a completeness check (verified live: a
-// shared host killing the remote connection mid-dump still lets gzip close
-// its own output cleanly). See the "dump completeness" section below.
-// `backup` additionally splits big tables into bounded PK-range chunks so
-// no single remote query runs long enough to hit whatever killed the old
-// one-shot dump.
+// Every downloaded/dumped dump (pull's per-table downloads, push's local
+// dumps, backup's schema pass and per-table/chunk data dumps) is verified
+// complete before it's trusted for anything - `gzip -t` alone is NOT a
+// completeness check (verified live: a shared host killing the remote
+// connection mid-dump still lets gzip close its own output cleanly). See
+// the "dump completeness" section below. `backup` additionally splits big
+// tables into bounded PK-range chunks so no single remote query runs long
+// enough to hit whatever killed the old one-shot dump, and renames the
+// output to `.INCOMPLETE.sql.gz` (instead of leaving it under its normal,
+// trustworthy-looking name) if the completeness check ever fails.
 
 import { readFileSync, mkdirSync, statSync, createWriteStream, createReadStream, existsSync, unlinkSync, writeFileSync, renameSync } from 'node:fs';
 import { spawn } from 'node:child_process';
@@ -410,7 +416,7 @@ async function pullTableData(cfg, p, chunkDir, stamp, localGz) {
         acc.chunkCount++;
         return;
     } catch (e) {
-        console.error(`[db-sync] ${p.table}: single-shot dump still incomplete after retries - falling back to id-bisected pieces...`);
+        console.error(`[db-sync] ${p.table}: single-shot dump still incomplete after retries (${maskCmd(e.message, cfg)}) - falling back to id-bisected pieces...`);
     }
 
     if (full) {
@@ -562,27 +568,73 @@ function remoteImportCmd(cfg, dbName, { preamble }) {
 // Dump one local table (docker exec + mariadb-dump/mysqldump), gzipped, to
 // outPath - the push-direction twin of buildRemoteDumpCmd, using the exact
 // same dumpArgs() so the two directions can never drift.
+//
+// dumpArgs() always carries --compact, which suppresses mariadb-dump's own
+// completion trailer - so, exactly like buildRemoteDumpCmd does for the
+// pull direction, OWN_DUMP_MARKER is appended after dump.stdout ends, but
+// ONLY when the dump process itself exited 0. This gives push the same
+// completeness signal pull already verifies with (see verifyDumpComplete /
+// dumpLooksComplete): cmdPush must never delete anything on the live host
+// on the strength of a dump that failed silently downstream of a 0 exit
+// code (a disk-full gzip/write failure, in particular - both streams' error
+// events are now handled instead of leaving the returned promise pending
+// forever on that failure).
 async function dumpLocalTable({ container, clientBin, table, where, full, outPath }) {
     const args = dumpArgs({ db: config.DB_DATABASE, table, where, full });
     const dump = spawn('docker', ['exec', '-e', `MYSQL_PWD=${config.DB_PASSWORD}`, container, clientBin, `-u${config.DB_USERNAME}`, ...args]);
     const gzip = createGzip();
     const out = createWriteStream(outPath);
     let stderr = '';
+    let pipeErr = null;
     dump.stderr.on('data', d => stderr += d);
-    dump.stdout.pipe(gzip).pipe(out);
+    gzip.on('error', e => { pipeErr = pipeErr || e; });
+    out.on('error', e => { pipeErr = pipeErr || e; });
+    dump.stdout.pipe(gzip, { end: false });
+    gzip.pipe(out);
     const exitCode = await new Promise((resolve, reject) => {
         dump.on('error', e => reject(new Error(`docker exec failed to start: ${e.message}`)));
         dump.on('close', resolve);
     });
-    await new Promise(resolve => out.on('close', resolve));
+    gzip.end(exitCode === 0 ? `${OWN_DUMP_MARKER}\n` : undefined);
+    await new Promise(resolve => {
+        // Resolve (never reject) on whichever of close/error fires first -
+        // pipeErr (set by the listeners above) is what gets checked below;
+        // this just guarantees the promise always settles instead of
+        // hanging forever on a stream error that never emits 'close'.
+        out.once('close', resolve);
+        out.once('error', resolve);
+    });
+    if (pipeErr) throw new Error(`local dump of ${table} failed while compressing/writing: ${pipeErr.message}`);
     if (exitCode !== 0) throw new Error(`local dump of ${table} exited ${exitCode}:\n${stderr.trim()}`);
     return statSync(outPath).size;
 }
 
+// push is the one command that writes to the live host directly (the repo
+// rule is that it is only ever invoked with --dry-run). Safety order:
+//   1. migration heads must match (abort otherwise; --force overrides) -
+//      pushing locally-shaped rows onto a schema-behind (or -ahead) live
+//      host can silently misinterpret them, same reasoning as cmdPull.
+//   2. --yes AND a TYPED --confirm PUSH (case-sensitive) are both required
+//      to do anything for real - one accidental flag can no longer trigger
+//      a live write.
+//   3. per table: dump locally, verify the dump is COMPLETE, and only then
+//      delete the live window and upload - never the other way around. A
+//      local dump that turns out incomplete must never trigger the live
+//      delete; there would be nothing good to import afterward.
 async function cmdPush(flags) {
     const cfg = getCfg();
     if (!flags.tables) die('push requires --tables a,b (explicit list - no default table set, never instance tables).');
     const tables = flags.tables.split(',').map(s => s.trim()).filter(Boolean);
+
+    const { localHead, remoteHead } = await migrationHeads(cfg);
+    if (localHead !== remoteHead) {
+        if (!flags.force) {
+            die(`migration head mismatch: local="${localHead}" remote="${remoteHead}". Migrate to match, or pass `
+                + `--force to override - pushing a schema-mismatched local dump onto live can silently misinterpret rows.`);
+        }
+        console.warn(`[db-sync] WARNING: migration head mismatch overridden by --force (local="${localHead}" remote="${remoteHead}").`);
+    }
+
     const { since, until, full } = resolvePullWindow(flags);
     let plan;
     try {
@@ -598,18 +650,20 @@ async function cmdPush(flags) {
         for (const p of plan) {
             const localGz = path.join('backups', 'sync', `push_${p.table}_${stamp}.sql.gz`);
             console.log(`\n  [local]  docker exec <mariadb-dump|mysqldump> ${dumpArgs({ db: config.DB_DATABASE, table: p.table, where: p.where, full: p.mode === 'full' }).join(' ')} | gzip -9`);
-            console.log(`    -> ${localGz}`);
+            console.log(`    -> ${localGz}  (verified complete before anything on live is touched)`);
             if (p.mode === 'window') {
                 const del = windowDeleteSql(p.table, since, until);
-                if (del) console.log(`  [remote] ${del}`);
+                if (del) console.log(`  [remote] ${del}  (runs ONLY after the dump above verifies complete)`);
             }
             console.log(`  [remote] ${maskCmd(remoteImportCmd(cfg, cfg.DB_NAME, { preamble: true }), cfg)}`);
         }
         console.log('\n[db-sync] dry-run only - nothing was touched (push never runs for real in this repo without a separate explicit go-ahead).');
+        console.log('[db-sync] a real run additionally requires --yes AND a typed --confirm PUSH on top of --tables.');
         return;
     }
 
     if (!flags.yes) die('refusing to push without --yes (this OVERWRITES remote rows for the planned tables). Preview first with --dry-run.');
+    if (flags.confirm !== 'PUSH') die('refusing to push without --confirm PUSH (typed, case-sensitive - this writes to the LIVE host). Preview first with --dry-run.');
 
     mkdirSync(path.join('backups', 'sync'), { recursive: true });
     const container = resolveContainer(process.env.DB_DOCKER_CONTAINER || null);
@@ -618,7 +672,16 @@ async function cmdPush(flags) {
         console.log(`\n[db-sync] === ${p.table} (${p.mode}) ===`);
         const localGz = path.join('backups', 'sync', `push_${p.table}_${stamp}.sql.gz`);
         const bytes = await dumpLocalTable({ container, clientBin, table: p.table, where: p.where, full: p.mode === 'full', outPath: localGz });
-        console.log(`[db-sync] dumped local ${p.table}: ${fmtMB(bytes)}`);
+
+        // Verify BEFORE touching live - same discipline pull's
+        // downloadVerified enforces in the other direction. A truncated
+        // local dump must never trigger the live-side delete below: that
+        // would leave the live window gone with only a bad dump on hand.
+        if (!(await verifyDumpComplete(localGz))) {
+            die(`local dump of ${p.table} failed the completeness check (${localGz}) - refusing to touch the live `
+                + `host. Nothing on live was changed for this table.`);
+        }
+        console.log(`[db-sync] dumped + verified local ${p.table}: ${fmtMB(bytes)}`);
 
         if (p.mode === 'window') {
             const del = windowDeleteSql(p.table, since, until);
@@ -628,7 +691,24 @@ async function cmdPush(flags) {
             }
         }
 
-        await sshStreamUpload(cfg, localGz, remoteImportCmd(cfg, cfg.DB_NAME, { preamble: true }), `push ${p.table}`);
+        try {
+            await sshStreamUpload(cfg, localGz, remoteImportCmd(cfg, cfg.DB_NAME, { preamble: true }), `push ${p.table}`);
+        } catch (e) {
+            const rerunArgs = full ? `--tables ${p.table} --full` : `--tables ${p.table} --since ${since} --until ${until}`;
+            console.error(`[db-sync] ERROR: upload of ${p.table} failed: ${maskCmd(e.message, cfg)}`);
+            if (p.mode === 'window') {
+                console.error(`[db-sync] ROLLBACK: the live windowed delete for ${p.table} already ran before this `
+                    + `failure - that window on live is now empty.`);
+            } else {
+                console.error(`[db-sync] ROLLBACK: this was a --full push (--add-drop-table) - the remote import may `
+                    + `have partially applied (DROP/CREATE happens inside the uploaded stream itself, not as a `
+                    + `separate step this script controls), so ${p.table} on live may now be empty or mid-import.`);
+            }
+            console.error(`[db-sync] the verified local dump is still on disk at ${localGz} - retry ONLY this `
+                + `table's upload leg (re-dumps + re-verifies, then re-runs the delete/import - safe to repeat):`);
+            console.error(`  node scripts/db-sync.js push ${rerunArgs} --yes --confirm PUSH`);
+            throw e;
+        }
     }
     console.log('\n[db-sync] push done.');
 }
@@ -935,8 +1015,27 @@ async function cmdBackup(flags) {
         console.log(`  ${c.table.padEnd(28)}${String(c.chunks).padStart(7)}${String(c.plannedTotal).padStart(10)}${String(c.finalRows).padStart(10)}  ${c.match ? 'OK' : 'MISMATCH'}`);
     }
 
+    if (anyMismatch) {
+        // A completeness MISMATCH must never leave the file under its normal,
+        // trustworthy-looking name - a caller that only checks stdout/exit
+        // code (or lists backups/ later) could otherwise mistake it for a
+        // verified backup and restore/DROP against it. Rename it out of the
+        // trustworthy namespace, same discipline as the .partial rename above
+        // for a thrown abort, before failing loudly.
+        const incompletePath = outPath.replace(/\.sql\.gz$/, '.INCOMPLETE.sql.gz');
+        try {
+            renameSync(outPath, incompletePath);
+        } catch {
+            try { unlinkSync(outPath); } catch { /* best effort */ }
+            die(`one or more tables failed the completeness check (see above) - this backup is NOT trustworthy. `
+                + `Renaming it failed too, so it was DELETED instead of being left under a trustworthy name.`);
+        }
+        die(`one or more tables failed the completeness check (see above) - this backup is NOT trustworthy. `
+            + `Renamed to ${incompletePath} so it can never be mistaken for a verified backup - do not restore or `
+            + `DROP anything on the strength of this file.`);
+    }
+
     console.log(`\n[db-sync] backup done: ${outPath} (${fmtMB(bytes)}, ${secs.toFixed(1)}s).`);
-    if (anyMismatch) die('one or more tables failed the completeness check (see above) - this backup is NOT trustworthy, investigate before relying on it.');
     console.log('[db-sync] all tables verified complete.');
 }
 
@@ -967,7 +1066,7 @@ async function main() {
             console.error('Usage: node scripts/db-sync.js <status|pull|push|backup> [...flags]');
             console.error('  status                          side-by-side local vs live');
             console.error('  pull   [--tables a,b] [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--full] [--dry-run] [--yes] [--force]');
-            console.error('  push   --tables a,b [--since ...] [--until ...] [--dry-run] [--yes]');
+            console.error('  push   --tables a,b [--since ...] [--until ...] [--dry-run] [--yes] [--confirm PUSH]');
             console.error('  backup --remote-db <name> [--dry-run]');
             process.exitCode = 1;
     }
