@@ -168,7 +168,7 @@ node scripts/deploy-remote.js --app --web     # code-only redeploy
 ```
 
 Emergency single-file fix (no release build): `node scripts/hotfix-remote.js <file...>
-[--from <dir>] [--restart] [--dry-run]` — remote-backs-up (`.orig-<stamp>`), uploads,
+[--from <dir>] [--restart] [--dry-run]`: remote-backs-up (`.orig-<stamp>`), uploads,
 `node --check`s `.js`/`.mjs`/`.cjs` (auto-restores + dies on a syntax error), prints the
 rollback command; detail `docs/DEPLOYMENT.md` §5.1.
 

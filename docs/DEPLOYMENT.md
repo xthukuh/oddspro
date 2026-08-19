@@ -182,13 +182,13 @@ VALUES ('20260709000001_fixtures_elapsed.js',
 
 ### 5.1 Emergency file-level hotfix (no release)
 
-For a single backend file that needs an urgent fix between real deploys — no zip build, no `npm install`, no full app re-extract:
+For a single backend file that needs an urgent fix between real deploys (no zip build, no `npm install`, no full app re-extract):
 
 ```sh
 node scripts/hotfix-remote.js <repo-relative file...> [--from <dir>] [--restart] [--dry-run]
 ```
 
-Reuses `scripts/lib/remote.js` (same config/ssh plumbing as `deploy-remote.js`), so it targets the same `APP_DIR`/`SSH_TARGET` from `.env.deploy`. For each file it: refuses `.env*` paths and any path escaping the repo (`..`) before touching the host; takes a remote backup **first**, `cp -n <APP_DIR>/<file> <APP_DIR>/<file>.orig-<YYYYMMDD_HHMMSS>` (one UTC stamp per run, `cp -n` never overwrites an existing backup, and a brand-new file that doesn't exist remotely yet skips the backup step and says so); uploads via `sshStreamUpload`; and for `.js`/`.mjs`/`.cjs` files runs `node --check` remotely (via `NODE_BIN`) — a syntax error auto-restores the backup and dies loudly, so a broken upload never stays live. `--restart` touches `<APP_DIR>/tmp/restart.txt` (Passenger) once every file in the run has landed cleanly. `--dry-run` prints the full plan (backup check, upload, syntax check, rollback commands) without touching the host.
+Reuses `scripts/lib/remote.js` (same config/ssh plumbing as `deploy-remote.js`), so it targets the same `APP_DIR`/`SSH_TARGET` from `.env.deploy`. For each file it: refuses `.env*` paths and any path escaping the repo (`..`) before touching the host; takes a remote backup **first**, `cp -n <APP_DIR>/<file> <APP_DIR>/<file>.orig-<YYYYMMDD_HHMMSS>` (one UTC stamp per run, `cp -n` never overwrites an existing backup, and a brand-new file that doesn't exist remotely yet skips the backup step and says so); uploads via `sshStreamUpload`; and for `.js`/`.mjs`/`.cjs` files runs `node --check` remotely (via `NODE_BIN`), where a syntax error auto-restores the backup and dies loudly, so a broken upload never stays live. `--restart` touches `<APP_DIR>/tmp/restart.txt` (Passenger) once every file in the run has landed cleanly. `--dry-run` prints the full plan (backup check, upload, syntax check, rollback commands) without touching the host.
 
 The script always prints the exact rollback line for every file it backed up:
 
@@ -196,7 +196,7 @@ The script always prints the exact rollback line for every file it backed up:
 ssh <SSH_TARGET> 'cp <APP_DIR>/<file>.orig-<stamp> <APP_DIR>/<file> && touch <APP_DIR>/tmp/restart.txt'
 ```
 
-This is strictly a stop-gap for a single-file emergency fix — a real deploy (`deploy-remote.js --app`) still ships the full tree and stays the source of truth for what's actually running.
+This is strictly a stop-gap for a single-file emergency fix: a real deploy (`deploy-remote.js --app`) still ships the full tree and stays the source of truth for what's actually running.
 
 ## 6. Troubleshooting / risk appendix
 

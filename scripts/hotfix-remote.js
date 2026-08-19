@@ -117,7 +117,37 @@ console.log(`[hotfix] target ${SSH_TARGET}  app root ${APP_DIR}  stamp ${STAMP}$
 console.log(`[hotfix] ${plan.length} file(s): ${plan.map(p => p.file).join(', ')}${RESTART ? '  (+ restart after)' : ''}`);
 
 // ---- run ------------------------------------------------------------------
+// Rollback lines are registered the moment a backup lands, not after the
+// whole run succeeds - a failure partway through (die() below, or a thrown
+// error) must still tell the operator how to revert every file already
+// touched, not just the ones from a clean full run.
 const rollbacks = []; // { file, hadBackup, backupPath, remotePath }
+
+function printRollbacks() {
+    console.log('\n[hotfix] rollback commands (run any of these to revert that one file):');
+    if (rollbacks.length === 0) {
+        console.log('  (none yet - no file was backed up before this run stopped)');
+        return;
+    }
+    for (const r of rollbacks) {
+        if (r.hadBackup || DRY) {
+            // The whole remote command is already wrapped in ONE pair of
+            // single quotes here for the operator's local shell to copy-
+            // paste - q() (which itself single-quotes) must not run inside
+            // that, or it breaks the quoting instead of protecting it.
+            console.log(`  ssh ${SSH_TARGET} 'cp ${r.backupPath} ${r.remotePath} && touch ${APP_DIR}/tmp/restart.txt'`);
+        } else {
+            console.log(`  # ${r.file}: no prior remote version existed - nothing to roll back to (remove ${r.remotePath} to undo)`);
+        }
+    }
+}
+
+// die() that also dumps whatever rollback lines are known so far, then exits.
+function dieWithRollbacks(msg) {
+    console.error(`[hotfix] ERROR: ${msg}`);
+    printRollbacks();
+    process.exit(1);
+}
 
 async function patchOne(item) {
     const { file, source, remotePath, backupPath, remoteDir, isJs } = item;
@@ -137,28 +167,37 @@ async function patchOne(item) {
             hadBackup = true;
             console.log(`[hotfix] backed up ${remotePath} -> ${backupPath}`);
         } else {
-            console.log(`[hotfix] remote file does not exist yet - skipping backup (new file)`);
+            console.log('[hotfix] remote file does not exist yet, skipping backup (new file)');
         }
     }
+    // Registered as soon as the backup decision is made (even "no backup
+    // needed, it's a new file") so printRollbacks() always has an entry for
+    // every file that reached this point, on every exit path.
+    rollbacks.push({ file, hadBackup, backupPath, remotePath });
 
     // 2. Upload.
-    ssh(`mkdir -p ${q(remoteDir)}`);
     await sshStream(source, `mkdir -p ${q(remoteDir)} && cat > ${q(remotePath)}`, `upload ${file}`);
 
     // 3. Syntax-check JS uploads; auto-restore + die loudly on failure.
     if (isJs) {
-        const check = ssh(`${NODE_BIN}/node --check ${q(remotePath)}`, { allowFail: true });
-        if (!DRY && check.status !== 0) {
-            if (hadBackup) {
-                ssh(`cp ${q(backupPath)} ${q(remotePath)}`, { allowFail: true });
-                die(`node --check failed for ${file} - restored backup from ${backupPath}\n${check.stderr}`);
+        if (DRY) {
+            console.log(`[dry-run] node --check (skipped, dry run): ${remotePath}`);
+        } else {
+            const check = ssh(`${NODE_BIN}/node --check ${q(remotePath)}`, { allowFail: true });
+            if (check.status !== 0) {
+                if (!hadBackup) {
+                    dieWithRollbacks(`node --check failed for ${file} (no prior backup existed to restore, the bad upload is still live at ${remotePath})\n${check.stderr}`);
+                }
+                const restore = ssh(`cp ${q(backupPath)} ${q(remotePath)}`, { allowFail: true });
+                if (restore.status === 0) {
+                    dieWithRollbacks(`node --check failed for ${file}, restored backup from ${backupPath}\n${check.stderr}`);
+                } else {
+                    dieWithRollbacks(`node --check failed for ${file}, AND THE AUTO-RESTORE ALSO FAILED - ${remotePath} is NOT RESTORED, still holds the broken upload. Restore manually: ssh ${SSH_TARGET} 'cp ${backupPath} ${remotePath}'\ncheck error: ${check.stderr}\nrestore error: ${restore.stderr}`);
+                }
             }
-            die(`node --check failed for ${file} (no prior backup existed to restore - the bad upload is still live at ${remotePath})\n${check.stderr}`);
+            console.log(`[hotfix] node --check OK: ${remotePath}`);
         }
-        console.log(`[hotfix] node --check OK: ${remotePath}`);
     }
-
-    rollbacks.push({ file, hadBackup, backupPath, remotePath });
 }
 
 try {
@@ -168,17 +207,11 @@ try {
 
     if (RESTART) {
         console.log(`\n[hotfix] restarting (touch ${APP_DIR}/tmp/restart.txt)...`);
-        ssh(`mkdir -p ${APP_DIR}/tmp && touch ${APP_DIR}/tmp/restart.txt`);
+        ssh(`mkdir -p ${q(APP_DIR)}/tmp && touch ${q(APP_DIR)}/tmp/restart.txt`);
     }
 
-    console.log('\n[hotfix] done. Rollback commands (run any of these to revert that one file):');
-    for (const r of rollbacks) {
-        if (r.hadBackup || DRY) {
-            console.log(`  ssh ${SSH_TARGET} 'cp ${r.backupPath} ${r.remotePath} && touch ${APP_DIR}/tmp/restart.txt'`);
-        } else {
-            console.log(`  # ${r.file}: no prior remote version existed - nothing to roll back to (remove ${r.remotePath} to undo)`);
-        }
-    }
+    console.log('\n[hotfix] done.');
+    printRollbacks();
 } catch (e) {
-    die(e.message);
+    dieWithRollbacks(e.message);
 }
