@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
+    hasOddsSaveData,
 } from '../src/db/auto-rules.js';
 
 // refreshOutcome (F3): classify a finished refresh job.
@@ -159,6 +160,32 @@ test('shouldStampFreshness on partial defers to summary.data_bearing_ok', () => 
 test('shouldStampFreshness never stamps on error or cancelled', () => {
     assert.equal(shouldStampFreshness('error', { data_bearing_ok: true }), false);
     assert.equal(shouldStampFreshness('cancelled', { data_bearing_ok: true }), false);
+});
+
+// hasOddsSaveData (defect 3, 2026-08-19): the collection heartbeat must only
+// stamp `last_odds_at` when saveMatches() actually left something new behind,
+// never merely because the call did not throw.
+test('hasOddsSaveData is true when markets were written', () => {
+    assert.equal(hasOddsSaveData({ inserted: 0, updated: 0, skipped: 5, markets: 12 }), true);
+});
+
+test('hasOddsSaveData is true when a match was inserted or updated, even with zero markets', () => {
+    assert.equal(hasOddsSaveData({ inserted: 1, updated: 0, skipped: 0, markets: 0 }), true);
+    assert.equal(hasOddsSaveData({ inserted: 0, updated: 1, skipped: 0, markets: 0 }), true);
+});
+
+test('hasOddsSaveData is false on the all-zero counts saveMatches returns for an empty games array', () => {
+    assert.equal(hasOddsSaveData({ inserted: 0, updated: 0, skipped: 0, markets: 0 }), false);
+});
+
+test('hasOddsSaveData is false when everything was skipped (completed matches only)', () => {
+    assert.equal(hasOddsSaveData({ inserted: 0, updated: 0, skipped: 40, markets: 0 }), false);
+});
+
+test('hasOddsSaveData is false on missing/malformed input', () => {
+    assert.equal(hasOddsSaveData(null), false);
+    assert.equal(hasOddsSaveData(undefined), false);
+    assert.equal(hasOddsSaveData({}), false);
 });
 
 const utc = iso => new Date(iso).getTime();

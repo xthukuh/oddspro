@@ -2,7 +2,7 @@
 // DB shapes on purpose: DECIMAL handicap as string, is_stale as tinyint 0/1.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { diffOddsRows, oddsIdentity } from '../src/db/odds-diff.js';
+import { diffOddsRows, oddsIdentity, emptySnapshotIsSuspect } from '../src/db/odds-diff.js';
 
 const row = (id, type_name, name, handicap = null, is_stale = 0) =>
     ({ id, type_name, name, handicap, is_stale });
@@ -62,4 +62,34 @@ test('duplicate identities in existing rows are all replaced together', () => {
     const existing = [row(1, '1X2', '1'), row(2, '1X2', '1')];
     const latest = [snap('1X2', '1')];
     assert.deepEqual(diffOddsRows(existing, latest), { staleIds: [], deleteIds: [1, 2] });
+});
+
+// emptySnapshotIsSuspect: a 200-with-empty-body detail response must not be
+// treated as "the market genuinely closed" when fresh rows are already on
+// file - see src/db/store.js's saveMatches for the wiring.
+test('emptySnapshotIsSuspect: empty snapshot with fresh existing rows is suspect', () => {
+    const existing = [row(1, '1X2', '1'), row(2, '1X2', 'X')];
+    assert.equal(emptySnapshotIsSuspect(existing, []), true);
+});
+
+test('emptySnapshotIsSuspect: a first sighting with nothing existing is never suspect', () => {
+    assert.equal(emptySnapshotIsSuspect([], []), false);
+    assert.equal(emptySnapshotIsSuspect(null, []), false);
+    assert.equal(emptySnapshotIsSuspect(undefined, []), false);
+});
+
+test('emptySnapshotIsSuspect: existing rows already all stale is never suspect', () => {
+    const existing = [row(1, '1X2', '1', null, 1), row(2, '1X2', 'X', null, 1)];
+    assert.equal(emptySnapshotIsSuspect(existing, []), false);
+});
+
+test('emptySnapshotIsSuspect: a mix of fresh and stale existing rows is still suspect', () => {
+    const existing = [row(1, '1X2', '1', null, 1), row(2, '1X2', 'X')];
+    assert.equal(emptySnapshotIsSuspect(existing, []), true);
+});
+
+test('emptySnapshotIsSuspect: a non-empty snapshot is never suspect regardless of existing rows', () => {
+    const existing = [row(1, '1X2', '1')];
+    assert.equal(emptySnapshotIsSuspect(existing, [snap('1X2', '1')]), false);
+    assert.equal(emptySnapshotIsSuspect([], [snap('1X2', '1')]), false);
 });

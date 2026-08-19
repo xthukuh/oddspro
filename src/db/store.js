@@ -1,6 +1,6 @@
 import { db } from './connection.js';
 import { debugLog } from '../utils.js';
-import { diffOddsRows } from './odds-diff.js';
+import { diffOddsRows, emptySnapshotIsSuspect } from './odds-diff.js';
 import { withRetry } from './retry-rules.js';
 import { oddsRefreshDue } from './odds-refresh-rules.js';
 
@@ -169,12 +169,24 @@ export async function saveMatches(games) {
                 .select('id', 'type_name', 'name', 'handicap', 'is_stale');
             const tDiff = Date.now();
             timing.selectOdds += tDiff - tSelect;
-            const { staleIds, deleteIds } = diffOddsRows(existingOdds, rows);
-            if (staleIds.length) await trx('odds_markets').whereIn('id', staleIds).update({ is_stale: true });
-            if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
-            if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
+            // A degraded-but-200 detail response can yield zero parsed markets
+            // for a match that already has fresh rows on file. Treating that
+            // as a real snapshot would stale-bomb every one of them (see
+            // odds-diff.js's emptySnapshotIsSuspect) - view-once bookmaker
+            // odds, permanently lost if this happens to be the last fetch
+            // before kickoff. Skip the diff/stale/delete step entirely and
+            // leave the existing rows untouched; a genuine first sighting
+            // with zero markets (nothing existing yet) is unaffected.
+            if (emptySnapshotIsSuspect(existingOdds, rows)) {
+                console.warn(`[store] ${g.provider} ${g.match_id}: empty market snapshot ignored (kept ${existingOdds.length} existing rows)`);
+            } else {
+                const { staleIds, deleteIds } = diffOddsRows(existingOdds, rows);
+                if (staleIds.length) await trx('odds_markets').whereIn('id', staleIds).update({ is_stale: true });
+                if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
+                if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
+                markets = rows.length;
+            }
             timing.diffWrite += Date.now() - tDiff;
-            markets = rows.length;
         }));
         if (inserted) counts.inserted++;
         if (updated) counts.updated++;

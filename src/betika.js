@@ -137,13 +137,28 @@ export async function fetchBetikaGames(date_=null, exclude_=null) {
         if (items.length < before) console.debug(`Betika ${dt} - Skipped ${before - items.length} completed games (no detail requests).`);
     }
 
+    // One bad match's detail fetch must not discard the whole already-fetched
+    // day: `_batch` rejects entirely on the first uncaught error (src/utils.js),
+    // which used to abort the rest of the day's detail fetches on a single
+    // transient blip. Each match's fetch+parse is now its own guarded step: a
+    // failure is logged and skipped, the rest of the day proceeds, and the
+    // sparse `games` array (skipped indices left undefined) is compacted
+    // before returning.
     const games = [];
+    let detailFailures = 0;
     const tick = _progress(`Betika ${dt} - details`);
     await _batch(items, async (g, i, len) => {
-        const { data } = await BetikaClient.get('/match?parent_match_id=' + g.parent_match_id);
-        const {odds: _, ...rest} = g;
-        games[i] = parseBetikaGame({...rest, ...Object(data.meta), odds: data.data});
+        try {
+            const { data } = await BetikaClient.get('/match?parent_match_id=' + g.parent_match_id);
+            const {odds: _, ...rest} = g;
+            games[i] = parseBetikaGame({...rest, ...Object(data.meta), odds: data.data});
+        } catch (e) {
+            detailFailures++;
+            console.warn(`[betika] detail fetch failed for match ${g.parent_match_id}: ${e?.message ?? e}`);
+        }
         tick(len);
     }, 10);
-    return games;
+    const results = games.filter(Boolean);
+    console.debug(`Betika ${dt} - ${results.length} games, ${detailFailures} detail failures`);
+    return results;
 }

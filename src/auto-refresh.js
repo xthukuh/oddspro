@@ -14,6 +14,7 @@ import { pruneTrackEvents } from './track.js';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
+    hasOddsSaveData,
 } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
 import { effective } from './settings.js';
@@ -345,7 +346,15 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
                 // (lightRefresh only ever runs on the writer's own tick - see
                 // startAutoRefresh's isWriter() gate); never throws into this
                 // step even if the meta write itself fails.
-                if (isWriter()) {
+                //
+                // FIX (2026-08-19, defect 3): `saveMatches` not throwing is
+                // not the same as data landing - a scraper that ran but
+                // returned zero games (or a save that wrote zero markets and
+                // touched zero match rows) used to stamp the heartbeat anyway,
+                // reading as healthy while the watchdog it exists for went
+                // blind. Only stamp when hasOddsSaveData(c) says something
+                // was actually written (see db/auto-rules.js).
+                if (isWriter() && hasOddsSaveData(c)) {
                     setMeta('last_odds_at', new Date().toISOString())
                         .catch(e => console.error('[light] last_odds_at meta write failed:', e?.message ?? e));
                 }

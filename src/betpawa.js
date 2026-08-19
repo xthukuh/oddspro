@@ -1,5 +1,7 @@
 import axios from 'axios';
 import { _date, _dtime, _batch, _progress } from './utils.js';
+import { withRetry } from './db/retry-rules.js';
+import { isRetryableApiError } from './db/net-rules.js';
 
 // Get axios client instance
 const BetpawaClient = axios.create({
@@ -140,22 +142,36 @@ export async function fetchBetpawaGames(date_=null, exclude_=null) {
     const lt = new Date(date.getFullYear(), date.getMonth(), date.getDate(), 23, 59, 59, 999).toISOString();
     console.debug(`BetPawa ${lt.substring(0, 10)} - Fetch games...`);
 
+    // A failed list page must never read as "end of data" - a transient
+    // fault (timeout/429/5xx/malformed body) used to be swallowed into an
+    // empty page via `.catch`, so `done = len < take` came out TRUE and the
+    // truncated buffer was persisted as a complete day (view-once bookmaker
+    // odds lost for good; see docs/research/2026-08-19-odds-durability-and-
+    // outage-damage.md). The request now gets a bounded exponential-backoff
+    // retry (same tries/base as apisports.js's list-fetch), and a page whose
+    // body is missing/garbage `responses` is treated the same as a network
+    // fault - retried, and thrown if every attempt fails. `done` may only be
+    // computed from a genuinely successful, well-shaped response.
     let count = 0, buffer = [], _next = async (skip=0) => {
-        const res = await BetpawaClient.get('/events/lists/by-queries?q=' + encodeURIComponent(
-            '{"queries":[{'
-            + '"query":{"eventType":"UPCOMING","categories":["2"],"zones":{},"hasOdds":true,'
-            + `"startTime":{"gte":"${gte}","lt":"${lt}"}},`
-            + '"view":{"marketTypes":["3743","28000810","28000850","4693","1096755","3795"]},'
-            + `"skip":${skip},`
-            + `"take":${take}`
-            + '}]}'
-        ))
-        .catch(e => {
-            console.warn(`[_get] failure: ${e}`, {error: e});
-            return {error: e};
-        });
-        let arr = res.data?.responses?.[0]?.responses;
-        if (!Array.isArray(arr)) arr = [];
+        let arr = await withRetry(async () => {
+            const res = await BetpawaClient.get('/events/lists/by-queries?q=' + encodeURIComponent(
+                '{"queries":[{'
+                + '"query":{"eventType":"UPCOMING","categories":["2"],"zones":{},"hasOdds":true,'
+                + `"startTime":{"gte":"${gte}","lt":"${lt}"}},`
+                + '"view":{"marketTypes":["3743","28000810","28000850","4693","1096755","3795"]},'
+                + `"skip":${skip},`
+                + `"take":${take}`
+                + '}]}'
+            ));
+            const list = res.data?.responses?.[0]?.responses;
+            if (!Array.isArray(list)) {
+                throw Object.assign(
+                    new Error(`BetPawa list page malformed response body (skip=${skip})`),
+                    { malformedBody: true },
+                );
+            }
+            return list;
+        }, { tries: 4, base: 1500, isRetryable: e => isRetryableApiError(e) || e?.malformedBody === true });
         const len = arr.length;
         let done = len < take;
         count += len;
@@ -176,12 +192,27 @@ export async function fetchBetpawaGames(date_=null, exclude_=null) {
         if (items.length < before) console.debug(`BetPawa ${lt.substring(0, 10)} - Skipped ${before - items.length} completed games (no detail requests).`);
     }
 
+    // One bad match's detail fetch must not discard the whole already-fetched
+    // day: `_batch` rejects entirely on the first uncaught error (src/utils.js),
+    // which used to abort the rest of the day's detail fetches - and every
+    // odds row already gathered - on a single transient blip. Each match's
+    // fetch+parse is now its own guarded step: a failure is logged and
+    // skipped, the rest of the day proceeds, and the sparse `games` array
+    // (skipped indices left undefined) is compacted before returning.
     const games = [];
+    let detailFailures = 0;
     const tick = _progress(`BetPawa ${lt.substring(0, 10)} - details`);
     await _batch(items, async (g, i, len) => {
-        const { data } = await BetpawaClient.get('https://www.betpawa.co.ke/api/sportsbook/v4/events/' + g.id);
-        games[i] = parseBetpawaGame(data);
+        try {
+            const { data } = await BetpawaClient.get('https://www.betpawa.co.ke/api/sportsbook/v4/events/' + g.id);
+            games[i] = parseBetpawaGame(data);
+        } catch (e) {
+            detailFailures++;
+            console.warn(`[betpawa] detail fetch failed for match ${g.id}: ${e?.message ?? e}`);
+        }
         tick(len);
     }, 10);
-    return games;
+    const results = games.filter(Boolean);
+    console.debug(`BetPawa ${dt} - ${results.length} games, ${detailFailures} detail failures`);
+    return results;
 }

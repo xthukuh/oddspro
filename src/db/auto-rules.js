@@ -130,6 +130,21 @@ export function shouldStampFreshness(outcome, summary = null) {
     return false;
 }
 
+// Whether a saveMatches() counts object ({inserted, updated, skipped,
+// markets}) represents real collected data (Task, 2026-08-19 durability
+// pass follow-up: the collection heartbeat used to stamp `last_odds_at`
+// whenever saveMatches did not throw, regardless of whether any market data
+// actually arrived - a scraper that ran but returned zero games, or zero
+// markets, read as healthy and defeated the watchdog built to catch exactly
+// that). True when at least one odds market row was written, or at least one
+// match row was inserted/updated - the three ways a save call can leave
+// something new on the warehouse; false for an all-zero counts object
+// (the shape saveMatches returns early with on an empty/absent games array).
+export function hasOddsSaveData(counts) {
+    if (!counts || typeof counts !== 'object') return false;
+    return Number(counts.markets) > 0 || Number(counts.inserted) > 0 || Number(counts.updated) > 0;
+}
+
 // Decide what to do with a pending cross-instance manual-refresh request
 // (src/meta.js's `refresh_request` key, written by a follower's POST
 // /api/refresh - see src/server.js). The writer's tick calls this only after

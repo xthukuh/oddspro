@@ -28,3 +28,23 @@ export function diffOddsRows(existingRows, snapshotRows) {
     }
     return { staleIds, deleteIds };
 }
+
+// A 200-with-empty-body detail response is structurally indistinguishable
+// from a genuine "no markets right now" snapshot: parseBetpawaGame/
+// parseBetikaGame both default to `markets: []` when the expected array is
+// missing (degraded response, still a 200). Fed straight into diffOddsRows,
+// an empty snapshot puts EVERY existing fresh row into staleIds - and since a
+// frozen match is never revisited (completedMatchIds/oddsExcludeIds), if that
+// glitch is the last fetch before kickoff, genuinely-live closing prices get
+// permanently recorded as stale. An empty market list must mean "no
+// snapshot", never "empty snapshot", whenever the match already had
+// something real on file.
+//
+// Total: true only when the snapshot is empty AND at least one existing row
+// is still fresh (not already stale) - a first sighting with zero markets
+// (nothing existing yet) is fine to store as nothing, and a match whose rows
+// were already all stale has nothing left to protect.
+export function emptySnapshotIsSuspect(existingRows, snapshotRows) {
+    if (Array.isArray(snapshotRows) && snapshotRows.length) return false;
+    return Array.isArray(existingRows) && existingRows.some(row => !row.is_stale);
+}
