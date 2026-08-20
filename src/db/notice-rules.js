@@ -57,7 +57,8 @@ const sortedRuns = runs => (Array.isArray(runs) ? runs : [])
 // A stretch of wall-clock time with no finished run at all. The threshold
 // counts MISSING RUNS, not missing odds: a quiet-slate idle skip still runs
 // the pass and still records an `ok` row, so an idle night is never a gap.
-export function runGapSpans(runs, { maxGapMinutes = 90 } = {}) {
+export function runGapSpans(runs, opts) {
+    const { maxGapMinutes = 90 } = opts ?? {};
     const list = sortedRuns(runs);
     const out = [];
     for (let i = 1; i < list.length; i++) {
@@ -98,7 +99,8 @@ export function partialSpans(runs) {
 
 // Proposals only. Nothing here decides what is SHOWN; that is the admin's
 // approve/dismiss call, and an unconfirmed proposal is shown meanwhile.
-export function detectNotices(runs, { maxGapMinutes = 90 } = {}) {
+export function detectNotices(runs, opts) {
+    const { maxGapMinutes = 90 } = opts ?? {};
     const out = [];
     for (const g of runGapSpans(runs, { maxGapMinutes })) {
         out.push({

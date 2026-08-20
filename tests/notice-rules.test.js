@@ -188,3 +188,9 @@ test('coveragePayload on a clean day is ok and confirmed', () => {
     const p = coveragePayload([], '2026-08-20');
     assert.deepEqual(p, { status: 'ok', confirmed: true, notices: [] });
 });
+
+test('runGapSpans and detectNotices tolerate a null options argument', () => {
+    assert.deepEqual(runGapSpans(null, null), []);
+    assert.deepEqual(detectNotices(null, null), []);
+    assert.deepEqual(detectNotices([], null), []);
+});
