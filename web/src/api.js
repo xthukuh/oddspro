@@ -317,6 +317,21 @@ export async function patchAdminUser(id, patch) {
     return _send(`/api/admin/users/${encodeURIComponent(id)}`, patch, 'PATCH');
 }
 
+// --- Data-quality notices (admin) --------------------------------------------
+// An auto-detected notice arrives `unconfirmed` and is already being served
+// with an UNCONFIRMED prefix; approving only removes that hedge.
+export async function getAdminNotices(limit = 100) {
+    return (await _get('/api/admin/notices', { limit })).notices;
+}
+
+export async function patchAdminNotice(id, status) {
+    return _send(`/api/admin/notices/${encodeURIComponent(id)}`, { status }, 'PATCH');
+}
+
+export async function createAdminNotice(body) {
+    return _send('/api/admin/notices', body, 'POST');
+}
+
 // --- Admin SMS templates + campaigns (M9) ------------------------------------
 
 // { templates: [{id, name, body, is_auth_default, ...}] }
