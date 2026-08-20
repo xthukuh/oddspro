@@ -13,9 +13,12 @@ export default function CoverageRibbon({ notices, date }) {
     const hits = noticesForDate(notices, date);
     if (!hits.length) return null;
     const status = coverageStatus(hits);
+    // Fill and border keep the accent hue; the TEXT uses the darker ink token
+    // so the sentence is actually readable on the light surface. See the ink
+    // comment in index.css.
     const tone = status === 'outage'
-        ? 'border-hot/50 bg-hot/10 text-hot'
-        : 'border-warn/50 bg-warn/10 text-warn';
+        ? 'border-hot/50 bg-hot/10 text-alert-ink'
+        : 'border-warn/50 bg-warn/10 text-warn-ink';
     return (
         <div className={`shrink-0 flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-1 border-t text-[11px] ${tone}`} role="status">
             {hits.map(n => (
