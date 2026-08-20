@@ -24,6 +24,7 @@
     --color-hit: var(--green);
     --color-miss: var(--red);
     --color-hot: var(--orange);
+    --color-warn: var(--yellow);
     --color-logo: var(--logo);
     /* Provider badge hues (AX4) - blue/teal, deliberately OFF the semantic
        green(hit)/purple(accent)/orange(hot)/red(miss) set so a chip never reads
@@ -55,6 +56,7 @@
     --accent-soft: rgba(88, 86, 220, 0.12);
     --green: #34C759;
     --orange: #FF9500;
+    --yellow: #C99700;
     --red: #FF3B30;
     --logo: #5856dc;
     --provider-a: #2563EB;   /* betpawa - blue */
@@ -84,6 +86,7 @@
         --accent-soft: rgba(139, 137, 240, 0.2);
         --green: #30D158;
         --orange: #FF9F0A;
+        --yellow: #FFD426;
         --red: #FF453A;
         --logo: #FFFFFF;
         --provider-a: #6BA5FF;   /* betpawa - blue (brighter for dark) */
@@ -103,6 +106,7 @@
     --separator-2: rgba(60, 58, 67, 0.11); --fill: rgba(118, 116, 128, 0.1);
     --fill-hover: rgba(118, 116, 128, 0.18); --accent: #5856dc;
     --accent-soft: rgba(88, 86, 220, 0.12); --green: #34C759; --orange: #FF9500;
+    --yellow: #C99700;
     --red: #FF3B30; --logo: #5856dc; --provider-a: #2563EB; --provider-b: #0E9C90;
 }
 :root[data-theme="dark"] {
@@ -113,6 +117,7 @@
     --separator-2: rgba(240, 236, 240, 0.08); --fill: rgba(150, 146, 152, 0.16);
     --fill-hover: rgba(150, 146, 152, 0.26); --accent: #8B89F0;
     --accent-soft: rgba(139, 137, 240, 0.2); --green: #30D158; --orange: #FF9F0A;
+    --yellow: #FFD426;
     --red: #FF453A; --logo: #FFFFFF; --provider-a: #6BA5FF; --provider-b: #17C9BA;
 }
 

@@ -35,6 +35,7 @@ import Sheet from './components/Sheet.jsx';
 import SortPills from './components/SortPills.jsx';
 import ViewPills from './components/ViewPills.jsx';
 import Tooltip from './components/Tooltip.jsx';
+import CoverageRibbon from './components/CoverageRibbon.jsx';
 import { IconRefresh, IconSpinner, IconMagic, IconSlips, IconFilter, IconHelp, IconGear, IconMenu, IconChevronLeft, IconChevronRight, IconChevronDown, IconUser } from './components/icons.jsx';
 
 // Selected column keys persist across sessions (settings modal choices)
@@ -313,6 +314,7 @@ export default function App() {
     const [showDailySlip, setShowDailySlip] = useState(false);
     const [showOverflow, setShowOverflow] = useState(false);
     const [refresh, setRefresh] = useState(null); // /api/refresh job state
+    const [notices, setNotices] = useState([]); // data-quality notices from /api/refresh
     const [refreshTick, setRefreshTick] = useState(0); // bump -> reload records
     const [notice, setNotice] = useState(null); // transient neutral banner
     // Freshness signal plumbing: last seen data_version (null until the first
@@ -780,6 +782,7 @@ export default function App() {
                 maybeReload(st);
                 adoptMaintenance(st.maintenance);
                 adoptBuild(st.build);
+                if (Array.isArray(st.notices)) setNotices(st.notices);
             } catch {
                 // Transient failure: back off rather than hammering. The banner
                 // only appears after WARN_AFTER_FAILURES consecutive misses.
@@ -806,6 +809,7 @@ export default function App() {
                 const st = await fetchRefreshStatus();
                 setRefresh(st);
                 adoptMaintenance(st.maintenance);
+                if (Array.isArray(st.notices)) setNotices(st.notices);
                 if (!st.running) {
                     if (st.mode === 'manual') {
                         if (typeof st.data_version === 'number') lastVersionRef.current = st.data_version;
@@ -1363,6 +1367,8 @@ export default function App() {
                 />
                 )}
             </main>
+
+            <CoverageRibbon notices={notices} date={date} />
 
             {/* Status bar: a normal flex child of the app shell (no longer fixed).
                 Whole items wrap to more rows on narrow widths; refresh/last-refresh
