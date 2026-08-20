@@ -7,7 +7,7 @@
 // memo refreshed alongside the other meta keys. Same pattern as column_catalog.
 import { z } from 'zod';
 import { db } from './db/connection.js';
-import { getMeta, setMeta } from './meta.js';
+import { getMeta, setMeta, bumpWarehouseVersion, refreshMetaMemo } from './meta.js';
 import { isWriter } from './db/lease.js';
 import { effective } from './settings.js';
 import { detectNotices, coveragePayload, eatDay } from './db/notice-rules.js';
@@ -97,6 +97,20 @@ export function coverageFor(day) {
     return coveragePayload(_memo, day);
 }
 
+// What an ADMIN MUTATION must call, as opposed to the boot projection.
+// `/api/records` embeds the coverage block in a body memoized on
+// warehouse_version plus a 10-minute TTL, and a notice status change touches
+// neither, so without this bump an admin who dismisses a false-positive
+// outage banner would keep seeing it on /api/records for up to ten minutes.
+// Bumping is deliberately NOT inside projectNotices: that also runs at boot on
+// every instance, and bumping there would inflate the version on every restart
+// and make every connected client silently reload for nothing.
+async function _publish() {
+    await projectNotices();
+    await bumpWarehouseVersion();
+    await refreshMetaMemo();
+}
+
 export async function recordRun({ started_at, finished_at, mode, dates = [], verdict, step_failures = [] }) {
     await db('collection_runs').insert({
         started_at: new Date(started_at),
@@ -151,7 +165,10 @@ export async function runDetector() {
         }).onConflict(['source', 'kind', 'date_from', 'date_to']).ignore();
         if (Array.isArray(n) ? n[0] : n) inserted++;
     }
-    if (inserted) await projectNotices();
+    // Publish, not just project: the sweep's own version bump happens BEFORE
+    // onFinish runs the detector, so a notice inserted here would otherwise sit
+    // behind an already-warm /api/records cache entry.
+    if (inserted) await _publish();
     return { proposed: proposals.length, inserted };
 }
 
@@ -177,7 +194,7 @@ export async function setNoticeStatus(id, status, actorId = null) {
             new_value: status,
         });
     });
-    await projectNotices();
+    await _publish();
     return _out(await db('data_notices').where('id', nid).first(COLS));
 }
 
@@ -212,6 +229,6 @@ export async function createNotice(input, actorId = null) {
             new_value: `${row.kind} ${row.date_from}..${row.date_to}`,
         });
     });
-    await projectNotices();
+    await _publish();
     return _out(await db('data_notices').where('id', id).first(COLS));
 }
