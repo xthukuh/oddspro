@@ -66,3 +66,41 @@ export function claimIsDrifted(startTime, kickoff, limit = CLAIM_DRIFT_MINUTES) 
     const d = claimDriftMinutes(startTime, kickoff);
     return d != null && d > limit;
 }
+
+// How much better the flipped pairing must score before we believe a listing's
+// sides are reversed. Deliberately wide: a genuine reversal scores near 0
+// straight and near 1 flipped (measured 0.00 vs 1.00 on the real cases), so a
+// large gap costs us nothing and keeps ordinary fuzzy noise out.
+export const ORIENTATION_MARGIN = 0.30;
+
+// Is this linked match listed with its home/away sides the opposite way round
+// from the canonical fixture?
+//
+//   straight - 0.5*sim(matchHome, fixtureHome) + 0.5*sim(matchAway, fixtureAway)
+//   flip     - 0.5*sim(matchHome, fixtureAway) + 0.5*sim(matchAway, fixtureHome)
+//
+// Returns 'swapped', 'straight' or 'unknown'. 'unknown' means the two pairings
+// are too close to call, and the caller must LEAVE THE STORED FLAG ALONE rather
+// than guess: flapping a display flag on fuzzy noise would be worse than the
+// occasional stale one, and short or heavily abbreviated names ("Nottingham v
+// Guimaraes") legitimately score low both ways.
+//
+// Total over non-finite input, since both scores come from a similarity
+// function applied to provider-supplied text.
+export function orientationVerdict(straight, flip, margin = ORIENTATION_MARGIN) {
+    const a = Number(straight), b = Number(flip);
+    if (!Number.isFinite(a) || !Number.isFinite(b)) return 'unknown';
+    if (b - a > margin) return 'swapped';
+    if (a - b > margin) return 'straight';
+    return 'unknown';
+}
+
+// Does the stored flag need writing? Returns the boolean to persist, or null
+// when nothing should change - so the re-validation pass issues an UPDATE only
+// for rows that actually moved, instead of rewriting every linked row (and
+// bumping their `updated_at`, which the web surfaces as the odds refresh time).
+export function orientationUpdate(verdict, current) {
+    if (verdict === 'unknown') return null;
+    const next = verdict === 'swapped';
+    return next === Boolean(current) ? null : next;
+}

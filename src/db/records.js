@@ -323,7 +323,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
             'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
             'm.updated_at', 'm.completed_at',
             'm.home_team_name', 'm.away_team_name',
-            'm.home_score_fulltime', 'm.away_score_fulltime',
+            'm.home_score_fulltime', 'm.away_score_fulltime', 'm.sides_swapped',
             'l.name as league_name', 'l.country as league_country',
             'f.status', 'f.elapsed', 'f.season', 'f.round', 'f.league_id', 'f.kickoff',
             'f.home_team_id', 'f.away_team_id',
@@ -453,7 +453,17 @@ async function _hydrate(rows, allowed = null) {
         // Results are canonical: bookmaker scores are unreliable pre-match
         // (BetPawa reports 0-0), so only surface them once the fixture is final.
         const settled = RESULT_STATUSES.includes(r.status);
-        const hs = settled ? r.home_score_fulltime : null, as = settled ? r.away_score_fulltime : null;
+        // The stored score columns are in the CANONICAL fixture's orientation,
+        // but `fixture`/`home_team`/`away_team` below are the BOOKMAKER's names.
+        // When API-Football has since swapped the fixture's sides
+        // (matches.sides_swapped, maintained by link.js's orientation
+        // re-validation) those two disagree, and the row would render the result
+        // backwards - "FC Annecy - FC Sion 4-0" for a game Sion won 4-0. Swap
+        // here so names and score always tell the same story; `goals` is their
+        // sum and so is unaffected either way.
+        const swap = Boolean(r.sides_swapped);
+        const rawH = settled ? r.home_score_fulltime : null, rawA = settled ? r.away_score_fulltime : null;
+        const hs = swap ? rawA : rawH, as = swap ? rawH : rawA;
         // Snapshot rows win wholesale (presence of the row, not per-field ??):
         // a null snapshot rank means "no rank at kickoff" and must not drift
         // back to today's live standings.

@@ -1,6 +1,6 @@
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
-import { claimVerdict } from './db/link-rules.js';
+import { claimVerdict, orientationVerdict, orientationUpdate } from './db/link-rules.js';
 
 // Correlation order matters: betpawa first (richer identifiers), betika last so
 // it can additionally score against betpawa records already linked to a fixture.
@@ -245,6 +245,55 @@ async function _linkProvider(provider) {
     return counts;
 }
 
+// Re-validate the home/away orientation of EXISTING links.
+//
+// A link is written once and never re-checked, but API-Football keeps
+// `home_team_id`/`away_team_id` in its fixtures upsert merge list, so it can
+// swap a fixture's sides AFTER we linked it (seen on neutral-venue ties and
+// friendlies). The link stays correct - same teams, same kickoff - but the read
+// layer pairs the BOOKMAKER's names with the CANONICAL score, so the row then
+// renders a result the wrong way round (fixture 1548857 showed "FC Annecy - FC
+// Sion 4-0" when Sion won 4-0). This pass detects that and stamps
+// `matches.sides_swapped`, which src/db/records.js reads to swap the displayed
+// score. Nothing about the stored scores or the settle SQL changes.
+//
+// `sinceDays` bounds the scan (default 30, null = all history for the one-off
+// repair script): the shared host punishes unbounded scans, and a fixture whose
+// sides flip does so around its kickoff, not years later.
+export async function revalidateOrientation({ sinceDays = 30, apply = true } = {}) {
+    const q = db('matches as m')
+        .join('fixtures as f', 'f.id', 'm.fixture_id')
+        .join('teams as th', 'th.id', 'f.home_team_id')
+        .join('teams as ta', 'ta.id', 'f.away_team_id')
+        .whereNotNull('m.fixture_id')
+        .select('m.id', 'm.provider', 'm.sides_swapped', 'm.home_team_name as mh',
+            'm.away_team_name as ma', 'th.name as fh', 'ta.name as fa', 'm.fixture_id');
+    if (sinceDays != null) q.whereRaw('f.kickoff >= NOW() - INTERVAL ? DAY', [sinceDays]);
+    const rows = await q;
+
+    const counts = { examined: rows.length, swapped: 0, straightened: 0, unchanged: 0, errors: 0 };
+    for (const r of rows) {
+        try {
+            const straight = 0.5 * nameSimilarity(r.mh, r.fh) + 0.5 * nameSimilarity(r.ma, r.fa);
+            const flip = 0.5 * nameSimilarity(r.mh, r.fa) + 0.5 * nameSimilarity(r.ma, r.fh);
+            const next = orientationUpdate(orientationVerdict(straight, flip), r.sides_swapped);
+            if (next === null) {
+                counts.unchanged++;
+                continue;
+            }
+            next ? counts.swapped++ : counts.straightened++;
+            console.debug(`[link] ${r.provider} match ${r.id} (fixture ${r.fixture_id}) sides_swapped -> ${next}: `
+                + `"${r.mh} v ${r.ma}" vs canonical "${r.fh} v ${r.fa}" `
+                + `(straight ${straight.toFixed(2)}, flipped ${flip.toFixed(2)})`);
+            if (apply) await db('matches').where('id', r.id).update({ sides_swapped: next });
+        } catch (e) {
+            counts.errors++;
+            console.error(`[link] orientation check failed for match ${r.id}: ${e?.message ?? e}`);
+        }
+    }
+    return counts;
+}
+
 // Correlate bookmaker matches to canonical API-Football fixtures.
 // Pass a provider to restrict; default processes betpawa then betika.
 export async function linkMatches(provider_ = null) {
@@ -267,6 +316,20 @@ export async function linkMatches(provider_ = null) {
             + `${c.claims_replaced ? `, ${c.claims_replaced} reschedule claims replaced` : ''}`
             + `${c.claims_skipped ? `, ${c.claims_skipped} claims skipped` : ''}`
             + `${c.errors ? `, ${c.errors} row errors` : ''}.`);
+    }
+    // Orientation re-validation runs AFTER the providers, once, over the links
+    // that now exist. Guarded: it is a correctness nicety on the display layer,
+    // never a reason to fail a pass that correlated matches successfully.
+    try {
+        report.orientation = await revalidateOrientation();
+        const o = report.orientation;
+        if (o.swapped || o.straightened || o.errors) {
+            console.debug(`[link] orientation: ${o.examined} checked, ${o.swapped} marked swapped, `
+                + `${o.straightened} straightened, ${o.errors} errors.`);
+        }
+    } catch (e) {
+        report.orientation = { error: String(e?.message ?? e) };
+        console.error(`[link] orientation re-validation failed: ${e?.message ?? e}`);
     }
     return report;
 }
