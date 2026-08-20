@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listPageOutcome, listPageDone, dataPageOutcome } from '../src/db/collector-rules.js';
+import { listPageOutcome, listPageDone, dataPageOutcome, isVirtualCompetition } from '../src/db/collector-rules.js';
 
 // Shapes probed against the live BetPawa API on 2026-08-19.
 const withResults = n => ({ responses: [{ responses: Array.from({ length: n }, (_, i) => ({ id: i })) }] });
@@ -125,4 +125,62 @@ test('a truncated Betika walk can no longer look complete', () => {
     }
     assert.equal(malformed, true, 'the degraded page must be detected');
     assert.equal(collected.length, 100, 'and the partial buffer must NOT be returned as a complete day');
+});
+
+// --- Virtual competition classification (audit F5) -------------------------
+//
+// Every distinct virtual competition name in the warehouse on 2026-08-20
+// (19 names, 26,713 rows). These are the rows the linker must stop re-scoring.
+const VIRTUAL_NAMES = [
+    'World Cup-Zoom', 'SerieA-Zoom', 'Liga-Zoom', 'Premier-Zoom', 'Bundes-Zoom',
+    'Ligue1-Zoom', 'Primeira-Zoom', 'Eredivisie-Zoom', 'AFCON-Zoom',
+    'Premier-Zoom Turbo',
+    'SRL Club Friendlies', 'SRL International Friendlies',
+    'China Super League SRL', 'K-League 1 SRL', 'World Cup SRL',
+    'Eredivisie SRL', 'Copa Libertadores SRL', 'Turkey Super Lig SRL',
+    'LaLiga SRL',
+];
+
+// Real competitions the warehouse actually correlates. A false positive on any
+// of these permanently orphans real matches, so they are the load-bearing half
+// of this contract. The last four are deliberate near-misses.
+const REAL_NAMES = [
+    'Premier League', 'La Liga', 'Serie A', 'Bundesliga', 'Ligue 1',
+    'Eredivisie', 'Primeira Liga', 'World Cup', 'AFCON', 'MLS',
+    'Club Friendly Games', 'China Super League', 'K-League 1',
+    'Copa Libertadores', 'Turkey Super Lig', 'USL Championship',
+    'Brasileiro A1, Women', 'Kolmonen', 'Kakkonen', 'Primera Nacional',
+    'National League', '2. Liga', 'Gaucho, Serie A2', 'Besta deild, Women',
+    // Near-misses: the tokens must be matched as tokens, never as substrings.
+    'Serie A Zoomers Cup',   // "Zoom" only as part of a longer word
+    'SRLanka Premier League',// "SRL" only as the head of a longer word
+    'Zoomtown United League',// "Zoom" leading a real word
+    'Bundesliga SRLK',       // "SRL" as the head of a longer token
+];
+
+test('isVirtualCompetition flags every virtual competition in the warehouse', () => {
+    for (const name of VIRTUAL_NAMES) {
+        assert.equal(isVirtualCompetition(name), true, `should flag: ${name}`);
+    }
+});
+
+test('isVirtualCompetition never flags a real competition', () => {
+    for (const name of REAL_NAMES) {
+        assert.equal(isVirtualCompetition(name), false, `must NOT flag: ${name}`);
+    }
+});
+
+test('isVirtualCompetition is total over absent and non-string input', () => {
+    // `competition_name` is nullable, and Betika leaves several fields null.
+    for (const v of [null, undefined, '', '   ', 0, 42, {}, [], NaN]) {
+        assert.equal(isVirtualCompetition(v), false, `must be false for ${String(v)}`);
+    }
+});
+
+test('isVirtualCompetition matches the tokens case-insensitively', () => {
+    // The provider has changed casing on product names before; the linker skip
+    // must not silently stop working because a name arrived lowercased.
+    assert.equal(isVirtualCompetition('premier-zoom'), true);
+    assert.equal(isVirtualCompetition('LALIGA srl'), true);
+    assert.equal(isVirtualCompetition('srl Club Friendlies'), true);
 });

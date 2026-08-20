@@ -3,6 +3,7 @@ import { debugLog } from '../utils.js';
 import { diffOddsRows, emptySnapshotIsSuspect } from './odds-diff.js';
 import { withRetry } from './retry-rules.js';
 import { oddsRefreshDue } from './odds-refresh-rules.js';
+import { isVirtualCompetition } from './collector-rules.js';
 
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
@@ -32,6 +33,11 @@ function _matchRow(g) {
         category_name: g.category_name,
         competition_id: g.competition_id,
         competition_name: g.competition_name,
+        // Audit F5: classified at scrape time, where the provider taxonomy is
+        // known. Written on every upsert (insert AND update), so a predicate
+        // correction re-classifies existing rows on their next odds refresh
+        // rather than needing a backfill script.
+        is_virtual: isVirtualCompetition(g.competition_name),
         // metadata (raw ~39KB provider JSON) is no longer persisted at all
         // (owner ruling 2026-08-07: zero readers, 1.5 GB reclaimed; the
         // column survives for schema compat, historical blobs purged).

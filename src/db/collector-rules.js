@@ -85,3 +85,70 @@ export function dataPageOutcome(body, key = 'data') {
     if (Array.isArray(items)) return { status: 'ok', items };
     return { status: 'malformed', items: [] };
 }
+
+// ---------------------------------------------------------------------------
+// Virtual (simulated) competition classification - audit finding F5.
+//
+// Betika sells software-generated "virtual" football alongside real matches.
+// These fixtures do not exist in the world, so API-Football will never carry
+// them and the linker can never correlate them - but it retries every open row
+// every 10 minutes until the 4h completion fallback closes it. Measured on the
+// warehouse 2026-08-20: 26,713 of 50,994 matches (52.4%) are virtual, costing
+// roughly 15,000-17,000 wasted candidate queries and 1-1.5M similarity
+// evaluations per day.
+//
+// The classification lives here, with the other provider-taxonomy rules,
+// because only the collector layer knows what a provider's product names mean.
+// It is persisted to `matches.is_virtual` at scrape time by src/db/store.js.
+//
+// THE RISK IS ASYMMETRIC, and that is the whole design problem:
+//   - a false NEGATIVE costs some wasted CPU on a pass that already runs
+//   - a false POSITIVE permanently orphans a REAL match: it is never linked,
+//     so it never gets a canonical score, tip, or hot pick, and nothing in the
+//     codebase would ever re-examine it
+//
+// Every distinct competition name in the warehouse carrying either token
+// (19 names, 26,713 rows), newline-separated by product family:
+//
+//   World Cup-Zoom (6360)   SerieA-Zoom (2670)      Liga-Zoom (2660)
+//   Premier-Zoom (2650)     Bundes-Zoom (2403)      Ligue1-Zoom (2394)
+//   Primeira-Zoom (2367)    Eredivisie-Zoom (2367)  AFCON-Zoom (960)
+//   Premier-Zoom Turbo (1340)   <- `-Zoom` is NOT at the end of the string
+//
+//   SRL Club Friendlies (215)        SRL International Friendlies (202)
+//   China Super League SRL (46)      K-League 1 SRL (24)
+//   World Cup SRL (22)               Eredivisie SRL (14)
+//   Copa Libertadores SRL (11)       Turkey Super Lig SRL (5)
+//   LaLiga SRL (3)                   <- `SRL` appears as a SUFFIX here, and as
+//                                       a PREFIX in the two above it
+//
+// Note this contradicts the audit's own spec, which proposed anchoring on a
+// `-Zoom` suffix and an `SRL ` prefix. Measured against the warehouse, that
+// anchoring misses 1,465 real virtual rows (the whole `Turbo` product and all
+// seven `... SRL` suffix competitions).
+//
+// Evidence that a token match is safe here: of 17,938 already-linked matches,
+// ZERO carry a name matching either token, and no row in the canonical
+// `leagues` table matches either (asserted in the tests).
+//
+// @param {string|null|undefined} competition - `matches.competition_name`
+// @returns {boolean} true only when the competition is provably simulated
+export function isVirtualCompetition(competition) {
+    // `competition_name` is nullable, and Betika leaves several fields null.
+    if (typeof competition !== 'string') return false;
+    // Both tokens are matched at a WORD BOUNDARY, never as a bare substring.
+    // A substring test is the one failure mode that cannot be recovered from:
+    // `SRLanka Premier League` and `Serie A Zoomers Cup` are real-competition
+    // shapes that `includes('SRL')` / `includes('Zoom')` would orphan forever.
+    //
+    // `-Zoom` keeps its hyphen: the product is always `<League>-Zoom`, with an
+    // optional trailing variant (`Premier-Zoom Turbo`), so the hyphen is what
+    // separates the product from a real name that merely starts with "Zoom".
+    // `SRL` is a standalone token and appears at EITHER end of the name
+    // (`SRL Club Friendlies` and `LaLiga SRL` are both live products).
+    //
+    // Case-insensitive by choice: the provider has re-cased product names
+    // before, and a silently-disabled skip is worse than a slightly loose
+    // match when the token itself is this distinctive.
+    return /-zoom\b/i.test(competition) || /\bsrl\b/i.test(competition);
+}

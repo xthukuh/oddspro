@@ -120,12 +120,31 @@ async function _candidates(start_time) {
 
 // Link one provider's unlinked, uncompleted matches to canonical fixtures.
 async function _linkProvider(provider) {
+    // Audit F5: `is_virtual` rows are simulated competitions (Betika -Zoom /
+    // SRL). API-Football cannot carry a fixture that does not exist, so these
+    // can never link - but without this filter they were re-scored against the
+    // full candidate pool every 10 minutes until the 4h completion fallback
+    // closed them. They are excluded from the WORK, never from the warehouse:
+    // the rows keep their odds and the web layer still serves them.
+    const skipped = await db('matches')
+        .where('provider', provider)
+        .whereNull('fixture_id')
+        .whereNull('completed_at')
+        .where('is_virtual', true)
+        .select('competition_name');
     const rows = await db('matches')
         .where('provider', provider)
         .whereNull('fixture_id')
         .whereNull('completed_at')
+        .where('is_virtual', false)
         .select('id', 'start_time', 'home_team_name', 'away_team_name', 'competition_name', 'category_name');
-    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, alias_withheld: 0, errors: 0 };
+    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, alias_withheld: 0, errors: 0, virtual_skipped: skipped.length };
+    // Report the DISTINCT names skipped, not just the count: a false positive
+    // orphans a real match silently, and the name is the only thing that would
+    // let an operator notice it on the very first pass it happens.
+    if (skipped.length) {
+        counts.virtual_names = [...new Set(skipped.map(r => r.competition_name))].sort();
+    }
     if (!rows.length) return counts;
 
     // Alias caches (learned from previous confident links)
@@ -327,7 +346,8 @@ export async function linkMatches(provider_ = null) {
             + `${c.fuzzy_linked} fuzzy-linked, ${c.unmatched} unmatched`
             + `${c.claims_replaced ? `, ${c.claims_replaced} reschedule claims replaced` : ''}`
             + `${c.claims_skipped ? `, ${c.claims_skipped} claims skipped` : ''}`
-            + `${c.errors ? `, ${c.errors} row errors` : ''}.`);
+            + `${c.errors ? `, ${c.errors} row errors` : ''}`
+            + `${c.virtual_skipped ? `, ${c.virtual_skipped} virtual skipped (${c.virtual_names.join(', ')})` : ''}.`);
     }
     // Orientation re-validation runs AFTER the providers, once, over the links
     // that now exist. Guarded: it is a correctness nicety on the display layer,

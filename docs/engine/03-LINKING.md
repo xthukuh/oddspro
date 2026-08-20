@@ -4,6 +4,36 @@ The problem: BetPawa/Betika spell team and league names their own way (and Betik
 ids at all), so correlation is fuzzy string matching over normalized names — made cheap over
 time by learned aliases. All in `src/link.js`.
 
+## Excluded before scoring: simulated competitions
+
+Betika sells software-generated football (`-Zoom`, `SRL`) next to real matches.
+API-Football cannot carry a fixture that does not exist, so these rows can never
+correlate - yet before 2026-08-20 nothing said so, and the pass re-scored the
+whole open set against the full candidate pool every 10 minutes until the 4h
+completion fallback closed each row. Measured: 26,713 of 50,994 matches (52.4%),
+about 15,000-17,000 wasted candidate queries and 1-1.5M similarity evaluations
+per day, plus near-miss log noise that buries genuine correlation failures.
+
+`_linkProvider` now selects only `is_virtual = false` rows. The flag is
+persisted on `matches`, indexed, and written at SCRAPE time by `store.js`'s
+`_matchRow` behind the pure `isVirtualCompetition` (`src/db/collector-rules.js`)
+- both the insert and update branch pass through `_matchRow`, so correcting the
+predicate re-classifies existing rows on their next odds refresh.
+
+Two rules that are not negotiable:
+
+- **The rows are excluded from the work, never from the warehouse.** They carry
+  real bettable odds and the web layer still serves them.
+- **Both tokens match at a word boundary, never as a bare substring.** A false
+  negative costs CPU on a pass that already runs; a false positive permanently
+  orphans a real match, because nothing would ever re-examine it.
+  `SRLanka Premier League` and `Serie A Zoomers Cup` are the shapes an
+  `includes()` test breaks on.
+
+The pass reports `virtual_skipped` plus the DISTINCT names skipped, so a false
+positive surfaces by name on the first pass it happens rather than hiding in a
+count.
+
 ## Algorithm
 
 Names are normalized first (lowercase, diacritics stripped, noise tokens like FC/United

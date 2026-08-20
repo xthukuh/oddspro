@@ -220,7 +220,21 @@ page actually read.
 
 ### Correlator (`src/link.js`)
 
-**F5 - Virtual competitions are re-scored forever (MEDIUM, PROVEN, quantified).**
+**F5 - FIXED 2026-08-20** (was: virtual competitions re-scored forever; MEDIUM,
+PROVEN, quantified). Shipped as a persisted `matches.is_virtual`, classified at
+scrape time by the pure `isVirtualCompetition` in `src/db/collector-rules.js`
+and skipped by `_linkProvider`. **The anchoring proposed below was WRONG and was
+not implemented as specified:** measured against the warehouse, a `-Zoom` suffix
+plus `SRL ` prefix misses 1,465 real virtual rows, because `Premier-Zoom Turbo`
+(1,340 rows) carries `-Zoom` mid-string and seven competitions carry `SRL` as a
+SUFFIX (`LaLiga SRL`, `China Super League SRL`, ...). The shipped predicate
+matches both tokens at a WORD BOUNDARY instead, which covers all 19 names while
+still rejecting the `SRLanka`/`Zoomers` substring traps. Verified on 50,994
+matches: 26,713 flagged (52.4%), 0 of 17,938 already-linked rows flagged, 0
+canonical leagues flagged, and a live betika scrape wrote 26,896 rows with 0
+disagreements between the stored flag and the predicate.
+
+Original finding:
 Betika's `-Zoom` / `SRL ` virtual competitions have no real-world counterpart, so
 API-Football will never cover them. The open set is bounded by the 4h completion
 fallback (so the oft-quoted 33k is not the per-pass cost), but creation runs
