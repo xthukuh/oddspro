@@ -183,7 +183,14 @@ const EnvSchema = z.object({
     // warns once and carries on. Default 60s is far above any app query (a cold
     // /api/records is under a second) and far below "hung forever"; the
     // whole-warehouse replay scripts in scripts/ should set 0.
-    DB_STATEMENT_TIMEOUT: z.coerce.number().int().min(0).default(60),
+    //
+    // 120s is chosen from measurement, not taste: the slowest real endpoint is
+    // `/api/magic-sort?refresh=1`, timed at 39s on the live host (it replays
+    // every settled tip and is memoized per day, so only the first hit pays).
+    // A cap only has to sit well below "hangs forever" to free the pool slot;
+    // sitting close to a known-good query would turn a slow response into a
+    // failed one.
+    DB_STATEMENT_TIMEOUT: z.coerce.number().int().min(0).default(120),
     DB_ACQUIRE_TIMEOUT: z.coerce.number().int().min(1000).default(30_000),
     // Self-apply pending knex migrations when the server (src/server.js) boots.
     // OFF by default (local/dev restarts never migrate); a shell-less shared
