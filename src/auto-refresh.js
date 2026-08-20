@@ -22,6 +22,7 @@ import { _date, _dtime, debugLog } from './utils.js';
 import { isWriter } from './db/lease.js';
 import { bumpWarehouseVersion, getMeta, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
 import { columnCatalog } from './db/records.js';
+import { recordRun, runDetector, pruneRuns, projectNotices } from './notices.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
 // warehouse near real time without external cron - a cheap LIGHT pass every
@@ -219,6 +220,22 @@ export function startJob({ mode, dates, run, onFinish = null }) {
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
                 _storeColumnCatalog(mode)
                     .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
+            }
+            // Record EVERY finished run, including errors and cancels: the
+            // detector reasons about the ABSENCE of runs, so a run that failed
+            // is still evidence the process was alive and trying. Best-effort,
+            // exactly like the meta writes above - a ledger hiccup must never
+            // throw into this finally block.
+            if (isWriter()) {
+                recordRun({
+                    started_at: refreshJob.started_at ?? new Date(startedMs).toISOString(),
+                    finished_at: refreshJob.finished_at,
+                    mode,
+                    dates,
+                    verdict: outcome,
+                    step_failures: refreshJob.summary?.step_failures ?? [],
+                })
+                    .catch(e => console.error('[auto] run ledger write failed:', e?.message ?? e));
             }
             const secs = Math.round((Date.now() - startedMs) / 1000);
             const failedSteps = refreshJob.summary?.step_failures?.map(f => f.step) ?? [];
@@ -460,6 +477,9 @@ export function startAutoRefresh() {
     // slot re-arms on the next EAT day.
     lastLightMs = now;
     lastFullKey = fullAt != null && eatMinutesOfDay(now) >= fullAt ? eatDateKey(now) : null;
+    // Publish the current notice list once at boot so a fresh process serves
+    // it before the first refresh completes.
+    projectNotices().catch(e => console.error('[auto] notice projection failed:', e?.message ?? e));
     // Async (consumePendingRefreshRequest awaits a meta read/write) - the
     // in-flight guard stops an overlapping tick from double-consuming a
     // pending request or racing startJob's slot check, and the outer
@@ -514,6 +534,13 @@ export function startAutoRefresh() {
                             if (outcome === 'ok' || (outcome === 'partial' && job.summary?.data_bearing_ok)) {
                                 lastFullKey = dayKey;
                             }
+                            // Detection is a once-a-day job: it scans the whole run ledger, and a
+                            // gap that matters is hours wide, so running it on the 10-minute light
+                            // cadence would be pure waste. Pruning rides along for the same reason.
+                            runDetector()
+                                .then(r => { if (r.inserted) _log(`detector proposed ${r.inserted} notice(s)`); })
+                                .catch(e => console.error('[auto] notice detector failed:', e?.message ?? e));
+                            pruneRuns().catch(e => console.error('[auto] run prune failed:', e?.message ?? e));
                         },
                     });
                 } else if (verdict === 'exhausted' && fullExhaustedLoggedKey !== dayKey) {

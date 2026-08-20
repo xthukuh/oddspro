@@ -67,6 +67,11 @@ export async function refreshMetaMemo() {
         if (Object.prototype.hasOwnProperty.call(byKey, 'last_success')) {
             _lastSuccess = byKey.last_success;
         }
+        // Followers learn about a new or approved notice through the same 5s poll
+        // that already carries warehouse_version. Imported lazily to keep meta.js
+        // free of a cycle back through notices.js -> meta.js.
+        const { refreshNoticeMemo } = await import('./notices.js');
+        await refreshNoticeMemo();
         _lastErrorMessage = null;
     } catch (e) {
         const message = e?.message || String(e);
