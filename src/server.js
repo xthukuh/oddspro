@@ -60,7 +60,7 @@ import { maintenanceNow } from './maintenance.js';
 import { _dtime } from './utils.js';
 import {
     activeNotices, coverageFor, listNotices, setNoticeStatus, createNotice,
-    noticeStatusSchema, noticeCreateSchema,
+    noticeStatusSchema, noticeCreateSchema, projectNotices,
 } from './notices.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
@@ -1464,6 +1464,12 @@ let server = null;
         // the lifetime of the process.
         await refreshMetaMemo();
         startMetaPoll();
+        // Publish the notice list at boot, independent of the scheduler: a
+        // cron-only host runs with AUTO_REFRESH_ENABLED=0, and while the
+        // projection lived inside startAutoRefresh it never ran there, so every
+        // coverage surface answered a confident "ok" forever. Best-effort: a
+        // failed projection must not stop the server from listening.
+        await projectNotices().catch(e => console.error(`[boot] notice projection failed: ${e?.message ?? e}`));
         server = app.listen(config.API_PORT, config.API_HOST, () => {
             console.debug(`[+] oddspro API listening on http://${config.API_HOST}:${config.API_PORT}`);
             // Writer-lease attempt starts BEFORE the schedulers - they all

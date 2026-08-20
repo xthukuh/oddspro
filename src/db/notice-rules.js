@@ -1,12 +1,18 @@
-// Pure data-notice rules (zero DB/config imports so tests skip .env, and so
+// Pure data-notice rules (no DB/config imports, so tests skip .env, and so
 // the web app can import this module verbatim - the magic-rules idiom, one
-// definition of "is this day damaged" on both sides of the wire).
+// definition of "is this day damaged" on both sides of the wire). The ONLY
+// import is DATA_BEARING_STEP_RE from the equally pure, zero-import
+// src/db/auto-rules.js - a sanctioned cross-pure import (magic-rules.js does
+// the same over perf-rules.js), not a violation: browser safety and offline
+// testability both come from every module in the chain being import-free of
+// DB/config, not from this file having no imports at all.
 //
 // The detector deliberately reads the COLLECTOR'S OWN VERDICT, never the shape
 // of the data. A row-count heuristic was measured against the live warehouse
 // and refuted: it fires on five healthy days in a 45-day window, because the
 // capture regime shifted on 2026-08-05 and thin midweek slates are normal
 // football. See docs/dev/specs/2026-08-20-2114-data-notices.md section 2.
+import { DATA_BEARING_STEP_RE } from './auto-rules.js';
 
 export const SEVERITIES = ['degraded', 'outage'];
 
@@ -77,16 +83,50 @@ export function runGapSpans(runs, opts) {
     return out;
 }
 
-// Dates a `partial` run covered, merged when consecutive partial runs overlap.
+const TRAILING_DATE_RE = /(\d{4}-\d{2}-\d{2})$/;
+
+// Dates a `partial` run's DATA-BEARING failures actually affected, merged
+// when consecutive partial runs propose an identical span.
+//
+// `summarizeSteps` returns 'partial' when ANY guarded step fails, and the
+// full sweep guards roughly fifteen steps - standings/history/prematch/
+// predictions/hotpicks/enrich among them - most of which never touch odds
+// and can fail on an unrelated API-Football hiccup. Reporting the run's WHOLE
+// `dates` array (today..today+N for a full sweep) on ANY such failure used to
+// claim odds were missing for future days that were collected perfectly -
+// a confident lie about the exact thing this feature exists to report.
+//
+// Only DATA_BEARING_STEP_RE failures (results/betpawa odds/betika odds, see
+// src/db/auto-rules.js) may produce a span, and the span is derived from
+// THOSE steps' own date labels ('betpawa odds 2026-08-20'), never the run's
+// full scope: min..max of the dates named on the failed data-bearing steps.
+// A bare label with no trailing date (the light pass's plain 'results') falls
+// back to the run's own `dates` array, since that is the only scope
+// information available for it. A run whose data-bearing failures list is
+// empty (every failure was a non-odds step) produces NO span at all.
 export function partialSpans(runs) {
     const out = [];
     for (const r of sortedRuns(runs)) {
         if (r?.verdict !== 'partial') continue;
-        const dates = (Array.isArray(r.dates) ? r.dates : []).filter(Boolean).sort();
-        if (!dates.length) continue;
         const steps = (Array.isArray(r.step_failures) ? r.step_failures : [])
-            .map(f => f?.step).filter(Boolean);
-        const span = { date_from: dates[0], date_to: dates[dates.length - 1], steps };
+            .map(f => f?.step).filter(Boolean)
+            .filter(step => DATA_BEARING_STEP_RE.test(step));
+        if (!steps.length) continue;
+        const named = steps
+            .map(step => TRAILING_DATE_RE.exec(step)?.[1])
+            .filter(Boolean)
+            .sort();
+        let dateFrom, dateTo;
+        if (named.length) {
+            dateFrom = named[0];
+            dateTo = named[named.length - 1];
+        } else {
+            const dates = (Array.isArray(r.dates) ? r.dates : []).filter(Boolean).sort();
+            if (!dates.length) continue;
+            dateFrom = dates[0];
+            dateTo = dates[dates.length - 1];
+        }
+        const span = { date_from: dateFrom, date_to: dateTo, steps };
         const last = out[out.length - 1];
         if (last && last.date_from === span.date_from && last.date_to === span.date_to) {
             last.steps = [...new Set([...last.steps, ...span.steps])];

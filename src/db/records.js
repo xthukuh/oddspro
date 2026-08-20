@@ -5,7 +5,6 @@ import { parseFilterList } from './filter-csv.js';
 import { redactRecordForRole, stripDetails } from './access-rules.js';
 import { getMeta } from '../meta.js';
 import { coverageFor } from '../notices.js';
-import { _dtime } from '../utils.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -251,6 +250,18 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     page = unpaged ? 1 : Math.max(1, Number(page) || 1);
     per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
 
+    // ONE derivation of "which day is this query about", used by both the SQL
+    // filter and the coverage block. They used to compute it separately and
+    // disagreed between 00:00 and 03:00 EAT, so a dateless call could return
+    // yesterday's rows under today's coverage verdict. This does NOT change
+    // the SQL filter's existing UTC-versus-EAT semantics (a `Date` still
+    // reports its UTC day) - that behaviour predates this branch and altering
+    // it would change which rows every existing caller gets. The defect fixed
+    // here is the two derivations DISAGREEING, not the choice of derivation.
+    const dayKey = date == null
+        ? null
+        : (date instanceof Date ? date.toISOString().slice(0, 10) : String(date).slice(0, 10));
+
     const query = db('matches as m')
         .join('fixtures as f', 'f.id', 'm.fixture_id') // inner join = correlated only
         .join('leagues as l', 'l.id', 'f.league_id')
@@ -261,8 +272,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         // 1:1 (fp PK = fixture_id): never multiplies the m.id count/pagination
         .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id');
     if (date) {
-        const d = date instanceof Date ? date.toISOString().substring(0, 10) : String(date);
-        query.whereBetween('m.start_time', [`${d} 00:00:00`, `${d} 23:59:59`]);
+        query.whereBetween('m.start_time', [`${dayKey} 00:00:00`, `${dayKey} 23:59:59`]);
     } else if (access && !access.canFuture) {
         // Guest all-dates ceiling (Phase 8): whole days up to and including
         // today, consistent with the per-date rule (dates beyond today 403 in
@@ -359,11 +369,10 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         pages: unpaged ? 1 : Math.max(1, Math.ceil(Number(total) / per_page)),
         // Data-quality tag for humans and machines alike. Synchronous memo
         // read (src/notices.js), so this costs no query. `date: null` is the
-        // all-dates view, which has no single day to judge.
-        // `_dtime` is the project's EAT normalizer. Do not reach for
-        // `new Date(date).toISOString()`: on a Date input that reports the
-        // UTC day, which is the previous day for any EAT time before 03:00.
-        coverage: date ? coverageFor(_dtime(date).slice(0, 10)) : { status: 'ok', confirmed: true, notices: [] },
+        // all-dates view, which has no single day to judge. Uses the SAME
+        // `dayKey` the SQL filter above used, so the two can never disagree
+        // about which day this response is about (see the dayKey comment).
+        coverage: date ? coverageFor(dayKey) : { status: 'ok', confirmed: true, notices: [] },
         ...(unpaged && Number(total) > MAX_UNPAGED ? { truncated: true, limit: MAX_UNPAGED } : {}),
     };
 }

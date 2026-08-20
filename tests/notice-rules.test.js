@@ -69,7 +69,7 @@ test('runGapSpans tolerates empty and single-run history', () => {
     assert.deepEqual(runGapSpans(null, { maxGapMinutes: 90 }), []);
 });
 
-test('partialSpans reports only the dates a partial run covered', () => {
+test('partialSpans reports only the date the failed odds step named, not the whole run scope', () => {
     const runs = [
         run('2026-08-20T06:00:00+03:00', 'ok', ['2026-08-20']),
         run('2026-08-20T06:10:00+03:00', 'partial', ['2026-08-20', '2026-08-21'],
@@ -77,9 +77,36 @@ test('partialSpans reports only the dates a partial run covered', () => {
     ];
     const spans = partialSpans(runs);
     assert.equal(spans.length, 1);
-    assert.equal(spans[0].date_from, '2026-08-20');
+    assert.equal(spans[0].date_from, '2026-08-21');
     assert.equal(spans[0].date_to, '2026-08-21');
     assert.deepEqual(spans[0].steps, ['betika odds 2026-08-21']);
+});
+
+test('partialSpans ignores a partial run whose failures are not data-bearing', () => {
+    const runs = [run('2026-08-20T06:00:00+03:00', 'partial',
+        ['2026-08-20', '2026-08-21', '2026-08-22'],
+        [{ step: 'standings', error: '429' }, { step: 'enrich', error: 'timeout' }])];
+    assert.deepEqual(partialSpans(runs), []);
+    assert.deepEqual(detectNotices(runs, { maxGapMinutes: 90 }), []);
+});
+
+test('partialSpans spans only the dates the failed odds steps name', () => {
+    const runs = [run('2026-08-20T06:00:00+03:00', 'partial',
+        ['2026-08-20', '2026-08-21', '2026-08-22', '2026-08-23'],
+        [{ step: 'standings', error: '429' },
+         { step: 'betika odds 2026-08-21', error: 'timeout' }])];
+    const [s] = partialSpans(runs);
+    assert.equal(s.date_from, '2026-08-21');
+    assert.equal(s.date_to, '2026-08-21');
+    assert.deepEqual(s.steps, ['betika odds 2026-08-21']);
+});
+
+test('partialSpans falls back to the run dates when a data-bearing step carries none', () => {
+    const runs = [run('2026-08-20T06:00:00+03:00', 'partial',
+        ['2026-08-20'], [{ step: 'results', error: 'boom' }])];
+    const [s] = partialSpans(runs);
+    assert.equal(s.date_from, '2026-08-20');
+    assert.equal(s.date_to, '2026-08-20');
 });
 
 test('partialSpans ignores ok, error and cancelled runs', () => {

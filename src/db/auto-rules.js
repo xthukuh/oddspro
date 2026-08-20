@@ -116,7 +116,7 @@ export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () 
 // canonical fixtures ('fixtures 2026-08-20' in the full sweep) deliberately
 // stay excluded, since they are cheaply refetchable and not the view-once
 // asset this guarantee protects.
-const DATA_BEARING_STEP_RE = /^(results|betpawa odds|betika odds)/;
+export const DATA_BEARING_STEP_RE = /^(results|betpawa odds|betika odds)/;
 
 export function hasDataBearingSuccess(stepResults) {
     return Array.isArray(stepResults) && stepResults.some(r => r?.ok && DATA_BEARING_STEP_RE.test(r?.step));

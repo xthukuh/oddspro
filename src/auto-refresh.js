@@ -22,7 +22,7 @@ import { _date, _dtime, debugLog } from './utils.js';
 import { isWriter } from './db/lease.js';
 import { bumpWarehouseVersion, getMeta, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
 import { columnCatalog } from './db/records.js';
-import { recordRun, runDetector, pruneRuns, projectNotices } from './notices.js';
+import { recordRun, runDetector, pruneRuns } from './notices.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
 // warehouse near real time without external cron - a cheap LIGHT pass every
@@ -477,9 +477,6 @@ export function startAutoRefresh() {
     // slot re-arms on the next EAT day.
     lastLightMs = now;
     lastFullKey = fullAt != null && eatMinutesOfDay(now) >= fullAt ? eatDateKey(now) : null;
-    // Publish the current notice list once at boot so a fresh process serves
-    // it before the first refresh completes.
-    projectNotices().catch(e => console.error('[auto] notice projection failed:', e?.message ?? e));
     // Async (consumePendingRefreshRequest awaits a meta read/write) - the
     // in-flight guard stops an overlapping tick from double-consuming a
     // pending request or racing startJob's slot check, and the outer
