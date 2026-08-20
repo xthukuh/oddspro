@@ -234,6 +234,13 @@ const EnvSchema = z.object({
     // published games are discovered (0 = don't force-run while idle).
     AUTO_IDLE_LOOKAHEAD_MINUTES: z.coerce.number().int().min(0).default(120),
     AUTO_IDLE_EVERY_MINUTES: z.coerce.number().int().min(0).default(60),
+    // A stretch with no finished refresh run longer than this is proposed as
+    // an odds outage. Counts MISSING RUNS, not missing odds: an idle-skip pass
+    // still records an `ok` run, so a quiet night is never a gap. Nine missed
+    // light cadences at the default AUTO_LIGHT_MINUTES of 10.
+    COLLECTION_GAP_MINUTES: z.coerce.number().int().min(5).default(90),
+    // Rows older than this are pruned from collection_runs. 0 = keep forever.
+    COLLECTION_RUNS_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
     // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
     // has no log rotation and tight disk quotas).
     AUTO_LOG: boolStr('1'),
