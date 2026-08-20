@@ -171,6 +171,20 @@ const EnvSchema = z.object({
     // with separate pools - shared hosting connection caps may need this lower.
     DB_POOL_MIN: z.coerce.number().int().min(0).default(0),
     DB_POOL_MAX: z.coerce.number().int().min(1).default(10),
+    // Per-statement ceiling (seconds, 0 = no limit) applied as MariaDB/MySQL
+    // `max_execution_time` on every pooled connection, and how long a caller
+    // waits for a free connection before failing. Both exist because the
+    // warehouse shares a heavily loaded host: without them a single runaway
+    // SELECT holds one of very few pool slots indefinitely and starves odds
+    // collection, which is the one thing here that cannot be re-fetched.
+    // NB the underlying variable bounds SELECTs only (MariaDB
+    // max_statement_time / MySQL max_execution_time), so it can never interrupt
+    // an in-flight upsert. Applied best-effort: a server supporting neither
+    // warns once and carries on. Default 60s is far above any app query (a cold
+    // /api/records is under a second) and far below "hung forever"; the
+    // whole-warehouse replay scripts in scripts/ should set 0.
+    DB_STATEMENT_TIMEOUT: z.coerce.number().int().min(0).default(60),
+    DB_ACQUIRE_TIMEOUT: z.coerce.number().int().min(1000).default(30_000),
     // Self-apply pending knex migrations when the server (src/server.js) boots.
     // OFF by default (local/dev restarts never migrate); a shell-less shared
     // host (cPanel) sets this so restarting the Node app runs migrate:latest.

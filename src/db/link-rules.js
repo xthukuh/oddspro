@@ -146,3 +146,42 @@ export function orientationUpdate(verdict, current) {
 // similarity is a bonus and never a veto, and v1's AI contradiction vetoes were
 // net-negative. Full evidence in
 // docs/research/2026-08-19-linker-and-apisports-audit.md.
+
+// --- Alias caching (audit finding F3, partial) -------------------------------
+//
+// A confident link teaches `team_aliases`, and that entry then short-circuits
+// the scorer for every future fixture of those teams. There is no DELETE, no
+// override and no expiry anywhere in the repo, and scripts/lib/sync-rules.js
+// classes the table `canonical`, so a bad entry replicates between local and
+// live and is permanent. The poisoning vector is a link accepted at the very
+// edge of the gate: `LINK_MIN_CONFIDENCE` (0.85) plus a 0.05 runner-up margin
+// is enough to LINK, and that was also enough to teach a permanent rule.
+//
+// So the bar for TEACHING is now strictly higher than the bar for linking. This
+// costs nothing when the link is genuinely good (real matches score well clear
+// of the floor) and it stops the marginal ones from becoming permanent.
+//
+// Deliberately NOT implemented: the audit also proposed re-scoring the alias
+// fast path and rejecting it below ~0.5. That would break the aliases that
+// matter MOST. A club rename ("Zhenis Nur Sultan" -> "Zhenys", "Lisen Brno" ->
+// "Artis") scores near zero by name, which is precisely why the alias exists;
+// the audit's own sweep found 314 such entries below 0.60. The fast path
+// already demands that BOTH team aliases resolve and that the candidate's home
+// AND away ids match, inside the kickoff window, which is a strong joint
+// constraint.
+export const ALIAS_CONFIDENCE_BONUS = 0.05;
+export const ALIAS_MIN_MARGIN = 0.15;
+
+// Should a link at this confidence teach a permanent alias?
+//
+//   conf      - the accepted link's confidence
+//   runnerUp  - the second-best candidate's confidence (0 when there was none)
+//   threshold - the effective LINK_MIN_CONFIDENCE the link was accepted against
+//
+// Total: non-finite inputs answer false, because "we could not tell" must never
+// write something irreversible.
+export function aliasWorthCaching(conf, runnerUp, threshold) {
+    const c = Number(conf), r = Number(runnerUp) || 0, t = Number(threshold);
+    if (!Number.isFinite(c) || !Number.isFinite(t)) return false;
+    return c >= t + ALIAS_CONFIDENCE_BONUS && (c - r) >= ALIAS_MIN_MARGIN;
+}

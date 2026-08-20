@@ -21,10 +21,22 @@ export const EventItem = z.object({
 // Validate + shape a fixture's raw /fixtures/events response into fixture_events
 // rows. Events without a type are skipped (fixture_events.type is NOT NULL and
 // the type IS the event's meaning - mirrors the lineups' required-name skip).
+//
+// A row zod cannot parse (e.g. a missing time.elapsed) is skipped and reported
+// in `skipped`, never thrown - the same per-item isolation buildStandingRows
+// has: the 2026-07 fix only made `type` nullable, tolerating the one shape then
+// observed, but a bare `.parse()` still let any OTHER malformation discard
+// every event for the fixture.
 export function buildEventRows(rawItems, fixture_id) {
-    const rows = [];
+    const rows = [], skipped = [];
     for (const raw of rawItems) {
-        const item = EventItem.parse(raw);
+        let item;
+        try {
+            item = EventItem.parse(raw);
+        } catch (err) {
+            skipped.push({ raw, error: err });
+            continue;
+        }
         if (!item.type) continue;
         rows.push({
             fixture_id,
@@ -40,5 +52,5 @@ export function buildEventRows(rawItems, fixture_id) {
             assist_name: item.assist?.name ?? null,
         });
     }
-    return rows;
+    return { rows, skipped };
 }

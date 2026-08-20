@@ -25,7 +25,7 @@ test('EventItem tolerates type: null (the payload that aborted the sweep)', () =
 });
 
 test('buildEventRows drops typeless events, keeps valid ones', () => {
-    const rows = buildEventRows([
+    const { rows } = buildEventRows([
         goal,
         { time: { elapsed: 90 }, type: null },      // typeless -> skipped
         { time: { elapsed: 5 }, type: undefined },  // missing type -> skipped
@@ -36,7 +36,7 @@ test('buildEventRows drops typeless events, keeps valid ones', () => {
 });
 
 test('buildEventRows maps every column, coalescing absent nested fields to null', () => {
-    const [row] = buildEventRows([goal], 987);
+    const { rows: [row] } = buildEventRows([goal], 987);
     assert.deepEqual(row, {
         fixture_id: 987,
         team_id: 33,
@@ -53,7 +53,7 @@ test('buildEventRows maps every column, coalescing absent nested fields to null'
 });
 
 test('buildEventRows tolerates absent team/player/assist objects', () => {
-    const [row] = buildEventRows([{ time: { elapsed: 45, extra: 2 }, type: 'Card', detail: 'Yellow Card' }], 1);
+    const { rows: [row] } = buildEventRows([{ time: { elapsed: 45, extra: 2 }, type: 'Card', detail: 'Yellow Card' }], 1);
     assert.equal(row.team_id, null);
     assert.equal(row.player_id, null);
     assert.equal(row.player_name, null);
@@ -61,9 +61,25 @@ test('buildEventRows tolerates absent team/player/assist objects', () => {
     assert.equal(row.extra, 2);
 });
 
-test('buildEventRows still throws ZodError on a genuinely broken shape', () => {
+test('buildEventRows skips (not throws) an item zod cannot parse, keeping good events - one bad event must never abort the fixture', () => {
     // elapsed is required (fixture_events needs the minute) - a missing/NaN time
-    // must still surface as a ZodError so the batch layer logs and skips the
-    // fixture rather than silently inventing data.
-    assert.throws(() => buildEventRows([{ time: {}, type: 'Goal' }], 1), z.ZodError);
+    // previously surfaced as a ZodError that discarded every OTHER event for the
+    // same fixture. It must now be isolated per item, mirroring buildStandingRows.
+    const { rows, skipped } = buildEventRows([
+        goal,
+        { time: {}, type: 'Goal' }, // elapsed missing -> unparseable, skipped
+    ], 1);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0].type, 'Goal');
+    assert.equal(skipped.length, 1);
+    assert.ok(skipped[0].error instanceof z.ZodError);
+});
+
+test('buildEventRows returns empty (not throws) when every item is unparseable', () => {
+    const { rows, skipped } = buildEventRows([
+        { time: {}, type: 'Goal' },
+        { time: { elapsed: 'ninety' }, type: 'Card' },
+    ], 1);
+    assert.deepEqual(rows, []);
+    assert.equal(skipped.length, 2);
 });

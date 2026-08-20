@@ -1,6 +1,6 @@
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
-import { claimVerdict, orientationVerdict, orientationUpdate } from './db/link-rules.js';
+import { claimVerdict, orientationVerdict, orientationUpdate, aliasWorthCaching } from './db/link-rules.js';
 
 // Correlation order matters: betpawa first (richer identifiers), betika last so
 // it can additionally score against betpawa records already linked to a fixture.
@@ -125,7 +125,7 @@ async function _linkProvider(provider) {
         .whereNull('fixture_id')
         .whereNull('completed_at')
         .select('id', 'start_time', 'home_team_name', 'away_team_name', 'competition_name', 'category_name');
-    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, errors: 0 };
+    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, alias_withheld: 0, errors: 0 };
     if (!rows.length) return counts;
 
     // Alias caches (learned from previous confident links)
@@ -157,7 +157,7 @@ async function _linkProvider(provider) {
             }
 
             // 1) alias fast-path: both team names already known
-            let hit = null, viaAlias = false;
+            let hit = null, viaAlias = false, score = null;
             const ah = teamAliases.get(m.home_team_name), aa = teamAliases.get(m.away_team_name);
             if (ah && aa) {
                 hit = candidates.find(c => c.home_id === ah && c.away_id === aa) ?? null;
@@ -178,6 +178,7 @@ async function _linkProvider(provider) {
                 }
                 if (best && best.conf >= effective('LINK_MIN_CONFIDENCE') && (best.conf - second) >= MIN_MARGIN) {
                     hit = best.c;
+                    score = { conf: best.conf, runnerUp: second };
                 } else if (best && best.conf >= 0.5) {
                     console.debug(`[link] ${provider} near-miss (${best.conf.toFixed(3)}): `
                         + `"${m.home_team_name} v ${m.away_team_name}" ~ "${best.c.home_name} v ${best.c.away_name}"`);
@@ -222,16 +223,27 @@ async function _linkProvider(provider) {
                 console.debug(`[link] ${provider}: match ${claim.id} lost fixture ${hit.id} to ${m.id} (reschedule)`);
             }
 
-            // 4) persist link + learn aliases for future exact-match correlation
+            // 4) persist the link. Learning an alias is a SEPARATE, stricter
+            // decision: an alias short-circuits the scorer for every future
+            // fixture of those teams, it is never re-validated, and nothing in
+            // the repo can delete one - so a link accepted at the very edge of
+            // the gate must not become a permanent rule (audit F3,
+            // aliasWorthCaching). An alias-path link teaches nothing new anyway.
             await db('matches').where('id', m.id).update({ fixture_id: hit.id });
-            await db('team_aliases').insert([
-                { team_id: hit.home_id, provider, alias_name: m.home_team_name },
-                { team_id: hit.away_id, provider, alias_name: m.away_team_name },
-            ]).onConflict(['provider', 'alias_name']).ignore();
-            teamAliases.set(m.home_team_name, hit.home_id);
-            teamAliases.set(m.away_team_name, hit.away_id);
+            const teach = score != null
+                && aliasWorthCaching(score.conf, score.runnerUp, effective('LINK_MIN_CONFIDENCE'));
+            if (teach) {
+                await db('team_aliases').insert([
+                    { team_id: hit.home_id, provider, alias_name: m.home_team_name },
+                    { team_id: hit.away_id, provider, alias_name: m.away_team_name },
+                ]).onConflict(['provider', 'alias_name']).ignore();
+                teamAliases.set(m.home_team_name, hit.home_id);
+                teamAliases.set(m.away_team_name, hit.away_id);
+            } else if (score != null) {
+                counts.alias_withheld++;
+            }
             const comp = m.competition_name || m.category_name;
-            if (comp && !leagueAliases.has(comp)) {
+            if (teach && comp && !leagueAliases.has(comp)) {
                 await db('league_aliases').insert({ league_id: hit.league_id, provider, alias_name: comp })
                     .onConflict(['provider', 'alias_name']).ignore();
                 leagueAliases.set(comp, hit.league_id);

@@ -331,11 +331,11 @@ async function _fetchFixtureStatistics(fixture_id, giveup) {
         }
     }
     if (!rows.length && !giveup) return 0;
-    await db.transaction(async trx => {
+    await withRetry(() => db.transaction(async trx => {
         await trx('fixture_statistics').where('fixture_id', fixture_id).del();
         if (rows.length) await db.batchInsert('fixture_statistics', rows, 200).transacting(trx);
         await trx('fixtures').where('id', fixture_id).update({ stats_fetched_at: db.fn.now() });
-    });
+    }));
     return rows.length;
 }
 
@@ -368,25 +368,28 @@ async function _fetchFixtureLineups(fixture_id, giveup) {
         }
     }
     if (!lineups.length && !giveup) return { lineups: 0, players: 0 };
-    await db.transaction(async trx => {
+    await withRetry(() => db.transaction(async trx => {
         await trx('fixture_players').where('fixture_id', fixture_id).del();
         await trx('fixture_lineups').where('fixture_id', fixture_id).del();
         if (lineups.length) await trx('fixture_lineups').insert(lineups);
         if (players.length) await db.batchInsert('fixture_players', players, 200).transacting(trx);
         await trx('fixtures').where('id', fixture_id).update({ lineups_fetched_at: db.fn.now() });
-    });
+    }));
     return { lineups: lineups.length, players: players.length };
 }
 
 // Replace + flag one fixture's events. Returns row count.
 async function _fetchFixtureEvents(fixture_id, giveup) {
-    const rows = buildEventRows(await _get('/fixtures/events', { fixture: fixture_id }), fixture_id);
+    const { rows, skipped } = buildEventRows(await _get('/fixtures/events', { fixture: fixture_id }), fixture_id);
+    if (skipped.length) {
+        console.warn(`[apisports] events: ${skipped.length} item(s) skipped (unparseable)`);
+    }
     if (!rows.length && !giveup) return 0;
-    await db.transaction(async trx => {
+    await withRetry(() => db.transaction(async trx => {
         await trx('fixture_events').where('fixture_id', fixture_id).del();
         if (rows.length) await db.batchInsert('fixture_events', rows, 200).transacting(trx);
         await trx('fixtures').where('id', fixture_id).update({ events_fetched_at: db.fn.now() });
-    });
+    }));
     return rows.length;
 }
 
@@ -397,13 +400,22 @@ export async function fetchApisportsStats() {
         .whereIn('f.status', FINAL_STATUSES)
         .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
         .where(q => q.whereNull('f.stats_fetched_at').orWhereNull('f.lineups_fetched_at').orWhereNull('f.events_fetched_at'))
-        .select('f.id', 'f.kickoff', 'f.stats_fetched_at', 'f.lineups_fetched_at', 'f.events_fetched_at');
+        .select(
+            'f.id', 'f.stats_fetched_at', 'f.lineups_fetched_at', 'f.events_fetched_at',
+            // Computed in the pinned +03:00 SQL session (TIMESTAMPDIFF over the raw
+            // DATETIME column, same server both sides) instead of `new Date(f.kickoff)`
+            // in the Node process, which decodes DATETIME in the process's LOCAL
+            // timezone and would skew the 48h threshold on any host not running EAT -
+            // the same class CLAUDE.md documents as fixed in src/enrich.js's
+            // KICKOFF_SQL_EXPR, applied here to keep STATS_GIVEUP_HOURS meaningful.
+            db.raw('TIMESTAMPDIFF(HOUR, f.kickoff, NOW()) > ? as giveup', [STATS_GIVEUP_HOURS]),
+        );
     console.debug(`API-Football - ${targets.length} final correlated fixtures need deep stats...`);
     const counts = { fixtures: targets.length, statistics: 0, lineups: 0, players: 0, events: 0 };
     const tick = _progress('API-Football - deep stats');
     await _batch(targets, async (f, i, len) => {
         try {
-            const giveup = (Date.now() - new Date(f.kickoff).getTime()) > STATS_GIVEUP_HOURS * 3600_000;
+            const giveup = !!f.giveup;
             if (!f.stats_fetched_at) counts.statistics += await _fetchFixtureStatistics(f.id, giveup);
             if (!f.lineups_fetched_at) {
                 const r = await _fetchFixtureLineups(f.id, giveup);
@@ -520,7 +532,7 @@ export async function fetchApisportsPredictions() {
         try {
             const items = await _get('/predictions', { fixture: f.id });
             const p = items.length ? PredictionItem.parse(items[0]).predictions : null;
-            await db.transaction(async trx => {
+            await withRetry(() => db.transaction(async trx => {
                 if (p) {
                     await trx('fixture_api_predictions').insert({
                         fixture_id: f.id,
@@ -541,7 +553,7 @@ export async function fetchApisportsPredictions() {
                 // Flag even on an empty response - fetch-once; a fixture without a
                 // prediction is simply neutral downstream.
                 await trx('fixtures').where('id', f.id).update({ predictions_fetched_at: db.fn.now() });
-            });
+            }));
         } catch (e) {
             // One fixture's malformed API payload must not abort the whole sweep.
             // Data-shape errors (zod) are logged and skipped - the fixture stays
@@ -582,10 +594,10 @@ export async function fetchApisportsStandings() {
         if (teamRows.length) {
             await db('teams').insert(teamRows).onConflict('id').merge(['name', 'logo']);
         }
-        await db.transaction(async trx => {
+        await withRetry(() => db.transaction(async trx => {
             await trx('standings').where({ league_id, season }).del();
             await db.batchInsert('standings', rows, 200).transacting(trx);
-        });
+        }));
         counts.rows += rows.length;
     }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
