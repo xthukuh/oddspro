@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listPageOutcome, listPageDone } from '../src/db/collector-rules.js';
+import { listPageOutcome, listPageDone, dataPageOutcome } from '../src/db/collector-rules.js';
 
 // Shapes probed against the live BetPawa API on 2026-08-19.
 const withResults = n => ({ responses: [{ responses: Array.from({ length: n }, (_, i) => ({ id: i })) }] });
@@ -72,4 +72,57 @@ test('the exact-multiple case that used to false-alarm now terminates cleanly', 
         if (listPageDone(o, 100)) break;
     }
     assert.equal(seen.length, 200);
+});
+
+// --- Betika's envelope ------------------------------------------------------
+// Probed live 2026-08-19: a page past the end returns HTTP 200 with a REAL
+// empty `data: []`, so there is no empty-vs-omitted ambiguity here. The hazard
+// is the reverse one: the pager used to coerce ANY unreadable body to an empty
+// page, and since it terminates on `len < limit`, a degraded 200 on page 3 of
+// 10 returned the first two pages as the complete day.
+
+test('a Betika page with matches is ok', () => {
+    const o = dataPageOutcome({ data: [{ match_id: 1 }, { match_id: 2 }], meta: {} });
+    assert.equal(o.status, 'ok');
+    assert.equal(o.items.length, 2);
+});
+
+test('a genuinely empty Betika page is ok and simply ends the walk', () => {
+    const o = dataPageOutcome({ data: [], meta: {}, time_elapsed_secs: 0.1 });
+    assert.equal(o.status, 'ok');
+    assert.deepEqual(o.items, []);
+});
+
+test('a body with no data array is malformed, NOT an empty page', () => {
+    // This is the regression: each of these used to read as "day complete".
+    for (const bad of [
+        null, undefined, '', 'gateway timeout', 42, [],
+        {}, { data: null }, { data: 'nope' }, { data: {} },
+        { error: 'upstream failure' }, { meta: {} },
+    ]) {
+        const o = dataPageOutcome(bad);
+        assert.equal(o.status, 'malformed', `expected malformed for ${JSON.stringify(bad)}`);
+        assert.deepEqual(o.items, []);
+    }
+});
+
+test('dataPageOutcome honours a custom key', () => {
+    assert.equal(dataPageOutcome({ rows: [1] }, 'rows').status, 'ok');
+    assert.equal(dataPageOutcome({ rows: [1] }, 'data').status, 'malformed');
+});
+
+test('a truncated Betika walk can no longer look complete', () => {
+    // pages: full, full, then a degraded body. The third must be malformed so
+    // the pager retries/throws instead of returning 100 matches as the day.
+    const pages = [{ data: new Array(50).fill({}) }, { data: new Array(50).fill({}) }, { error: 'boom' }];
+    const collected = [];
+    let malformed = false;
+    for (const p of pages) {
+        const o = dataPageOutcome(p);
+        if (o.status === 'malformed') { malformed = true; break; }
+        collected.push(...o.items);
+        if (o.items.length < 50) break;
+    }
+    assert.equal(malformed, true, 'the degraded page must be detected');
+    assert.equal(collected.length, 100, 'and the partial buffer must NOT be returned as a complete day');
 });

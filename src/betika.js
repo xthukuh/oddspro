@@ -1,5 +1,8 @@
 import axios from 'axios';
 import { _date, _dtime, _batch, _progress } from './utils.js';
+import { withRetry } from './db/retry-rules.js';
+import { isRetryableApiError } from './db/net-rules.js';
+import { dataPageOutcome } from './db/collector-rules.js';
 
 // Get axios client instance
 const BetikaClient = axios.create({
@@ -121,8 +124,28 @@ export async function fetchBetikaGames(date_=null, exclude_=null) {
     const buffer = [];
     const _next = async (page = 1) => {
         const path = `/matches?page=${page}&limit=${limit}&tab=upcoming&sub_type_id=${sub_type_id}&sport_id=14,139&sort_id=2&period_id=${period}&esports=false`;
-        const { data } = await BetikaClient.get(path);
-        const arr = Array.isArray(data.data) ? data.data : [];
+        // A page whose body carries no `data` array must NEVER be read as an
+        // empty page. `Array.isArray(data.data) ? data.data : []` used to do
+        // exactly that, and because the loop terminates on `len < limit`, a
+        // degraded 200 on page 3 of 10 returned the first two pages as if they
+        // were the whole day - the same silent truncation that cost three days
+        // of BetPawa odds on 2026-08-16 (docs/research/2026-08-19-odds-
+        // durability-and-outage-damage.md), still present here. Retried with
+        // the same bounded backoff as BetPawa/apisports, then thrown, so
+        // `done` can only ever be computed from a page we actually read.
+        // Betika DOES report a genuinely empty day as `data: []` (probed live),
+        // which stays usable and simply ends the walk.
+        const arr = await withRetry(async () => {
+            const { data } = await BetikaClient.get(path);
+            const outcome = dataPageOutcome(data);
+            if (outcome.status === 'malformed') {
+                throw Object.assign(
+                    new Error(`Betika list page malformed response body (page=${page})`),
+                    { malformedBody: true },
+                );
+            }
+            return outcome.items;
+        }, { tries: 4, base: 1500, isRetryable: e => isRetryableApiError(e) || e?.malformedBody === true });
         const len = arr.length;
         buffer.push(...arr);
         if (len < limit) return buffer;

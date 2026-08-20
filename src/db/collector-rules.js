@@ -60,3 +60,28 @@ export function listPageDone(outcome, take) {
     if (outcome.status === 'empty') return true;
     return outcome.items.length < take;
 }
+
+// Betika's list pages are a different envelope: `{ data: [ ...matches ], meta }`.
+// Probed live 2026-08-19: a page past the end answers HTTP 200 with `data: []`,
+// a REAL empty array, so unlike BetPawa there is no empty-vs-omitted ambiguity
+// to resolve.
+//
+// The hazard is the other one. `fetchBetikaGames` used to read its page as
+// `Array.isArray(data.data) ? data.data : []`, so a degraded 200 whose body
+// carries no `data` array (an error envelope, a truncated proxy response)
+// collapsed to an empty page - and since the loop terminates on
+// `len < limit`, a failure on page 3 of 10 returned the first two pages AS IF
+// they were the complete day. That is exactly the silent truncation that cost
+// three days of irreplaceable BetPawa odds on 2026-08-16, sitting unfixed in
+// the other provider.
+//
+// So: a well-formed page (the key IS an array) is usable even when empty;
+// anything else is malformed and must be retried, then thrown.
+export function dataPageOutcome(body, key = 'data') {
+    if (body === null || typeof body !== 'object' || Array.isArray(body)) {
+        return { status: 'malformed', items: [] };
+    }
+    const items = body[key];
+    if (Array.isArray(items)) return { status: 'ok', items };
+    return { status: 'malformed', items: [] };
+}

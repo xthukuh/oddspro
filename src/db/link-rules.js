@@ -104,3 +104,45 @@ export function orientationUpdate(verdict, current) {
     const next = verdict === 'swapped';
     return next === Boolean(current) ? null : next;
 }
+
+// --- Team qualifiers (audit finding F4): MEASURED AND REFUTED, do not rebuild
+//
+// F4's proposed fix was a hard veto on a squad-qualifier mismatch (women vs
+// men, reserve vs first team, U20 vs senior), on the reasoning that the
+// difference is categorical rather than fuzzy. The mechanism it describes is
+// real: `_tokenSim` returns `max(dice, 0.9 * overlap)`, so any strict token
+// subset scores exactly 0.9, and "Arsenal Women" clears the 0.85 floor against
+// "Arsenal" with no competition evidence at all.
+//
+// The veto was built and measured against all 18,022 live links before being
+// wired in. It cannot ship, and the numbers are worth keeping so nobody
+// rebuilds it:
+//
+//   Exact-tag veto on team names ............ rejects 958 links (5.3%)
+//   Women-only, team OR competition evidence . rejects 57
+//   Additionally on development/senior ....... rejects a further 994
+//
+// Nearly all are CORRECT links, because the two sources tag squads
+// inconsistently and in different FIELDS:
+//   - the bookmaker puts it in the competition ("U20 NSW NPL", "Liga Femenina")
+//     and leaves the team name bare, while API-Football puts it in the team
+//     name ("Manly Utd U20", "Washington Spirit W");
+//   - API-Football is not even self-consistent: fixture "VIFK W v IF Gnistan"
+//     tags one side of a women's fixture and not the other;
+//   - whole women's leagues carry no marker at all (Damallsvenskan, WK-League);
+//   - a bare "w" token is not a marker - "Springvale W. E." is White Eagles and
+//     "Havant & W" is Waterlooville;
+//   - a bare "2" token is not a reserve marker - it rejected an exact 1.00
+//     name match because the league is called "China League 2".
+//
+// Against that, the confirmed error the veto was meant to catch is a single row
+// in 18,022 (betika "North Lakes United v Caboolture FC", Queensland Premier
+// League 1 Women, linked to the men's "Broadbeach United v Caboolture"), and it
+// happened because API-Football did not carry that women's league for the date,
+// so the men's fixture won the pool uncontested. A name veto is the wrong
+// instrument for that: the fix would have to be in candidate SCOPING.
+//
+// This is the same lesson the codebase already recorded twice - competition
+// similarity is a bonus and never a veto, and v1's AI contradiction vetoes were
+// net-negative. Full evidence in
+// docs/research/2026-08-19-linker-and-apisports-audit.md.
