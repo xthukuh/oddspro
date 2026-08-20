@@ -75,10 +75,15 @@ export async function refreshNoticeMemo() {
     if (Array.isArray(stored)) _memo = stored;
 }
 
-// Writer only. Rewritten on any change (detector run or admin action), so the
-// memo on every instance converges within one meta poll (5s).
+// Deliberately NOT writer-gated, unlike _storeColumnCatalog. This is a cheap
+// indexed read of a tiny table rewritten into one meta key, and it is
+// idempotent: whichever instance runs it derives the same list from the same
+// shared table. Gating it on isWriter() would mean an admin approving a notice
+// on a FOLLOWER instance updates data_notices and admin_audit correctly and
+// then silently fails to update what visitors see, indefinitely, because
+// nothing else re-projects after a manual admin action. Every instance
+// projecting at boot is three identical upserts of one row, which is free.
 export async function projectNotices() {
-    if (!isWriter()) return;
     const rows = await db('data_notices')
         .whereNot('status', 'dismissed')
         .orderBy('date_from', 'desc')
@@ -191,13 +196,21 @@ export async function createNotice(input, actorId = null) {
         evidence: JSON.stringify(input.evidence ?? null),
         created_by: actorId,
     };
-    const [id] = await db('data_notices').insert(row);
-    await db('admin_audit').insert({
-        actor_id: actorId,
-        action: 'notice.create',
-        target: `notice:${id}`,
-        old_value: null,
-        new_value: `${row.kind} ${row.date_from}..${row.date_to}`,
+    // The notice INSERT and its audit row ride ONE transaction, matching
+    // setNoticeStatus. Split across two statements, a failing audit insert
+    // would throw to the caller while leaving a live, approved, publicly
+    // projected notice behind with no audit trail, which is the exact gap
+    // admin_audit exists to close.
+    let id;
+    await db.transaction(async trx => {
+        [id] = await trx('data_notices').insert(row);
+        await trx('admin_audit').insert({
+            actor_id: actorId,
+            action: 'notice.create',
+            target: `notice:${id}`,
+            old_value: null,
+            new_value: `${row.kind} ${row.date_from}..${row.date_to}`,
+        });
     });
     await projectNotices();
     return _out(await db('data_notices').where('id', id).first(COLS));
