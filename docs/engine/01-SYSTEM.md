@@ -120,6 +120,30 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
   mirrors the SMS seam: `MAIL_MAILER=log` (default) prints emails to the server console,
   `smtp` sends via the .env-only `MAIL_*` creds (fail-closed when the host is missing);
   the admin settings editor exposes only the `MAIL_MAILER` switch (group `mail`).
+- **Data notices:** every finished refresh job (light, full, manual) logs a row to
+  `collection_runs` (mode, dates covered, verdict ok/partial/error/cancelled, step
+  failures). A detector reads that ledger, never the shape of the collected data
+  itself: a rolling row-count rule was tried and refuted against the live warehouse
+  first (it fired on five healthy days in a 45-day window - the capture regime
+  shifted on 2026-08-05, and a thin midweek slate looks identical to an outage by
+  volume alone). No successful run inside `COLLECTION_GAP_MINUTES` (90) proposes an
+  `outage` for the dates spanned; a `partial` run proposes `degraded` for the dates
+  it covered. Proposals insert as `unconfirmed` and are served immediately with a
+  `UNCONFIRMED` title prefix - the warning must work before anyone reviews it;
+  approving one only drops the prefix, dismissing one is permanent (the
+  `(source, kind, date_from, date_to)` unique index blocks the same span from ever
+  being re-raised). Serving costs no query: the active (non-dismissed) list
+  projects into the shared `meta` table (key `data_notices`) and every instance
+  reads it off the same 5s memo `column_catalog` uses. Four surfaces carry the
+  resulting `{status: ok/degraded/outage, confirmed, notices}` block: `GET
+  /api/records` (`coverage`, per date), `GET /api/refresh` (the raw `notices`
+  array), `GET /api/daily-slip/timeline` (per-day `coverage`), and the public `GET
+  /api/coverage` (optional `?date=`, for automated consumers). The web ribbon
+  (`CoverageRibbon.jsx`) shows a non-dismissible one-line strip whenever the loaded
+  day is affected; Admin → Dashboard's Notices card approves/dismisses/adds one by
+  hand (a manual notice is born `approved`, never `unconfirmed` - an admin writing
+  one has already reviewed it). `COLLECTION_RUNS_RETENTION_DAYS` (90) bounds the
+  ledger the detector and admin list both read.
 - **SMS templates + broadcast campaigns (M9):** Admin → Messaging drives
   `/api/admin/sms/*` (admin SESSION only). A campaign freezes its rendered message and
   audience at creation, then sends through a **single-slot background job** — one campaign
@@ -142,5 +166,6 @@ restart never fires a surprise sweep. Successful jobs bump the monotonic `data_v
 
 ---
 *Update this chapter when: a pipeline step is added/removed/reordered, a scheduler is
-added, or light/full/manual scope or cadence knobs change (`src/pipeline.js`,
-`src/auto-refresh.js`, `src/server.js`).*
+added, light/full/manual scope or cadence knobs change, or data-notice detection/serving
+changes (`src/pipeline.js`, `src/auto-refresh.js`, `src/server.js`, `src/notices.js`,
+`src/db/notice-rules.js`).*

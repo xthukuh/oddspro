@@ -41,6 +41,7 @@ Reading paths — new developer: 01 → 02 → 04 → 05; AI agent: `AGENTS.md` 
 | Change in | Update |
 |---|---|
 | `src/pipeline.js` step order; `src/auto-refresh.js` schedulers/cadence; serve boot; multi-instance writer lease/shared meta (`src/db/lease.js`, `src/meta.js`) | `01-SYSTEM.md` |
+| Data-notice detection/serving (`src/notices.js`, `src/db/notice-rules.js`), `collection_runs`/`data_notices` schema, `COLLECTION_GAP_MINUTES`/`COLLECTION_RUNS_RETENTION_DAYS` | `01-SYSTEM.md` |
 | Data sources, fetch-once/freeze/settle invariants, market identity, snapshot windows | `02-DATA-PIPELINE.md` |
 | `src/link.js` similarity/thresholds/aliases | `03-LINKING.md` |
 | Hot gates (`goals-rules`), tip families/blend/guards (`tip-rules`), settlement | `04-PREDICTIONS.md` |

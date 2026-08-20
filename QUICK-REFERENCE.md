@@ -199,8 +199,9 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 1. `GET /api/refresh` — fresh `data_version` / `last_success`.
 2. `GET /api/columns` — catalog loads fast (an index regression shows here first).
 3. `GET /api/visits/daily-unique` — public counter answers.
-4. `logs/auto-refresh.log` gains `light ok` lines (proves the process stays resident).
-5. Web page title shows the new version.
+4. `GET /api/coverage` - data-notice status answers (public, memo-backed, costs no query).
+5. `logs/auto-refresh.log` gains `light ok` lines (proves the process stays resident).
+6. Web page title shows the new version.
 
 ### 2.6 Production routines
 
@@ -314,6 +315,8 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | `data_version` | shared `meta.warehouse_version` (cross-instance since 2026-08-19, not a per-process counter) bumped on successful refresh; keys the response cache + client silent reloads | `src/meta.js`, `src/auto-refresh.js` |
 | Fetch-once | immutable API detail fetched at most once per fixture (`*_fetched_at` flags) | `docs/engine/02-DATA-PIPELINE.md` |
 | Stale odds | vanished market kept flagged with its last-seen price (it IS the historical price) | `src/db/odds-diff.js` |
+| `coverage.status` | `ok`/`degraded`/`outage` for a date, worst active notice wins; served on `/api/records`, `/api/refresh`, `/api/daily-slip/timeline`, `/api/coverage` | `src/db/notice-rules.js` `coveragePayload` |
+| `UNCONFIRMED` prefix | an auto-detected, not-yet-approved notice; shown from the moment it is proposed, dropped on approval, never changes the notice text | `src/db/notice-rules.js` `noticeLabel` |
 | Alias | learned provider→canonical team/league name mapping — the linking fast-path | `src/link.js` |
 | DARK switch | shipped-but-off AI regime knob; flipping needs an explicit go, dated by `admin_audit` (M6) | `AGENTS.md` |
 | Model tag (`#pN`) | model+grounding+prompt-version identity keying AI-verdict reuse | `src/ai/adjudicators.js` |
