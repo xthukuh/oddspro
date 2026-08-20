@@ -58,6 +58,10 @@ import { queryCacheKey } from './db/cache-rules.js';
 import { retryAfterSeconds } from './db/maintenance-rules.js';
 import { maintenanceNow } from './maintenance.js';
 import { _dtime } from './utils.js';
+import {
+    activeNotices, coverageFor, listNotices, setNoticeStatus, createNotice,
+    noticeStatusSchema, noticeCreateSchema,
+} from './notices.js';
 
 // Visualization API server (:3001). Serves the paginated/multi-sort/filtered
 // records endpoint over the warehouse plus the column catalog for the web
@@ -633,6 +637,16 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
     }
 });
 
+// GET /api/coverage - every known data-quality notice, for automated
+// consumers that pull rows elsewhere and need to know which days are damaged.
+// Public and memo-backed, so it costs no query.
+app.get('/api/coverage', (req, res) => {
+    const day = req.query.date ? _dtime(req.query.date).slice(0, 10) : null;
+    res.json(day
+        ? { date: day, ...coverageFor(day) }
+        : { notices: activeNotices() });
+});
+
 // GET /api/hotpicks - over 2.5 hot-pick accuracy windows + upcoming hot list.
 // Memoized like /api/columns: it is a full scan of the prediction ledger, was
 // unauthenticated and uncached, and a modest concurrent flood could therefore
@@ -661,7 +675,7 @@ const _slipTeaser = s => s && ({
     date: s.date, status: s.status, mood: s.mood, legs_total: s.legs_total,
     legs_hit: s.legs_hit, cards_total: s.cards_total, cards_won: s.cards_won,
     combined_odds: s.combined_odds, outcome: s.outcome,
-    backfilled: s.backfilled, teaser: true, auth_required: true,
+    backfilled: s.backfilled, coverage: s.coverage, teaser: true, auth_required: true,
 });
 
 app.get('/api/daily-slip', optionalAuth, async (req, res, next) => {
@@ -1134,6 +1148,41 @@ app.get('/api/admin/sms/job', requireAdminRole, (req, res) => {
     res.json(campaignJobStatus());
 });
 
+// Data notices (admin). Session-only plus csrfOk, the UsersSection idiom.
+// Approving a proposal only removes the UNCONFIRMED hedge; it never changes
+// what the notice says. Dismissing hides it permanently, and the span unique
+// index stops the detector re-raising it.
+//
+// NOTE: server.js does NOT import zod (verified: no `from 'zod'` line in the
+// file). The two request schemas therefore live in src/notices.js and ride
+// the import added above, exactly as userPatchSchema lives in
+// src/db/admin-rules.js rather than in the route file.
+
+app.get('/api/admin/notices', requireAdminRole, async (req, res, next) => {
+    try {
+        res.json({ notices: await listNotices({ limit: req.query.limit }) });
+    } catch (e) { next(e); }
+});
+
+app.patch('/api/admin/notices/:id', requireAdminRole, express.json({ limit: '4kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const { status } = noticeStatusSchema.parse(req.body ?? {});
+        res.json({ ok: true, notice: await setNoticeStatus(req.params.id, status, req.user?.id ?? null) });
+    } catch (e) {
+        if (e?.status === 404) return res.status(404).json({ error: e.message });
+        authErr(e, res, next);
+    }
+});
+
+app.post('/api/admin/notices', requireAdminRole, express.json({ limit: '4kb' }), async (req, res, next) => {
+    if (!csrfOk(req, res)) return;
+    try {
+        const body = noticeCreateSchema.parse(req.body ?? {});
+        res.json({ ok: true, notice: await createNotice(body, req.user?.id ?? null) });
+    } catch (e) { authErr(e, res, next); }
+});
+
 // Single-slot refresh job state lives in src/auto-refresh.js - one shared
 // guard for manual AND scheduled runs: parallel refreshes would deadlock on
 // InnoDB delete+insert gap locks (same rule as `_batch` DB-writing
@@ -1301,6 +1350,9 @@ app.get('/api/refresh', (req, res) => res.json({
     warehouse_version: warehouseVersion(),
     maintenance: maintenanceNow(),
     build: deployedBuildId(),
+    // The whole active list, so the web ribbon needs no extra fetch: the app
+    // already polls this endpoint every 60s.
+    notices: activeNotices(),
 }));
 
 // Legacy admin dashboard URL -> the SPA admin area (M5, spec decision 14).

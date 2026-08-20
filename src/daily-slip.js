@@ -26,6 +26,7 @@ import { tipMarketLabel } from './db/magic-rules.js';
 import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
+import { coverageFor } from './notices.js';
 
 export const ALGO_VERSION = 'v2.1-hunter-2026-08-08';   // gen-2 ladder + value-hunt singles (DEFAULT_GEN2 + DEFAULT_HUNT)
 
@@ -460,6 +461,7 @@ const _rowOut = r => ({
     outcome: r.outcome,
     algo_version: r.algo_version,
     backfilled: !!r.backfilled,
+    coverage: coverageFor(r.day),
     computed_at: r.computed_at,
     settled_at: r.settled_at,
 });

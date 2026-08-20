@@ -4,6 +4,8 @@ import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
 import { redactRecordForRole, stripDetails } from './access-rules.js';
 import { getMeta } from '../meta.js';
+import { coverageFor } from '../notices.js';
+import { _dtime } from '../utils.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -355,6 +357,13 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         page,
         per_page: unpaged ? data.length : per_page,
         pages: unpaged ? 1 : Math.max(1, Math.ceil(Number(total) / per_page)),
+        // Data-quality tag for humans and machines alike. Synchronous memo
+        // read (src/notices.js), so this costs no query. `date: null` is the
+        // all-dates view, which has no single day to judge.
+        // `_dtime` is the project's EAT normalizer. Do not reach for
+        // `new Date(date).toISOString()`: on a Date input that reports the
+        // UTC day, which is the previous day for any EAT time before 03:00.
+        coverage: date ? coverageFor(_dtime(date).slice(0, 10)) : { status: 'ok', confirmed: true, notices: [] },
         ...(unpaged && Number(total) > MAX_UNPAGED ? { truncated: true, limit: MAX_UNPAGED } : {}),
     };
 }
