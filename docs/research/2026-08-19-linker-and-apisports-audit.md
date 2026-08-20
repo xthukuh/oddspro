@@ -57,57 +57,168 @@ statistics and lineups parsers (a bad record for one team discarded the other
 team's valid data) and the history/predictions batch bodies (no per-fixture
 guard, unlike `fetchApisportsStats`) got the same treatment.
 
+### F2 - Home/away orientation is never re-validated  (HIGH, PROVEN, FIXED - CORRECTED mechanism)
+
+The audit's original diagnosis was wrong about what these 13 rows are. They are
+**not bad links.** On every one, both bookmakers agree with each other and
+disagree with the fixture, and the cached `team_aliases` are correct and would
+not have matched the reversed pairing - the link was made correctly. What
+actually happened: `home_team_id`/`away_team_id` are in the fixtures upsert
+merge list, and API-Football SWAPPED the fixture's sides SOME TIME AFTER the
+link was written, with nothing re-checking afterwards. Neutral-venue ties and
+friendlies are where it happens.
+
+The damage is real and user-visible, because the read layer pairs the
+BOOKMAKER's team names with the CANONICAL score: fixture `1548857` rendered as
+"FC Annecy - FC Sion 4-0" for a game Sion won 4-0 (straight-pairing similarity
+0.00, flipped 1.00). Nothing downstream is affected - tips settle from the
+fixture directly, and the goals-sum sort is symmetric - so this was purely a
+display lie.
+
+Because it is a display problem, the fix stays out of the write path entirely.
+`matches.sides_swapped` (migration `20260820000001_matches_sides_swapped`)
+records the reversal; `src/db/records.js` swaps the score it renders so names
+and score always tell the same story. The settle SQL - the most failure-prone
+statement in the codebase, and the cause of the 2026-08-16 outage - is
+untouched, and the stored score columns stay in the canonical fixture's
+orientation.
+
+`revalidateOrientation()` (`src/link.js`) maintains the flag on every link pass
+over a bounded 30-day window (the shared host punishes unbounded scans, and
+sides flip around kickoff, not years later), guarded so it can never fail a pass
+that correlated matches successfully. Pure `orientationVerdict`/
+`orientationUpdate` (`src/db/link-rules.js`) decide: `'unknown'` when the two
+pairings are too close to call, and then the stored flag is LEFT ALONE rather
+than guessed, because short abbreviated names ("Nottingham v Guimaraes")
+legitimately score low both ways. `orientationUpdate` also returns `null` for
+rows that did not move, so a pass over every recent link does not rewrite them
+all and bump the `updated_at` the web shows as the odds refresh time.
+
+`scripts/repair-orientation.js` runs the same pass unbounded for links
+predating the flag. **Applied to local AND production 2026-08-19/20: 18,024
+links checked, exactly 13 flagged (the same 13 rows the audit found), zero
+false positives, second run clean on both.**
+
+### F4 - Subset containment scores 0.9  (MEASURED AND REFUTED, NOT a bug - do not rebuild)
+
+This is the important correction: **F4 is not fixed, it is refuted.** The
+proposed veto was implemented and measured against all 18,022 live links before
+being wired in, and it cannot ship - keeping this write-up so nobody rebuilds
+it.
+
+The mechanism the audit described is real: `_tokenSim` returns
+`max(dice, 0.9 * overlap)`, so any strict token subset ("Arsenal Women" in
+"Arsenal", "Bayern Munich II" in "Bayern Munich") scores exactly 0.9, clearing
+the 0.85 floor with no competition evidence at all. But a hard veto on that
+signal rejects far more than it catches:
+
+```
+exact-tag veto on team names ............. rejects 958 links (5.3%)
+women-only, team OR competition evidence . rejects 57
+additionally on development/senior ....... rejects a further 994
+```
+
+Nearly all of those are CORRECT links, because the two sources put the
+qualifier in different FIELDS and tag it inconsistently:
+
+- the bookmaker puts it in the competition ("Liga Femenina", "U20 NSW NPL") and
+  leaves the team name bare, while API-Football puts it in the team name
+  ("Manly Utd U20", "Washington Spirit W");
+- API-Football is not even self-consistent: it tags one side of the fixture
+  "VIFK W v IF Gnistan" and not the other;
+- whole women's leagues carry no marker at all (Damallsvenskan, WK-League);
+- a bare "w" token is not a marker - "Springvale W. E." is White Eagles and
+  "Havant & W" is Waterlooville;
+- a bare "2" token is not a reserve marker - it rejected an exact 1.00 name
+  match because the league is called "China League 2".
+
+Against that, the target error the veto was meant to catch is **one row in
+18,022** (betika "North Lakes United v Caboolture FC", Queensland Premier
+League 1 Women, linked to the men's "Broadbeach United v Caboolture"), and it
+happened because API-Football did not carry that women's league for the date,
+so the men's fixture won the candidate pool uncontested - a candidate-SCOPING
+failure (see F7 below), not a name-similarity failure. A name veto is the wrong
+instrument for it.
+
+This is the third time the codebase has recorded that a veto underperforms a
+bonus here - competition similarity stays a bonus, never a veto, and v1's AI
+contradiction vetoes were net-negative for the same reason. Full evidence and
+the refutation rationale live next to `aliasWorthCaching` in
+`src/db/link-rules.js`.
+
+### F3 - Alias fast-path teaching bar  (HIGH, PROVEN, PARTIALLY FIXED - deliberately)
+
+Alias teaching now needs a strictly higher bar than linking. A confident link
+teaches `team_aliases`/`league_aliases`, and that entry then short-circuits the
+scorer for every future fixture of those teams - there is no DELETE, no UPDATE,
+no override and no expiry anywhere in the repo, and `scripts/lib/sync-rules.js`
+classes both tables `canonical`, so a bad entry replicates between local and
+live and is permanent. The poisoning vector is a link accepted at the very edge
+of the gate: `LINK_MIN_CONFIDENCE` (0.85) plus a 0.05 runner-up margin is enough
+to LINK, and that was also enough to teach a permanent rule.
+
+`aliasWorthCaching(conf, runnerUp, threshold)` (`src/db/link-rules.js`) requires
+the confidence to clear the linking floor by 0.05 AND the runner-up margin by
+0.15; withheld links are counted in the pass log (`alias_withheld`).
+`scripts/forget-alias.js` is the missing escape hatch (search, dry-run,
+per-provider, `--yes`), and deleting an alias is safe by construction because it
+removes only a shortcut - the next pass re-derives the correlation by scoring.
+
+**Deliberately NOT done:** the audit also proposed re-scoring the alias fast
+path and rejecting it below ~0.5. That would break the aliases that matter
+most - a club rename ("Zhenis Nur Sultan" -> "Zhenys", "Lisen Brno" -> "Artis")
+scores near zero by name, which is exactly why the alias exists, and the
+audit's own sweep found 314 such entries below 0.60. Reasoning recorded in
+`link-rules.js` next to the rule.
+
+### A4/A5/A6 - API-Football write-path + timezone hardening  (PROVEN, FIXED)
+
+- **A4** `buildEventRows` still lacked true per-item isolation: the 2026-07 fix
+  made `type` nullable, tolerating the one shape then observed, but any other
+  malformation still discarded every event for the fixture. Now the
+  `buildStandingRows` treatment: skip, collect, report, never throw.
+- **A5** the statistics, lineups, events, predictions and standings writes all
+  called `db.transaction` bare, so a transient deadlock against a concurrent
+  writer was not retried - only `_saveFixtureItems` was. All five now use the
+  same `withRetry` idiom (default `isRetryableDbError`).
+- **A6** the `STATS_GIVEUP_HOURS` threshold did `new Date(f.kickoff)` on a raw
+  `DATETIME` column, which mysql2 decodes in the NODE process's timezone rather
+  than the pinned +03:00 session, skewing the 48h give-up on any non-EAT host.
+  Now a `TIMESTAMPDIFF` computed in the session, per `enrich.js`'s
+  `KICKOFF_SQL_EXPR` precedent.
+
+### Betika list-page pager - silent truncation the audit itself misdiagnosed  (NEW, PROVEN, FIXED)
+
+Not one of the original 14 findings - found while fixing the BetPawa "no
+results is not a malformed page" false alarm (BetPawa signals empty by
+OMITTING the inner `responses[0].responses` key rather than returning `[]`;
+`listPageOutcome`/`listPageDone`, `src/db/collector-rules.js`, now classify
+`ok`/`empty`/`malformed` by envelope shape so a genuine "nothing left to
+collect" no longer fires a malformed-page alarm every 15 minutes).
+
+While fixing that, this audit's own "verified clean" note on Betika turned out
+to be wrong: it stated Betika's pager "already threw by construction." It does
+not. `fetchBetikaGames` read each page as
+`Array.isArray(data.data) ? data.data : []`, so any body it could not read
+collapsed to an EMPTY page - and because the walk terminates on
+`len < limit`, a degraded 200 on page 3 of 10 returned the first two pages as
+if they were the complete day. That is the exact silent-truncation class that
+cost three days of irreplaceable BetPawa odds on 2026-08-16, sitting unfixed in
+the other provider the whole time this audit ran.
+
+Probed the live API: a page past the end answers HTTP 200 with a REAL
+`data: []`, so unlike BetPawa there is no empty-vs-omitted ambiguity to resolve
+for Betika - an empty array is genuinely usable and simply ends the walk. Pure
+`dataPageOutcome` (`src/db/collector-rules.js`) separates that from a body with
+no `data` array at all, which now retries with the same bounded backoff the
+other two clients have and then throws, so `done` can only be computed from a
+page actually read.
+
 ---
 
 ## Open - ranked, not yet fixed
 
 ### Correlator (`src/link.js`)
-
-**F2 - Home/away orientation is never re-validated (HIGH, PROVEN, 13 rows).**
-`home_team_id`/`away_team_id` are in the fixtures merge list, so orientation can
-flip upstream after linking; nothing re-checks. Worse, betika's `alt` scoring arm
-compares against the already-linked betpawa row rather than against the fixture,
-so once betpawa is reversed betika scores 1.0 and the error is laundered into a
-maximally confident link. Evidence: `FC Annecy v FC Sion` linked to fixture
-`FC Sion v Annecy` (straight 0.00 / flipped 1.00). The settle pass then writes
-the score backwards onto that row.
-*Fix:* reject when `flip - straight > 0.30`; make `alt` a bonus that can never
-reach 1.0 on its own; re-validate linked-but-uncompleted rows each pass.
-
-**F4 - Subset containment scores 0.9, collapsing reserve/women/youth sides onto
-the senior side (HIGH, PROVEN mechanism; 2,246 subset links, 1 confirmed
-cross-team error).** `_tokenSim` returns `max(dice, 0.9 * overlap)`, so any
-strict token subset (`Arsenal Women` in `Arsenal`, `Bayern Munich II` in `Bayern
-Munich`) scores exactly 0.9 on both sides = a 0.9 average, clearing the 0.85
-floor with no competition evidence at all. The runner-up margin only protects
-when the correct fixture is also in the candidate pool - and when API-Football
-does not carry that women's/youth league for the date, the senior fixture wins
-uncontested. Confirmed error: betika `North Lakes United v Caboolture FC`
-(Queensland Premier League 1 **Women**) linked to fixture `Broadbeach United v
-Caboolture`.
-*Fix:* extract age/gender/reserve markers in `normalizeName` into a qualifier tag
-instead of an ordinary token, and treat a qualifier mismatch as a hard veto - the
-one place a veto is justified, because the difference is categorical, not fuzzy.
-Add a per-side floor (`min(simH, simA) >= 0.6`); the 50/50 average currently lets
-one side be badly wrong.
-
-**F3 - Alias fast-path bypasses the confidence gate, is irreversible, and poisons
-within the same pass (HIGH, PROVEN structurally).** An exact alias hit links with
-NO score computed and NO threshold applied. Aliases are written for every
-accepted link, including one accepted at exactly the floor, and are mutated into
-the in-memory map immediately - so a marginal fuzzy link on row 5 short-circuits
-the scorer for rows 6..N of the same pass, no rerun needed. `(provider,
-alias_name)` is unique with `.onConflict().ignore()`, so the first mapping ever
-written wins permanently. There is **no DELETE, UPDATE, override or expiry for
-either alias table anywhere in the repo**, and `scripts/lib/sync-rules.js` classes
-them `canonical`, so a poisoned alias replicates between local and live. 9,006
-team aliases; 314 score below 0.60 against their team (mostly legitimate club
-renames, which is exactly why a blind cleanup is unsafe); 76 carry an age/gender
-marker the canonical team name lacks.
-*Fix:* cache an alias only well above the linking floor (`conf >= min + 0.05` and
-runner-up margin >= 0.15); keep the fast-path but still require a sanity score
->= 0.5 so a poisoned alias cannot link a fixture the names visibly contradict;
-add a `--forget-alias` path so a bad alias is reversible at all.
 
 **F5 - Virtual competitions are re-scored forever (MEDIUM, PROVEN, quantified).**
 Betika's `-Zoom` / `SRL ` virtual competitions have no real-world counterpart, so
@@ -134,7 +245,11 @@ the write and correct the three docs.
 **F7 - Candidate pool is unscoped and queried per row (N+1).** Filtered on
 kickoff alone, no league/country/season scoping: up to 84 fixtures per row
 measured, with 246 sharing a single kickoff minute at peak. A wide pool is what
-let F4's cross-league error happen.
+let F4's cross-league error happen - and now that F4's own veto is refuted as
+the fix for that error class, **F7 candidate scoping is the leading remaining
+candidate** for closing it: a per-league-scoped pool would have kept the
+uncontested men's fixture from winning that one row without touching any of the
+958-994 legitimately cross-tagged links a name veto would have broken.
 *Fix:* one batched query per pass over the whole start_time range, bucketed by
 minute in memory; then prefilter by league when `leagueAliases` resolves (which
 is what would make F6's table earn its keep).
@@ -148,30 +263,15 @@ with `short.length === 2` before changing anything.
 surfaces as "odds refresh time" in the row tooltip. The collection watchdog is
 already immune (it reads `meta.last_odds_at`).
 
-**Related, found while repairing F1:** 92 links remain where a SINGLE match sits
-more than 60 min from its fixture's kickoff. These are reschedules the bookmaker
-never relisted, so the link itself is right, but the row still displays under a
-stale bookmaker `start_time`. Lower severity than F1 (no wrong score, just the
-wrong date). Candidate fix: refresh `matches.start_time` from `f.kickoff` once
-linked - consistent with the standing "canonical cutoffs" rule that
-bookmaker-provided times go stale after a reschedule.
+**Still open, unrelated to F1-F4/F8: 92 links remain where a SINGLE match sits
+more than 60 min from its fixture's kickoff.** These are reschedules the
+bookmaker never relisted, so the link itself is right, but the row still
+displays under a stale bookmaker `start_time`. Lower severity than F1 (no wrong
+score, just the wrong date). Candidate fix: refresh `matches.start_time` from
+`f.kickoff` once linked - consistent with the standing "canonical cutoffs" rule
+that bookmaker-provided times go stale after a reschedule.
 
 ### API-Football client (`src/apisports.js`)
-
-**A4 - `buildEventRows` still lacks true per-item isolation (PROVEN).** The
-2026-07 fix made `type` nullable, tolerating the one observed shape, but did not
-add the per-item try/catch `buildStandingRows` later got. Any other malformation
-(e.g. a missing `time.elapsed`) still discards every event for that fixture.
-
-**A5 - Five write paths lack the deadlock retry `_saveFixtureItems` has
-(PROVEN).** Stats, lineups, events, predictions and standings all call
-`db.transaction(...)` bare. A transient `ER_LOCK_DEADLOCK` there is not retried.
-
-**A6 - `STATS_GIVEUP_HOURS` uses process-local `Date` math on a raw `f.kickoff`
-column (PROVEN pattern; impact SUSPECTED).** Exactly the class CLAUDE.md
-documents as fixed in `enrich.js` via `KICKOFF_SQL_EXPR`, never applied here.
-Harmless while the host runs EAT, wrong on any other host. Same latent family as
-the `_date()`/`_dtime()` note already in the resume point.
 
 **A7 (SUSPECTED, low)** module-level rate-limit counters are unsynchronised
 across `_batch` calls running at parallel 2, allowing a 1-2 request overshoot
@@ -199,5 +299,5 @@ continue now lets the gate see the resulting empty/partial rows.
   `NS`/`PST` for more than 7 days that is THEN given a new date ages out of the
   pending set first and is never refetched. Worth a one-time warning as a fixture
   crosses out of the window rather than widening it.
-- `buildStandingRows` is the reference hardened parser; A4 should be brought up
-  to it.
+- `buildStandingRows` is the reference hardened parser; A4 was brought up to it
+  this session.

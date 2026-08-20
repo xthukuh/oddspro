@@ -69,6 +69,14 @@ Duplicate link-claim repair (a reschedule left a stale bookmaker listing holding
 back-dating the eventual score): `node scripts/repair-duplicate-claims.js [--yes] [--limit N]`
 keeps, per (provider, fixture), the listing closest to the canonical kickoff and unlinks the
 rest, clearing the scores they inherited; dry-run by default, idempotent.
+Orientation repair (API-Football swapped a fixture's sides after linking, so the bookmaker
+names and the canonical score render backwards): `node scripts/repair-orientation.js [--yes]`
+stamps `matches.sides_swapped` over all history; dry-run by default, idempotent.
+Forget a poisoned alias (a `team_aliases`/`league_aliases` entry is short-circuiting the
+linker onto the wrong team/league): `node scripts/forget-alias.js (--list <term> | --team
+<name> | --league <name>) [--provider p] [--yes]` — `--list` searches both tables, `--team`/
+`--league` delete an exact match (dry-run by default); deleting only removes the shortcut,
+the next link pass re-derives the correlation by scoring.
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
