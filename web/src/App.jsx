@@ -11,6 +11,7 @@ import MaintenanceOverlay from './MaintenanceOverlay.jsx';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
+import { recordsCacheKey, makeLruCache } from './recordsCache.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, sanitizeFilters, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
@@ -158,6 +159,10 @@ function _loadSort() {
 const EMPTY_PROVIDERS = [];
 
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
+
+// One cache for the tab's lifetime. Eight days of parsed rows is the honest
+// ceiling before this costs more memory than it saves in requests.
+const recordsCache = makeLruCache(8);
 
 // Display an ISO date compactly as D/M/YYYY (no leading zeros); tooltip spells
 // it out (noon-anchored to dodge tz day-shift). Native <input type="date">
@@ -660,6 +665,26 @@ export default function App() {
         [orderedProviders, providerKeys],
     );
 
+    // Date bounds and the chevron targets. Declared HERE, above the records
+    // effect, rather than down beside the nav bar that renders them: the
+    // prefetch effect below reads them from its dependency array, which is
+    // evaluated during render, so a later declaration would be a temporal
+    // dead zone error. One definition, used by both the effect and the nav.
+    const TODAY = _today();
+    const DAY_MS = 86400000;
+    const MIN_DATE = '2026-07-05';
+    // Guests browse up to today only (Phase 8) - the server enforces the same
+    // ceiling (403 on future dates), this clamp is just the honest UI. Only
+    // once session hydration settled: a stored sign-in must not flash a
+    // clamped calendar at mount. A premium guest (GUEST_PREMIUM on) is exempt -
+    // the server already opens future dates for them, so clamping here would
+    // just be a UI lie on top of a working request.
+    const guestClamp = !!session?.isGuest && !canFutureDates && session?.status === 'ready';
+    const MAX_DATE = guestClamp ? TODAY : new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
+    // date can be '' (All dates) - anchor the chevrons on today then.
+    const PREV_DATE = new Date(new Date(date || TODAY).setHours(13) - DAY_MS).toISOString().substring(0,10);
+    const NEXT_DATE = new Date(new Date(date || TODAY).setHours(13) + DAY_MS).toISOString().substring(0,10);
+
     // Records whenever the SERVER query shape changes (or a refresh lands
     // new data). Client-only filter edits re-filter locally, never refetch:
     // the effect keys on the serialized server subset, not `filters`.
@@ -689,20 +714,79 @@ export default function App() {
         if (lastQueryRef.current === queryKey) return;
         lastQueryRef.current = queryKey;
         const current = () => lastQueryRef.current === queryKey;
+        // The cache key is the query identity MINUS `refreshTick`: that counter
+        // bumps on every background auto-refresh, so including it would mint a
+        // new slot every few minutes and nothing would ever hit.
+        const cacheKey = recordsCacheKey({
+            date: date || 'all',
+            filtersKey: serverFiltersKey,
+            completed: showCompleted,
+            providers: reqProviders,
+            token: session?.token ?? '',
+        });
+        // Paint from cache first. A revisited date must never show the loading
+        // dim: we still revalidate below, and the server answers 304 with an
+        // empty body when nothing moved, so correctness costs one small round
+        // trip rather than a visible stall. Revalidating EVERY hit (rather than
+        // trusting a past date) is deliberate - `revalidateOrientation` in
+        // src/link.js can flip a fixture's sides inside a rolling 30-day
+        // window, and the settle pass re-polls 7 days back.
+        const cached = recordsCache.get(cacheKey);
+        if (cached) {
+            setResult(cached);
+            setError(null);
+            setSignInNeeded(false);
+        }
         // Silent background reloads (auto-refresh landed new data) skip the
-        // loading dim - the table just updates in place.
-        if (!silentRef.current) setLoading(true);
+        // loading dim - the table just updates in place. So does a cache hit.
+        if (!silentRef.current && !cached) setLoading(true);
         fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
-            .then(res => { if (current()) { setResult(res); setError(null); setSignInNeeded(false); } })
+            .then(res => {
+                recordsCache.set(cacheKey, res);
+                if (current()) { setResult(res); setError(null); setSignInNeeded(false); }
+            })
             .catch(e => {
                 if (!current()) return;
+                const authNeeded = e?.status === 403 && e?.body?.auth_required;
+                // A failed revalidation of data we are already showing must not
+                // replace the table with an error. Keep the cached view.
+                if (cached && !authNeeded) return;
                 // Guest hit the future-date ceiling: swap the table for the
                 // sign-in panel, not the transient error banner.
-                if (e?.status === 403 && e?.body?.auth_required) { setResult(null); setSignInNeeded(true); }
+                if (authNeeded) { setResult(null); setSignInNeeded(true); recordsCache.delete(cacheKey); }
                 else setError(String(e.message ?? e));
             })
             .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
     }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, maintActive]);
+
+    // Quietly warm the neighbouring days so the first chevron click is instant
+    // too, not just the second visit. Strictly best effort: a prefetch failure
+    // is swallowed whole, never surfaces a banner, and never touches table
+    // state. Bounded by the same limits the chevrons themselves enforce, so a
+    // guest can never trigger a future-date 403 here.
+    useEffect(() => {
+        if (!date || loading || maintActive) return;
+        let cancelled = false;
+        const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
+        const warm = day => {
+            if (cancelled || !day || day < MIN_DATE || day > MAX_DATE) return;
+            const key = recordsCacheKey({
+                date: day,
+                filtersKey: serverFiltersKey,
+                completed: showCompleted,
+                providers: reqProviders,
+                token: session?.token ?? '',
+            });
+            if (recordsCache.has(key)) return;
+            fetchRecords({ date: day, filters: serverFilters, completed: showCompleted, providers: reqProviders })
+                .then(res => { if (!cancelled) recordsCache.set(key, res); })
+                .catch(() => {});
+        };
+        // One tick after paint, so warming never competes with the day the user
+        // is actually looking at.
+        const id = setTimeout(() => { warm(PREV_DATE); warm(NEXT_DATE); }, 400);
+        return () => { cancelled = true; clearTimeout(id); };
+    }, [date, loading, maintActive, serverFiltersKey, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, PREV_DATE, NEXT_DATE, MIN_DATE, MAX_DATE]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).
     // A new error resets the timer; clearing on unmount avoids a stray setState.
@@ -1142,21 +1226,6 @@ export default function App() {
         onTogglePrioritize: () => savePrioritizeSelected(!prioritizeSelected),
         onExportCsv: exportSelection,
     };
-
-    const TODAY = _today();
-    const DAY_MS = 86400000;
-    const MIN_DATE = '2026-07-05';
-    // Guests browse up to today only (Phase 8) - the server enforces the same
-    // ceiling (403 on future dates), this clamp is just the honest UI. Only
-    // once session hydration settled: a stored sign-in must not flash a
-    // clamped calendar at mount. A premium guest (GUEST_PREMIUM on) is exempt -
-    // the server already opens future dates for them, so clamping here would
-    // just be a UI lie on top of a working request.
-    const guestClamp = !!session?.isGuest && !canFutureDates && session?.status === 'ready';
-    const MAX_DATE = guestClamp ? TODAY : new Date(new Date().setHours(13) + DAY_MS * 7).toISOString().substring(0,10);
-    // date can be '' (All dates) - anchor the chevrons on today then.
-    const PREV_DATE = new Date(new Date(date || TODAY).setHours(13) - DAY_MS).toISOString().substring(0,10);
-    const NEXT_DATE = new Date(new Date(date || TODAY).setHours(13) + DAY_MS).toISOString().substring(0,10);
 
     const navBtn = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-label hover:bg-accent-soft disabled:opacity-40 disabled:hover:bg-transparent';
     const navBtnActive = 'cursor-pointer h-10 w-10 inline-flex items-center justify-center rounded-[10px] text-accent bg-accent-soft';
