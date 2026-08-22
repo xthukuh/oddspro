@@ -2,15 +2,15 @@
 
 > Command/action sequences only. The WHY lives in `docs/engine/` (system bible); per-file
 > architecture in `CLAUDE.md`; verified ops playbooks in `docs/agents/toolset.md`.
-> **Commands or routines changed? Update this file in the SAME commit** — full triggers
+> **Commands or routines changed? Update this file in the SAME commit** - full triggers
 > table: `docs/engine/00-README.md`.
 
 ## 1. Development
 
 ### 1.1 Prerequisites
 
-- Node **20+** (prose requirement — no `engines` field by design; lockfiles gitignored).
-- Docker with a MariaDB/MySQL container on host **:3306** — must pre-exist and is
+- Node **20+** (prose requirement - no `engines` field by design; lockfiles gitignored).
+- Docker with a MariaDB/MySQL container on host **:3306** - must pre-exist and is
   auto-detected (no compose file or canonical container name in the repo; pass
   `--container <name>` to scripts when detection fails).
 - Windows/PowerShell 5.1 quirks (no `&&`, BOM traps): `docs/agents/toolset.md` §2.
@@ -40,7 +40,7 @@ Semantics authority: `CLAUDE.md` `## Commands` (names duplicated here, annotatio
 | `cd web && npm run dev` | frontend dev server :5173 |
 | `npm test` | offline node:test suite (< 2s, no DB/APIs) |
 | `npm run migrate` / `migrate:make <name>` | apply / scaffold migrations |
-| `npm run package:deploy` | release zips — see §2.2 |
+| `npm run package:deploy` | release zips - see §2.2 |
 
 `node src/index.js <action> [date]` (idempotent; `[date]` defaults today):
 
@@ -74,7 +74,7 @@ names and the canonical score render backwards): `node scripts/repair-orientatio
 stamps `matches.sides_swapped` over all history; dry-run by default, idempotent.
 Forget a poisoned alias (a `team_aliases`/`league_aliases` entry is short-circuiting the
 linker onto the wrong team/league): `node scripts/forget-alias.js (--list <term> | --team
-<name> | --league <name>) [--provider p] [--yes]` — `--list` searches both tables, `--team`/
+<name> | --league <name>) [--provider p] [--yes]` - `--list` searches both tables, `--team`/
 `--league` delete an exact match (dry-run by default); deleting only removes the shortcut,
 the next link pass re-derives the correlation by scoring.
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
@@ -89,7 +89,7 @@ Legacy v1 evolution: `node scripts/evolve-daily-slip.js --db oddspro`
 new champion ONLY when it wins train AND does not lose the test tail, then bump
 ALGO_VERSION + re-run the backfill).
 
-### 1.4 Dev routines — in this order
+### 1.4 Dev routines - in this order
 
 1. **After pulling backend changes:** restart `npm run serve` (a stale process holds :3001
    with old code).
@@ -101,11 +101,11 @@ ALGO_VERSION + re-run the backfill).
    `data_version` bump (light pass) or the `REFRESH_CACHE_MINUTES` window; restart serve to
    drop the in-memory response memo.
 
-### 1.5 Dev health checks — in this order
+### 1.5 Dev health checks - in this order
 
-1. `npm test` — trust the live count, not doc snapshots.
-2. `GET http://127.0.0.1:3001/api/refresh` — `data_version` + `last_success` freshness.
-3. Tail `logs/auto-refresh.log` — recent `light ok` lines.
+1. `npm test` - trust the live count, not doc snapshots.
+2. `GET http://127.0.0.1:3001/api/refresh` - `data_version` + `last_success` freshness, and the `warm` block: last pass should be recent with `failed: 0` (the warm keeper precomputes records/columns/hotpicks/performance so no visitor pays a cold compute).
+3. Tail `logs/auto-refresh.log` - recent `light ok` lines; console shows `[warm] <reason> pass: N/N computed`.
 4. No `./.HALT` file present.
 
 ## 2. Production
@@ -113,9 +113,9 @@ ALGO_VERSION + re-run the backfill).
 ### 2.1 Prerequisites
 
 On `main` only; versions bumped in **both** `package.json` + `web/package.json` (lockstep);
-cPanel access. Deep guide: `docs/DEPLOYMENT.md` §2–3 (one-time host setup lives there).
+cPanel access. Deep guide: `docs/DEPLOYMENT.md` §2-3 (one-time host setup lives there).
 
-### 2.2 Release build — in this order
+### 2.2 Release build - in this order
 
 ```sh
 # 1. bump version: package.json + web/package.json (user decision)
@@ -140,7 +140,7 @@ env-audit compares the live .env against code defaults so trims are safe: REDUND
 change nothing and can go; a DIFFERS line is load-bearing (the 2026-07-26 lesson: a
 "clean" .env silently dropped LINK_MIN_CONFIDENCE=0.8 and made the linker stricter).
 
-### 2.3 Production config — `.env` vs Admin → Settings
+### 2.3 Production config - `.env` vs Admin → Settings
 
 **Precedence: `settings` table (Admin → Settings) → `.env` → code defaults.** 82 of the 121 config keys are admin-editable and audited in `admin_audit`; only the other 39 (credentials, endpoints, pre-DB boot infra) belong in `.env`. `.env.example` is the authoritative template of what stays. Full split + trim runbook: `docs/DEPLOYMENT.md` §9.
 
@@ -159,13 +159,13 @@ change nothing and can go; a DIFFERS line is load-bearing (the 2026-07-26 lesson
 
 | Knob | Group |
 |---|---|
-| `AUTO_FULL_AT` (EAT), `AUTO_LIGHT_MINUTES` — refresh cadence | `refresh` (both restart-required) |
-| `SMS_ENABLED=1` — required for real sign-ups (off = codes log server-side) | `sms` |
-| `DEBUG=0` — shared-host posture | `logging` |
-| AI caps/models (`TIP_AI_DAILY_CAP`, `AI_ENRICH_CAP`, `OPENROUTER_MODEL`, …) | `ai`, `ai-dark` |
-| Bot protection (opt-in) — `docs/DEPLOYMENT.md` §8 | `bot` |
+| `AUTO_FULL_AT` (EAT), `AUTO_LIGHT_MINUTES` - refresh cadence | `refresh` (both restart-required) |
+| `SMS_ENABLED=1` - required for real sign-ups (off = codes log server-side) | `sms` |
+| `DEBUG=0` - shared-host posture | `logging` |
+| AI caps/models (`TIP_AI_DAILY_CAP`, `AI_ENRICH_CAP`, `OPENROUTER_MODEL`, ...) | `ai`, `ai-dark` |
+| Bot protection (opt-in) - `docs/DEPLOYMENT.md` §8 | `bot` |
 
-### 2.4 Deploy — in this order (detail: `docs/DEPLOYMENT.md` §4–5)
+### 2.4 Deploy - in this order (detail: `docs/DEPLOYMENT.md` §4-5)
 
 **Automated over SSH (v1.4.0+, the default; config `.env.deploy`, prod env `.env.server`):**
 
@@ -190,15 +190,15 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 **Manual fallback (File Manager):**
 
 1. Upload + extract app zip → Application Root; web zip → `public_html`.
-2. cPanel **Run NPM Install** — only if dependencies changed.
+2. cPanel **Run NPM Install** - only if dependencies changed.
 3. **Restart** (with `MIGRATE_ON_BOOT=1` this applies any new migration first).
 4. Smoke test (§2.5).
 
-### 2.5 Post-deploy smoke test — in this order
+### 2.5 Post-deploy smoke test - in this order
 
-1. `GET /api/refresh` — fresh `data_version` / `last_success`.
-2. `GET /api/columns` — catalog loads fast (an index regression shows here first).
-3. `GET /api/visits/daily-unique` — public counter answers.
+1. `GET /api/refresh` - fresh `data_version` / `last_success`, and `warm.last` recent with `failed: 0` (each instance precomputes its own memo, so check per instance if diagnosing slowness).
+2. `GET /api/columns` - catalog loads fast (an index regression shows here first).
+3. `GET /api/visits/daily-unique` - public counter answers.
 4. `GET /api/coverage` - data-notice status answers (public, memo-backed, costs no query).
 5. `logs/auto-refresh.log` gains `light ok` lines (proves the process stays resident).
 6. Web page title shows the new version.
@@ -207,21 +207,21 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 
 | Routine | Command / action |
 |---|---|
-| Daily sweep | in-process (serve); optional cron backup ≥ 1h from `AUTO_FULL_AT` — Windows task `oddspro-pipeline` 08:00 / `scripts/pipeline-cron.sh` |
+| Daily sweep | in-process (serve); optional cron backup ≥ 1h from `AUTO_FULL_AT` - Windows task `oddspro-pipeline` 08:00 / `scripts/pipeline-cron.sh` |
 | Cron-only host | run `node src/index.js aireview` after each sweep (else AI verdicts stop) |
 | Stalled-collection watchdog | cron every ~15 min: `node scripts/collection-watchdog.js`, flags stalled odds collection (`WATCHDOG_STALE_MINUTES`/`WATCHDOG_QUIET_STALE_MINUTES`), touches `tmp/restart.txt` to recycle Passenger, SMS-alerts the admin after `WATCHDOG_ALERT_AFTER` consecutive stale runs. Never exits non-zero; log in `logs/watchdog.log` |
-| Emergency stop | create `.HALT` in the app root — running serve exits ≤ ~30s, boot refused; delete to resume |
+| Emergency stop | create `.HALT` in the app root - running serve exits ≤ ~30s, boot refused; delete to resume |
 | Scheduled maintenance window | Admin → Dashboard "Maintenance" card (or Admin → Settings group `maintenance`): toggle + EAT start/end + message. Guests: banner pre-window, full-screen notice + API 503 during; admins/bearers bypass; auto-expires at end (M14) |
 | User management (rescue a user) | Admin → Users: disable/enable, unlock, manual phone-verify (SMS-failure fallback), force PIN change, Reset PIN → temp PIN shown ONCE (user must change it at next sign-in). Self-disable/demote and last-admin removal are blocked (M8). Self-service alternative: Forgot PIN below (M13) |
 | Forgot PIN (self-service) | Sign-in → "Forgot your PIN?" → code to the phone (falls back to the account's STORED email when SMS delivery verifiably fails) → new PIN + auto sign-in; every prior session is revoked (M13) |
 | Email OTP fallback | Verify / PIN-change / Forgot-PIN codes can go by email when SMS can't deliver. `MAIL_MAILER=log` (default) prints emails to the server console (dev); `smtp` sends via .env `MAIL_*` creds. Admin → Settings group `Email` holds only the switch (M13) |
-| Broadcast an SMS to users | Admin → Messaging: pick audience (filter or a Users-section selection) → live preview shows recipients · segments · **credits** → Send needs typing `SEND` + the previewed count. **Opted-out users are excluded always**, even from a hand-picked selection. `SMS_ENABLED=0` = dry run, no network. A sent campaign is frozen — send the remainder as a NEW campaign, never a re-send (M9) |
-| Campaign send refused 409 "audience grew" | Someone signed up/verified between your preview and confirm, so the send would reach people you never previewed and bill past the estimate. Re-preview and confirm the new count. Shrink (opt-outs/disables) proceeds silently — it stays a subset of what you approved (M9) |
+| Broadcast an SMS to users | Admin → Messaging: pick audience (filter or a Users-section selection) → live preview shows recipients · segments · **credits** → Send needs typing `SEND` + the previewed count. **Opted-out users are excluded always**, even from a hand-picked selection. `SMS_ENABLED=0` = dry run, no network. A sent campaign is frozen - send the remainder as a NEW campaign, never a re-send (M9) |
+| Campaign send refused 409 "audience grew" | Someone signed up/verified between your preview and confirm, so the send would reach people you never previewed and bill past the estimate. Re-preview and confirm the new count. Shrink (opt-outs/disables) proceeds silently - it stays a subset of what you approved (M9) |
 | DB backup | `node scripts/db-export.js [--container <name>]` → `backups/` (**mariadb-dump, never mysqldump**; phpMyAdmin-ready) |
 | DB restore (local) | `node scripts/db-import.js <file.sql.gz> [--container <name>] [--database <name>] --yes` (**OVERWRITES** the target DB; refuses without `--yes`; streams gzip → gunzip → `mariadb`/`mysql` client) |
-| Keep local current with live | `node scripts/db-sync.js status` (side-by-side counts/freshness/migration head) then `pull [--tables a,b] [--since YYYY-MM-DD] [--full] --yes` (**LIVE WINS** — `--full` on a table drops+recreates it wholesale, discarding any row that only exists locally; default window pulls the last 3 days). Aborts on a `knex_migrations` head mismatch unless `--force` — check what changed between the two heads before forcing. Every pulled table also lands a dated copy in `backups/sync/` |
+| Keep local current with live | `node scripts/db-sync.js status` (side-by-side counts/freshness/migration head) then `pull [--tables a,b] [--since YYYY-MM-DD] [--full] --yes` (**LIVE WINS** - `--full` on a table drops+recreates it wholesale, discarding any row that only exists locally; default window pulls the last 3 days). Aborts on a `knex_migrations` head mismatch unless `--force` - check what changed between the two heads before forcing. Every pulled table also lands a dated copy in `backups/sync/` |
 | Backup ANY remote DB | `node scripts/db-sync.js backup --remote-db <name>` → `backups/remote_<name>_<ts>.sql.gz` (works on dead/legacy DBs too, not just the deploy target) |
-| Changed-pepper recovery | `node scripts/reset-users.js --yes` (**DESTRUCTIVE** — wipes all users; dry-run without `--yes`) |
+| Changed-pepper recovery | `node scripts/reset-users.js --yes` (**DESTRUCTIVE** - wipes all users; dry-run without `--yes`) |
 | Rollback | `docs/DEPLOYMENT.md` §5 |
 
 ## 3. Critical warnings & best practices
@@ -233,17 +233,17 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Never edit an applied migration | forward-only; add a new one |
 | Never rotate `PIN_PEPPER` casually | invalidates every stored PIN (deliberate global reset only) |
 | Releases/tags from `main` only | `package:deploy` enforces; versions bump root + web in lockstep |
-| Never move a live generation knob (`TIP_MIN_PRICE`, `SAFE_*`) mid-experiment undated — change it via Admin → Settings so `admin_audit` dates it (M6); a raw `.env` move still needs a dated `docs/memory-bank.md` note | it partitions the measurement ledger (the 2026-07-10 lesson) |
+| Never move a live generation knob (`TIP_MIN_PRICE`, `SAFE_*`) mid-experiment undated - change it via Admin → Settings so `admin_audit` dates it (M6); a raw `.env` move still needs a dated `docs/memory-bank.md` note | it partitions the measurement ledger (the 2026-07-10 lesson) |
 | Never touch `DEFAULT_SAFE` without a fresh `analyze-safe-tips.js` run | the gates are LODO-tuned, not opinions |
-| `DEFAULT_TIP.suppressedMarkets` / `statsVetoGap` ship DISABLED — do not enable without a re-test | both looked strong on the live ledger and REVERSED SIGN under re-derivation; the ledger spans two config regimes (`docs/research/2026-07-26-banker-ladder.md` §7) |
-| The Banker is a SURVIVAL product, never an EV claim — label it that way in every surface | measured -2.7% flat-stake ROI; it wins more often, not more money |
+| `DEFAULT_TIP.suppressedMarkets` / `statsVetoGap` ship DISABLED - do not enable without a re-test | both looked strong on the live ledger and REVERSED SIGN under re-derivation; the ledger spans two config regimes (`docs/research/2026-07-26-banker-ladder.md` §7) |
+| The Banker is a SURVIVAL product, never an EV claim - label it that way in every surface | measured -2.7% flat-stake ROI; it wins more often, not more money |
 | `.env` overrides silently differ from code defaults (`TIP_MIN_PRICE` 1.35 vs 1.2, `TIP_MIN_UNDER_LINE` 3.5 vs 4.5) | any backtest run on code defaults is measuring a DIFFERENT engine than the live one |
-| DARK switches (`AI_INJECTION_PREAMBLE`, `AI_CONSENSUS_*`) need an explicit user go BEFORE flipping; flip them in Admin → Settings (group `ai-dark`) so `admin_audit` dates the change (M6 — replaced the manual memory-bank note) | AI regime changes must be attributable |
+| DARK switches (`AI_INJECTION_PREAMBLE`, `AI_CONSENSUS_*`) need an explicit user go BEFORE flipping; flip them in Admin → Settings (group `ai-dark`) so `admin_audit` dates the change (M6 - replaced the manual memory-bank note) | AI regime changes must be attributable |
 | `scripts/reset-users.js` is DESTRUCTIVE | wipes all users/sessions/prefs |
-| Frozen ledger / fetch-once: never rewrite settled rows or refetch immutable data | the scoreboard is honest by construction — `docs/engine/02-DATA-PIPELINE.md` |
+| Frozen ledger / fetch-once: never rewrite settled rows or refetch immutable data | the scoreboard is honest by construction - `docs/engine/02-DATA-PIPELINE.md` |
 | Odds market identity = `type_name`, never `type_id` | Betika reuses ids across different markets |
 | Secrets live in `.env` only | never in git |
-| **Live host runs three concurrent `lsnode` app instances** — only the `GET_LOCK` lease holder (`isWriter()`, `src/db/lease.js`) schedules/writes; the other two serve reads only | a follower running its own scheduler/AI worker would double-bill and gap-lock-deadlock the same rows it warns about above |
+| **Live host runs three concurrent `lsnode` app instances** - only the `GET_LOCK` lease holder (`isWriter()`, `src/db/lease.js`) schedules/writes; the other two serve reads only | a follower running its own scheduler/AI worker would double-bill and gap-lock-deadlock the same rows it warns about above |
 | `gzip -t` alone is NOT a completeness check on a dump | a shared host killing the remote connection mid-dump still lets `gzip` close its own output cleanly (`scripts/db-sync.js`'s `dumpLooksComplete`) |
 | Never run `node scripts/deploy-remote.js --db` (or `--all --fresh`) against the live host outside a genuine first deploy | it overwrites the warehouse; routine fixes are `--app --web` only (`docs/DEPLOYMENT.md` §4a.1) |
 
@@ -265,10 +265,10 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | Odds / price | decimal payout multiplier; `1/price` = implied probability incl. vig | `glossary.js` |
 | Overround (vig) | `sum(1/price)` over a full market book; tip books accepted only inside [1.01, 1.30] | `src/db/tip-rules.js` `bookIntegrity` |
 | Devig / fair probability | renormalize implied probabilities to sum to 1 | `goals-rules.js` `impliedProbability`, `tip-rules.js` `_devig` |
-| Edge | `confidence × price − 1` — an EV *proxy* for bucketing/ordering, not a profit claim | `magic-rules.js` / `perf-rules.js` |
+| Edge | `confidence × price − 1` - an EV *proxy* for bucketing/ordering, not a profit claim | `magic-rules.js` / `perf-rules.js` |
 | Flat-stake EV / ROI | profit at 1 unit per settled pick; honest overall ≈ **−3%** (no +EV market) | `perf-rules.js`, `docs/research/` |
-| Break-even rate | `1 / avg price` — the hit-rate a price class must beat to profit | `perf-rules.js` |
-| `TIP_MIN_PRICE` | 1.2 generation floor — sub-1.20 "sure things" pay too little to matter | `tip-rules.js` |
+| Break-even rate | `1 / avg price` - the hit-rate a price class must beat to profit | `perf-rules.js` |
+| `TIP_MIN_PRICE` | 1.2 generation floor - sub-1.20 "sure things" pay too little to matter | `tip-rules.js` |
 
 ### Prediction & selection
 
@@ -276,31 +276,31 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 |---|---|---|
 | Canonical fixture | the API-Football record every bookmaker match correlates to (`matches.fixture_id`) | `docs/engine/02-DATA-PIPELINE.md` |
 | Tip | best-supported outcome across 7 families; confidence = 0.6 market + 0.3 stats + 0.1 API | `tip-rules.js`, `docs/engine/04-PREDICTIONS.md` |
-| Banker | safest market the book offers on the fixture, floor `TIP_BANKER_FLOOR` (1.01) — a SEPARATE output from the Tip, not a re-ranking of it. 92.1% hit-rate vs the Tip's 66-71%, still -EV | `ladder-rules.js`, `docs/research/2026-07-26-banker-ladder.md` |
+| Banker | safest market the book offers on the fixture, floor `TIP_BANKER_FLOOR` (1.01) - a SEPARATE output from the Tip, not a re-ranking of it. 92.1% hit-rate vs the Tip's 66-71%, still -EV | `ladder-rules.js`, `docs/research/2026-07-26-banker-ladder.md` |
 | Market lattice | `marketRelation(a,b)` -> contradictory / nested / identical / overlapping, derived from `tipOutcome` over every 0-6 scoreline so it cannot drift from settlement | `ladder-rules.js` |
 | Coherent alternatives | displayed runners-up may never contradict the tip (`O 2.5` beside `U 2.5`) nor be a nested rung of it (`O 1.5` beside `O 2.5`) | `ladder-rules.js` |
 | `rung_gap` | tip price minus the safest available price; strongest non-trivial hit/miss discriminator found (-0.20 sd). Persisted in `tip_breakdown` | `ladder-rules.js` |
-| Hot pick 🔥 | binary Over-2.5 flag — all 9 gates passed; precision over recall | `goals-rules.js`, `docs/engine/04-PREDICTIONS.md` |
+| Hot pick 🔥 | binary Over-2.5 flag - all 9 gates passed; precision over recall | `goals-rules.js`, `docs/engine/04-PREDICTIONS.md` |
 | Fairness pairing | both teams judged over the SAME window length, capped at the smaller side | `goals-rules.js` |
-| Freeze at kickoff | `kickoff > NOW()` selection — past rows are never selected, hence never rewritten | `docs/engine/02-DATA-PIPELINE.md` |
+| Freeze at kickoff | `kickoff > NOW()` selection - past rows are never selected, hence never rewritten | `docs/engine/02-DATA-PIPELINE.md` |
 | hit / miss / void | settled outcomes; void = DNB draw push (stake returned, excluded from rates) | `tip-rules.js` `tipOutcome` |
 | Blend / parts | the components present in a tip's confidence (market/stats/api) | `tip-rules.js` |
 | `safePrior` | market's live hit-rate beta-shrunk (k=20) toward its `WAREHOUSE_WLO` anchor | `magic-rules.js` |
-| `sure` (strategy) | default sort = `safePrior × confidence` — win probability, NOT profit | `magic-rules.js`, `docs/engine/05-RANKING.md` |
-| Sure bets ⭐ | top-10/day list, Safe-gated but ranked by `estimateLegProb` — **not** the `sure` strategy | `magic-rules.js`, `docs/engine/05-RANKING.md` |
+| `sure` (strategy) | default sort = `safePrior × confidence` - win probability, NOT profit | `magic-rules.js`, `docs/engine/05-RANKING.md` |
+| Sure bets ⭐ | top-10/day list, Safe-gated but ranked by `estimateLegProb` - **not** the `sure` strategy | `magic-rules.js`, `docs/engine/05-RANKING.md` |
 | Safe pool 🛡 | `safeQualifies` gates (parts/agreement/price/stats/maturity) + top-3/day | `magic-rules.js` |
-| `estimateLegProb` | `bucketPosterior ?? confidence`, clamped [0.05, 0.98] — the slip survival number | `magic-rules.js` |
-| Unbettable | pattern-mine class: real statistical lift priced below 1.20 — lift you cannot buy | `mine-rules.js` |
+| `estimateLegProb` | `bucketPosterior ?? confidence`, clamped [0.05, 0.98] - the slip survival number | `magic-rules.js` |
+| Unbettable | pattern-mine class: real statistical lift priced below 1.20 - lift you cannot buy | `mine-rules.js` |
 
 ### Statistics & measurement
 
 | Term | Meaning (mechanism) | Source |
 |---|---|---|
-| LODO | leave-one-day-out replay — day D is scored with calibration built without D | `magic-rules.js` `simulateStrategies` |
-| Temporal OOS | train on older days, test on the newest — no future leakage | `mine-rules.js`, backtest scripts |
-| Beta shrinkage | `(hits + k·prior) / (n + k)` — thin buckets pulled toward the prior | `magic-rules.js` |
+| LODO | leave-one-day-out replay - day D is scored with calibration built without D | `magic-rules.js` `simulateStrategies` |
+| Temporal OOS | train on older days, test on the newest - no future leakage | `mine-rules.js`, backtest scripts |
+| Beta shrinkage | `(hits + k·prior) / (n + k)` - thin buckets pulled toward the prior | `magic-rules.js` |
 | BH-FDR | Benjamini-Hochberg false-discovery control across pattern hypotheses | `mine-rules.js` |
-| Day-clustered CI | bootstrap resamples DAYS, not rows — same-day tips are correlated | `mine-rules.js` |
+| Day-clustered CI | bootstrap resamples DAYS, not rows - same-day tips are correlated | `mine-rules.js` |
 | Brier | mean squared error of stated probabilities (AI calibration health) | `scripts/ai-scorecard.js` |
 | edge / booster / refuted / underpowered | pattern-verdict vocabulary (closed class); booster = real lift, no profit; edge = clears break-even at real prices (**never found**) | `mine-rules.js` |
 | Policy regime | the config epoch a measurement ran under; a mid-window knob move splits the ledger | `scripts/mine-patterns.js` warning |
@@ -317,12 +317,12 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | Stale odds | vanished market kept flagged with its last-seen price (it IS the historical price) | `src/db/odds-diff.js` |
 | `coverage.status` | `ok`/`degraded`/`outage` for a date, worst active notice wins; served on `/api/records`, `/api/refresh`, `/api/daily-slip/timeline`, `/api/coverage` | `src/db/notice-rules.js` `coveragePayload` |
 | `UNCONFIRMED` prefix | an auto-detected, not-yet-approved notice; shown from the moment it is proposed, dropped on approval, never changes the notice text | `src/db/notice-rules.js` `noticeLabel` |
-| Alias | learned provider→canonical team/league name mapping — the linking fast-path | `src/link.js` |
+| Alias | learned provider→canonical team/league name mapping - the linking fast-path | `src/link.js` |
 | DARK switch | shipped-but-off AI regime knob; flipping needs an explicit go, dated by `admin_audit` (M6) | `AGENTS.md` |
 | Model tag (`#pN`) | model+grounding+prompt-version identity keying AI-verdict reuse | `src/ai/adjudicators.js` |
-| `AiGuardOpen` | the AI run guard tripped (wall-clock budget / breaker) — remaining calls refuse instantly | `src/ai/harness.js` |
+| `AiGuardOpen` | the AI run guard tripped (wall-clock budget / breaker) - remaining calls refuse instantly | `src/ai/harness.js` |
 | `.HALT` | kill-switch file: presence stops a running serve and blocks boot | `src/halt.js` |
-| EAT day | Africa/Nairobi calendar day (+03:00 pinned in the SQL session) — daily caps and schedules key on it | `knexfile.js` |
+| EAT day | Africa/Nairobi calendar day (+03:00 pinned in the SQL session) - daily caps and schedules key on it | `knexfile.js` |
 | Gap lock | InnoDB range lock behind the single-writer rule | `toolset.md` §3.2 |
 | `PIN_PEPPER` | server-wide scrypt secret; set before first migrate, never rotate | `src/auth-rules.js` |
-| `MIGRATE_ON_BOOT` | serve self-migrates before listening — the no-SSH host migration path | `src/server.js` |
+| `MIGRATE_ON_BOOT` | serve self-migrates before listening - the no-SSH host migration path | `src/server.js` |
