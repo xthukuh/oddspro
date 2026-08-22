@@ -24,6 +24,10 @@
 const DEVICE_EXACT = new Set([
     'oddspro.session', 'oddspro.human', 'oddspro.prefs.sync',
     'oddspro.maintenance', 'oddspro.visitor',
+    // The persisted records-cache seed (recordsPersist.js): multi-MB response
+    // bodies are device-local cache, not preferences - syncing one would blow
+    // the prefs contract and upload another device's stale table.
+    'oddspro.recordsCache',
 ]);
 const DEVICE_PREFIXES = ['oddspro.select.d.'];
 

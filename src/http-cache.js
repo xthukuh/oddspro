@@ -59,29 +59,37 @@ async function writeResponse(req, res, data) {
 // bump invalidates every entry at once without an explicit clear.
 export function makeJsonCache({ max = 12, ttlMs = 10 * 60_000, version = () => 0 } = {}) {
     const store = new Map();
-    const fresh = (key, loader) => {
+    const fresh = (key, loader, maxMs = ttlMs) => {
         const ver = version();
         let entry = lruGet(store, key);
-        if (!entryFresh(entry, ver, Date.now(), ttlMs)) {
+        let computed = false;
+        if (!entryFresh(entry, ver, Date.now(), Math.min(ttlMs, maxMs))) {
             entry = buildEntry(ver, loader);
+            computed = true;
             // A failed compute must not poison the slot - drop it so the
             // next request retries (same idiom as magicSortCached).
             entry.data.catch(() => { if (lruGet(store, key) === entry) store.delete(key); });
             lruSet(store, key, entry, max);
         }
-        return entry;
+        return { entry, computed };
     };
     return {
         async send(req, res, key, loader) {
-            return writeResponse(req, res, await fresh(key, loader).data);
+            return writeResponse(req, res, await fresh(key, loader).entry.data);
         },
-        // A5 pre-warm: compute a slot ahead of demand (after a data_version
-        // bump / at boot) so the first USER request is a memo hit, not the
-        // cold compute. Same freshness contract as send; a same-version warm
-        // is a no-op. App-update cache busting is inherent: the memo lives
-        // in-process (a deploy restart clears it) and ETags hash the body.
-        async warm(key, loader) {
-            await fresh(key, loader).data;
+        // Pre-warm (A5 / the warm keeper): compute a slot ahead of demand so
+        // the first USER request is a memo hit, not the cold compute. Same
+        // freshness contract as send; a same-version young warm is a no-op.
+        // `maxAgeMs` tightens the age bar below the TTL: the warm keeper
+        // passes its own cadence so an entry is REBUILT before the TTL could
+        // ever expire it cold (and so out-of-process writers that never bump
+        // the version are bounded to maxAgeMs of staleness, not ttlMs).
+        // App-update cache busting is inherent: the memo lives in-process (a
+        // deploy restart clears it) and ETags hash the body.
+        async warm(key, loader, { maxAgeMs = ttlMs } = {}) {
+            const { entry, computed } = fresh(key, loader, maxAgeMs);
+            await entry.data;
+            return { computed };
         },
         clear: () => store.clear(),
     };

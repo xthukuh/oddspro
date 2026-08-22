@@ -19,6 +19,9 @@ test('isDeviceKey: per-device state, exact keys + prefixes only', () => {
     // visitors.anon_id, silently conflating the unique/repeat-visitor metrics
     // the tracking exists to produce.
     assert.equal(isDeviceKey('oddspro.visitor'), true);
+    // Persisted records-cache seed (recordsPersist.js): multi-MB device-local
+    // cache bodies, never a syncable preference.
+    assert.equal(isDeviceKey('oddspro.recordsCache'), true);
     assert.equal(isDeviceKey('oddspro.theme'), false);
     assert.equal(isDeviceKey('oddspro.sort'), false);
     assert.equal(isDeviceKey('oddspro.session.other'), false); // exact keys stay exact

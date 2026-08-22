@@ -241,6 +241,16 @@ const EnvSchema = z.object({
     COLLECTION_GAP_MINUTES: z.coerce.number().int().min(5).default(90),
     // Rows older than this are pruned from collection_runs. 0 = keep forever.
     COLLECTION_RUNS_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+    // Warm keeper (src/warm.js, runs inside `npm run serve` on every
+    // instance): precomputes the heavy read payloads (records for
+    // yesterday..today+ahead per reachable tier, columns, hotpicks,
+    // performance, the magic-sort day memo) the moment warehouse_version
+    // moves, plus an age-based re-warm so the response memo can never expire
+    // cold. Visitors always land on a warm, current cache slot.
+    WARM_ENABLED: boolStr('1'),
+    WARM_DATES_BACK: z.coerce.number().int().min(0).default(1),   // days behind today to keep hot
+    WARM_DATES_AHEAD: z.coerce.number().int().min(0).default(2),  // days ahead of today to keep hot
+    WARM_MAX_AGE_MINUTES: z.coerce.number().min(1).default(5),    // forced re-warm cadence; keep under the 10-min memo TTL
     // Per-job log lines in logs/auto-refresh.log (self-truncating - the host
     // has no log rotation and tight disk quotas).
     AUTO_LOG: boolStr('1'),

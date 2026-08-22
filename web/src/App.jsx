@@ -12,6 +12,7 @@ import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { recordsCacheKey, makeLruCache } from './recordsCache.js';
+import { hydrateRecordsCache, persistRecordsCache } from './recordsPersist.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, sanitizeFilters, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
@@ -163,6 +164,11 @@ const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0
 // One cache for the tab's lifetime. Eight days of parsed rows is the honest
 // ceiling before this costs more memory than it saves in requests.
 const recordsCache = makeLruCache(8);
+// Seed from the previous visit (localStorage, best-effort) so a fresh tab
+// paints the table instantly instead of showing the loading spinner. Safe on
+// freshness: every cache hit still revalidates against the server below, and
+// the server's warm keeper answers current data in milliseconds.
+hydrateRecordsCache(recordsCache);
 
 // Display an ISO date compactly as D/M/YYYY (no leading zeros); tooltip spells
 // it out (noon-anchored to dodge tz day-shift). Native <input type="date">
@@ -743,6 +749,7 @@ export default function App() {
         fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
             .then(res => {
                 recordsCache.set(cacheKey, res);
+                persistRecordsCache(recordsCache, cacheKey, { primary: true });
                 if (current()) { setResult(res); setError(null); setSignInNeeded(false); }
             })
             .catch(e => {
@@ -753,7 +760,7 @@ export default function App() {
                 if (cached && !authNeeded) return;
                 // Guest hit the future-date ceiling: swap the table for the
                 // sign-in panel, not the transient error banner.
-                if (authNeeded) { setResult(null); setSignInNeeded(true); recordsCache.delete(cacheKey); }
+                if (authNeeded) { setResult(null); setSignInNeeded(true); recordsCache.delete(cacheKey); persistRecordsCache(recordsCache); }
                 else setError(String(e.message ?? e));
             })
             .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
@@ -779,7 +786,7 @@ export default function App() {
             });
             if (recordsCache.has(key)) return;
             fetchRecords({ date: day, filters: serverFilters, completed: showCompleted, providers: reqProviders })
-                .then(res => { if (!cancelled) recordsCache.set(key, res); })
+                .then(res => { if (!cancelled) { recordsCache.set(key, res); persistRecordsCache(recordsCache, key); } })
                 .catch(() => {});
         };
         // One tick after paint, so warming never competes with the day the user

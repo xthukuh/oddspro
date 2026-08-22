@@ -3,7 +3,8 @@ import compression from 'compression';
 import { existsSync, createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
-import { queryRecords, columnCatalog, columnCatalogFromMeta } from './db/records.js';
+import { queryRecords, columnCatalogFromMeta } from './db/records.js';
+import { startWarmKeeper, stopWarmKeeper, warmStatus } from './warm.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { dailySlipPayload, dailyTimelinePayload } from './daily-slip.js';
 import { featureAllowed } from './db/feature-rules.js';
@@ -516,8 +517,11 @@ function _json(value, fallback) {
 // the belt for out-of-process writers. Repeated hits skip queryRecords /
 // columnCatalog entirely and reuse the serialized+gzipped body; a matching
 // If-None-Match answers 304 with no body at all.
+// max 24: the warm keeper (src/warm.js) holds up to ~11 slots hot (columns +
+// records dates x tiers + hotpicks + performance); the rest is headroom for
+// filtered/paged user variants so demand traffic can't evict the warmed set.
 const apiCache = makeJsonCache({
-    max: 12, ttlMs: 10 * 60_000,
+    max: 24, ttlMs: 10 * 60_000,
     version: () => warehouseVersion(),
 });
 
@@ -533,44 +537,16 @@ app.get('/api/columns', async (req, res, next) => {
     }
 });
 
-// A5 pre-warm: the column catalog is identical for every user but costs ~2s
-// cold (market discovery over odds_markets), and the memo invalidates on
-// every data_version bump - without this, that recompute lands on the first
-// user after each refresh. A 30s tick keeps the slot warm (the freshness
-// contract makes same-version-within-TTL warms free); app-update busting is
-// inherent (in-process memo dies on the deploy restart, ETags hash the
-// body). Per-DATE payloads (/api/records) deliberately stay demand-computed:
-// availability varies by date and tier, so those entries are keyed per
-// (date, tier, version) and warming every combination would be waste.
-//
-// Multi-instance: only the writer runs the odds_markets scan (auto-refresh.js
-// persists it to shared meta on every ok completion, throttled). A follower
-// serves that persisted catalog instead - `?? columnCatalog()` is only the
-// fallback for the (unlikely) case meta is still empty, e.g. right after a
-// migration on a host that has never run the writer's ok path yet.
-let catalogWarmTimer = null;
-function startCatalogWarm() {
-    if (catalogWarmTimer) return;
-    const warm = () => {
-        const load = isWriter() ? () => columnCatalog() : () => columnCatalogFromMeta();
-        apiCache.warm('/api/columns', load)
-            .catch(e => console.warn(`[warm] /api/columns failed: ${e?.message ?? e}`));
-        // magic-sort's whole-ledger strategy replay is the most expensive
-        // compute in the app (~25s local, worse on the shared host) and its
-        // memo is per-EAT-day - without this warm the first visitor after
-        // every process recycle or day-roll eats that stall. magicSortCached
-        // is a no-op while today's slot is warm.
-        magicSortCached().catch(e => console.warn(`[warm] magic-sort failed: ${e?.message ?? e}`));
-    };
-    catalogWarmTimer = setInterval(warm, 30_000);
-    catalogWarmTimer.unref?.();
-    warm(); // boot: pay the cold computes now, not on the first user request
-}
-function stopCatalogWarm() {
-    if (!catalogWarmTimer) return;
-    clearInterval(catalogWarmTimer);
-    catalogWarmTimer = null;
-}
+// Pre-warming moved to the warm keeper (src/warm.js): version-driven passes
+// keep /api/columns, /api/records (yesterday..today+ahead per reachable
+// tier), /api/hotpicks, /api/performance and the magic-sort day memo hot in
+// THIS process, so no visitor ever wakes a cold compute. It replaced the old
+// 30s catalog-only tick here - records payloads used to stay demand-computed
+// and went cold on every warehouse_version bump, which put the recompute
+// stall on the first human after each refresh. Multi-instance note stands:
+// only the writer runs the odds_markets scan (auto-refresh.js persists it to
+// shared meta on every ok completion, throttled); a follower's keeper warms
+// from that persisted catalog instead (columnCatalogFromMeta).
 
 // Premium policy options for the feature registry (src/db/feature-rules.js).
 // Read live on every call so an Admin -> Settings flip takes effect without a
@@ -612,8 +588,8 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         const tier = access && !access.fullDetail ? 'guest' : (slimDetails && access ? 'slim' : 'full');
         // Key on the params that actually CHANGE the body, not on req.query
         // wholesale: spreading the raw query let `?nonce=1,2,3...` mint endless
-        // distinct keys, each forcing a cold compute and evicting the 12-slot
-        // LRU (including the warmed column catalog). Anything not listed here
+        // distinct keys, each forcing a cold compute and evicting the bounded
+        // LRU (including the keeper-warmed slots). Anything not listed here
         // is ignored by queryRecords, so it must not shard the cache either.
         const key = queryCacheKey('/api/records', {
             date: day, tier, page, per_page, sort, filters, completed, providers, markets,
@@ -1350,6 +1326,10 @@ app.get('/api/refresh', (req, res) => res.json({
     warehouse_version: warehouseVersion(),
     maintenance: maintenanceNow(),
     build: deployedBuildId(),
+    // Warm-keeper health (src/warm.js): last pass reason/timings/failures.
+    // Rides the poll the web already runs, so the keeper is observable from
+    // any browser or curl without a new route.
+    warm: warmStatus(),
     // The whole active list, so the web ribbon needs no extra fetch: the app
     // already polls this endpoint every 60s.
     notices: activeNotices(),
@@ -1479,7 +1459,7 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
-            startCatalogWarm();
+            startWarmKeeper({ cache: apiCache });
             startHaltWatch(() => shutdown('halt-file'));
         });
     } catch (err) {
@@ -1502,7 +1482,7 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
-    stopCatalogWarm();
+    stopWarmKeeper();
     stopHaltWatch();
     stopMetaPoll();
     // Async (releases the pinned GET_LOCK connection) - fired without

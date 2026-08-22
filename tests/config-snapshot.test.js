@@ -78,6 +78,7 @@ test('isTransient excludes per-date selections and the prefs-sync cursor', () =>
     // Device identity, not configuration: exporting it puts a tracking id in a
     // shareable file and importing one clones another device's visitor identity.
     assert.equal(isTransient('oddspro.visitor'), true);
+    assert.equal(isTransient('oddspro.recordsCache'), true);     // persisted cache seed, not config
     assert.equal(isTransient('oddspro.theme'), false);
     assert.equal(isTransient('oddspro.selection'), false);          // prefix must match fully
 });

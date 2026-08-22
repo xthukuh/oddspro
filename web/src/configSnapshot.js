@@ -21,7 +21,10 @@ export const isTransient = key => key.startsWith('oddspro.select.d.') || key ===
     // The anonymous analytics id: device identity, not configuration. Exporting
     // it puts a tracking identifier in a shareable file, and importing one
     // clones another device's visitor identity into this browser.
-    || key === 'oddspro.visitor';
+    || key === 'oddspro.visitor'
+    // The persisted records-cache seed (recordsPersist.js): multi-MB cached
+    // response bodies are device-local data, not configuration.
+    || key === 'oddspro.recordsCache';
 // Per-device credentials (the session + human-verification tokens) are
 // secrets, not preferences: they must never leave the device in an export,
 // and an import must neither install another device's tokens nor wipe this

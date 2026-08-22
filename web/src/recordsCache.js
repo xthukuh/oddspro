@@ -49,5 +49,70 @@ export function makeLruCache(max = 8) {
         delete: k => m.delete(k),
         clear: () => m.clear(),
         size: () => m.size,
+        // Insertion-order snapshot (oldest -> newest) for the persistence
+        // layer. Read-only: does not touch recency.
+        entries: () => [...m.entries()].map(([key, value]) => ({ key, value })),
     };
+}
+
+// ---- localStorage persistence (pure pack/unpack; DOM glue in
+// recordsPersist.js). A brand-new visit (fresh tab, next day) starts with an
+// empty in-memory LRU, so the table showed the loading spinner even though
+// the same body sat in yesterday's tab. Persisting the newest few entries
+// lets the next visit paint instantly from the seed; correctness is
+// unchanged because App.jsx ALWAYS revalidates a cache hit against the
+// server (whose warm keeper answers in milliseconds / 304), so a stale seed
+// self-corrects silently within the first round trip.
+
+export const PERSIST_KEY = 'oddspro.recordsCache';
+// Bump when the /api/records payload shape changes incompatibly - a seed
+// written by an older deploy is then discarded instead of rendered.
+export const PERSIST_FORMAT = 1;
+
+// Move the entry the user is actually VIEWING to the front of the pack
+// order. Without this, the neighbour-day prefetch (which lands AFTER the main
+// fetch) is the "newest" entry, and on a busy day one body alone nearly fills
+// the char budget - so the seed persisted the neighbour and dropped the very
+// day the next visit will load. Total: an absent/unknown key is a no-op.
+export function prioritizeEntries(entries, primaryKey) {
+    const list = Array.isArray(entries) ? entries : [];
+    if (!primaryKey) return list;
+    const head = list.filter(e => e && e.key === primaryKey);
+    return head.length ? [...head, ...list.filter(e => !head.includes(e))] : list;
+}
+
+// Envelope from entries listed NEWEST FIRST (run prioritizeEntries first so
+// the viewed day leads). Budgeted: localStorage quota is ~5M UTF-16 chars per
+// origin, so at most `maxEntries` bodies within `maxChars` total - a busy
+// Saturday's full-day body alone measures ~4.5M chars, hence the near-quota
+// default; an entry that would blow the remaining budget is skipped rather
+// than allowed to crowd out an earlier (higher-priority) one. The glue layer
+// (recordsPersist.js) falls back to packing the viewed day alone, then to
+// clearing the key, when setItem still hits the quota.
+export function packRecordsCache(entries, { nowMs = 0, maxEntries = 3, maxChars = 4_600_000 } = {}) {
+    const out = [];
+    let used = 0;
+    for (const e of Array.isArray(entries) ? entries : []) {
+        if (!e || typeof e.key !== 'string' || e.value == null) continue;
+        if (out.length >= maxEntries) break;
+        let size;
+        try { size = JSON.stringify(e.value)?.length; } catch { continue; }
+        if (!Number.isFinite(size) || used + size > maxChars) continue;
+        used += size;
+        out.push({ k: e.key, at: Number(e.at) || nowMs, value: e.value });
+    }
+    return { v: PERSIST_FORMAT, at: nowMs, entries: out };
+}
+
+// Total: any malformed/foreign-format envelope yields []. Entries older than
+// maxAgeMs are dropped (odds that old should load fresh rather than flash a
+// long-stale table), and the survivors come back OLDEST FIRST so LRU
+// insertion leaves the newest one most-recent.
+export function unpackRecordsCache(envelope, { nowMs = 0, maxAgeMs = 12 * 3_600_000 } = {}) {
+    if (!envelope || envelope.v !== PERSIST_FORMAT || !Array.isArray(envelope.entries)) return [];
+    return envelope.entries
+        .filter(e => e && typeof e.k === 'string' && e.value != null
+            && Number.isFinite(Number(e.at)) && (nowMs - Number(e.at)) <= maxAgeMs)
+        .map(e => ({ key: e.k, at: Number(e.at), value: e.value }))
+        .sort((a, b) => a.at - b.at);
 }
