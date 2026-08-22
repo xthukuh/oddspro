@@ -1,7 +1,7 @@
-# 03 — Linking: bookmaker match ↔ canonical fixture
+# 03 - Linking: bookmaker match ↔ canonical fixture
 
 The problem: BetPawa/Betika spell team and league names their own way (and Betika exposes no
-ids at all), so correlation is fuzzy string matching over normalized names — made cheap over
+ids at all), so correlation is fuzzy string matching over normalized names - made cheap over
 time by learned aliases. All in `src/link.js`.
 
 ## Excluded before scoring: simulated competitions
@@ -45,28 +45,67 @@ nameSimilarity(a, b) = max( bigramDice(a, b),                 // Sorensen-Dice o
                             initialism(a, b) ? 0.9 : 0 )      // "MUFC" vs "Manchester United FC"
 ```
 
-Candidate fixtures are those within **±30 minutes** of the match kickoff. Per candidate:
+Candidate fixtures are those within **±30 minutes** of the match kickoff (see "Candidate pool"
+below for how that set is fetched and narrowed). Per candidate:
 
 ```
 confidence = min(1, 0.5 * simHome + 0.5 * simAway + 0.1 * simCompetition)
 ```
 
-Competition similarity is a corroborating **bonus, never a veto** — bookmakers rename
+Competition similarity is a corroborating **bonus, never a veto** - bookmakers rename
 leagues too aggressively for it to gate.
 
 ```mermaid
 flowchart TD
     M["Bookmaker match (teams, kickoff)"] --> A{Both team names in alias cache?}
     A -- yes --> L1["Link instantly (alias fast-path)"]
-    A -- no --> W["Candidate fixtures within 30 min of kickoff"]
+    A -- no --> W["Candidate fixtures within 30 min of kickoff<br/>(aliased league first, full bucket on fallback)"]
     W --> S["confidence = 0.5*simHome + 0.5*simAway + 0.1*simCompetition"]
     S --> D{"best >= 0.85 AND (best - runnerUp) >= 0.05?"}
     D -- yes --> L2["Link + cache team/league aliases"]
     D -- no --> N["No link (near-miss logged at >= 0.5)"]
 ```
 
-Acceptance needs BOTH the absolute floor and the **0.05 margin over the runner-up** — a
+Acceptance needs BOTH the absolute floor and the **0.05 margin over the runner-up** - a
 high score that two fixtures share is ambiguity, not confidence.
+
+## Candidate pool: batched, then league-scoped
+
+Until 2026-08-23 the pool was one query PER OPEN ROW, filtered on kickoff alone (audit F7).
+Measured on the live warehouse: 438 fixtures inside a single row's +/-30 minute window, 152
+per row on average, and 1,754 round trips for one 2026-08-22 pass across both providers.
+
+Fetching is now batched, and it is a pure mechanical change - the pool a row sees is the same
+set:
+
+- `candidateWindows` turns the pass's open rows into a few bounded kickoff ranges: min/max
+  `start_time` padded by the same +/-30 minute tolerance, split wherever consecutive kickoffs
+  sit more than 180 minutes apart. An overnight lull is never scanned, and one stray row
+  cannot stretch a single range across years - the shared host kills long scans.
+- `bucketByMinute` indexes the result by kickoff minute; `candidatesNear` cuts each row's pool
+  out of it and re-applies the exact millisecond distance, inclusive at both ends, so the
+  in-memory pool is byte-for-byte the set the SQL `BETWEEN` returned. Verified read-only
+  against the per-row SQL on 80 live rows: 80/80 identical.
+
+Selection is then narrowed by league, and this is a behavior change:
+
+- when `league_aliases` resolves the row's competition to a canonical league,
+  `candidateAttempts` scores THAT league's candidates first, and the full time bucket is only
+  reached if the scoped pool produced no acceptable link. Measured: widest pool per row 438 ->
+  35, average 152 -> 25.5, with a league alias resolving on 922 of 1,006 betika rows.
+- **Scoping is a preference, never a veto.** A stale or missing alias costs one extra scoring
+  pass, never a lost link. That asymmetry is the whole design: nothing in the repo ever
+  re-examines a match the linker failed to correlate.
+
+The scorer, the acceptance floor, the runner-up margin, the claim contest and the
+alias-teaching bar are untouched. The pass log gains `candidate_queries`,
+`candidates_loaded`, `candidates_max`, `league_scoped` and `league_fallback`.
+
+This is the intended fix for the audit's cross-league error (F4): the men's fixture won that
+row because it was uncontested in a wide pool, and the name veto proposed for it was measured
+against 18,022 links and refuted - it rejects 57 to 994+ correct links. The fix is honestly
+**partial**: when the correct league carries no fixture at that kickoff the scoped pool is
+empty and the fallback restores the wide pool, so the error class is narrowed, not closed.
 
 ## Tunables & order
 
@@ -74,16 +113,15 @@ high score that two fixtures share is ambiguity, not confidence.
 |---|---|---|
 | `LINK_MIN_CONFIDENCE` | 0.85 | absolute acceptance floor (`.env`-overridable) |
 | `MIN_MARGIN` | 0.05 | required gap to the runner-up (code constant) |
-| Provider order | betpawa → betika | betika (no ids) additionally scores against betpawa matches already linked to a candidate — the richer provider seeds the poorer one |
+| Provider order | betpawa → betika | betika (no ids) additionally scores against betpawa matches already linked to a candidate - the richer provider seeds the poorer one |
 
 Confident links cache `team_aliases` per provider; the alias fast-path (both team names known)
 skips scoring entirely, so correlation gets faster and more accurate as data grows.
-`league_aliases` is also written on a confident link, but it is **write-only**: it is read only
-to skip a redundant INSERT, never to score, scope or short-circuit a match (open finding F6,
-`docs/research/2026-08-19-linker-and-apisports-audit.md` - either the table starts earning its
-keep as the scoping signal the wide, unscoped candidate pool currently lacks, or the write is
-removed). Inspect failures by running `node src/index.js link` and reading the near-miss
-log lines.
+`league_aliases` is also written on a confident link and, since 2026-08-23, is finally READ:
+it picks the league-scoped candidate pool a row is scored against first (see "Candidate pool"
+above). That closes audit finding F6, which had the table write-only - read only to skip a
+redundant INSERT, never to score, scope or short-circuit a match. Inspect failures by running
+`node src/index.js link` and reading the near-miss log lines.
 
 ## Claim contest (one match per provider)
 

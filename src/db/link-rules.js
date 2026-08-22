@@ -185,3 +185,130 @@ export function aliasWorthCaching(conf, runnerUp, threshold) {
     if (!Number.isFinite(c) || !Number.isFinite(t)) return false;
     return c >= t + ALIAS_CONFIDENCE_BONUS && (c - r) >= ALIAS_MIN_MARGIN;
 }
+
+// --- Candidate pool (audit finding F7) ---------------------------------------
+//
+// The pool used to be one query PER OPEN ROW, filtered on kickoff alone: up to
+// 84 fixtures per row measured, 246 sharing a single kickoff minute at peak,
+// and one round trip each. Two things replace it, and they are separable:
+//
+//   1. BATCHING - one query per contiguous kickoff window of the whole pass,
+//      bucketed by kickoff minute in memory. Pure mechanics, identical output.
+//   2. LEAGUE SCOPING - when `league_aliases` resolves the row's competition to
+//      a canonical league, that league's candidates are scored FIRST, and the
+//      full time bucket is only reached when the scoped pool produced no link.
+//      This is what finally makes F6's write-only alias table earn its keep,
+//      and it is the intended answer to F4's cross-league error: the men's
+//      fixture won that row because it was uncontested in a wide pool, and a
+//      NAME veto was measured against 18,022 links and refuted as the fix (see
+//      the F4 note above - it rejects 57 to 994+ correct links).
+//
+// Scoping is a PREFERENCE, never a veto: a wrong or missing alias costs one
+// extra scoring pass, never a lost link. That asymmetry is deliberate, because
+// nothing in the repo re-examines a match the linker failed to correlate.
+
+// The tolerance around a bookmaker start_time, in minutes. This MUST stay equal
+// to the window `src/link.js` used to express as SQL `BETWEEN ? - INTERVAL 30
+// MINUTE AND ? + INTERVAL 30 MINUTE`, or the batched pool is not the same pool.
+export const CANDIDATE_WINDOW_MINUTES = 30;
+
+// A gap between consecutive kickoffs wider than this starts a NEW query window.
+// The open set spans several days (overnight gaps of 8h+ are normal, and one
+// stray row could otherwise stretch a single range across years), and the live
+// host kills long scans - so a handful of tight ranges beats one wide one.
+export const CANDIDATE_WINDOW_MAX_GAP_MINUTES = 180;
+
+const MIN_MS = 60000;
+
+// Bounded kickoff ranges covering every start_time in the pass.
+//
+//   startTimes - the open rows' start_time values (Date, ISO string or null)
+//
+// Returns `[{ from: Date, to: Date }]`, ascending, each padded by the tolerance
+// on both ends. Total: unparseable and missing values are dropped, an empty
+// input answers `[]` (the caller then issues no query at all).
+export function candidateWindows(startTimes, {
+    toleranceMinutes = CANDIDATE_WINDOW_MINUTES,
+    maxGapMinutes = CANDIDATE_WINDOW_MAX_GAP_MINUTES,
+} = {}) {
+    const times = (Array.isArray(startTimes) ? startTimes : [])
+        .map(_ms).filter(t => t != null).sort((a, b) => a - b);
+    if (!times.length) return [];
+    const tol = Math.max(0, Number(toleranceMinutes) || 0) * MIN_MS;
+    const gap = Math.max(0, Number(maxGapMinutes) || 0) * MIN_MS;
+    const out = [];
+    let start = times[0], prev = times[0];
+    for (const t of times.slice(1)) {
+        if (t - prev > gap) {
+            out.push({ from: new Date(start - tol), to: new Date(prev + tol) });
+            start = t;
+        }
+        prev = t;
+    }
+    out.push({ from: new Date(start - tol), to: new Date(prev + tol) });
+    return out;
+}
+
+// Index candidate fixtures by the MINUTE their kickoff falls in, so a row's
+// pool is 61 map lookups instead of a query. A row with no usable kickoff is
+// dropped: it could never have satisfied the SQL BETWEEN either.
+export function bucketByMinute(candidates, key = 'kickoff') {
+    const m = new Map();
+    for (const c of Array.isArray(candidates) ? candidates : []) {
+        const t = _ms(c?.[key]);
+        if (t == null) continue;
+        const bucket = Math.floor(t / MIN_MS);
+        const list = m.get(bucket);
+        if (list) list.push(c); else m.set(bucket, [c]);
+    }
+    return m;
+}
+
+// The candidates within +/- tolerance of one row's start_time.
+//
+// Buckets are minute-granular, so the bucket sweep is deliberately widened by
+// one minute at each end and then filtered on the exact millisecond distance -
+// otherwise a candidate up to 59s outside the window would join the pool and
+// the batched path would stop being the same pool the SQL BETWEEN returned.
+// The distance test is `<=`, matching BETWEEN's inclusive bounds.
+//
+// Order is ascending by kickoff minute, insertion order inside a minute, so a
+// pass over the same data always scores candidates in the same sequence.
+export function candidatesNear(buckets, startTime, toleranceMinutes = CANDIDATE_WINDOW_MINUTES, key = 'kickoff') {
+    const t = _ms(startTime);
+    if (t == null || !(buckets instanceof Map) || !buckets.size) return [];
+    const tol = Math.max(0, Number(toleranceMinutes) || 0) * MIN_MS;
+    const first = Math.floor((t - tol) / MIN_MS), last = Math.floor((t + tol) / MIN_MS);
+    const out = [];
+    for (let b = first; b <= last; b++) {
+        const list = buckets.get(b);
+        if (!list) continue;
+        for (const c of list) {
+            const k = _ms(c?.[key]);
+            if (k != null && Math.abs(k - t) <= tol) out.push(c);
+        }
+    }
+    return out;
+}
+
+// How should this row's pool be scored - league-scoped first, or straight at
+// the full time bucket?
+//
+//   candidates - the row's time-bucket pool
+//   leagueId   - what `league_aliases` resolved the row's competition to, if
+//                anything (null when the alias is unknown)
+//
+// Returns the attempts to make IN ORDER: `[{scope:'league', rows}, {scope:'all',
+// rows}]` when scoping actually narrows the pool, `[{scope:'all', rows}]`
+// otherwise, `[]` when there is nothing to score. The scoped attempt is skipped
+// when it would be empty (an empty pool cannot produce a link, so trying it is
+// pure waste) or when it equals the full pool (nothing to narrow).
+export function candidateAttempts(candidates, leagueId) {
+    const rows = Array.isArray(candidates) ? candidates : [];
+    if (!rows.length) return [];
+    const all = { scope: 'all', rows };
+    if (leagueId == null) return [all];
+    const scoped = rows.filter(c => c?.league_id === leagueId);
+    if (!scoped.length || scoped.length === rows.length) return [all];
+    return [{ scope: 'league', rows: scoped }, all];
+}

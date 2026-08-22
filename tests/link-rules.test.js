@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
     claimVerdict, claimDriftMinutes, claimIsDrifted, CLAIM_DRIFT_MINUTES,
     orientationVerdict, orientationUpdate, ORIENTATION_MARGIN,
+    candidateWindows, bucketByMinute, candidatesNear, candidateAttempts,
+    CANDIDATE_WINDOW_MINUTES, CANDIDATE_WINDOW_MAX_GAP_MINUTES,
 } from '../src/db/link-rules.js';
 
 // The real 2026-08-19 case: fixture 1493561 was rescheduled from 2026-07-05
@@ -116,4 +118,111 @@ test('orientationUpdate writes only rows that actually moved', () => {
     assert.equal(orientationUpdate('straight', 0), null);
     assert.equal(orientationUpdate('unknown', 0), null);        // never guess
     assert.equal(orientationUpdate('unknown', 1), null);        // including leaving one set
+});
+
+// --- Audit F7: batched, bucketed, league-scoped candidate pool ---------------
+
+test('candidateWindows collapses one pass into a few bounded ranges', () => {
+    // One evening slate: a single window, padded by the tolerance on both ends.
+    const w = candidateWindows(['2026-08-22T18:00:00Z', '2026-08-22T19:30:00Z', '2026-08-22T18:45:00Z']);
+    assert.equal(w.length, 1);
+    assert.equal(w[0].from.toISOString(), '2026-08-22T17:30:00.000Z');
+    assert.equal(w[0].to.toISOString(), '2026-08-22T20:00:00.000Z');
+    assert.equal(CANDIDATE_WINDOW_MINUTES, 30);
+});
+
+test('candidateWindows splits on a gap wider than maxGapMinutes', () => {
+    // The overnight gap between two match days must not be scanned: the shared
+    // host punishes long scans, and nothing kicks off inside it.
+    const w = candidateWindows(
+        ['2026-08-22T18:00:00Z', '2026-08-23T13:00:00Z', '2026-08-23T14:00:00Z'],
+        { maxGapMinutes: 180 },
+    );
+    assert.equal(w.length, 2);
+    assert.equal(w[0].from.toISOString(), '2026-08-22T17:30:00.000Z');
+    assert.equal(w[0].to.toISOString(), '2026-08-22T18:30:00.000Z');
+    assert.equal(w[1].from.toISOString(), '2026-08-23T12:30:00.000Z');
+    assert.equal(w[1].to.toISOString(), '2026-08-23T14:30:00.000Z');
+    assert.equal(CANDIDATE_WINDOW_MAX_GAP_MINUTES, 180);
+});
+
+test('candidateWindows is total over unparseable and empty input', () => {
+    assert.deepEqual(candidateWindows([]), []);
+    assert.deepEqual(candidateWindows(null), []);
+    assert.deepEqual(candidateWindows([null, 'not a date', undefined]), []);
+    const w = candidateWindows([null, '2026-08-22T18:00:00Z', 'nope']);
+    assert.equal(w.length, 1);
+    assert.equal(w[0].from.toISOString(), '2026-08-22T17:30:00.000Z');
+});
+
+test('candidateWindows accepts Date objects (what mysql2 hands back)', () => {
+    const w = candidateWindows([new Date('2026-08-22T18:00:00Z')]);
+    assert.equal(w.length, 1);
+    assert.equal(w[0].to.toISOString(), '2026-08-22T18:30:00.000Z');
+});
+
+const FX = [
+    { id: 1, league_id: 10, kickoff: '2026-08-22T18:00:00Z' },
+    { id: 2, league_id: 11, kickoff: '2026-08-22T18:00:30Z' },   // same minute bucket
+    { id: 3, league_id: 10, kickoff: '2026-08-22T18:30:00Z' },   // exactly at +30
+    { id: 4, league_id: 12, kickoff: '2026-08-22T18:30:01Z' },   // one second past
+    { id: 5, league_id: 10, kickoff: '2026-08-22T17:30:00Z' },   // exactly at -30
+    { id: 6, league_id: 10, kickoff: '2026-08-22T19:10:00Z' },   // out
+    { id: 7, league_id: 10, kickoff: null },                     // unusable
+];
+
+test('candidatesNear reproduces the SQL +/-30 minute window exactly', () => {
+    const buckets = bucketByMinute(FX);
+    const got = candidatesNear(buckets, '2026-08-22T18:00:00Z').map(c => c.id);
+    // Bucketing is by minute, so the exact-millisecond filter is what keeps id
+    // 4 (18:30:01) out while id 3 (18:30:00) stays in, inclusive like BETWEEN.
+    assert.deepEqual(got, [5, 1, 2, 3]);
+});
+
+test('candidatesNear returns candidates in ascending kickoff-minute order', () => {
+    const buckets = bucketByMinute(FX);
+    const got = candidatesNear(buckets, '2026-08-22T18:20:00Z').map(c => c.id);
+    assert.deepEqual(got, [1, 2, 3, 4]);
+});
+
+test('candidatesNear is total over a missing or unparseable start time', () => {
+    const buckets = bucketByMinute(FX);
+    assert.deepEqual(candidatesNear(buckets, null), []);
+    assert.deepEqual(candidatesNear(buckets, 'whenever'), []);
+    assert.deepEqual(candidatesNear(new Map(), '2026-08-22T18:00:00Z'), []);
+    assert.deepEqual(candidatesNear(null, '2026-08-22T18:00:00Z'), []);
+});
+
+test('bucketByMinute drops rows with no usable kickoff', () => {
+    const buckets = bucketByMinute(FX);
+    const all = [...buckets.values()].flat().map(c => c.id).sort((a, b) => a - b);
+    assert.deepEqual(all, [1, 2, 3, 4, 5, 6]);
+    assert.deepEqual(bucketByMinute(null), new Map());
+});
+
+test('candidateAttempts scopes to the aliased league first, full pool second', () => {
+    const pool = [FX[0], FX[1], FX[2]];      // leagues 10, 11, 10
+    const a = candidateAttempts(pool, 10);
+    assert.equal(a.length, 2);
+    assert.equal(a[0].scope, 'league');
+    assert.deepEqual(a[0].rows.map(c => c.id), [1, 3]);
+    assert.equal(a[1].scope, 'all');
+    assert.deepEqual(a[1].rows.map(c => c.id), [1, 2, 3]);
+});
+
+test('candidateAttempts skips the scoped pass when it would change nothing', () => {
+    const pool = [FX[0], FX[1]];
+    // No league alias: nothing to scope by.
+    assert.deepEqual(candidateAttempts(pool, null).map(a => a.scope), ['all']);
+    assert.deepEqual(candidateAttempts(pool, undefined).map(a => a.scope), ['all']);
+    // The alias resolves to a league no candidate is in: a scoped pass could
+    // only waste work, since an empty pool can never produce a link.
+    assert.deepEqual(candidateAttempts(pool, 99).map(a => a.scope), ['all']);
+    // Every candidate is already in that league: the scoped pool IS the full one.
+    assert.deepEqual(candidateAttempts([FX[0], FX[2]], 10).map(a => a.scope), ['all']);
+});
+
+test('candidateAttempts is total over an empty pool', () => {
+    assert.deepEqual(candidateAttempts([], 10), []);
+    assert.deepEqual(candidateAttempts(null, 10), []);
 });

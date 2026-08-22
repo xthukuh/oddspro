@@ -1,6 +1,10 @@
 import { db } from './db/connection.js';
 import { effective } from './settings.js';
-import { claimVerdict, orientationVerdict, orientationUpdate, aliasWorthCaching } from './db/link-rules.js';
+import {
+    claimVerdict, orientationVerdict, orientationUpdate, aliasWorthCaching,
+    candidateWindows, bucketByMinute, candidatesNear, candidateAttempts,
+    CANDIDATE_WINDOW_MINUTES,
+} from './db/link-rules.js';
 
 // Correlation order matters: betpawa first (richer identifiers), betika last so
 // it can additionally score against betpawa records already linked to a fixture.
@@ -103,19 +107,58 @@ function _confidence(m, c, alt) {
     return Math.min(1, teamScore + 0.1 * simC);
 }
 
-// Candidate fixtures with kickoff within ±30 min of the match start time
-async function _candidates(start_time) {
+// Candidate fixtures whose kickoff falls inside one bounded window.
+//
+// Audit F7: this used to run once PER OPEN ROW with the +/-30 min tolerance
+// expressed in SQL (`BETWEEN ? - INTERVAL 30 MINUTE AND ...`). It is now called
+// once per contiguous kickoff window of the whole pass - `candidateWindows`
+// applies the same tolerance to the window edges - and the per-row pool is cut
+// out of the result in memory by `candidatesNear`, which re-applies the exact
+// millisecond distance so the pool is byte-for-byte the one the SQL returned.
+async function _candidatesInWindow({ from, to }) {
     return db('fixtures as f')
         .join('teams as th', 'th.id', 'f.home_team_id')
         .join('teams as ta', 'ta.id', 'f.away_team_id')
         .join('leagues as l', 'l.id', 'f.league_id')
-        .whereRaw('f.kickoff BETWEEN ? - INTERVAL 30 MINUTE AND ? + INTERVAL 30 MINUTE', [start_time, start_time])
+        .whereBetween('f.kickoff', [from, to])
         .select(
             'f.id', 'f.league_id', 'f.kickoff',
             'th.id as home_id', 'th.name as home_name',
             'ta.id as away_id', 'ta.name as away_name',
             'l.name as league_name', 'l.country as league_country',
         );
+}
+
+// Score one candidate pool for one match: alias fast path, then fuzzy
+// confidence with the runner-up margin. Returns the hit (or null) plus the
+// best-scoring candidate, which the caller needs for the near-miss log.
+//
+// Unchanged from the pre-F7 inline version except that the pool is now passed
+// in - the SAME scorer, floor and margin run whether the pool is the league
+// slice or the full time bucket. NB the runner-up margin is measured inside the
+// pool being scored, so a league-scoped pass asks "is this unambiguous within
+// the league the bookmaker named", which is the question it should be asking;
+// an ambiguous scoped pass simply falls through to the full bucket.
+function _scorePool(m, candidates, { teamAliases, betpawaByFixture, threshold }) {
+    const ah = teamAliases.get(m.home_team_name), aa = teamAliases.get(m.away_team_name);
+    if (ah && aa) {
+        const hit = candidates.find(c => c.home_id === ah && c.away_id === aa) ?? null;
+        if (hit) return { hit, viaAlias: true, score: null, best: null };
+    }
+    let best = null, second = 0;
+    for (const c of candidates) {
+        const conf = _confidence(m, c, betpawaByFixture.get(c.id));
+        if (!best || conf > best.conf) {
+            second = best?.conf ?? 0;
+            best = { c, conf };
+        } else if (conf > second) {
+            second = conf;
+        }
+    }
+    if (best && best.conf >= threshold && (best.conf - second) >= MIN_MARGIN) {
+        return { hit: best.c, viaAlias: false, score: { conf: best.conf, runnerUp: second }, best };
+    }
+    return { hit: null, viaAlias: false, score: null, best };
 }
 
 // Link one provider's unlinked, uncompleted matches to canonical fixtures.
@@ -138,7 +181,16 @@ async function _linkProvider(provider) {
         .whereNull('completed_at')
         .where('is_virtual', false)
         .select('id', 'start_time', 'home_team_name', 'away_team_name', 'competition_name', 'category_name');
-    const counts = { examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0, claims_replaced: 0, claims_skipped: 0, alias_withheld: 0, errors: 0, virtual_skipped: skipped.length };
+    const counts = {
+        examined: rows.length, alias_linked: 0, fuzzy_linked: 0, unmatched: 0,
+        claims_replaced: 0, claims_skipped: 0, alias_withheld: 0, errors: 0,
+        virtual_skipped: skipped.length,
+        // Audit F7 instrumentation: how many candidate queries the pass cost
+        // (it was one PER ROW), how big the widest per-row pool got, and how
+        // often the league alias narrowed it / failed to carry.
+        candidate_queries: 0, candidates_loaded: 0, candidates_max: 0,
+        league_scoped: 0, league_fallback: 0,
+    };
     // Report the DISTINCT names skipped, not just the count: a false positive
     // orphans a real match silently, and the name is the only thing that would
     // let an operator notice it on the very first pass it happens.
@@ -152,6 +204,21 @@ async function _linkProvider(provider) {
         .select('alias_name', 'team_id')).map(r => [r.alias_name, r.team_id]));
     const leagueAliases = new Map((await db('league_aliases').where('provider', provider)
         .select('alias_name', 'league_id')).map(r => [r.alias_name, r.league_id]));
+
+    // Audit F7: ONE candidate query per contiguous kickoff window of the whole
+    // pass, bucketed by kickoff minute in memory, instead of one query per row.
+    // The windows are bounded by the open rows' own start_time range plus the
+    // tolerance, and split on gaps wider than CANDIDATE_WINDOW_MAX_GAP_MINUTES,
+    // so an overnight lull is never scanned and one stray row cannot stretch
+    // the range across years - the live host kills long scans.
+    const windows = candidateWindows(rows.map(r => r.start_time));
+    const pool = [];
+    // Appended one by one, never spread: a spread of a very large result array
+    // is a call with that many arguments, which blows the stack.
+    for (const w of windows) for (const c of await _candidatesInWindow(w)) pool.push(c);
+    counts.candidate_queries = windows.length;
+    counts.candidates_loaded = pool.length;
+    const buckets = bucketByMinute(pool);
 
     // For betika: names of betpawa matches already linked to fixtures
     let betpawaByFixture = new Map();
@@ -169,42 +236,41 @@ async function _linkProvider(provider) {
         // The pass is idempotent, so skipping one row costs nothing but one
         // cycle: it is simply re-examined next pass.
         try {
-            const candidates = await _candidates(m.start_time);
+            const candidates = candidatesNear(buckets, m.start_time, CANDIDATE_WINDOW_MINUTES);
             if (!candidates.length) {
                 counts.unmatched++;
                 continue;
             }
+            if (candidates.length > counts.candidates_max) counts.candidates_max = candidates.length;
 
-            // 1) alias fast-path: both team names already known
-            let hit = null, viaAlias = false, score = null;
-            const ah = teamAliases.get(m.home_team_name), aa = teamAliases.get(m.away_team_name);
-            if (ah && aa) {
-                hit = candidates.find(c => c.home_id === ah && c.away_id === aa) ?? null;
-                viaAlias = !!hit;
-            }
-
-            // 2) fuzzy confidence scoring with runner-up margin
-            if (!hit) {
-                let best = null, second = 0;
-                for (const c of candidates) {
-                    const conf = _confidence(m, c, betpawaByFixture.get(c.id));
-                    if (!best || conf > best.conf) {
-                        second = best?.conf ?? 0;
-                        best = { c, conf };
-                    } else if (conf > second) {
-                        second = conf;
-                    }
+            // 1+2) alias fast-path then fuzzy scoring, run over the LEAGUE-scoped
+            // pool first when league_aliases resolves this competition (audit F7,
+            // and the answer to F6's write-only table). Scoping is a preference,
+            // never a veto: if the scoped pool yields no acceptable link we score
+            // the full time bucket exactly as before, so a stale or missing alias
+            // costs one extra scoring pass and never a lost link.
+            const comp = m.competition_name || m.category_name;
+            const leagueId = comp ? (leagueAliases.get(comp) ?? null) : null;
+            const threshold = effective('LINK_MIN_CONFIDENCE');
+            let hit = null, viaAlias = false, score = null, best = null, scope = null;
+            for (const attempt of candidateAttempts(candidates, leagueId)) {
+                const r = _scorePool(m, attempt.rows, { teamAliases, betpawaByFixture, threshold });
+                best = r.best;
+                if (r.hit) {
+                    hit = r.hit; viaAlias = r.viaAlias; score = r.score; scope = attempt.scope;
+                    break;
                 }
-                if (best && best.conf >= effective('LINK_MIN_CONFIDENCE') && (best.conf - second) >= MIN_MARGIN) {
-                    hit = best.c;
-                    score = { conf: best.conf, runnerUp: second };
-                } else if (best && best.conf >= 0.5) {
+                if (attempt.scope === 'league') counts.league_fallback++;
+            }
+            if (hit && scope === 'league') counts.league_scoped++;
+
+            if (!hit) {
+                // The near-miss line reports the LAST attempt's best, i.e. the
+                // full pool's - the same candidate the pre-F7 pass reported.
+                if (best && best.conf >= 0.5) {
                     console.debug(`[link] ${provider} near-miss (${best.conf.toFixed(3)}): `
                         + `"${m.home_team_name} v ${m.away_team_name}" ~ "${best.c.home_name} v ${best.c.away_name}"`);
                 }
-            }
-
-            if (!hit) {
                 counts.unmatched++;
                 continue;
             }
@@ -250,7 +316,7 @@ async function _linkProvider(provider) {
             // aliasWorthCaching). An alias-path link teaches nothing new anyway.
             await db('matches').where('id', m.id).update({ fixture_id: hit.id });
             const teach = score != null
-                && aliasWorthCaching(score.conf, score.runnerUp, effective('LINK_MIN_CONFIDENCE'));
+                && aliasWorthCaching(score.conf, score.runnerUp, threshold);
             if (teach) {
                 await db('team_aliases').insert([
                     { team_id: hit.home_id, provider, alias_name: m.home_team_name },
@@ -261,7 +327,6 @@ async function _linkProvider(provider) {
             } else if (score != null) {
                 counts.alias_withheld++;
             }
-            const comp = m.competition_name || m.category_name;
             if (teach && comp && !leagueAliases.has(comp)) {
                 await db('league_aliases').insert({ league_id: hit.league_id, provider, alias_name: comp })
                     .onConflict(['provider', 'alias_name']).ignore();
@@ -344,6 +409,10 @@ export async function linkMatches(provider_ = null) {
         const c = report[provider];
         console.debug(`[link] ${provider}: ${c.examined} examined, ${c.alias_linked} via alias, `
             + `${c.fuzzy_linked} fuzzy-linked, ${c.unmatched} unmatched`
+            + `${c.examined ? `, ${c.candidate_queries} candidate ${c.candidate_queries === 1 ? 'query' : 'queries'}`
+                + ` (${c.candidates_loaded} fixtures, max ${c.candidates_max}/row)` : ''}`
+            + `${c.league_scoped ? `, ${c.league_scoped} league-scoped` : ''}`
+            + `${c.league_fallback ? `, ${c.league_fallback} league fallbacks` : ''}`
             + `${c.claims_replaced ? `, ${c.claims_replaced} reschedule claims replaced` : ''}`
             + `${c.claims_skipped ? `, ${c.claims_skipped} claims skipped` : ''}`
             + `${c.errors ? `, ${c.errors} row errors` : ''}`

@@ -75,3 +75,5 @@ env.replacement.txt
 _attic/
 
 .superpowers/
+.claude/worktrees/
+.claude/launch.json
