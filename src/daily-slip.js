@@ -31,6 +31,7 @@ import { coverageFor } from './notices.js';
 export const ALGO_VERSION = 'v2.1-hunter-2026-08-08';   // gen-2 ladder + value-hunt singles (DEFAULT_GEN2 + DEFAULT_HUNT)
 
 const CALIBRATION_WINDOW_DAYS = 90;
+const SETTLED_WINDOW_CHUNK = 200;   // fixtures per odds_markets fetch in _settledWindow
 // Recency decay (grid round 4, owner's error-feedback directive): identical
 // green rate to the flat calibrator at n=35 days (26/30, streak 8, P&L +0.01u)
 // - adopted for the HEALING property (recent misses outweigh stale history as
@@ -89,11 +90,22 @@ async function _settledWindow(beforeDate, windowDays) {
             'th.name as home_name', 'ta.name as away_name');
     if (!fixtures.length) return { fixtures, menus: new Map() };
     const namesById = new Map(fixtures.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
-    const rows = await db('odds_markets as om')
-        .join('matches as m', 'm.id', 'om.match_id')
-        .whereIn('m.fixture_id', fixtures.map(f => f.id))
-        .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
-    const { menus } = _menusByFixture(rows, namesById);
+    // Chunked on purpose (2026-08-23). A 90-day window is ~10k settled
+    // fixtures and ~7M odds_markets rows; one IN (...) statement over all of
+    // them is killed by the shared live host ("lost connection during query",
+    // the exact error that failed the 2026-08-19 full sweep's daily-slip step)
+    // and, where it does run, holds the whole result in memory at once (1.5 GB
+    // RSS measured live). Per-chunk menus are folded as each chunk arrives, so
+    // the output is identical and the peak is one chunk's rows.
+    const menus = new Map();
+    const ids = fixtures.map(f => f.id);
+    for (let i = 0; i < ids.length; i += SETTLED_WINDOW_CHUNK) {
+        const rows = await db('odds_markets as om')
+            .join('matches as m', 'm.id', 'om.match_id')
+            .whereIn('m.fixture_id', ids.slice(i, i + SETTLED_WINDOW_CHUNK))
+            .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
+        for (const [id, menu] of _menusByFixture(rows, namesById).menus) menus.set(id, menu);
+    }
     return { fixtures, menus };
 }
 
