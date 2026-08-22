@@ -63,7 +63,7 @@ export default function MySlips({ onClose, onLoad }) {
                 </form>
                 {error && <div className="mx-6 mb-2 text-[13px] text-miss">{error}</div>}
                 <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-2">
-                    {!error && slips == null && <div className="px-2 text-sm text-label-3">Loading…</div>}
+                    {!error && slips == null && <div className="px-2 text-sm text-label-3">Loading...</div>}
                     {slips?.length === 0 && <div className="px-2 text-sm text-label-3">Nothing saved yet - build a slip and hit Save.</div>}
                     {slips?.map(s => (
                         <div key={s.id} className="rounded-xl border border-separator px-3.5 py-2.5">

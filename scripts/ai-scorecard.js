@@ -1,4 +1,4 @@
-// AI SCORECARD — per-model-tag health + calibration over the settled ledgers.
+// AI SCORECARD - per-model-tag health + calibration over the settled ledgers.
 // READ-ONLY: no writes, no AI calls, no API-Football calls. Run any time.
 //
 //   node scripts/ai-scorecard.js
@@ -52,8 +52,8 @@ const _power = n => (n < MIN_TEST ? `  [UNDERPOWERED < ${MIN_TEST}]` : '');
 export function formatScorecard(summary) {
     const lines = [];
 
-    // ============ S1 — hot adjudicator, per model tag ============
-    lines.push('############ S1 — hot-pick adjudicator (settled, per model tag) ############');
+    // ============ S1 - hot adjudicator, per model tag ============
+    lines.push('############ S1 - hot-pick adjudicator (settled, per model tag) ############');
     for (const g of summary.s1.groups) {
         lines.push(`  ${g.tag}${_power(g.n)}`);
         lines.push(`    confirm ${g.confirm.n} hit ${pct(g.confirm.rate)} | veto ${g.veto.n} hit ${pct(g.veto.rate)}`
@@ -61,8 +61,8 @@ export function formatScorecard(summary) {
     }
     lines.push(`  settled hot rows without any verdict: ${summary.s1.noVerdict} of ${summary.s1.settledTotal} (coverage detail in S5)`);
 
-    // ============ S2 — tip reviewer, per model tag ============
-    lines.push('\n############ S2 — tip reviewer (settled, per model tag) ############');
+    // ============ S2 - tip reviewer, per model tag ============
+    lines.push('\n############ S2 - tip reviewer (settled, per model tag) ############');
     for (const g of summary.s2.groups) {
         lines.push(`  ${g.tag}${_power(g.n)}`);
         lines.push(`    confirm ${g.confirm.n} hit ${pct(g.confirm.rate)} | veto ${g.veto.n} hit ${pct(g.veto.rate)}`
@@ -71,8 +71,8 @@ export function formatScorecard(summary) {
             + ` (tol ${pct(summary.s2.tol)}; legacy verdicts carry no judged context)`);
     }
 
-    // ============ S3 — blind reasoner Brier / reliability, per model tag ============
-    lines.push('\n############ S3 — blind reasoner calibration (settled, per model tag) ############');
+    // ============ S3 - blind reasoner Brier / reliability, per model tag ============
+    lines.push('\n############ S3 - blind reasoner calibration (settled, per model tag) ############');
     if (!summary.s3.hasTerms) lines.push('  no settled blind insights yet (AI_ENRICH_ENABLED accumulates them).');
     for (const g of summary.s3.groups) {
         lines.push(`  ${g.tag}: ${g.n} (fixture,market) terms${_power(g.n)}`);
@@ -83,8 +83,8 @@ export function formatScorecard(summary) {
         }
     }
 
-    // ============ S4 — error verdicts per day (provider health) ============
-    lines.push('\n############ S4 — error verdicts per day (transport/parse/guard health) ############');
+    // ============ S4 - error verdicts per day (provider health) ============
+    lines.push('\n############ S4 - error verdicts per day (transport/parse/guard health) ############');
     if (!summary.s4.hasErrors) lines.push('  no error verdicts on the ledger.');
     else {
         for (const d of summary.s4.days) {
@@ -92,8 +92,8 @@ export function formatScorecard(summary) {
         }
     }
 
-    // ============ S5 — verdict coverage per day (worker pre-kickoff reach) ============
-    lines.push('\n############ S5 — verdict coverage per day (settled rows; NULL = missed the kickoff freeze) ############');
+    // ============ S5 - verdict coverage per day (worker pre-kickoff reach) ============
+    lines.push('\n############ S5 - verdict coverage per day (settled rows; NULL = missed the kickoff freeze) ############');
     lines.push(`  tips scoped to confidence >= TIP_AI_MIN_CONFIDENCE (${summary.s5.tipAiMinConfidence}); hot = hot pick or stored verdict.`);
     lines.push('  day          hot covered      tips covered');
     for (const d of summary.s5.days) {

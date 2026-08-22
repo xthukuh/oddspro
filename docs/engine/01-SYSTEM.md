@@ -67,9 +67,15 @@ sequenceDiagram
     Note over C: /api/records + /api/columns bodies are memoized keyed on data_version - the bump invalidates them. The web polls GET /api/refresh (60s) and reloads silently when its date is covered.
 ```
 
-The full sweep is stamped due **at start** - one attempt per day even on failure; a mid-day
-restart never fires a surprise sweep. Successful jobs bump the monotonic `data_version`
-(the client freshness signal) and log to self-truncating `logs/auto-refresh.log`.
+The full sweep is stamped done only from the job's own completion callback, and only when
+the run finished ok, or partial with at least one data-bearing step succeeding
+(`fullSweepAttemptVerdict`, `src/db/auto-rules.js`). A failed or total-error attempt leaves
+the "done today" marker untouched, so the next 30s tick retries - up to `AUTO_FULL_MAX_ATTEMPTS`
+(default 3) attempts per EAT day, the count resetting at the day boundary - before the
+scheduler waits for tomorrow; a mid-day restart still never fires a surprise sweep (the marker
+is pre-seeded to today's key at boot). Successful jobs bump the shared `data_version`
+(the client freshness signal, backed by the cross-instance `warehouse_version` meta) and log
+to self-truncating `logs/auto-refresh.log`.
 
 ## Serve behavior notes
 

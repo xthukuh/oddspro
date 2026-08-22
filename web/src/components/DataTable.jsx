@@ -720,7 +720,7 @@ export default function DataTable({
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
                 <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface/90 border border-separator-2 shadow-lg [backdrop-filter:blur(6px)]">
                     <IconSpinner className="[animation:op-spin_0.8s_linear_infinite] text-accent" />
-                    <span className="text-xs font-medium text-label-2">Loading…</span>
+                    <span className="text-xs font-medium text-label-2">Loading...</span>
                 </div>
             </div>
         )}

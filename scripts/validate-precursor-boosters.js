@@ -1,4 +1,4 @@
-// M4.2b — live-ledger validation of the three precursor-pattern boosters from
+// M4.2b - live-ledger validation of the three precursor-pattern boosters from
 // docs/research/precursor-patterns.md Verdict §(i), the best-evidenced-but-never-shipped
 // candidates in the project. READ-ONLY: no writes, no API calls.
 //
@@ -32,7 +32,7 @@
 // flatEv, BETTABLE_FLOOR) are imported VERBATIM from src/db/mine-rules.js so
 // this harness cannot invent a second, kinder taxonomy. The leak-free
 // reconstruction (teamShape/buildFeatures/settle/devig/price-attach) MIRRORS
-// scripts/mine-precursors.js — which is deliberately frozen (published
+// scripts/mine-precursors.js - which is deliberately frozen (published
 // provenance behind docs/research/precursor-patterns.md) and does not export its
 // internals, so the same "mirror the idiom" pattern the mine itself uses
 // (teamShape mirrors backtest-sure-tips) is applied here.
@@ -176,7 +176,7 @@ function lodoJackknife(gated, baseByDay) {
 
 // Live classification, adapted from mine-rules.classifyPattern for a fixed
 // pre-registered gate on a single live window (there is no warehouse train
-// split here — the warehouse WAS the train; this is the fresh live test).
+// split here - the warehouse WAS the train; this is the fresh live test).
 function classifyLive({ n, liftLo, medPrice, flatEv: e }) {
     if (n < 40) return 'underpowered';
     if (liftLo == null || liftLo <= 0) return 'refuted';           // lift CI includes 0
@@ -250,7 +250,7 @@ try {
     // Well-powered, price-robust. For each booster: gated rows {day,hit,price},
     // base rows = ALL priced fixtures offering that market (unconditional live
     // rate on the same days), lift CI, EV CI, LODO jackknife, recency split.
-    console.log('\n\n############ LENS A — linked-with-odds fixtures (price-robust, well-powered) ############');
+    console.log('\n\n############ LENS A - linked-with-odds fixtures (price-robust, well-powered) ############');
     const linkedFeat = [...featById.values()].filter(r => price.has(r.id));
     const linkedDaysSorted = [...new Set(linkedFeat.map(r => r.day))].sort();
     const recencyCut = linkedDaysSorted[Math.floor(linkedDaysSorted.length / 2)]; // split window in half by days
@@ -313,7 +313,7 @@ try {
     // ================= LENS B: settled-tip ledger, RECENT REGIME =================
     // Decision-relevant: among tips of the booster's market, does the gate
     // discriminate hit-rate? Headlines the recent regime (abides to trajectory).
-    console.log('\n\n############ LENS B — settled-tip ledger, RECENT regime (abides to trajectory) ############');
+    console.log('\n\n############ LENS B - settled-tip ledger, RECENT regime (abides to trajectory) ############');
     const tipHitBool = o => o === 'hit';                 // void excluded below
     const lensB = (market, gate, dayset) => {
         const pool = ledger.filter(t => t.tip_market === market && t.tip_outcome !== 'void' && dayset.has(t.day) && featById.has(t.fixture_id));

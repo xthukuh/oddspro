@@ -139,7 +139,7 @@ export default function MaintenanceCard() {
             <div className="flex items-center gap-3 mt-3">
                 <button onClick={save} disabled={busy || !dirty}
                     className="cursor-pointer h-9 px-4 rounded-full text-[12px] font-semibold bg-accent text-white disabled:opacity-40 disabled:cursor-default">
-                    {busy ? 'Saving…' : 'Save schedule'}
+                    {busy ? 'Saving...' : 'Save schedule'}
                 </button>
                 {dirty && !busy && (
                     <button onClick={() => { setForm(savedCfg); setError(null); }}

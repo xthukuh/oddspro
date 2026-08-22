@@ -16,7 +16,7 @@ import NoticesCard from './NoticesCard.jsx';
 
 const ACCENT = { light: '#5856dc', dark: '#8B89F0' };
 
-const fmtRoi = v => (v == null ? '–' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`);
+const fmtRoi = v => (v == null ? '-' : `${v > 0 ? '+' : ''}${(v * 100).toFixed(1)}%`);
 const roiCls = v => (v == null ? 'text-label-2' : v >= 0 ? 'text-hit' : 'text-miss');
 
 // Zero-fill the sparse per-day rows into a contiguous window ending today so
@@ -124,7 +124,7 @@ export default function DashboardSection() {
     }, []);
 
     if (error) return <p className="text-miss text-[13px]" role="alert">Traffic summary failed: {error}</p>;
-    if (!sum) return <p className="text-label-2 text-sm py-8 text-center">Loading dashboard…</p>;
+    if (!sum) return <p className="text-label-2 text-sm py-8 text-center">Loading dashboard...</p>;
 
     const t = sum.today;
     const tips30 = perf?.tips?.windows?.['30d'];
@@ -156,7 +156,7 @@ export default function DashboardSection() {
                         sub={tipsAll ? <>ROI <span className={roiCls(tipsAll.roi)}>{fmtRoi(tipsAll.roi)}</span> · n={tipsAll.hits + tipsAll.misses}</> : 'no data'} />
                     <Tile label="Hot picks · 30d" value={pct(hot30?.rate)}
                         sub={hot30 ? `n=${hot30.hits + hot30.misses}` : 'no data'} />
-                    <Tile label="Top strategy" value={best?.label ?? '–'}
+                    <Tile label="Top strategy" value={best?.label ?? '-'}
                         sub={best ? `slip survival ${pct(best.stats?.survival)} over ${best.stats?.days}d${best.low_sample ? ' · low sample' : ''}` : 'no replay yet'} />
                 </div>
             </Card>

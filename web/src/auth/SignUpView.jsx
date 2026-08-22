@@ -97,7 +97,7 @@ export default function SignUpView() {
                 <FormError>{error}</FormError>
                 <button type="submit" className={btnCls}
                     disabled={busy || !name.trim() || !phone || pin.length !== 4 || pinConfirm.length !== 4 || !agreed}>
-                    {busy ? 'Creating account…' : 'Create account'}
+                    {busy ? 'Creating account...' : 'Create account'}
                 </button>
             </form>
             {legal && <LegalModal doc={legal} onClose={() => setLegal(null)} />}

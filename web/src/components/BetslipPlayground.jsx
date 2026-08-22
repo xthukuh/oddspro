@@ -186,7 +186,7 @@ export default function BetslipPlayground({ rows, chain, cal, columns, calibrati
     const live = useMemo(() => new Set(candidates.map(c => c.api_id)), [candidates]);
 
     // Tips already sitting on any slip: "Fill from top" ALWAYS skips them, so
-    // each click autogenerates the next distinct slip (ranks 1-4, then 5-8, …)
+    // each click autogenerates the next distinct slip (ranks 1-4, then 5-8, ...)
     // until the day's tips are exhausted; the Hide-used toggle additionally
     // hides them from the list below. Removing a slip/leg frees its tips.
     const usedIds = useMemo(() => new Set(slips.flatMap(s => s.legs.map(l => l.api_id))), [slips]);

@@ -36,7 +36,7 @@ export function normalizeName(name) {
         .join(' ');
 }
 
-// Sørensen–Dice coefficient over character bigrams (0..1)
+// Sørensen-Dice coefficient over character bigrams (0..1)
 function _diceBigrams(a, b) {
     const grams = s => {
         const m = new Map();

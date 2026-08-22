@@ -31,7 +31,7 @@ and after the truncation** - which is the proof, not the claim, that it never us
 ## 1. What was built
 
 The blend's stats component asked each market a separate question: *what share of this team's last
-six games went over 2.5?* Over a six-game window the answer can only be one of {0, 1/6, 2/6, …} - a seventeen-point grid - and each line was counted independently, so the engine could
+six games went over 2.5?* Over a six-game window the answer can only be one of {0, 1/6, 2/6, ...} - a seventeen-point grid - and each line was counted independently, so the engine could
 simultaneously believe P(O 1.5) = 0.67 and P(O 2.5) = 0.83. That is not a noisy probability. It is
 not a probability distribution at all.
 

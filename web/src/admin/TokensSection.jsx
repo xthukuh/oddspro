@@ -7,7 +7,7 @@ import { getAdminPats, createAdminPat, revokeAdminPat, getAdminUsers } from '../
 // The plaintext token is shown EXACTLY ONCE after minting - the server only
 // stores its hash - so the reveal box is explicit and copy-first.
 
-const fmt = ts => (ts ? String(ts).replace('T', ' ').slice(0, 16) : '—');
+const fmt = ts => (ts ? String(ts).replace('T', ' ').slice(0, 16) : ' - ');
 
 export default function TokensSection() {
     const [tokens, setTokens] = useState(null);
@@ -50,7 +50,7 @@ export default function TokensSection() {
     };
 
     const revoke = async t => {
-        if (!window.confirm(`Revoke token ${t.prefix}… (${t.name})? Integrations using it stop working immediately.`)) return;
+        if (!window.confirm(`Revoke token ${t.prefix}... (${t.name})? Integrations using it stop working immediately.`)) return;
         try { await revokeAdminPat(t.id); await reload(); }
         catch (e) { setError(e?.message ?? String(e)); }
     };
@@ -64,7 +64,7 @@ export default function TokensSection() {
                 <p className="text-label-2 text-[12px] mt-1 leading-relaxed">
                     Personal access tokens for integrations (n8n, automated reads). A token acts as its
                     user on read-only GET endpoints (<code className="text-label">/api/view</code>,{' '}
-                    <code className="text-label">/api/records</code>, <code className="text-label">/api/daily-slip</code>…)
+                    <code className="text-label">/api/records</code>, <code className="text-label">/api/daily-slip</code>...)
                     and is never valid on admin or account endpoints. Only a hash is stored.
                 </p>
             </div>
@@ -73,7 +73,7 @@ export default function TokensSection() {
 
             {minted && (
                 <div className="rounded-xl border border-accent/40 bg-accent/5 p-3 space-y-2">
-                    <div className="text-[13px] text-label font-medium">Token minted — copy it now, it is shown only once.</div>
+                    <div className="text-[13px] text-label font-medium">Token minted - copy it now, it is shown only once.</div>
                     <div className="flex items-center gap-2">
                         <code className="flex-1 min-w-0 truncate text-[12px] bg-fill rounded-lg px-2.5 py-2 text-label">{minted.token}</code>
                         <button className="cursor-pointer h-9 px-3 rounded-lg bg-accent text-white text-[13px] font-medium shrink-0"
@@ -90,7 +90,7 @@ export default function TokensSection() {
                     <label className="flex flex-col gap-1 text-[12px] text-label-2">User
                         <select className={inputCls} value={form.user_id} required
                             onChange={e => setForm(f => ({ ...f, user_id: e.target.value }))}>
-                            <option value="">Select…</option>
+                            <option value="">Select...</option>
                             {users.map(u => <option key={u.id} value={u.id}>{u.name || u.phone} (#{u.id})</option>)}
                         </select>
                     </label>
@@ -110,7 +110,7 @@ export default function TokensSection() {
                 </label>
                 <button type="submit" disabled={busy}
                     className="cursor-pointer h-9 px-4 rounded-lg bg-accent text-white text-[13px] font-medium disabled:opacity-50">
-                    {busy ? 'Minting…' : 'Mint token'}
+                    {busy ? 'Minting...' : 'Mint token'}
                 </button>
             </form>
 
@@ -128,11 +128,11 @@ export default function TokensSection() {
                         </tr>
                     </thead>
                     <tbody>
-                        {tokens == null && <tr><td colSpan={7} className="px-3 py-4 text-label-3">Loading…</td></tr>}
+                        {tokens == null && <tr><td colSpan={7} className="px-3 py-4 text-label-3">Loading...</td></tr>}
                         {tokens?.length === 0 && <tr><td colSpan={7} className="px-3 py-4 text-label-3">No tokens yet.</td></tr>}
                         {tokens?.map(t => (
                             <tr key={t.id} className="border-b border-separator/60 last:border-0">
-                                <td className="px-3 py-2"><code className="text-label">{t.prefix}…</code></td>
+                                <td className="px-3 py-2"><code className="text-label">{t.prefix}...</code></td>
                                 <td className="px-3 py-2 text-label">{t.name}</td>
                                 <td className="px-3 py-2 text-label-2">{t.user_name || t.user_phone || `#${t.user_id}`}</td>
                                 <td className="px-3 py-2 text-label-2">{fmt(t.last_used_at)}</td>

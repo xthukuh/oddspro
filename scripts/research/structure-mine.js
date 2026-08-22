@@ -1,4 +1,4 @@
-// structure-mine.js — cross-market STRUCTURE mine over the bookmaker odds menu.
+// structure-mine.js - cross-market STRUCTURE mine over the bookmaker odds menu.
 //
 // Hypothesis space: a bookmaker's ENTIRE pre-match menu for a fixture (which
 // markets are offered, at what prices, with what internal shape) encodes the
@@ -67,8 +67,8 @@ function mulberry32(seed) {
         return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
     };
 }
-const fmt = (v, d = 3) => (v == null || Number.isNaN(v) ? '—' : (+v).toFixed(d));
-const pct = (v, d = 1) => (v == null || Number.isNaN(v) ? '—' : (100 * v).toFixed(d) + '%');
+const fmt = (v, d = 3) => (v == null || Number.isNaN(v) ? ' - ' : (+v).toFixed(d));
+const pct = (v, d = 1) => (v == null || Number.isNaN(v) ? ' - ' : (100 * v).toFixed(d) + '%');
 
 // ---------- menu assembly ----------
 const normName = s => String(s ?? '').toLowerCase().replace(/[^a-z0-9]+/g, '');
@@ -122,8 +122,8 @@ function addRow(menu, row, homeN, awayN) {
 // Devig a complete family book: { key: price } -> { key: implied } (proportional).
 // `mass` = what the TRUE outcome probabilities sum to across the book's legs:
 // 1 for partitions of the outcome space (1X2, O/U pair, BTTS, odd/even, TT pair,
-// DNB — conditional on no-draw, consistent with excluding voids from the
-// denominator), 2 for double chance (the three DC legs double-cover the space —
+// DNB - conditional on no-draw, consistent with excluding voids from the
+// denominator), 2 for double chance (the three DC legs double-cover the space - 
 // naive mass-1 devig halves every DC implied and fabricates a +33% "edge").
 function devig(book, keys, mass = 1) {
     for (const k of keys) if (!(Number(book[k]) > 1)) return null;
@@ -315,7 +315,7 @@ function buildFixtureRecord(fx, menus) {
     // NOTE: within one complete book the pooled all-legs edge is ZERO by
     // construction (implieds sum to the mass, exactly `mass` legs hit), so the
     // H-margin section reports the FAVOURITE leg's edge + the Brier score
-    // instead — those are not degenerate. `fav` marks the book's shortest leg.
+    // instead - those are not degenerate. `fav` marks the book's shortest leg.
     rec.marginLegs = [];
     const legFam = (fam, bk, settleKeys) => {
         if (!bk) return;
@@ -389,7 +389,7 @@ function buildFixtureRecord(fx, menus) {
 }
 
 // ---------- load ----------
-console.log(`# structure-mine — DB \`${DB_NAME}\` — ${new Date().toISOString()}`);
+console.log(`# structure-mine - DB \`${DB_NAME}\` - ${new Date().toISOString()}`);
 const t0 = Date.now();
 
 const fixtures = await db.raw(`
@@ -448,7 +448,7 @@ for (let i = 0; i < fixtures.length; i += CHUNK) {
 process.stderr.write('\n');
 console.log(`Fixtures with a usable pre-match menu: ${records.length} (${((Date.now() - t0) / 1000).toFixed(0)}s)`);
 
-// league popularity proxy (within the analyzed set — menu-derived context, not repo predictions)
+// league popularity proxy (within the analyzed set - menu-derived context, not repo predictions)
 const leagueCount = new Map();
 for (const r of records) leagueCount.set(r.league_id, (leagueCount.get(r.league_id) || 0) + 1);
 for (const r of records) r.features.league_pop = leagueCount.get(r.league_id);
@@ -594,7 +594,7 @@ for (const target of TARGETS) {
             }
         }
         if (lines.length) {
-            console.log(`\n- ${f} — ${label}${thresholds[f] != null ? ` (train median ${fmt(thresholds[f])})` : ''}`);
+            console.log(`\n- ${f} - ${label}${thresholds[f] != null ? ` (train median ${fmt(thresholds[f])})` : ''}`);
             for (const l of lines) console.log(l);
         }
     }
@@ -611,11 +611,11 @@ for (const c of candidates) {
     const [bLo, bHi] = bootDelta(c.on, c.off, BOOT_ITERS, BOOT_SEED + (seedIdx++));
     const survived = c.dTe != null && Math.sign(c.dTe) === Math.sign(c.dTr) && Math.abs(c.dTe) >= SCREEN_MIN_DELTA / 2;
     c.bootLo = bLo; c.bootHi = bHi; c.survived = survived;
-    console.log(`- ${c.target} × ${c.feature} @ ${c.band}: Δtrain=${pct(c.dTr)} (n=${c.nTrOn}/${c.nTrOff}) → Δtest=${c.dTe == null ? '—' : pct(c.dTe)} (n=${c.nTeOn}/${c.nTeOff}) | Δall=${pct(c.dAll)} bootCI=[${pct(bLo)},${pct(bHi)}] | ${survived ? 'SURVIVES' : 'fails'}${(bLo != null && bLo <= 0 && bHi >= 0) ? ' (CI spans 0)' : ''}`);
+    console.log(`- ${c.target} × ${c.feature} @ ${c.band}: Δtrain=${pct(c.dTr)} (n=${c.nTrOn}/${c.nTrOff}) → Δtest=${c.dTe == null ? ' - ' : pct(c.dTe)} (n=${c.nTeOn}/${c.nTeOff}) | Δall=${pct(c.dAll)} bootCI=[${pct(bLo)},${pct(bHi)}] | ${survived ? 'SURVIVES' : 'fails'}${(bLo != null && bLo <= 0 && bHi >= 0) ? ' (CI spans 0)' : ''}`);
 }
 
 // ---------- H-blowout descriptive ----------
-console.log('\n## H-blowout: extreme 1X2 favourites (price < 1.20) — totals behavior');
+console.log('\n## H-blowout: extreme 1X2 favourites (price < 1.20) - totals behavior');
 {
     const blow = records.filter(r => r.features.blowout === true);
     const rest = records.filter(r => r.features.blowout === false);
@@ -660,7 +660,7 @@ console.log('favourite-leg edge (the book\'s shortest leg) and the all-legs Brie
 }
 
 // ---------- H-bait (a): cross-provider generosity ----------
-console.log('\n## H-bait (a): cross-provider generosity — does an unusually generous quote realize worse than its own-book implied?');
+console.log('\n## H-bait (a): cross-provider generosity - does an unusually generous quote realize worse than its own-book implied?');
 {
     const legs = [];
     for (const r of records) for (const l of r.baitLegs) legs.push({ ...l, day: r.day });
@@ -684,7 +684,7 @@ console.log('\n## H-bait (a): cross-provider generosity — does an unusually ge
             console.log(`  ${band.label.padEnd(9)} gen n=${String(sOn.n).padStart(5)} edge=${pct(sOn.edge).padStart(7)} [${pct(sOn.edgeLo)},${pct(sOn.edgeHi)}] | rest n=${String(sOff.n).padStart(6)} edge=${pct(sOff.edge).padStart(7)} | Δ=${pct(sOn.edge - sOff.edge).padStart(7)}${under} (train Δ=${pct(dTr)}, test Δ=${pct(dTe)}, bootCI=[${pct(bLo)},${pct(bHi)}])`);
         }
     }
-    // Realized EV at price for the generous legs — the bettor-facing bottom line.
+    // Realized EV at price for the generous legs - the bettor-facing bottom line.
     for (const [label, sel] of [['g>=q90 legs', legs.filter(l => l.g >= q90)], ['g>=0.10 legs', legs.filter(l => l.g >= 0.10)], ['all cross-provider legs', legs]]) {
         const ev = mean(sel.map(l => l.hit * l.price - 1));
         console.log(`  flat-stake EV at price, ${label}: ${pct(ev)} (n=${sel.length})`);
@@ -692,7 +692,7 @@ console.log('\n## H-bait (a): cross-provider generosity — does an unusually ge
 }
 
 // ---------- H-bait (b): anomalous overround books ----------
-console.log('\n## H-bait (b): anomalous (boosted-looking) overround books — do they settle worse for the bettor?');
+console.log('\n## H-bait (b): anomalous (boosted-looking) overround books - do they settle worse for the bettor?');
 {
     const legs = [];
     for (const r of records) for (const l of r.bookLegs) legs.push({ ...l, day: r.day });
@@ -704,7 +704,7 @@ console.log('\n## H-bait (b): anomalous (boosted-looking) overround books — do
     ];
     const bucketOf = l => OVR_BUCKETS.find(b => l.ovr >= b.lo && l.ovr < b.hi);
     console.log(`family-book legs (all complete single-provider books, voids excluded): ${legs.length}`);
-    console.log('per normalized-overround bucket — mean edge (vs own devig), price-weighted excess EV, realized flat EV at price:');
+    console.log('per normalized-overround bucket - mean edge (vs own devig), price-weighted excess EV, realized flat EV at price:');
     for (const b of OVR_BUCKETS) {
         const sel = legs.filter(l => bucketOf(l) === b);
         if (!sel.length) { console.log(`  ${b.label.padEnd(24)} n=0`); continue; }

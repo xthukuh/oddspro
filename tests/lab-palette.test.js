@@ -39,10 +39,10 @@ test('rampColor: valid hex, monotone lightness, floor keeps rate-0 visible', () 
 });
 
 test('binLabel/pct: numeric ranges without float noise, categories verbatim', () => {
-    assert.equal(binLabel(0.3, { width: 0.1 }), '0.3–0.4'); // no 0.30000000000000004
-    assert.equal(binLabel(1.5, { width: 0.25 }), '1.5–1.75');
-    assert.equal(binLabel(-10, { width: 5 }), '-10–-5');
+    assert.equal(binLabel(0.3, { width: 0.1 }), '0.3-0.4'); // no 0.30000000000000004
+    assert.equal(binLabel(1.5, { width: 0.25 }), '1.5-1.75');
+    assert.equal(binLabel(-10, { width: 5 }), '-10--5');
     assert.equal(binLabel('Premier League', undefined), 'Premier League');
     assert.equal(pct(0.625), '63%');
-    assert.equal(pct(null), '–');
+    assert.equal(pct(null), '-');
 });

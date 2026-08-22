@@ -114,7 +114,7 @@ export default function MultiSelect({
                             type="text"
                             value={query}
                             onChange={e => setQuery(e.target.value)}
-                            placeholder="Search…"
+                            placeholder="Search..."
                             autoFocus
                             className="w-full mb-2 px-2.5 py-1.5 text-sm rounded-lg border border-separator bg-surface text-label outline-none focus:border-accent"
                         />

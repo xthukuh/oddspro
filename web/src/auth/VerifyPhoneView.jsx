@@ -139,7 +139,7 @@ export default function VerifyPhoneView() {
                     <FormError>{error}</FormError>
                     <FormNotice>{notice}</FormNotice>
                     <button type="submit" className={btnCls} disabled={busy || code.length < 4}>
-                        {busy ? 'Checking…' : 'Verify'}
+                        {busy ? 'Checking...' : 'Verify'}
                     </button>
                     <div className="flex items-center justify-between text-sm">
                         <button type="button" className={`${linkCls} disabled:opacity-40 disabled:no-underline disabled:cursor-default`}
@@ -176,7 +176,7 @@ export default function VerifyPhoneView() {
                     </Field>
                     <FormError>{error}</FormError>
                     <button type="submit" className={btnCls} disabled={busy || !newPhone}>
-                        {busy ? 'Updating…' : 'Update & send code'}
+                        {busy ? 'Updating...' : 'Update & send code'}
                     </button>
                     <div className="text-center text-sm">
                         <button type="button" className={linkCls} onClick={() => { setChanging(false); setError(null); }}>

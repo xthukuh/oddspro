@@ -1321,7 +1321,7 @@ export default function App() {
                         <button onClick={onRefresh} disabled={!date || refresh?.running}
                             aria-label={refresh?.running ? 'Refreshing' : 'Refresh this date'}
                             title={refresh?.running
-                                ? `Refreshing ${refresh.date}${refresh.step ? ` - ${refresh.step}` : ''}…`
+                                ? `Refreshing ${refresh.date}${refresh.step ? ` - ${refresh.step}` : ''}...`
                                 : date
                                     ? `Refresh fixtures, results & odds${refresh?.last_success ? ` - last ${_hm(refresh.last_success.at)}` : ''}`
                                     : 'Pick a date to refresh'}

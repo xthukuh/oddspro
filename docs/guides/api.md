@@ -1,7 +1,7 @@
 # oddspro HTTP API reference
 
 **Captured:** 2026-08-06 against a dev serve (`build 1.3.0+`, branch `feat/engine-v2`).
-Example responses are REAL captures, trimmed with `…` where noted. Base URL below is
+Example responses are REAL captures, trimmed with `...` where noted. Base URL below is
 the dev default; the server binds `API_HOST` (default `127.0.0.1`) on port 3001.
 
 ```
@@ -15,7 +15,7 @@ http://127.0.0.1:3001
 | Guest | no header | public data, redacted tips (see `/api/records` notes), teaser Daily MultiBet, no future dates |
 | User session | `Authorization: Bearer <session token>` from `/api/auth/login` | full data tier |
 | Machine bearer | `Authorization: Bearer <API_TOKEN or ADMIN_TOKEN>` | legacy full access (`ADMIN_TOKEN` additionally opens `/api/admin/*`) |
-| Personal access token | `Authorization: Bearer opat_…` (admin-minted, see below) | read-only full tier for integrations (n8n, automation) |
+| Personal access token | `Authorization: Bearer opat_...` (admin-minted, see below) | read-only full tier for integrations (n8n, automation) |
 
 With `AUTH_ENABLED=0` every request is legacy full-access. Mutating endpoints
 require the CSRF header `X-Requested-With: XMLHttpRequest` (custom headers force a
@@ -47,7 +47,7 @@ dated (`pat.create`/`pat.revoke`, prefix only).
 - `sort` and `filters` are JSON-encoded query params validated against the column
   registry; an unknown key or op is a `400`.
 - During a scheduled maintenance window every `/api/*` call (except auth/admin)
-  answers `503` with `{ "error": "maintenance", "maintenance": {…} }` and a
+  answers `503` with `{ "error": "maintenance", "maintenance": {...} }` and a
   `Retry-After` header.
 - Dates are EAT (`Africa/Nairobi`) day strings `YYYY-MM-DD`; `today`/`now` accepted.
 
@@ -80,17 +80,17 @@ Authorization: Bearer <token>
     "round": "Clausura - 2", "status": "FT", "elapsed": 90,
     "home_rank": 13, "home_form": "L", "away_rank": 1, "away_form": "W",
     "h2h": "6W-7D-5L", "h2h_count": 18,
-    "h2h_meetings": [{ "date": "2026-02-08", "home": "Trujillanos FC", "away": "Carabobo FC", "score": "1-1" }, "…"],
+    "h2h_meetings": [{ "date": "2026-02-08", "home": "Trujillanos FC", "away": "Carabobo FC", "score": "1-1" }, "..."],
     "home_goals_h2h": "8/9 (3.4)", "away_goals_oth": "4/12 (2.3)",
     "updated_at": "2026-08-04T23:04:07.000Z", "available": false,
     "hot": false, "hot_score": 0.469, "hot_outcome": "miss",
-    "hot_signals": [{ "key": "home_sample", "value": 6, "threshold": 6, "pass": true }, "…"],
-    "tip_market": "…", "tip_price": "…", "tip_confidence": "…",
-    "tip_breakdown": { "…": "component probs, weights, samples, runners-up" },
-    "markets": { "1": 4.6, "X": 3.4, "2": 1.75, "O 2.5": 1.62, "…": "…" },
-    "markets_stale": { "…": "last-seen prices of vanished markets" }
+    "hot_signals": [{ "key": "home_sample", "value": 6, "threshold": 6, "pass": true }, "..."],
+    "tip_market": "...", "tip_price": "...", "tip_confidence": "...",
+    "tip_breakdown": { "...": "component probs, weights, samples, runners-up" },
+    "markets": { "1": 4.6, "X": 3.4, "2": 1.75, "O 2.5": 1.62, "...": "..." },
+    "markets_stale": { "...": "last-seen prices of vanished markets" }
   }],
-  "meta": { "total": "…", "page": 1, "per_page": 1 }
+  "meta": { "total": "...", "page": 1, "per_page": 1 }
 }
 ```
 
@@ -103,7 +103,7 @@ is quantized to 0.05.
 
 Column catalog for building UIs/queries: market columns discovered from live odds
 coverage, STATS columns discovered from `fixture_statistics`, providers from
-`matches`. Shape: `{ markets: […], stats: […], providers: […] }`.
+`matches`. Shape: `{ markets: [...], stats: [...], providers: [...] }`.
 
 ---
 
@@ -137,7 +137,7 @@ Signed-in / machine bearer (full card; one leg shown):
     "cell": { "n": 160, "hit": 155 }, "cell_key": "dc|1.02",
     "reasoning": "Safest qualifying pick of this fixture: Home or draw at 1.01, calibrated 97.0% from 160 settled legs in its price/market cell (155 hit); bookmaker devig says 97.4%.",
     "outcome": null
-  }, "…5 more legs"] } }
+  }, "...5 more legs"] } }
 ```
 
 Field notes: `status` is `published` or `no_slip` (an honest no-bet day);
@@ -155,9 +155,9 @@ Query: `days` (default 30, max 365). Streaks span the WHOLE history regardless o
 { "streaks": { "current": 3, "best": 8, "greenRate": 0.8667, "played": 30 },
   "days": [
     { "date": "2026-08-06", "status": "published", "mood": "amber", "legs_total": 6,
-      "combined_odds": 1.09, "outcome": null, "backfilled": false, "…": "…" },
+      "combined_odds": 1.09, "outcome": null, "backfilled": false, "...": "..." },
     { "date": "2026-08-05", "status": "published", "mood": "amber", "legs_total": 6,
-      "legs_hit": 6, "combined_odds": 1.08, "outcome": "won", "backfilled": true, "…": "…" }
+      "legs_hit": 6, "combined_odds": 1.08, "outcome": "won", "backfilled": true, "...": "..." }
   ] }
 ```
 
@@ -180,22 +180,22 @@ strategy id stays callable; unknown ids `400`), `safe_only=1` (filter to the Saf
 
 ```
 GET /api/view?date=2026-08-05
-Authorization: Bearer opat_…
+Authorization: Bearer opat_...
 ```
 
 ```json
 {
   "date": "2026-08-05", "strategy": "banker",
   "strategies": ["banker", "target", "value"],
-  "safe_policy": { "…": "the resolved SAFE_* gate values" },
+  "safe_policy": { "...": "the resolved SAFE_* gate values" },
   "daily_slip": { "status": "published", "mood": "amber", "legs_total": 6, "outcome": "won" },
   "counts": { "rows": 208, "safe": 0, "sure": 9, "daily_slip_legs": 6 },
   "rows": [{
     "rank": 1, "magic_score": 0.513,
     "flags": { "safe": false, "sure": false, "sure_prob": null, "daily_slip": false },
     "fixture": "FH Hafnarfjordur - KR Reykjavik", "tip_market": "U 5.5",
-    "…": "every /api/records field: odds pivot, tip_breakdown, AI reviews, prematch stats"
-  }, "…207 more, already in rendered order"]
+    "...": "every /api/records field: odds pivot, tip_breakdown, AI reviews, prematch stats"
+  }, "...207 more, already in rendered order"]
 }
 ```
 
@@ -214,7 +214,7 @@ Over-2.5 hot-pick accuracy windows + the upcoming hot list.
     "all": { "picks": 412, "hits": 282, "misses": 130, "rate": 0.6845 } },
   "pending": 36, "pending_reviews": { "hot": 21, "tips": 0 },
   "upcoming": [{ "fixture_id": 1546426, "kickoff": "2026-08-06T12:00:00.000Z",
-    "score": 0.797, "ai_verdict": null, "fixture": "Sandefjord U19 - Åsane U19" }, "…"] }
+    "score": 0.797, "ai_verdict": null, "fixture": "Sandefjord U19 - Åsane U19" }, "..."] }
 ```
 
 ## GET /api/performance
@@ -227,9 +227,9 @@ Flat-stake ROI / hit-rate / bucket report for tips and hot picks.
     "7d":  { "picks": 1782, "hits": 753, "misses": 378, "voids": 10, "pending": 641,
              "rate": 0.6658, "avg_price": 1.4223, "break_even": 0.7031,
              "staked": 1131, "profit": -62.7, "roi": -0.0554 },
-    "30d": { "…": "…" }, "all": { "…": "…" } },
-    "buckets": { "confidence": "…", "market": "…", "line": "…", "edge": "…" } },
-  "hotpicks": { "…": "same shape" } }
+    "30d": { "...": "..." }, "all": { "...": "..." } },
+    "buckets": { "confidence": "...", "market": "...", "line": "...", "edge": "..." } },
+  "hotpicks": { "...": "same shape" } }
 ```
 
 ## GET /api/magic-sort
@@ -297,5 +297,5 @@ needs). Admin editing happens on `/api/admin/settings`.
 Errors are JSON `{ "error": "<message>" }` plus contextual fields:
 `auth_required: true` (guest hitting a gated resource), `pin_change_required: true`
 (forced PIN change), `retry_after_seconds` (rate limits), `attempts_left` (PIN/OTP),
-`maintenance: {…}` (503 window). Unknown filter/sort keys and malformed JSON params
+`maintenance: {...}` (503 window). Unknown filter/sort keys and malformed JSON params
 are `400`.

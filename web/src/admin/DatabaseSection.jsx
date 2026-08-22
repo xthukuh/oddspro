@@ -53,7 +53,7 @@ const primaryCls = 'cursor-pointer h-9 px-3 rounded-lg text-[12px] bg-accent tex
 const dangerCls = 'cursor-pointer h-9 px-3 rounded-lg text-[12px] bg-miss text-white hover:opacity-90 disabled:opacity-40 disabled:cursor-default';
 
 const fmtWhen = v => {
-    if (v == null) return '–';
+    if (v == null) return '-';
     const d = new Date(v);
     return Number.isNaN(d.getTime()) ? String(v)
         : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -75,7 +75,7 @@ function fmtBytes(bytes) {
     return `${unit === 0 ? value : value.toFixed(1)} ${BYTE_UNITS[unit]}`;
 }
 function fmtUptime(s) {
-    if (s == null) return '–';
+    if (s == null) return '-';
     const days = Math.floor(s / 86400);
     const hours = Math.floor((s % 86400) / 3600);
     const mins = Math.floor((s % 3600) / 60);
@@ -92,15 +92,15 @@ function OverviewCard({ overview, error, onReload }) {
             {error ? (
                 <p className="text-miss text-[13px]" role="alert">{error}</p>
             ) : !overview ? (
-                <p className="text-label-2 text-sm py-4 text-center">Loading…</p>
+                <p className="text-label-2 text-sm py-4 text-center">Loading...</p>
             ) : (
                 <>
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
                         <Stat label="Database" value={overview.database} />
-                        <Stat label="Server" value={overview.server_version ?? '–'} />
+                        <Stat label="Server" value={overview.server_version ?? '-'} />
                         <Stat label="Total size" value={fmtBytes(overview.totals.total_bytes)} sub={`${overview.totals.tables} tables`} />
-                        <Stat label="Pool" value={overview.pool.used ?? '–'}
-                            sub={`free ${overview.pool.free ?? '–'} · pending ${overview.pool.pending_acquires ?? '–'}`} />
+                        <Stat label="Pool" value={overview.pool.used ?? '-'}
+                            sub={`free ${overview.pool.free ?? '-'} · pending ${overview.pool.pending_acquires ?? '-'}`} />
                     </div>
 
                     <div className="mb-4">
@@ -153,15 +153,15 @@ function OverviewCard({ overview, error, onReload }) {
 function HealthCard({ health, busy, onCheck }) {
     return (
         <Card title="Health" hint="SELECT 1 latency + SHOW GLOBAL STATUS uptime/connections."
-            right={<button className={btnCls} disabled={busy} onClick={onCheck}>{busy ? 'Checking…' : 'Re-check'}</button>}>
+            right={<button className={btnCls} disabled={busy} onClick={onCheck}>{busy ? 'Checking...' : 'Re-check'}</button>}>
             {!health ? (
-                <p className="text-label-2 text-sm py-2">Loading…</p>
+                <p className="text-label-2 text-sm py-2">Loading...</p>
             ) : health.ok ? (
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                     <Stat label="Status" value={<Chip tone="hit">OK</Chip>} />
                     <Stat label="Latency" value={`${health.latency_ms} ms`} />
                     <Stat label="Uptime" value={fmtUptime(health.uptime_s)} />
-                    <Stat label="Connections" value={health.threads_connected ?? '–'} />
+                    <Stat label="Connections" value={health.threads_connected ?? '-'} />
                 </div>
             ) : (
                 <div>

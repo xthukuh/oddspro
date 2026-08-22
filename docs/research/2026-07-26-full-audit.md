@@ -108,7 +108,7 @@ a null `ft_home` that settles the bet on the extra-time score. One fixture curre
 | unlinked matches | 12,185 |
 | **virtual / zoom / esports (correctly unlinked)** | **10,105** |
 | plausibly real | 2,080 |
-| …of which have a time-compatible fixture | 2,066 |
+| ...of which have a time-compatible fixture | 2,066 |
 
 Of 1,920,577 stranded odds rows, **1,591,395 are on virtual products** - betika "Zoom" and
 Simulated Reality League markets that have no real-world fixture by design. The genuine gap is

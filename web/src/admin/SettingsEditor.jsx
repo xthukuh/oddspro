@@ -65,7 +65,7 @@ export function Switch({ checked, onChange, disabled }) {
     );
 }
 
-const fmt = v => (v == null || v === '' ? '–' : String(v));
+const fmt = v => (v == null || v === '' ? '-' : String(v));
 const fmtAudit = v => (v == null ? 'default' : String(v));
 
 function safePatternTest(source, value) {
@@ -199,7 +199,7 @@ export default function SettingsEditor() {
         }
     }
 
-    if (rows == null) return <p className="text-label-2 text-sm py-8 text-center">Loading settings…</p>;
+    if (rows == null) return <p className="text-label-2 text-sm py-8 text-center">Loading settings...</p>;
 
     const edit = (key, value) => setEdits(prev => ({ ...prev, [key]: value }));
     const inputCls = 'bg-surface border border-separator text-label rounded-lg h-9 px-2.5 text-[13px] outline-none focus:border-accent disabled:opacity-40';
@@ -256,7 +256,7 @@ export default function SettingsEditor() {
                                     <p className="text-[11px] text-label-3 mt-0.5">
                                         <code className="text-[10px]">{r.key}</code>
                                         {' · '}default {fmt(r.default)}
-                                        {(r.min != null || r.max != null) && ` · ${r.min ?? ''}…${r.max ?? ''}`}
+                                        {(r.min != null || r.max != null) && ` · ${r.min ?? ''}...${r.max ?? ''}`}
                                     </p>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -291,7 +291,7 @@ export default function SettingsEditor() {
                         <div className="flex items-center gap-3">
                             <button onClick={save} disabled={busy}
                                 className="cursor-pointer h-10 px-5 rounded-[10px] bg-accent text-white text-[13px] font-semibold hover:opacity-90 disabled:opacity-40 disabled:cursor-default">
-                                {busy ? 'Saving…' : `Save ${diff.count} change${diff.count === 1 ? '' : 's'}`}
+                                {busy ? 'Saving...' : `Save ${diff.count} change${diff.count === 1 ? '' : 's'}`}
                             </button>
                             <button onClick={() => setEdits({})} disabled={busy}
                                 className="cursor-pointer h-10 px-4 rounded-[10px] bg-fill hover:bg-fill-hover text-label-2 text-[13px] disabled:opacity-40">Discard</button>

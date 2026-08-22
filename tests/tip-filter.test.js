@@ -4,7 +4,7 @@ import {
     parseTipFilter, tipCandidateMarket, tipCandidateOutcome, evalCondition,
 } from '../web/src/filterExpr.js';
 
-// R26b — tip-column filter value prefix. Grammar `[H|M]?\d?:value`:
+// R26b - tip-column filter value prefix. Grammar `[H|M]?\d?:value`:
 //   \d  = candidate index (1 = chosen/default, 2/3 = runners-up from
 //         tip_breakdown.runners_up); bare value = 1st.
 //   H|M = settled-outcome filter (H = hit, M = miss; none = all outcomes),
@@ -158,7 +158,7 @@ test('evalCondition tip: in / not-in / match honor the candidate prefix', () => 
 test('evalCondition tip: a pending fixture never satisfies an H/M outcome filter', () => {
     const r = tipRow({ score: null });
     assert.equal(evalCondition(r, { key: 'tip', op: 'like', value: 'H1:O 2.5' }, COLS), false);
-    // …but without the outcome gate the market still matches on a pending row
+    // ...but without the outcome gate the market still matches on a pending row
     assert.equal(evalCondition(r, { key: 'tip', op: 'like', value: '1:O 2.5' }, COLS), true);
 });
 

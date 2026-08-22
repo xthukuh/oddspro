@@ -98,7 +98,7 @@ export default function ForgotPinView() {
                     </Field>
                     <FormError>{error}</FormError>
                     <button type="submit" className={btnCls} disabled={busy || !phone}>
-                        {busy ? 'Sending…' : 'Send reset code'}
+                        {busy ? 'Sending...' : 'Send reset code'}
                     </button>
                 </form>
             ) : (
@@ -128,7 +128,7 @@ export default function ForgotPinView() {
                     <FormNotice>{notice}</FormNotice>
                     <button type="submit" className={btnCls}
                         disabled={busy || code.length < 4 || pin.length !== 4 || pinConfirm.length !== 4}>
-                        {busy ? 'Resetting…' : 'Reset PIN & sign in'}
+                        {busy ? 'Resetting...' : 'Reset PIN & sign in'}
                     </button>
                     <div className="flex items-center justify-between text-sm">
                         <button type="button" className={`${linkCls} disabled:opacity-40 disabled:no-underline disabled:cursor-default`}

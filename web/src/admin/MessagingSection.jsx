@@ -55,7 +55,7 @@ const btnCls = 'cursor-pointer h-9 px-3 rounded-lg text-[12px] bg-fill hover:bg-
 const primaryCls = 'cursor-pointer h-9 px-3 rounded-lg text-[12px] bg-accent text-white hover:opacity-90 disabled:opacity-40';
 
 const fmtWhen = v => {
-    if (v == null) return '–';
+    if (v == null) return '-';
     const d = new Date(v);
     return Number.isNaN(d.getTime()) ? String(v)
         : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -252,10 +252,10 @@ function Composer({ templates, onCreated, onError }) {
                     </select>
                 </div>
                 <textarea className="bg-surface border border-separator text-label rounded-lg p-2.5 text-[13px] outline-none focus:border-accent min-h-[80px]"
-                    placeholder="Message text…" value={message} onChange={e => setMessage(e.target.value)} />
+                    placeholder="Message text..." value={message} onChange={e => setMessage(e.target.value)} />
 
                 <div className="border-t border-separator-2 pt-3">
-                    <div className="text-label-3 text-[11px] mb-2">Audience — people who opted out are always excluded.</div>
+                    <div className="text-label-3 text-[11px] mb-2">Audience - people who opted out are always excluded.</div>
                     <AudienceBuilder audience={audience} setAudience={setAudience} selectionLabels={selectionLabels} />
                 </div>
 
@@ -273,7 +273,7 @@ function Composer({ templates, onCreated, onError }) {
                             {!preview.sms_enabled && <Chip tone="hot" title="SMS_ENABLED is off - a send will be a dry run and touch no network">Dry-run mode</Chip>}
                         </div>
                         <div className="text-label-3 text-[11px]">{preview.audience_label}</div>
-                        {overBudget && <div className="text-miss text-[12px]">Not enough credits — this send would stop partway.</div>}
+                        {overBudget && <div className="text-miss text-[12px]">Not enough credits - this send would stop partway.</div>}
                     </div>
                 )}
 
@@ -410,7 +410,7 @@ export default function MessagingSection() {
                                         <span className="ml-auto flex gap-1">
                                             {c.status === 'draft' && (
                                                 <>
-                                                    <button className={primaryCls} disabled={busy || job?.running} onClick={() => openSend(c)}>Send…</button>
+                                                    <button className={primaryCls} disabled={busy || job?.running} onClick={() => openSend(c)}>Send...</button>
                                                     <button className={btnCls} disabled={busy} onClick={() => cancel(c.id)}>Discard</button>
                                                 </>
                                             )}

@@ -88,6 +88,13 @@ Legacy v1 evolution: `node scripts/evolve-daily-slip.js --db oddspro`
 (deterministic coordinate-descent over the walk-forward replay, train/test split; bake a
 new champion ONLY when it wins train AND does not lose the test tail, then bump
 ALGO_VERSION + re-run the backfill).
+ASCII punctuation normalization (owner's standing rule: no em-dash/en-dash/curly quotes/
+ellipsis in prose): `node scripts/normalize-punctuation.js [--check]` walks every git-tracked
+file and rewrites em-dash -> ` - `, en-dash -> `-`, curly quotes -> straight, ellipsis -> `...`;
+`--check` reports offenders and exits 1 without writing. Idempotent; preserves each file's
+line endings/BOM; skips binaries/`web/dist`/`node_modules`/lockfiles/fonts/images/`.sql*`/the
+root `x-*-output*.json` snapshots, and a small hardcoded list of regex/char-class literals in
+`tests/` that deliberately test FOR one of these characters.
 
 ### 1.4 Dev routines - in this order
 

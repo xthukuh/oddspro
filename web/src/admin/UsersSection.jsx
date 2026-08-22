@@ -31,7 +31,7 @@ function Chip({ tone = 'muted', title, children }) {
 }
 
 const fmtWhen = v => {
-    if (v == null) return '–';
+    if (v == null) return '-';
     const d = new Date(v);
     return Number.isNaN(d.getTime()) ? String(v)
         : d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
@@ -80,7 +80,7 @@ function ConfirmDialog({ user, action, busy, onConfirm, onCancel }) {
                         className="cursor-pointer h-9 px-4 rounded-lg bg-fill hover:bg-fill-hover text-label-2 text-[13px] disabled:opacity-40">Cancel</button>
                     <button onClick={onConfirm} disabled={!ok || busy}
                         className="cursor-pointer h-9 px-4 rounded-lg bg-miss text-white text-[13px] font-semibold hover:opacity-90 disabled:opacity-40 disabled:cursor-default">
-                        {busy ? 'Working…' : c.label}
+                        {busy ? 'Working...' : c.label}
                     </button>
                 </div>
             </div>
@@ -181,7 +181,7 @@ export default function UsersSection() {
         }
     }
 
-    if (users == null) return <p className="text-label-2 text-sm py-8 text-center">Loading users…</p>;
+    if (users == null) return <p className="text-label-2 text-sm py-8 text-center">Loading users...</p>;
 
     const btn = 'cursor-pointer h-7 px-2 rounded-md text-[11px] bg-fill hover:bg-fill-hover text-label-2 disabled:opacity-30 disabled:cursor-default whitespace-nowrap';
 
@@ -213,7 +213,7 @@ export default function UsersSection() {
     return (
         <div className="flex flex-col gap-4">
             <div className="flex flex-wrap items-center gap-2">
-                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name or phone…"
+                <input value={q} onChange={e => setQ(e.target.value)} placeholder="Search name or phone..."
                     className="bg-surface border border-separator text-label rounded-lg h-9 px-2.5 text-[13px] outline-none focus:border-accent w-56" />
                 <span className="text-label-3 text-[12px]">{shown.length} of {total} user{total === 1 ? '' : 's'}</span>
                 {selected.size > 0 && (

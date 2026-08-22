@@ -73,7 +73,7 @@ const TEAM_STAT_KEYS = ['home_rank', 'home_form', 'away_rank', 'away_form', 'h2h
 
 const DATE_KEYS = new Set(['start_time', 'updated_at', 'locked_at']);
 // Fields whose sort value is numeric (so comparisons use a numeric input) even
-// when the displayed text is a string (form points, tip confidence, …).
+// when the displayed text is a string (form points, tip confidence, ...).
 const NUMBER_KEYS = new Set(['no', 'goals', 'score', 'h2h_count', 'hot', 'hot_score', 'api_id', 'tip',
     'tip_confidence', 'season', 'home_rank', 'away_rank', 'home_form', 'away_form', 'h2h',
     'home_goals_h2h', 'away_goals_h2h', 'home_goals_oth', 'away_goals_oth']);
@@ -81,7 +81,7 @@ const NUMBER_KEYS = new Set(['no', 'goals', 'score', 'h2h_count', 'hot', 'hot_sc
 const SORT_HINT = {
     home_form: 'sorts by points (W=3, D=1)', away_form: 'sorts by points (W=3, D=1)',
     h2h: 'sorts by home points', score: 'sorts by total goals',
-    tip: 'compares confidence 0–1; “contains” matches the market text',
+    tip: 'compares confidence 0-1; "contains" matches the market text',
     home_goals_h2h: 'sorts by avg total', away_goals_h2h: 'sorts by avg total',
     home_goals_oth: 'sorts by avg total', away_goals_oth: 'sorts by avg total',
 };
@@ -249,7 +249,7 @@ function ValueControl({ cond, ctx, onChange, apply }) {
                 onChange={e => onChange({ value: e.target.value })}
                 className={`${selCls} w-full sm:w-52`}
             >
-                <option value="" disabled>choose…</option>
+                <option value="" disabled>choose...</option>
                 {values.map(v => <option key={String(v)} value={String(v)}>{valueLabel(key, v)}</option>)}
             </select>
         );
@@ -343,7 +343,7 @@ function ConditionRow({ cond, ctx, advanced, onChange, onRemove, apply }) {
             </button>
             {cond.mode === 'col' ? (
                 <select value={cond.col ?? ''} onChange={e => onChange({ col: e.target.value })} className={`${selCls} w-full sm:w-44`}>
-                    <option value="" disabled>column…</option>
+                    <option value="" disabled>column...</option>
                     {ctx.groups.map(([label, opts]) => (
                         <optgroup key={label} label={label}>
                             {opts.filter(o => o.key !== cond.key).map(o => (
@@ -391,7 +391,7 @@ function ExprRow({ cond, onChange, onRemove }) {
                 : expr.trim() && <span className="text-[11px] text-hit">✓ valid</span>}
             {showHelp && (
                 <div className="text-[11px] text-label-2 leading-relaxed border-t border-hairline pt-2 mt-1">
-                    <p><code className="text-accent">$row['key']</code> reads a column’s sort value · <code className="text-accent">raw('key')</code> its display text.</p>
+                    <p><code className="text-accent">$row['key']</code> reads a column's sort value · <code className="text-accent">raw('key')</code> its display text.</p>
                     <p>Operators: <code>+ - * / %</code> · <code>{'>'} {'>='} {'<'} {'<='} == != and or not</code> · <code>( )</code></p>
                     <p>Helpers: <code>contains(a,b)</code>, <code>in(x,'a,b')</code>, <code>lower</code>, <code>upper</code>, <code>abs</code>, <code>num</code></p>
                     <p className="mt-1 text-label-3">Examples:</p>

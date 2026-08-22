@@ -1,4 +1,4 @@
-# 07 — AI-agent engagement procedures
+# 07 - AI-agent engagement procedures
 
 This chapter ROUTES; it does not restate. Hard invariants live in `AGENTS.md` (root);
 verified operational playbooks live in `docs/agents/toolset.md`. If you find yourself
@@ -8,10 +8,10 @@ copying content into this chapter, you are in the wrong file.
 
 | You need | Go to |
 |---|---|
-| Architecture, per-file notes, commands with full semantics | `CLAUDE.md` (root — authoritative) |
+| Architecture, per-file notes, commands with full semantics | `CLAUDE.md` (root - authoritative) |
 | Hard invariants + cross-harness entry point | `AGENTS.md` (root) |
 | HOW to operate the toolchain (test/serve/E2E/DB/release playbooks, ops issue KB) | `docs/agents/toolset.md` |
-| System *behavior* — modes, algorithms, formulas | `docs/engine/` chapters 01–06 |
+| System *behavior* - modes, algorithms, formulas | `docs/engine/` chapters 01-06 |
 | Command/routine sequences, warnings, definitions | root `QUICK-REFERENCE.md` |
 | History, resolved issues, AI regime-switch log | `docs/memory-bank.md` |
 
@@ -19,17 +19,17 @@ copying content into this chapter, you are in the wrong file.
 
 | Change | Required pre-read | Required verification |
 |---|---|---|
-| `DEFAULT_SAFE` / safe gates | `05-RANKING.md` | fresh `scripts/analyze-safe-tips.js` run (LODO grid) — mandatory |
+| `DEFAULT_SAFE` / safe gates | `05-RANKING.md` | fresh `scripts/analyze-safe-tips.js` run (LODO grid) - mandatory |
 | Hot-pick gates/thresholds/lines | `04-PREDICTIONS.md` | `scripts/backtest-hotpicks.js [--line]` replay |
 | Tip families/blend/floors/book guards | `04-PREDICTIONS.md` | offline suite + `scripts/mine-patterns.js` regime warning check |
 | Strategies/calibration/sure/sure-bets | `05-RANKING.md` | `simulateStrategies` LODO replay (`scripts/analyze-sure-live.js`, `scripts/backtest-sure-tips.js`) |
 | AI prompts/models/tags | `06-AI.md` | regime-neutral (bytes + tags identical) or bump the tag same-commit; `scripts/ai-scorecard.js` after |
 | Pipeline steps/schedulers/cadence | `01-SYSTEM.md` | offline suite (auto-rules tests) + one observed light pass in `logs/auto-refresh.log` |
-| Data invariants (freeze/fetch-once/settle) | `02-DATA-PIPELINE.md` | do NOT — these are load-bearing; propose to the user first |
-| A new ops recipe discovered | — | dated VERIFIED append to `docs/agents/toolset.md` (its protocol) |
+| Data invariants (freeze/fetch-once/settle) | `02-DATA-PIPELINE.md` | do NOT - these are load-bearing; propose to the user first |
+| A new ops recipe discovered | - | dated VERIFIED append to `docs/agents/toolset.md` (its protocol) |
 
-Two standing meta-rules: (1) live generation knobs (`TIP_MIN_PRICE`, `SAFE_*`, …) never
-move mid-experiment without a dated note — a silent move partitions the measurement ledger
+Two standing meta-rules: (1) live generation knobs (`TIP_MIN_PRICE`, `SAFE_*`, ...) never
+move mid-experiment without a dated note - a silent move partitions the measurement ledger
 (the 2026-07-10 lesson); (2) settled negatives in `toolset.md` §4 are not re-litigated
 without NEW data.
 

@@ -31,7 +31,7 @@ export const CLIENT_ONLY_KEYS = new Set(['league']);
 const CLIENT_ONLY_OPS = new Set(['match', 'not-match']);
 
 // R26b: a `tip` condition whose value carries a candidate/outcome prefix
-// (`2:`, `H:`, `M2:`, …) can't be a plain `fp.tip_market LIKE` - the server
+// (`2:`, `H:`, `M2:`, ...) can't be a plain `fp.tip_market LIKE` - the server
 // would match the literal "H2:" text and return nothing. Such conditions must
 // evaluate client-side (where parseTipFilter resolves the runner-up + settles
 // hit/miss). A plain, un-prefixed tip value stays server-side, unchanged.

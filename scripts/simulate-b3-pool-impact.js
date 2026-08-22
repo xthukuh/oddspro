@@ -1,4 +1,4 @@
-// M4.2b — does the B3 gate (U 3.5 support >= 0.7) actually improve the LIVE
+// M4.2b - does the B3 gate (U 3.5 support >= 0.7) actually improve the LIVE
 // Safe pool? READ-ONLY: no writes, no API calls.
 //
 //   node scripts/simulate-b3-pool-impact.js

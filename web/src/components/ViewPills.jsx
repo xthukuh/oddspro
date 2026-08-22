@@ -18,8 +18,8 @@ export default function ViewPills({
     if (noMiss) items.push(['noMiss', 'No miss', 'Any market that lost today is hidden', () => onNoMiss(false)]);
     // Only surfaced when actually cutting rows (magic sort / Safe-only active).
     if (riskGate && riskGateActive) items.push(['riskGate', '✓ Sufficient stats', 'Games with thin stats (risky bets) are hidden while a magic sort or Safe-only is active', () => onRiskGate(false)]);
-    if (safeOnly) items.push(['safeOnly', '🛡 Safe only', 'Only the day’s safe picks are shown', () => onSafeOnly(false)]);
-    if (sureBets && sureCount > 0) items.push(['sureBets', `⭐ Sure bets (${sureCount} of ${sureCap})`, 'Only the day’s sure-bets list is shown', () => onSureBets(false)]);
+    if (safeOnly) items.push(['safeOnly', '🛡 Safe only', 'Only the day\'s safe picks are shown', () => onSafeOnly(false)]);
+    if (sureBets && sureCount > 0) items.push(['sureBets', `⭐ Sure bets (${sureCount} of ${sureCap})`, 'Only the day\'s sure-bets list is shown', () => onSureBets(false)]);
     // N=0: the warning takes the chip's place so the user sees WHY the table is
     // empty; the toggle stays on until they dismiss it (spec 2026-07-17 §3).
     if (sureBets && sureCount === 0) items.push(['sureBets', '⭐ No sure bets today - no fixture passed the safety gates', 'Nothing qualified today; × turns Sure bets off', () => onSureBets(false)]);

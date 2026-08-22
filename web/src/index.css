@@ -107,7 +107,7 @@
 
 /* Explicit override wins over the OS setting in BOTH directions. color-scheme
    is pinned per theme so native controls (select popups, scrollbars, date
-   pickers) follow the FORCED theme, not the OS — the theme switcher relies on
+   pickers) follow the FORCED theme, not the OS - the theme switcher relies on
    this, and it fixes the dark-mode filter dropdowns. */
 :root[data-theme="light"] {
     color-scheme: light;

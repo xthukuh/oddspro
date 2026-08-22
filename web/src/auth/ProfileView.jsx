@@ -191,7 +191,7 @@ export default function ProfileView({ forced = false }) {
                 <FormNotice>{notice}</FormNotice>
                 <button type="submit" className={btnCls}
                     disabled={busy || (changingPin && (currentPin.length !== 4 || pin.length !== 4 || pinConfirm.length !== 4 || otpCode.length < 4))}>
-                    {busy ? 'Saving…' : forced ? 'Set new PIN' : 'Save'}
+                    {busy ? 'Saving...' : forced ? 'Set new PIN' : 'Save'}
                 </button>
             </form>
             {/* M9 SMS consent. Saves on toggle (no Save press): withdrawing
@@ -203,8 +203,8 @@ export default function ProfileView({ forced = false }) {
                         Promotional SMS
                         <span className="block text-[12px] mt-0.5">
                             {user?.sms_opt_out
-                                ? 'Off — you will not receive announcements.'
-                                : 'On — occasional announcements. Verification codes are always sent.'}
+                                ? 'Off - you will not receive announcements.'
+                                : 'On - occasional announcements. Verification codes are always sent.'}
                         </span>
                     </span>
                     <label className="shrink-0 flex items-center gap-1.5 text-label-2 cursor-pointer">

@@ -1,4 +1,4 @@
-// PR-1 closure — the laddered-EV economic claim. READ-ONLY: no writes, no API.
+// PR-1 closure - the laddered-EV economic claim. READ-ONLY: no writes, no API.
 //
 //   node scripts/close-pr1-ladder-ev.js
 //
@@ -6,7 +6,7 @@
 // whose descriptive claim HELD: fixtures we tipped O 2.5 cleared the lower
 // line O 1.5 85.1% vs the tip itself landing 70.3% (n=101). The economic
 // claim stayed OPEN because nobody attached O 1.5's REAL price at those
-// fixtures — and O 1.5 is a live −5.4% loser overall, so the expectation was
+// fixtures - and O 1.5 is a live −5.4% loser overall, so the expectation was
 // a sub-1.20 trap. At 85.1% the break-even price is 1/0.851 = 1.175: the
 // whole question is whether the offered O 1.5 price at THESE fixtures sits
 // above or below that.
@@ -84,7 +84,7 @@ try {
     const days = [...dayMin.keys()].sort();
     let breakDay = null; const floor0 = dayMin.get(days[0]);
     for (const d of days) if (dayMin.get(d) >= floor0 + 0.10) { breakDay = d; break; }
-    console.log(`PR-1 laddered EV — settled O 2.5 tips: ${tips.length}; O 1.5 priced: ${ladder.length}. Regime break: ${breakDay ?? 'none'}.`);
+    console.log(`PR-1 laddered EV - settled O 2.5 tips: ${tips.length}; O 1.5 priced: ${ladder.length}. Regime break: ${breakDay ?? 'none'}.`);
 
     report('FULL window', ladder, base);
     if (breakDay) {

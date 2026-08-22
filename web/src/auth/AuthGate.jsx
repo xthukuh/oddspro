@@ -22,7 +22,7 @@ const ForgotPinView = lazy(() => import('./ForgotPinView.jsx'));
 // are the only ones that appear unprompted, and a blank overlay would read as
 // a broken screen rather than a loading one.
 const overlayFallback = (
-    <div className="fixed inset-0 z-[60] bg-app flex items-center justify-center text-label-2 text-sm">Loading…</div>
+    <div className="fixed inset-0 z-[60] bg-app flex items-center justify-center text-label-2 text-sm">Loading...</div>
 );
 
 // SOFT auth gate: the app always renders - guests browse exactly as before,

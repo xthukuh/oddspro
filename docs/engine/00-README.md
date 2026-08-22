@@ -1,4 +1,4 @@
-# docs/engine/ — the system bible
+# docs/engine/ - the system bible
 
 How oddspro BEHAVES: operating modes, execution stages, and the logic behind every
 prediction calculation. Division of labor: **this folder = behavior and why**; root
@@ -7,7 +7,7 @@ and denser); `docs/memory-bank.md` = history and hard-won lessons. Chapters are 
 docs, never changelogs.
 
 > ## The honesty contract
-> **No positive-EV market exists on our books — flat-stake EV ≈ −3% (the vig).** The
+> **No positive-EV market exists on our books - flat-stake EV ≈ −3% (the vig).** The
 > `sure` sort, safe pool and sure-bets list maximize **win probability and slip
 > survival, NOT profit.** Every ranking or selection claim in these chapters is subject
 > to this. Evidence: `../research/sure-win-analysis.md`,
@@ -25,12 +25,12 @@ docs, never changelogs.
 | 06 | `06-AI.md` | Adjudicators (veto-only), the worker + budget, enrichment, the guard chain |
 | 07 | `07-AGENT-PROCEDURES.md` | Agent engagement routing: where things live, change → pre-read → verification |
 
-Reading paths — new developer: 01 → 02 → 04 → 05; AI agent: `AGENTS.md` → 07 → 01;
+Reading paths - new developer: 01 → 02 → 04 → 05; AI agent: `AGENTS.md` → 07 → 01;
 "why did it tip that?": 04 → 05.
 
 ## Maintenance
 
-- A behavior change updates its chapter **in the same commit** — the triggers table below
+- A behavior change updates its chapter **in the same commit** - the triggers table below
   says which. Diagrams must match code; a stale diagram is worse than none.
 - Chapters state current behavior only. Dated history belongs in `docs/memory-bank.md`;
   findings in `docs/research/`.

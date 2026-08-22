@@ -1,4 +1,4 @@
-// EDGE SENTINEL — the standing M4.3 instrument over fixture_ai_insights.
+// EDGE SENTINEL - the standing M4.3 instrument over fixture_ai_insights.
 // READ-ONLY: no writes, no AI calls, no API-Football calls. Run it any time;
 // it measures whatever has accumulated. ~seconds.
 //
@@ -101,8 +101,8 @@ try {
         if (BTTS_NAMES.has(r.type_name)) { const nm = String(r.name).toLowerCase(); if (/^(gg|yes)/.test(nm)) bump(r.fixture_id, 'GG', r.price); else if (/^(ng|no)/.test(nm)) bump(r.fixture_id, 'NG', r.price); }
     }
 
-    // ================= M1 — ANCHORING EFFECT (no outcomes) =================
-    console.log('\n############ M1 — anchoring effect (anchored - blind, same fixture+tip) ############');
+    // ================= M1 - ANCHORING EFFECT (no outcomes) =================
+    console.log('\n############ M1 - anchoring effect (anchored - blind, same fixture+tip) ############');
     const deltas = [], vsMkt = [];
     let pairable = 0, offMenu = 0;
     for (const id of fids) {
@@ -127,8 +127,8 @@ try {
         console.log('  READ: positive mean = seeing the tip+price pulls the model TOWARD the bet (anchoring bias).');
     } else console.log(`  no comparable pairs yet (${pairable} pairs, ${offMenu} tips outside the blind menu).`);
 
-    // ================= M2 — AI-MARKET DISSENT (no outcomes) =================
-    console.log('\n############ M2 — blind-AI dissent from the devigged market ############');
+    // ================= M2 - AI-MARKET DISSENT (no outcomes) =================
+    console.log('\n############ M2 - blind-AI dissent from the devigged market ############');
     console.log('  market   n     mean      sd     share|d|>0.05  share|d|>0.10');
     const dissents = [];   // { fid, day, market, dissent, price, devig }
     for (const id of fids) {
@@ -153,8 +153,8 @@ try {
         console.log('        Real dissent is NECESSARY for an edge, not sufficient - M3 arbitrates who is right.');
     }
 
-    // ================= M3 — DISSENT CALIBRATION (settled only) =================
-    console.log('\n############ M3 — does blind-AI dissent predict outcomes beyond the market? ############');
+    // ================= M3 - DISSENT CALIBRATION (settled only) =================
+    console.log('\n############ M3 - does blind-AI dissent predict outcomes beyond the market? ############');
     const settledSet = new Set(settledIds);
     const settledD = dissents.filter(d => settledSet.has(d.fid)).map(d => {
         const e = byFixture.get(d.fid);

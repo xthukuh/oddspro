@@ -42,10 +42,10 @@ export function fmtBin(v) {
 // range, categories as themselves.
 export function binLabel(v, bin) {
     if (!bin || typeof v !== 'number') return String(v);
-    return `${fmtBin(v)}–${fmtBin(v + bin.width)}`;
+    return `${fmtBin(v)}-${fmtBin(v + bin.width)}`;
 }
 
 // Percentage text for a rate cell ('62%'; guarded cells show a dash).
 export function pct(rate) {
-    return rate == null ? '–' : `${Math.round(rate * 100)}%`;
+    return rate == null ? '-' : `${Math.round(rate * 100)}%`;
 }

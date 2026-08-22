@@ -103,7 +103,7 @@ broken/unknown cells fall back to calibrated prob).
 | TRAIN (22-23 days) | 15/18 = 83.3%, streak 8 | 20/22 = 90.9%, streak 12 |
 | TEST (12 days, untouched) | 11/12 = 91.7% | 11/12 = 91.7% (tie; P&L −0.16u worse) |
 | FULL (flat calibrator) | 26/30 = 86.7%, streak 8 | 31/34 = 91.2%, streak 12 |
-| FULL (production decay) | — | 30/34 = 88.2%, streak 12 (the live timeline) |
+| FULL (production decay) | - | 30/34 = 88.2%, streak 12 (the live timeline) |
 
 - Hard streak GATES all rejected by the search (they starve publishing); the
   streak PREFERENCE in ranking is what works. The champion also publishes 4 more
@@ -121,8 +121,8 @@ broken/unknown cells fall back to calibrated prob).
 cards per day. EVERY split reached **100% any-green days (35/35, best streak =
 the whole window)**: one bad leg kills one card, not the day. P&L per staked
 unit improved (single −5.3% → splits −2.2%/−3.3%) because surviving cards
-recoup stakes. **Baked (v1.3-cards): split-2x2** — top-4 dealt round-robin into
-two 2-leg cards — which keeps strict all-cards-green at the single-card 88.6%.
+recoup stakes. **Baked (v1.3-cards): split-2x2** - top-4 dealt round-robin into
+two 2-leg cards - which keeps strict all-cards-green at the single-card 88.6%.
 Timeline regenerated: 32/32 settled multi-card days any-green, 28/32 both-green.
 Honesty: any-green at ~1.03x/card is a survival record, not profit (still −3.3%
 per unit); `outcome` keeps the strict all-cards meaning, `cards_won/total`
@@ -145,11 +145,11 @@ tilts, error-feedback knobs). Two iterations:
    −2.1% (fair-priced), 2.5x/3.0x arms −17%/−39% (real ceiling at this ledger).
 
 Verdict: at 36 days of data, honest value sits at ~break-even for a two-card
-1.5x construction — a genuine 4pp/unit improvement over the single card, no
+1.5x construction - a genuine 4pp/unit improvement over the single card, no
 proven +EV yet. The instrument re-runs monthly; every future claim must clear
 the worst-half fitness AND the untouched tail, exactly as these two rounds did.
 
-## What works — validated principles (session close, 2026-08-06)
+## What works - validated principles (session close, 2026-08-06)
 
 Eleven replay-tested experiments distilled; build on these, re-derive nothing:
 

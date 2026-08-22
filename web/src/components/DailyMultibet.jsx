@@ -103,7 +103,7 @@ function DayCard({ d, today, allPrices }) {
                         title="Reconstructed by hindsight-free replay, not a live call">backfilled</span>
                 )}
                 <span className="ml-auto text-[12px] tabular-nums text-label-2">
-                    {d.status === 'published' ? `${d.legs_total} legs @ ${Number(d.combined_odds).toFixed(2)}x` : '—'}
+                    {d.status === 'published' ? `${d.legs_total} legs @ ${Number(d.combined_odds).toFixed(2)}x` : ' - '}
                 </span>
                 <OutcomeBadge d={d} />
             </div>
@@ -231,7 +231,7 @@ export default function DailyMultibet({ onClose, premium, onSignIn }) {
                 )}
                 <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-4 space-y-2">
                     {error && <div className="px-2 py-1 text-sm text-miss">{error}</div>}
-                    {!error && !data && <div className="px-2 py-1 text-sm text-label-3">Loading…</div>}
+                    {!error && !data && <div className="px-2 py-1 text-sm text-label-3">Loading...</div>}
                     {days.map(d => <DayCard key={d.date} d={d} today={d.date === todayKey} allPrices={allPrices} />)}
                     {data && !days.length && <div className="px-2 py-1 text-sm text-label-3">No cards yet.</div>}
                 </div>

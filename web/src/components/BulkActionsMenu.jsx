@@ -42,12 +42,12 @@ export default function BulkActionsMenu({
     const run = fn => () => { fn?.(); setOpen(false); };
     const hasSel = selectionCount > 0;
 
-    // Tri-state indicator glyph: filled ✓ (all shown selected), filled – (some),
+    // Tri-state indicator glyph: filled ✓ (all shown selected), filled - (some),
     // empty box (none) - mirrors the checkbox the menu replaced.
     const glyph = allSelected
         ? <span className="flex h-4 w-4 items-center justify-center rounded-[3px] bg-accent text-white text-[10px] leading-none">✓</span>
         : someSelected
-            ? <span className="flex h-4 w-4 items-center justify-center rounded-[3px] bg-accent text-white text-[11px] leading-none">–</span>
+            ? <span className="flex h-4 w-4 items-center justify-center rounded-[3px] bg-accent text-white text-[11px] leading-none">-</span>
             : <span className="block h-4 w-4 rounded-[3px] border border-label-3" />;
 
     return (

@@ -35,7 +35,7 @@ export default function OverflowMenu({ refreshing, canRefresh, filterCount, magi
         <>
             <div className={`absolute right-0 top-[46px] w-56 bg-surface text-label rounded-2xl shadow-2xl border border-separator-2 py-1 ${Z.popup} [animation:op-pop_0.16s_ease]`}>
                 <Row icon={refreshing ? <IconSpinner className="[animation:op-spin_0.8s_linear_infinite]" /> : <IconRefresh />}
-                    label={refreshing ? 'Refreshing…' : 'Refresh'} onClick={onRefresh} disabled={!canRefresh} />
+                    label={refreshing ? 'Refreshing...' : 'Refresh'} onClick={onRefresh} disabled={!canRefresh} />
                 <Row icon={<IconMagic />} label="Magic sort" onClick={onMagic} active={magicActive} />
                 <Row icon={<IconSlips />} label="Betslip playground" onClick={onSlips} />
                 <Row icon={<IconFilter />} label="Filters" onClick={onFilters} active={filterCount > 0}

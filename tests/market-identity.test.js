@@ -1,4 +1,4 @@
-// Locks marketIdentity() (src/markets.js, M2 Task 2) — the generic replacement
+// Locks marketIdentity() (src/markets.js, M2 Task 2) - the generic replacement
 // for whereMarket() that builds an odds_markets WHERE for ANY canonicalMarket()
 // key (canonical, named simple family, or best-effort grouped/raw). Disconnected
 // knex builder (no live DB), same idiom as tests/markets.test.js.
@@ -8,7 +8,7 @@ import knex from 'knex';
 import { marketIdentity, canonicalMarket } from '../src/markets.js';
 
 test('marketIdentity builds type_name WHEREs for canonical, family and raw keys', () => {
-    const kx = knex({ client: 'mysql2' }); // disconnected builder — no queries run
+    const kx = knex({ client: 'mysql2' }); // disconnected builder - no queries run
     // canonical period-null keys delegate to the existing proven builder
     const x12 = marketIdentity(kx('odds_markets'), '1').toString();
     assert.match(x12, /`type_name` in \('1X2 \| Full Time', '1X2'\)/);
@@ -125,7 +125,7 @@ test('marketIdentity WHERE agrees with canonicalMarket for the exact named-famil
     assert.match(ouSql, /`handicap` = 2\.5/);
     assert.match(ouSql, /LOWER\(name\) LIKE 'over%'/i);
 
-    // NG / DNB2 / EVEN — the other three named-simple-family outcomes, mirroring
+    // NG / DNB2 / EVEN - the other three named-simple-family outcomes, mirroring
     // GG / DNB1 / ODD above (the CS bug proved these key->WHERE round-trips are
     // worth asserting explicitly, not only in the never-type_id sweep).
     const ngRow = { type_name: 'BOTH TEAMS TO SCORE (GG/NG)', name: 'NO' };
@@ -153,7 +153,7 @@ test('marketIdentity WHERE agrees with canonicalMarket for the exact named-famil
 // Regression (reviewer, 2026-07-14): the CS:/HTFT: period-null branch must
 // select the REAL provider raw type_names, not the period-stripped BASE
 // spellings. BetPawa's raw Correct Score type_name is 'Correct Score | Full
-// Time' (58,153 rows) / Half Time/Full Time is 'Half Time/Full Time' — an
+// Time' (58,153 rows) / Half Time/Full Time is 'Half Time/Full Time' - an
 // exact whereIn on the base ('Correct Score' / 'CORRECT SCORE') selected
 // NOTHING for BetPawa (the majority provider). A LIKE token that the raw
 // type_name contains as a substring, OR an IN-list carrying the raw spelling,

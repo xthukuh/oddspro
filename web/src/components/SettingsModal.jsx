@@ -116,7 +116,7 @@ export default function SettingsModal({
     const [pinned, setPinned] = useState(false);
 
     // Wipe every persisted Odds Pro preference on this device and reload (E5).
-    // Confirmed first - this resets slips, selections, filters, columns, theme…
+    // Confirmed first - this resets slips, selections, filters, columns, theme...
     const clearCacheReload = () => {
         const ok = window.confirm(
             'Clear all saved Odds Pro settings on this device and reload?\n\n'
@@ -147,7 +147,7 @@ export default function SettingsModal({
         if (!file) return;
         const ok = window.confirm(
             `Import "${file.name}"?\n\nThis REPLACES all Odds Pro settings on this device `
-            + '(betslips, filters, sorts, columns, theme…) and reloads the page.',
+            + '(betslips, filters, sorts, columns, theme...) and reloads the page.',
         );
         if (!ok) return;
         try {
@@ -183,7 +183,7 @@ export default function SettingsModal({
                                 options={baseColOptions}
                                 selected={visibleBaseKeys ?? baseColOptions.map(o => o.key)}
                                 onChange={onVisibleBase}
-                                title="Show or hide the fixed columns (Start, Fixture, Score…) plus the Select checkbox and No row-number columns"
+                                title="Show or hide the fixed columns (Start, Fixture, Score...) plus the Select checkbox and No row-number columns"
                             />
                             <MultiSelect
                                 label="Odds markets"
@@ -286,7 +286,7 @@ export default function SettingsModal({
                         </Toggle>
 
                         <p className="text-xs text-label-3 mt-2">
-                            With-selected actions (hide, keep, invert, export CSV…) now live in the ☑ column header menu at the top-left of the table.
+                            With-selected actions (hide, keep, invert, export CSV...) now live in the ☑ column header menu at the top-left of the table.
                         </p>
 
                         <h4 className="text-sm text-label-2 mt-3 mb-1">Settled tips</h4>
@@ -345,7 +345,7 @@ export default function SettingsModal({
                                 <SafeLimit label="Max price" k="maxPrice" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={5} hint="Only keep short-priced legs at or below this odds" />
                                 <SafeLimit label="Min agreement" k="minAgreement" safe={safe} onSafeSet={onSafeSet}
-                                    min={0} max={1} step={0.05} hint="Floor on the weakest present blend component (0–1)" />
+                                    min={0} max={1} step={0.05} hint="Floor on the weakest present blend component (0-1)" />
                                 <SafeLimit label="Min signals" k="minParts" safe={safe} onSafeSet={onSafeSet}
                                     min={1} max={3} int hint="Require at least this many blend components present" />
                                 <SafeLimit label="Min form games" k="minSamples" safe={safe} onSafeSet={onSafeSet}
@@ -355,8 +355,8 @@ export default function SettingsModal({
                             </div>
                             <p className="text-xs text-label-2 mt-2">
                                 Tighter limits = fewer, safer picks. Defaults come from the server policy
-                                {safeDefaults ? '' : ' (loading…)'}; these tune it just for your view.
-                                The <b>“Hide risky games”</b> filter above uses the “Min form / H2H games” floors.
+                                {safeDefaults ? '' : ' (loading...)'}; these tune it just for your view.
+                                The <b>"Hide risky games"</b> filter above uses the "Min form / H2H games" floors.
                             </p>
                         </div>
 

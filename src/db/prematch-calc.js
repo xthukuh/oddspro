@@ -3,7 +3,7 @@
 // Zero imports on purpose (like odds-diff.js) so tests run without .env/DB.
 //
 // Division of labor: callers filter fixtures to RESULT_STATUSES in SQL;
-// these helpers enforce the row-level rules — non-null FT scores and
+// these helpers enforce the row-level rules - non-null FT scores and
 // kickoff strictly before the analyzed fixture's kickoff.
 
 // Summarize finished head-to-head meetings from the row's home-team

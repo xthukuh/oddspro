@@ -1,9 +1,9 @@
-// EDGE HUNT — the value-vs-market probe. READ-ONLY: no writes, no API calls.
+// EDGE HUNT - the value-vs-market probe. READ-ONLY: no writes, no API calls.
 //
 //   node scripts/probe-value-edge.js
 //
-// THE IDEA (and why it is new). Every sort this project has ever shipped —
-// `sure`, Safe-only, the hot-pick gate, and the three precursor boosters —
+// THE IDEA (and why it is new). Every sort this project has ever shipped - 
+// `sure`, Safe-only, the hot-pick gate, and the three precursor boosters - 
 // selects on HIGH STATS SUPPORT (or confidence). docs/research/precursor-patterns.md
 // proved that region lands in the CHEAP sub-1.20 tail, where EV is worst, and
 // closed with the one door left open:
@@ -12,8 +12,8 @@
 //    support."  (precursor-patterns.md, line 167)
 //
 // VALUE != CONFIDENCE. A confident tip (stats 0.90, market devig 0.88) is
-// priced ~1.13 — unbettable. A VALUE tip (stats 0.60, market devig 0.50) is
-// priced ~1.9 — bettable, and it only pays if our stats know something the
+// priced ~1.13 - unbettable. A VALUE tip (stats 0.60, market devig 0.50) is
+// priced ~1.9 - bettable, and it only pays if our stats know something the
 // book's devigged price does not. So we define, per (fixture, market):
 //
 //   value = stats_support - devigged_market_probability
@@ -21,10 +21,10 @@
 // and ask the only question that has never been answered here: is there ANY
 // (market, value-threshold) slice, restricted to a bettable price (>= 1.20),
 // whose flat-stake EV at REAL prices is positive with a day-clustered CI
-// clear of zero — AFTER a Benjamini-Hochberg control for the many slices we
+// clear of zero - AFTER a Benjamini-Hochberg control for the many slices we
 // sweep? If yes, it is the first bettable +EV signal the project has found
 // (EXPLORATORY: pre-registered here, ship only after an independent OOS
-// confirmation — the honesty contract in src/db/mine-rules.js). If no, it is
+// confirmation - the honesty contract in src/db/mine-rules.js). If no, it is
 // the definitive nail: even the theoretically-best value region is -EV, so
 // the vig is unbeatable on these books, exactly as every prior audit warned.
 //
@@ -41,7 +41,7 @@
 // nothing rides on the early window alone.
 //
 // Reconstruction (teamShape/settle/full support/devigProb) MIRRORS the frozen
-// scripts/mine-precursors.js — same "mirror the idiom" pattern the mine uses;
+// scripts/mine-precursors.js - same "mirror the idiom" pattern the mine uses;
 // the pure statistics are imported VERBATIM from src/db/mine-rules.js.
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { db, closeDb } from '../src/db/connection.js';
@@ -182,7 +182,7 @@ try {
     // ---------- H-CALIB: does `value` predict the (realized - devig) residual? ----------
     // If our stats add nothing the market has not priced, residual is ~0 across
     // value bins. A monotone climb = our stats carry orthogonal information.
-    console.log('############ H-CALIB — does value predict outcome beyond the market? ############');
+    console.log('############ H-CALIB - does value predict outcome beyond the market? ############');
     console.log('value bin        n     mean(realized-devig)   (a climbing column = stats add info)');
     const VBINS = [[-9, -0.05], [-0.05, 0], [0, 0.05], [0.05, 0.10], [0.10, 9]];
     for (const [lo, hi] of VBINS) {
@@ -194,7 +194,7 @@ try {
     }
 
     // ---------- H-VALUE: sweep market x threshold, day-clustered EV CI + BH-FDR ----------
-    console.log('\n############ H-VALUE — bettable positive-value slices (price >= 1.20) ############');
+    console.log('\n############ H-VALUE - bettable positive-value slices (price >= 1.20) ############');
     const oneSidedP = rowsSlice => {
         // bootstrap share of day-clustered resamples with EV <= 0
         const byDay = new Map();

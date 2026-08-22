@@ -40,7 +40,7 @@ export default function AvatarMenu({ btnCls, activeCls }) {
         setSync(r.action === 'error' ? 'error' : 'ok');
         setTimeout(() => { setSync(null); setOpen(false); }, 1200);
     };
-    const syncLabel = sync === 'busy' ? 'Syncing…'
+    const syncLabel = sync === 'busy' ? 'Syncing...'
         : sync === 'ok' ? 'Synced'
             : sync === 'error' ? 'Sync failed - try again' : 'Sync settings';
 

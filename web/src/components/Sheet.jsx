@@ -56,7 +56,7 @@ export function PinToggle({ pinned, onToggle }) {
             onClick={onToggle}
             aria-pressed={pinned}
             aria-label={pinned ? 'Unpin view' : 'Pin view'}
-            title={pinned ? 'Pinned - clicks outside won’t close this' : 'Pin - keep open when clicking outside'}
+            title={pinned ? 'Pinned - clicks outside won\'t close this' : 'Pin - keep open when clicking outside'}
             className={`cursor-pointer shrink-0 w-8 h-8 inline-flex items-center justify-center rounded-full hover:bg-fill ${pinned ? 'bg-accent-soft text-accent' : 'bg-fill text-label-2'}`}
         >
             <IconPin filled={pinned} width="15" height="15" />

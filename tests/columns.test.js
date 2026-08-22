@@ -66,7 +66,7 @@ test('filterHint returns key, type and a working example expression', () => {
     assert.deepEqual(filterHint({ key: 'tip', group: 'base' }),
         { key: 'tip', type: 'number', example: "$row['tip'] >= 0.7" });
     assert.deepEqual(filterHint({ key: 'fixture', group: 'base' }),
-        { key: 'fixture', type: 'text', example: "contains(raw('fixture'), '…')" });
+        { key: 'fixture', type: 'text', example: "contains(raw('fixture'), '...')" });
     assert.deepEqual(filterHint({ key: 'start_time', group: 'base' }),
         { key: 'start_time', type: 'date', example: "$row['start_time'] >= <timestamp>" });
     assert.equal(filterHint({}), null);

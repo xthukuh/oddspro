@@ -49,7 +49,7 @@ export default function MagicMenu({
             )}
             <div className="flex-1 min-h-0 overflow-y-auto px-4 pb-2">
                 {error && <div className="px-2 py-1 text-sm text-miss">{error}</div>}
-                {!error && !data && <div className="px-2 py-1 text-sm text-label-3">Loading…</div>}
+                {!error && !data && <div className="px-2 py-1 text-sm text-label-3">Loading...</div>}
                 {strategies.map(s => (
                     <button
                         key={s.id}

@@ -64,7 +64,7 @@ export function filterHint(col) {
     if (!key) return null;
     const type = filterType(col);
     const example = type === 'text'
-        ? `contains(raw('${key}'), '…')`
+        ? `contains(raw('${key}'), '...')`
         : type === 'date'
             ? `$row['${key}'] >= <timestamp>`
             : `$row['${key}'] >= ${key === 'tip' ? '0.7' : col?.group === 'market' ? '1.8' : '2'}`;

@@ -79,7 +79,7 @@ Betting the bottom rung on the signal (current-engine regime, day-clustered 95% 
 |---|---|---|---|---|
 | `O 1.5` blind on every tipped fixture | 841 | 74.8% | −5.0% | [−8.3, −2.3] |
 | **`O 1.5` when the set reaches up** | 356 | **83.1%** | **−2.3%** | [−8.0, +2.9] |
-| **…and `O 1.5` is not itself a candidate** | 305 | **84.6%** | −2.5% | [−7.5, +2.5] |
+| **...and `O 1.5` is not itself a candidate** | 305 | **84.6%** | −2.5% | [−7.5, +2.5] |
 | `O 1.5` when the set does NOT reach up | 485 | 68.7% | **−7.0%** | [−12.3, −4.0] |
 
 **+9.8pp of accuracy and +2.5pp of ROI over betting `O 1.5` blind.** The ROI CI still spans zero,
