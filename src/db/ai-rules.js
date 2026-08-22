@@ -276,6 +276,91 @@ export function modelVendor(model) {
     return (slash > 0 ? s.slice(0, slash) : s).toLowerCase();
 }
 
+// CSV -> ordered, trimmed, de-duplicated model slugs. Order is the caller's
+// preference order, so duplicates keep their FIRST position. Total: junk in,
+// empty list out (a malformed knob must degrade to "no fallbacks", never throw
+// inside an AI path that is supposed to fail open).
+export function parseModelList(csv) {
+    const seen = new Set();
+    return String(csv ?? '')
+        .split(',')
+        .map(s => s.trim())
+        .filter(s => s && !seen.has(s) && seen.add(s));
+}
+
+// The blind reasoner's fallback chain, tried in order when the primary slug
+// answers 404 (see ai-guard-rules#isModelMissingError). Chosen 2026-08-23 from
+// the live OpenRouter catalog against three constraints - free, JSON-capable
+// (response_format), and passing blindModelRejection against the shipped
+// DeepSeek anchored model:
+//   z-ai/glm-5.2:free            - a THIRD vendor, so it survives an
+//                                  NVIDIA-wide outage that would take the
+//                                  primary and any nvidia sibling with it.
+//   nvidia/nemotron-nano-9b-v2:free - same vendor as the primary but a
+//                                  separate model and endpoint, which is what
+//                                  the one observed 404 actually was: the
+//                                  primary is a SINGLE-endpoint free model, so
+//                                  it has no internal failover at all.
+// Both verified answering HTTP 200 on a live probe the same day.
+export const DEFAULT_BLIND_FALLBACKS = Object.freeze([
+    'z-ai/glm-5.2:free',
+    'nvidia/nemotron-nano-9b-v2:free',
+]);
+
+// THE reasoner-independence rule, in one place. -> null when `model` may serve
+// the blind task, else the reason it may not ('empty'|'google'|'same-vendor').
+// Both the throwing primary check in resolveTask and the silent fallback
+// filter below run through this, so the two can never drift into disagreeing
+// about what independence means.
+export function blindModelRejection(model, anchoredModel) {
+    if (!model) return 'empty';
+    if (/gemini|google|gemma/i.test(model)) return 'google';
+    if (anchoredModel && modelVendor(model) === modelVendor(anchoredModel)) return 'same-vendor';
+    return null;
+}
+
+const _BLIND_REJECTION_MESSAGE = {
+    google: (src, model) => `${src} "${model}" is a Google model - the blind reasoner must stay `
+        + 'vendor-independent of the anchored/facts reasoners, not the same lab agreeing with itself.',
+    'same-vendor': (src, model, anchored) => `${src} "${model}" shares a vendor with AI_ANCHORED_MODEL `
+        + `"${anchored}" - the blind reasoner must be a different vendor from the anchored one `
+        + '(reasoner independence is what the blind-vs-anchored comparison rests on).',
+};
+
+// -> { candidates, rejected }. `candidates[0]` is the primary; the rest are
+// AI_BLIND_MODEL_FALLBACKS entries that passed independence, in order.
+//
+// The asymmetry is deliberate. An invalid PRIMARY THROWS, because it is a
+// deterministic misconfiguration enrichFixtures() must die on before billing
+// anything (unchanged pre-2026-08-23 behaviour). An invalid FALLBACK is
+// DROPPED and reported in `rejected`, because a typo in a resilience knob must
+// never take down the run the knob exists to protect - but it is reported
+// rather than swallowed, since a chain that silently emptied itself would look
+// identical to one that was never configured.
+export function blindCandidates(cfg) {
+    const model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL;
+    const src = cfg.AI_BLIND_MODEL ? 'AI_BLIND_MODEL' : 'OPENROUTER_MODEL';
+    const anchored = cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL;
+
+    // An UNSET blind model is not a misconfiguration - resolveTask has always
+    // returned it as-is and the provider layer reports the failure - so only a
+    // model that is present AND independence-breaking throws here.
+    const rejection = model ? blindModelRejection(model, anchored) : null;
+    if (rejection && _BLIND_REJECTION_MESSAGE[rejection]) {
+        throw new Error(_BLIND_REJECTION_MESSAGE[rejection](src, model, anchored));
+    }
+
+    const rejected = [];
+    const candidates = model ? [model] : [];
+    for (const candidate of parseModelList(cfg.AI_BLIND_MODEL_FALLBACKS)) {
+        if (candidates.includes(candidate)) continue; // a fallback repeating the primary buys nothing
+        const why = blindModelRejection(candidate, anchored);
+        if (why) rejected.push({ model: candidate, reason: why });
+        else candidates.push(candidate);
+    }
+    return { candidates, rejected };
+}
+
 // task -> { provider, model, grounded }. Facts are extracted ONCE by the
 // grounded model; both reasoners then work identical evidence, so disagreement
 // is reasoning difference rather than one model simply knowing more.
@@ -299,21 +384,14 @@ export function resolveTask(task, cfg) {
         // are one lab's model agreeing with itself. (The old Google-only ban
         // generalized when the whole stack moved to OpenRouter.) Enforced
         // HERE, not just documented, because these are free-form env keys.
-        const model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL;
-        // Name the source key that actually resolved the model - an operator
-        // chasing the error would otherwise edit the wrong key.
-        const src = cfg.AI_BLIND_MODEL ? 'AI_BLIND_MODEL' : 'OPENROUTER_MODEL';
-        if (model && /gemini|google|gemma/i.test(model)) {
-            throw new Error(`${src} "${model}" is a Google model - the blind reasoner must stay `
-                + 'vendor-independent of the anchored/facts reasoners, not the same lab agreeing with itself.');
-        }
-        const anchored = cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL;
-        if (model && anchored && modelVendor(model) === modelVendor(anchored)) {
-            throw new Error(`${src} "${model}" shares a vendor with AI_ANCHORED_MODEL "${anchored}" - `
-                + 'the blind reasoner must be a different vendor from the anchored one '
-                + '(reasoner independence is what the blind-vs-anchored comparison rests on).');
-        }
-        return { provider: 'openrouter', model, grounded: false };
+        // blindCandidates owns the guard (and names the ACTUAL source key in
+        // its error, so an operator chasing it does not edit the wrong key).
+        // It THROWS on an invalid primary exactly as the inline checks did
+        // before 2026-08-23, and additionally returns the vetted fallback
+        // chain the provider seam walks on a 404.
+        const { candidates } = blindCandidates(cfg);
+        const [model = cfg.AI_BLIND_MODEL || cfg.OPENROUTER_MODEL, ...fallbacks] = candidates;
+        return { provider: 'openrouter', model, grounded: false, fallbacks };
     }
     if (task === 'anchored') {
         return { provider: 'openrouter', model: cfg.AI_ANCHORED_MODEL || cfg.HOTPICK_AI_MODEL, grounded: false };

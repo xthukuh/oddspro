@@ -7,6 +7,7 @@ import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only 
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
 import { DEFAULT_MAINTENANCE_MESSAGE } from './db/maintenance-rules.js'; // zero-import module - no cycle
+import { DEFAULT_BLIND_FALLBACKS } from './db/ai-rules.js'; // zod-only module - no cycle
 
 // A committed-but-blank .env line (`KEY=`, the .env.example shape) reaches zod
 // as '' - treat that as unset for optional strings, else `.min(1).optional()`
@@ -123,6 +124,32 @@ const EnvSchema = z.object({
     // (it used to ride HOTPICK_AI_MODEL).
     AI_ANCHORED_MODEL: z.string().default('deepseek/deepseek-v4-flash-0731'),
     AI_FACTS_MODEL: z.string().default('deepseek/deepseek-v4-flash-0731'),
+    // --- 2026-08-23 AI transport resilience ---
+    // Ordered CSV of blind-task fallbacks, tried when the primary slug answers
+    // 404 ("no endpoint can serve this right now"). The default blind model is
+    // a SINGLE-endpoint free model, so it has no internal failover at all.
+    // Every entry re-passes the reasoner-independence check
+    // (ai-rules#blindCandidates); one that fails is dropped and reported, never
+    // used. Blank = no fallback (pre-2026-08-23 behaviour).
+    AI_BLIND_MODEL_FALLBACKS: z.string().default(DEFAULT_BLIND_FALLBACKS.join(',')),
+    // Completion ceiling per AI call. Sending NONE was the truncation bug: the
+    // whole roster is reasoning models, so the reasoning stream could consume
+    // the provider's default budget and emit zero content tokens (30 live
+    // "carried no message content" + 4 "truncated ... (0 chars)"). The facts
+    // payload is the largest schema and fits inside ~1k tokens, so 3000 is
+    // roomy for the answer; the reasoning cap below is what keeps it reachable.
+    AI_MAX_TOKENS: z.coerce.number().int().min(256).default(3000),
+    // The ONE bounded retry's raised ceiling, used only after an incomplete
+    // reply (ai-parse#chatReplyOutcome retryable). A second failure fails open.
+    AI_MAX_TOKENS_RETRY: z.coerce.number().int().min(256).default(8000),
+    // Caps the reasoning stream so content is actually reached. 'low' is the
+    // shipped default because these prompts ask for a small typed JSON object,
+    // not a proof. 'off' omits the parameter entirely (models that reject it).
+    AI_REASONING_EFFORT: z.enum(['off', 'low', 'medium', 'high']).default('low'),
+    // Strict JSON reply mode. Documented in src/ai/index.js since 2026-08-19 as
+    // the `AI_JSON_MODE=0` escape hatch but never actually declared here, so
+    // zod stripped it and the hatch silently did nothing - declared now.
+    AI_JSON_MODE: boolStr('1'),
     // --- Detour B: AI safety-harness run guards (src/ai/harness.js) ---
     // Per-run wall-clock budget in minutes (0 = off; TIP_AI_DAILY_CAP /
     // AI_ENRICH_CAP already bound call COUNTS) and the circuit breaker:

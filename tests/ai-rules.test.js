@@ -239,8 +239,11 @@ test('resolveTask routes every task through OpenRouter (2026-08-04 Gemini retire
         HOTPICK_AI_WEB: 1, AI_BLIND_MODEL: '' };
     assert.deepEqual(resolveTask('facts', cfg),
         { provider: 'openrouter', model: 'deepseek/deepseek-v4-flash-0731', grounded: true });
+    // `fallbacks` (2026-08-23) is empty with no AI_BLIND_MODEL_FALLBACKS set,
+    // so the pre-existing routing contract is byte-identical; the key rides
+    // ONLY the blind task, which is the one with a vendor-independence rule.
     assert.deepEqual(resolveTask('blind', cfg),
-        { provider: 'openrouter', model: 'openai/gpt-5.6-terra', grounded: false });
+        { provider: 'openrouter', model: 'openai/gpt-5.6-terra', grounded: false, fallbacks: [] });
     // anchored is deliberately UNGROUNDED: blind and anchored must work
     // identical evidence for the paired anchoring-effect measurement.
     assert.deepEqual(resolveTask('anchored', cfg),

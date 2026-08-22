@@ -116,6 +116,62 @@ export function extractJson(text) {
     throw new Error(`AI reply carried no parseable JSON object (${lastError?.message ?? 'unknown'}): ${raw.slice(0, 400)}`);
 }
 
+// One OpenAI-compatible `choices[0]` -> a decision about whether it carried a
+// usable reply, and if not, WHICH way it failed. Pure and total.
+//
+// The live pipeline log (2026-08-19 .. 2026-08-22) reported these as two
+// unrelated errors - 30 x "carried no message content" and 4 x "truncated at
+// the model's token limit (0 chars)" - but they are ONE root cause: every
+// enrichment model in the current roster is a reasoning model, no max_tokens
+// was ever sent, and the reasoning stream can consume the whole completion
+// budget before a single content token is emitted. Whether the provider then
+// reports finish_reason 'length' or 'stop' is provider detail, not a different
+// problem, so both resolve to `retryable: true` and one retry policy covers
+// them (src/ai/index.js retries once with a raised ceiling and lower
+// reasoning effort).
+//
+// Returns { ok, retryable, reason, text, finishReason, reasoningChars, message }.
+//   reason: 'ok' | 'no-choice' | 'truncated' | 'reasoning-only' | 'empty'
+export function chatReplyOutcome(choice) {
+    const base = { ok: false, retryable: false, reason: 'no-choice', text: '', finishReason: null, reasoningChars: 0 };
+    if (!choice || typeof choice !== 'object') {
+        return { ...base, message: 'OpenRouter reply carried no choices' };
+    }
+    const message = choice.message;
+    const finishReason = typeof choice.finish_reason === 'string' ? choice.finish_reason : null;
+    if (!message || typeof message !== 'object') {
+        return { ...base, finishReason, message: 'OpenRouter reply carried no message object' };
+    }
+    const text = typeof message.content === 'string' ? message.content : '';
+    const reasoningChars = typeof message.reasoning === 'string' ? message.reasoning.length : 0;
+    const blank = !text.trim();
+
+    // finish_reason 'length' means the ceiling cut the reply. Even when some
+    // content arrived it is a JSON object cut mid-value, so extractJson would
+    // fail with a confusing syntax error at whatever character it stopped on -
+    // say "truncated" instead, and let the caller retry with more room.
+    if (finishReason === 'length') {
+        const reason = blank && reasoningChars > 0 ? 'reasoning-only' : 'truncated';
+        const detail = `${text.length} content chars, ${reasoningChars} reasoning chars`;
+        return {
+            ok: false, retryable: true, reason, text, finishReason, reasoningChars,
+            message: reason === 'reasoning-only'
+                ? `OpenRouter reply spent its whole token budget on reasoning and emitted no content (${detail})`
+                : `OpenRouter reply was truncated at the model's token limit (${detail})`,
+        };
+    }
+    if (blank) {
+        const reason = reasoningChars > 0 ? 'reasoning-only' : 'empty';
+        return {
+            ok: false, retryable: true, reason, text, finishReason, reasoningChars,
+            message: reason === 'reasoning-only'
+                ? `OpenRouter reply carried reasoning but no message content (${reasoningChars} reasoning chars)`
+                : 'OpenRouter reply carried no message content',
+        };
+    }
+    return { ok: true, retryable: false, reason: 'ok', text, finishReason, reasoningChars, message: '' };
+}
+
 // Text-level verdict decode: raw reply text -> fenced-JSON verdict (T3
 // split). Provider-agnostic - callers that already hold reply text (the
 // AI-review worker via the retried complete(), later the harness) decode

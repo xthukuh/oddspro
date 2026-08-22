@@ -290,3 +290,75 @@ export function structuredContract(shape) {
     };
     return `Reply with ONLY a JSON object, no other text:\n${render(shape)}`;
 }
+
+// ---------------------------------------------------------------------------
+// AI TRANSPORT ERROR CLASSIFICATION (2026-08-23). Read off the live pipeline
+// log, where enrichment sweeps produced 131 hard HTTP 429s and 1091
+// breaker-open refusals: openrouter.js retried on net-rules'
+// isRetryableNetworkError, which by contract matches ONLY faults that produced
+// no HTTP response. Every 429 from the free-tier shared pool therefore counted
+// as a permanent failure, five consecutive ones latched the run guard, and the
+// rest of the sweep was refused instantly. The rate limit was never the
+// outage - not retrying it was.
+//
+// Deliberately NOT net-rules' isTransientHttpStatus: that predicate retries
+// 403 (API-Football's WAF throttles with one) and has no 404 class. Against
+// OpenRouter a 403 is a moderation refusal - retrying re-bills a prompt that
+// will be refused again - and a 404 means "no endpoint can serve this slug
+// right now", which the blind fallback chain answers rather than a retry.
+const AI_RETRY_STATUSES = new Set([408, 409, 425, 429, 500, 502, 503, 504]);
+
+// Responseless transport faults, mirroring net-rules' RETRYABLE_CODES. Kept
+// local rather than imported so this module stays zero-import.
+const AI_NETWORK_CODES = new Set([
+    'ECONNRESET', 'ETIMEDOUT', 'ECONNABORTED', 'EAI_AGAIN',
+    'EPIPE', 'ENOTFOUND', 'ECONNREFUSED', 'ENETUNREACH',
+]);
+
+// A slug that no longer exists does NOT answer 404 - probed live 2026-08-23,
+// OpenRouter answers 400 with "<slug> is not a valid model ID". So the two ways
+// a model can be unreachable arrive under different statuses: 404 for "no
+// endpoint can serve this right now" (the observed live failure, on a slug that
+// does exist), and this 400 for a retired or mistyped one. Both mean the same
+// thing to a caller holding a fallback chain, so both resolve to
+// 'model-missing'. Every OTHER 400 stays permanent - a genuinely malformed
+// request must stay loud rather than quietly retrying against other models.
+const MODEL_MISSING_RE = /not a valid model|no such model|model not found|unknown model|no endpoints found|no allowed providers/i;
+
+// -> 'retry' | 'model-missing' | 'permanent'. Total: junk in, 'permanent' out.
+export function aiErrorClass(err) {
+    if (!err || typeof err !== 'object') return 'permanent';
+    const status = Number(err.response?.status ?? err.status);
+    if (Number.isFinite(status) && status > 0) {
+        if (status === 404) return 'model-missing';
+        if (status === 400) {
+            const body = err.response?.data?.error?.message ?? err.response?.data?.error ?? '';
+            return MODEL_MISSING_RE.test(String(body)) ? 'model-missing' : 'permanent';
+        }
+        return AI_RETRY_STATUSES.has(status) ? 'retry' : 'permanent';
+    }
+    // No status at all: the request never reached the server.
+    if (err.isAxiosError === true) return 'retry';
+    if (typeof err.code === 'string' && AI_NETWORK_CODES.has(err.code)) return 'retry';
+    return 'permanent';
+}
+
+export const isRetryableAiError = err => aiErrorClass(err) === 'retry';
+export const isModelMissingError = err => aiErrorClass(err) === 'model-missing';
+
+// The server's own "come back in N seconds" hint, in ms, or null when it gave
+// none. OpenRouter puts it in the error metadata AND a Retry-After header (a
+// live 429 body captured 2026-08-23 carried retry_after_seconds: 5). Bounded,
+// because an upstream is free to name a delay longer than the whole run's
+// budget. An HTTP-date Retry-After is legal but deliberately unparsed: "no
+// hint" lets the caller's own jittered backoff decide instead of guessing.
+export function aiRetryAfterMs(err, { max = 30_000 } = {}) {
+    if (!err || typeof err !== 'object') return null;
+    const headers = err.response?.headers ?? {};
+    const raw = err.response?.data?.error?.metadata?.retry_after_seconds
+        ?? headers['retry-after'] ?? headers['Retry-After'];
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    const cap = Number(max);
+    return Math.min(Math.round(n * 1000), Number.isFinite(cap) && cap > 0 ? cap : 30_000);
+}
