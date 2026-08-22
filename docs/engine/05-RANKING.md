@@ -30,6 +30,15 @@ shrunkRate = (bucket.hits + k * globalRate) / (bucket.n + k)     // k = shrink_k
 Voids are skipped from rate buckets; per-market buckets also carry flat-stake
 `staked`/`profit` (the per-market honesty line in the UI).
 
+The engine-v2 **leg-cell calibrator** (`loadCalibrator` in `src/daily-slip.js`, served as
+`calibration.leg_cells` on `/api/magic-sort` and feeding the Daily MultiBet) is built from
+every offered menu leg of every settled fixture in a 90-day window. Its `odds_markets`
+load is chunked per 200 fixtures (2026-08-23): the single `IN (...)` statement it used to
+issue covered ~10k fixtures and ~7M rows, which the shared live host killed every time
+("lost connection during query", the error behind the 2026-08-19 full-sweep failure) and
+which peaked at 1.5 GB RSS where it did run. Chunking keeps the output byte-identical
+(sha-verified) at a 443 MB peak, and live carried `leg_cells` for the first time that day.
+
 ## The 11 strategies
 
 | id | Scores by |
