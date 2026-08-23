@@ -1,0 +1,9 @@
+#!/bin/sh
+# Prose punctuation gate: no em-dash, en-dash, curly quotes or ellipsis
+# characters may enter the repo. `npm run check:prose` lists offenders and
+# exits 1; fix them (or run `node scripts/normalize-punctuation.js`) and
+# re-stage. Never bypass with --no-verify (house rule).
+npm run --silent check:prose || {
+    echo "pre-commit: prose punctuation gate failed - run 'node scripts/normalize-punctuation.js' and re-stage." >&2
+    exit 1
+}
