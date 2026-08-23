@@ -2,7 +2,8 @@
 
 Lean by policy (housekeeping 2026-08-04): completed specs/plans/checklists and superseded
 research were pruned - git history keeps them. What remains is current-truth only.
-Architecture lives in the repo-root `CLAUDE.md` (authoritative, agent-dense); agent
+The architecture MAP lives in the repo-root `CLAUDE.md` (one line per module, the
+invariants, the conventions) and the per-module detail in `engine/`; agent
 operational playbooks in `agents/toolset.md` (entry point: repo-root `AGENTS.md`).
 Command/routine quick card: repo-root `QUICK-REFERENCE.md`; system-behavior chapters:
 `engine/` (index: `engine/00-README.md`).
@@ -12,8 +13,9 @@ Command/routine quick card: repo-root `QUICK-REFERENCE.md`; system-behavior chap
 - `DEPLOYMENT.md` - the manual cPanel deploy guide (no SSH; zips via `npm run package:deploy`),
   including the "What's new in v1.3.0" pre-flight section for the pending live deploy.
 - `engine/` - the system bible: numbered behavior chapters (operating modes, data pipeline,
-  linking, predictions, ranking, AI layers, agent procedures). Index + the doc
-  update-triggers table: `engine/00-README.md`.
+  linking, predictions, ranking, AI layers, agent procedures, web client). Index + the doc
+  update-triggers table: `engine/00-README.md`. Since the 2026-08-23 CLAUDE.md slim-down the
+  chapters carry the per-module detail; root `CLAUDE.md` is the map that points into them.
 - `memory-bank.md` - resolved-issue lessons (do not re-learn), the AI policy-regime switch
   log, environment facts, and the short current-state block.
 - `agents/` - the agent toolset knowledge library (`toolset.md`): verified operational

@@ -1,10 +1,11 @@
 # docs/engine/ - the system bible
 
 How oddspro BEHAVES: operating modes, execution stages, and the logic behind every
-prediction calculation. Division of labor: **this folder = behavior and why**; root
-`QUICK-REFERENCE.md` = command sequences; `CLAUDE.md` = per-file architecture (authoritative
-and denser); `docs/memory-bank.md` = history and hard-won lessons. Chapters are behavior
-docs, never changelogs.
+prediction calculation. Division of labor since the 2026-08-23 CLAUDE.md slim-down:
+**this folder = behavior, detail and why**; root `CLAUDE.md` = the map (one line per module,
+the invariants, the conventions) and the entry point; root `QUICK-REFERENCE.md` = command
+sequences; `docs/memory-bank.md` = history and hard-won lessons. Chapters are behavior docs,
+never changelogs.
 
 > ## The honesty contract
 > **No positive-EV market exists on our books - flat-stake EV ≈ −3% (the vig).** The
@@ -24,9 +25,10 @@ docs, never changelogs.
 | 05 | `05-RANKING.md` | Calibration + shrinkage, the 11 strategies, LODO replay, `sure`, safe pool, sure bets |
 | 06 | `06-AI.md` | Adjudicators (veto-only), the worker + budget, enrichment, the guard chain |
 | 07 | `07-AGENT-PROCEDURES.md` | Agent engagement routing: where things live, change → pre-read → verification |
+| 08 | `08-WEB-CLIENT.md` | The React SPA: shell/theme, table, filters, betslip, view toggles, caches, auth + admin panel |
 
 Reading paths - new developer: 01 → 02 → 04 → 05; AI agent: `AGENTS.md` → 07 → 01;
-"why did it tip that?": 04 → 05.
+"why did it tip that?": 04 → 05; "why does the table do that?": 08.
 
 ## Maintenance
 
@@ -47,6 +49,8 @@ Reading paths - new developer: 01 → 02 → 04 → 05; AI agent: `AGENTS.md` �
 | Hot gates (`goals-rules`), tip families/blend/guards (`tip-rules`), settlement | `04-PREDICTIONS.md` |
 | `STRATEGIES`, calibration, `WAREHOUSE_WLO`, `DEFAULT_SAFE`, sure bets (`magic-rules`) | `05-RANKING.md` |
 | AI prompts/tags/caps/guards/DARK switches | `06-AI.md` |
+| Web client behavior: table/sort/filters/toggles/betslip/records cache/admin panel (`web/src/**`) | `08-WEB-CLIENT.md` |
+| Accounts/settings-catalog/feature-registry/analytics surfaces (`src/auth.js`, `src/settings.js`, `src/db/feature-rules.js`, `src/track.js`) | `01-SYSTEM.md` |
 | New agent procedure or change-category | `AGENTS.md`/`toolset.md` (dated append) + a `07` routing row |
 | Any command, routine sequence, warning, or env knob | root `QUICK-REFERENCE.md` (same commit) |
 | User-facing term added/changed | `web/src/glossary.js` FIRST (tests enforce wording), then a QUICK-REFERENCE §4 row |

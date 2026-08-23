@@ -12,6 +12,7 @@ copying content into this chapter, you are in the wrong file.
 | Hard invariants + cross-harness entry point | `AGENTS.md` (root) |
 | HOW to operate the toolchain (test/serve/E2E/DB/release playbooks, ops issue KB) | `docs/agents/toolset.md` |
 | System *behavior* - modes, algorithms, formulas | `docs/engine/` chapters 01-06 |
+| The React SPA: table, filters, betslip, caches, admin panel | `docs/engine/08-WEB-CLIENT.md` |
 | Command/routine sequences, warnings, definitions | root `QUICK-REFERENCE.md` |
 | History, resolved issues, AI regime-switch log | `docs/memory-bank.md` |
 
@@ -26,12 +27,35 @@ copying content into this chapter, you are in the wrong file.
 | AI prompts/models/tags | `06-AI.md` | regime-neutral (bytes + tags identical) or bump the tag same-commit; `scripts/ai-scorecard.js` after |
 | Pipeline steps/schedulers/cadence | `01-SYSTEM.md` | offline suite (auto-rules tests) + one observed light pass in `logs/auto-refresh.log` |
 | Data invariants (freeze/fetch-once/settle) | `02-DATA-PIPELINE.md` | do NOT - these are load-bearing; propose to the user first |
+| Web table/filters/betslip/caches | `08-WEB-CLIENT.md` | offline suite (client rules tests) + a manual pass in the browser |
 | A new ops recipe discovered | - | dated VERIFIED append to `docs/agents/toolset.md` (its protocol) |
 
 Two standing meta-rules: (1) live generation knobs (`TIP_MIN_PRICE`, `SAFE_*`, ...) never
 move mid-experiment without a dated note - a silent move partitions the measurement ledger
 (the 2026-07-10 lesson); (2) settled negatives in `toolset.md` §4 are not re-litigated
 without NEW data.
+
+## What the offline suite covers
+
+`npm test` runs `node --test "tests/*.test.js"` - offline by construction, no DB and no live
+APIs. It asserts:
+
+- market registry invariants, stale-odds diff scenarios, the pre-match calc (H2H and
+  rolling-goals windows), hot-pick rules (gates, devig, veto logic), magic-sort rules
+  (calibration, strategies, slip replay, safe-only selection gates, the streak stat),
+  api-sports rate-limit rules, auto-refresh scheduling rules (EAT due times, log trim), the
+  client freshness reload gate, and the standardized game-record contract against the frozen
+  `x-*-output.xx.json` snapshots;
+- v1.1.0 added auth crypto/lockout/OTP rules (including the async scrypt twins),
+  sliding-window rate limits, the dynamic-settings catalog, the prefs LWW reconcile,
+  access-tier rules (guest redaction, date ceiling), lab binning and HTTP cache rules;
+- M3 added any-market tips (`tipOutcome` hit/miss/void plus legacy byte-compat,
+  book-integrity guards, `buildTipBooks` family assembly, per-line `scoreOverLine`,
+  market-ROI calibration with the safe maturity floor, `tipMarketLabel`);
+- 2026-08-19 added the writer-lease and meta cross-instance rules (`lease-rules.js`'s
+  `lockOutcome`/`leaseTransition`, `auto-rules.js`'s `shouldConsumeRefreshRequest`) and the
+  pure db-sync rules (`scripts/lib/sync-rules.js`: `planPull`, `dumpArgs`,
+  `dumpLooksComplete`, `planIdChunks`, `statusRows`/`compareStatus`).
 
 ## Doc updates are part of the change
 
