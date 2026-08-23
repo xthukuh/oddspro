@@ -268,28 +268,73 @@ uncontested men's fixture from winning that one row without touching any of the
 minute in memory; then prefilter by league when `leagueAliases` resolves (which
 is what would make F6's table earn its keep).
 
-**F9 (SUSPECTED)** two-letter initialisms score 0.9 - `_initialismSim` accepts
-`[a-z]{2,4}`, and `sm` matches `santa maria`, `san marino` and `sporting
-mendoza` alike. Needs a count of links whose winning arm was `_initialismSim`
-with `short.length === 2` before changing anything.
+**F9 - two-letter initialisms score 0.9  (MEASURED AND REFUTED 2026-08-24, NOT a
+bug - do not rebuild).** Same class as F4: the suspicion was tested against the
+warehouse before anything was changed, and the change it implied would have done
+pure damage. A read-only replay of the scorer over **all 20,041 existing links**
+found **exactly 12** where a team side was decided by the two-letter initialism
+arm (that arm scoring strictly above both the bigram-dice and the token arms) -
+and **all 12 are CORRECT**. Every one is API-Football's abbreviation `MP` for
+Mikkelin Palloilijat in the Finnish Ykkosliiga: 6 pairings, each linked by both
+providers, betpawa and betika agreeing.
 
-**F10 (SUSPECTED, low)** link writes bump `matches.updated_at`, which the web
-surfaces as "odds refresh time" in the row tooltip. The collection watchdog is
-already immune (it reads `meta.last_odds_at`).
+All 12 clear the 0.85 acceptance floor ONLY because of that arm. Restricting the
+initialism to 3+ letters - the audit's own suggestion - drops their confidence
+from 1.000 to 0.55-0.60, i.e. it destroys 12 correct links and every future MP
+fixture, against **zero wrong links found**. A further 56 links were decided by
+3-4 letter initialisms, which the suggested change would have kept.
 
-**Still open, unrelated to F1-F4/F8: 92 links remain where a SINGLE match sits
-more than 60 min from its fixture's kickoff.** These are reschedules the
-bookmaker never relisted, so the link itself is right, but the row still
-displays under a stale bookmaker `start_time`. Lower severity than F1 (no wrong
-score, just the wrong date). Candidate fix: refresh `matches.start_time` from
-`f.kickoff` once linked - consistent with the standing "canonical cutoffs" rule
-that bookmaker-provided times go stale after a reschedule.
+The ambiguity the finding feared is already neutralized one layer up, by the
+runner-up margin: two candidates matching the same initialism both score 0.9,
+tie, and the required 0.05 gap rejects BOTH. The arm ships exactly as it is.
+
+Original finding:
+two-letter initialisms score 0.9 - `_initialismSim` accepts `[a-z]{2,4}`, and
+`sm` matches `santa maria`, `san marino` and `sporting mendoza` alike. Needs a
+count of links whose winning arm was `_initialismSim` with `short.length === 2`
+before changing anything.
+
+**F10 - FIXED 2026-08-24** (was: SUSPECTED, low). Confirmed real: `matches.updated_at`
+is `ON UPDATE CURRENT_TIMESTAMP`, so every link-path UPDATE bumped the timestamp the
+web surfaces as "odds refresh time" in the row tooltip. All three link-path writes in
+`src/link.js` now pin it with `updated_at = updated_at` (a `db.raw` in the update
+object): the link write itself, the reschedule unlink of the claim-contest loser, and
+the `sides_swapped` display-flag write in `revalidateOrientation`. Verified against the
+local warehouse - a pinned UPDATE leaves the timestamp byte-identical. Side benefit: the
+collection watchdog's FALLBACK signal `MAX(matches.updated_at)` gets more truthful too
+(its primary signal `meta.last_odds_at` was already immune).
+
+**FIXED 2026-08-24, unrelated to F1-F4/F8: 92 links where a SINGLE match sits more
+than 60 min from its fixture's kickoff.** These are reschedules the bookmaker never
+relisted, so the link itself is right, but the row displayed under a stale bookmaker
+`start_time` - a never-played date. Lower severity than F1 (no wrong score, just the
+wrong date). Fixed at READ time, not write time: `src/db/records.js` now serves
+`start_time: r.kickoff ?? r.start_time`, so the canonical kickoff wins whenever the
+match is linked - the same doctrine as the completion fallback ("canonical cutoffs").
+Day filtering and ordering stay on the indexed `m.start_time`, so query plans are
+untouched; only the displayed value moves. Verified on the local warehouse: match
+`50796`, stored `start_time` 2h adrift, now serves the canonical kickoff.
+
+The candidate fix proposed above - overwrite `matches.start_time` from `f.kickoff`
+once linked - was **REJECTED**: `src/db/store.js`'s `_matchRow` rewrites `start_time`
+from the bookmaker feed on EVERY odds refresh, so a one-time repair would be undone
+within one light pass (~15 min), and a write-path change would have to fight the
+collector for the column forever. The read-time fix also follows the `sides_swapped`
+precedent from F2: a display problem gets read-time reconciliation and the stored
+bookmaker data stays exactly as the provider sent it.
 
 ### API-Football client (`src/apisports.js`)
 
-**A7 (SUSPECTED, low)** module-level rate-limit counters are unsynchronised
-across `_batch` calls running at parallel 2, allowing a 1-2 request overshoot
-past the quota floor. The floor is a safety margin, not a hard ceiling.
+**A7 - FIXED 2026-08-24** (was: SUSPECTED, low). Confirmed: the module-level rate
+counters were read and written around an `await`, so two `_batch` calls at parallel 2
+could both pass the floor check on the same remaining count and overshoot it by 1-2
+requests. `_getPage` now RESERVES its slot - `_remaining -= 1` and
+`_minuteRemaining -= 1` happen synchronously, in the same synchronous block as the
+floor checks and BEFORE the awaited GET - so check-and-reserve is atomic per call and a
+concurrent call sees the already-reserved value. Response headers re-sync the true
+counts after each response, and `Infinity - 1 === Infinity` preserves the "no header
+seen yet" semantics rather than inventing a fake budget. The floor remains a safety
+margin, not a hard ceiling.
 
 **A8 - resolved as a side effect of A1/A3.** Because the bare `.parse()` threw
 BEFORE the give-up gate was reached, a persistently malformed API response could

@@ -76,6 +76,22 @@ flowchart TD
 Acceptance needs BOTH the absolute floor and the **0.05 margin over the runner-up** - a
 high score that two fixtures share is ambiguity, not confidence.
 
+### The initialism arm stays at 2 letters (audit F9, measured and refuted)
+
+The obvious complaint about `initialism(a, b) ? 0.9 : 0` is that `_initialismSim` accepts
+`[a-z]{2,4}`, so a two-letter form like `sm` matches `santa maria`, `san marino` and
+`sporting mendoza` alike. Measured over all 20,041 existing links, that arm decided a team
+side (scoring strictly above both the bigram-dice and token arms) on **exactly 12 rows, and
+all 12 are correct** - every one is API-Football's `MP` for Mikkelin Palloilijat in the
+Finnish Ykkosliiga, 6 pairings linked by both providers with betpawa and betika agreeing.
+Those 12 clear the 0.85 floor ONLY through this arm: requiring 3+ letters drops them from
+1.000 to 0.55-0.60, destroying 12 correct links and every future MP fixture against zero
+wrong links found. (56 further links were decided by 3-4 letter initialisms.)
+
+The feared ambiguity is already handled one layer up: two candidates matching the same
+initialism both score 0.9, tie, and the 0.05 runner-up margin rejects both. **Do not
+rebuild this** - same class as the F4 qualifier veto below.
+
 ## Candidate pool: batched, then league-scoped
 
 Until 2026-08-23 the pool was one query PER OPEN ROW, filtered on kickoff alone (audit F7).
@@ -172,8 +188,12 @@ pure `orientationVerdict`/`orientationUpdate` (`src/db/link-rules.js`). Two deli
 non-actions: a `'unknown'` verdict (the two pairings are too close to call - short abbreviated
 names score low both ways) LEAVES the stored flag alone rather than guessing, and a row that
 did not move gets no UPDATE at all, because an unconditional rewrite would bump `updated_at`,
-which the web reads as the odds refresh time. `scripts/repair-orientation.js` runs the
-identical pass unbounded for links older than the flag. Verified 18,024 links checked across
+which the web reads as the odds refresh time. Since 2026-08-24 (audit F10) that column is
+also protected directly: every link-path write - the link itself, the claim-contest
+unlink, and this `sides_swapped` write - pins `updated_at = updated_at` in the UPDATE, so
+correlation work can never masquerade as an odds refresh (the column is `ON UPDATE
+CURRENT_TIMESTAMP`, so without the pin it bumped on all three). `scripts/repair-orientation.js`
+runs the identical pass unbounded for links older than the flag. Verified 18,024 links checked across
 local and production, exactly 13 flagged, zero false positives, second run clean on both.
 
 What the read layer does with the flag is chapter 02's read-layer section: the stored score

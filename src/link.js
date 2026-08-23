@@ -303,6 +303,10 @@ async function _linkProvider(provider) {
                     home_score_fulltime: null, away_score_fulltime: null,
                     home_score_first_half: null, away_score_first_half: null,
                     home_score_second_half: null, away_score_second_half: null,
+                    // Audit F10: updated_at is ON UPDATE CURRENT_TIMESTAMP and
+                    // the web shows it as the odds refresh time; pin it - this
+                    // write refreshes no odds.
+                    updated_at: db.raw('updated_at'),
                 });
                 counts.claims_replaced++;
                 console.debug(`[link] ${provider}: match ${claim.id} lost fixture ${hit.id} to ${m.id} (reschedule)`);
@@ -314,7 +318,10 @@ async function _linkProvider(provider) {
             // the repo can delete one - so a link accepted at the very edge of
             // the gate must not become a permanent rule (audit F3,
             // aliasWorthCaching). An alias-path link teaches nothing new anyway.
-            await db('matches').where('id', m.id).update({ fixture_id: hit.id });
+            // updated_at pinned (audit F10): linking is not an odds refresh.
+            await db('matches').where('id', m.id).update({
+                fixture_id: hit.id, updated_at: db.raw('updated_at'),
+            });
             const teach = score != null
                 && aliasWorthCaching(score.conf, score.runnerUp, threshold);
             if (teach) {
@@ -381,7 +388,13 @@ export async function revalidateOrientation({ sinceDays = 30, apply = true } = {
             console.debug(`[link] ${r.provider} match ${r.id} (fixture ${r.fixture_id}) sides_swapped -> ${next}: `
                 + `"${r.mh} v ${r.ma}" vs canonical "${r.fh} v ${r.fa}" `
                 + `(straight ${straight.toFixed(2)}, flipped ${flip.toFixed(2)})`);
-            if (apply) await db('matches').where('id', r.id).update({ sides_swapped: next });
+            if (apply) {
+                // updated_at pinned (audit F10): a display-flag write is not an
+                // odds refresh.
+                await db('matches').where('id', r.id).update({
+                    sides_swapped: next, updated_at: db.raw('updated_at'),
+                });
+            }
         } catch (e) {
             counts.errors++;
             console.error(`[link] orientation check failed for match ${r.id}: ${e?.message ?? e}`);

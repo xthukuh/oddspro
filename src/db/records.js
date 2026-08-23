@@ -511,7 +511,14 @@ async function _hydrate(rows, allowed = null) {
             match_id: r.match_id,
             api_id: r.api_id,
             provider: r.provider,
-            start_time: r.start_time,
+            // The CANONICAL kickoff wins whenever the match is linked (the same
+            // rule the completion fallback follows): m.start_time is bookmaker
+            // -provided and rewritten from the feed on every odds refresh, so a
+            // reschedule the bookmaker never relists leaves it stale - 92 links
+            // measured 60+ min adrift, displaying under a never-played date.
+            // Day filtering stays on the indexed m.start_time; only the value
+            // shown moves.
+            start_time: r.kickoff ?? r.start_time,
             fixture: `${r.home_team_name} - ${r.away_team_name}`,
             fixture_api: r.api_home && r.api_away ? `${r.api_home} - ${r.api_away}` : null,
             home_team: r.home_team_name,

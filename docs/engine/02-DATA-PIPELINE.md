@@ -134,7 +134,12 @@ align with bookmaker wall-clock times.
 header) is paced, not fatal: `_getPage` sleeps into the next minute window when it runs out
 and retries an `errors.rateLimit` response, bounded to 2 retries - decision logic lives in
 pure `src/db/rate-rules.js` (offline-tested; the daily-quota error deliberately does NOT
-match this rule and stays fatal).
+match this rule and stays fatal). **Check-and-reserve is atomic (2026-08-24, audit A7):**
+`_getPage` decrements both counters in the same synchronous block as the floor checks,
+before the awaited GET, so two `_batch` calls running at parallel 2 can no longer both
+pass the check on the same remaining count and overshoot the floor; response headers
+re-sync the true values afterwards, and `Infinity - 1 === Infinity` keeps an unseen header
+meaning "unknown" rather than a fake budget.
 
 **Results polling is bounded.** The results refresh only re-polls non-terminal
 past-kickoff fixtures within `RESULTS_MAX_AGE_DAYS` (7) - stuck upstream `NS`/`PST`
@@ -295,7 +300,19 @@ the home/away score before rendering, so the displayed result always agrees with
 bookmaker team names shown beside it. The goals-sum sort and the settle SQL are untouched
 either way - this is display-only.
 
-Rows also carry `updated_at` (odds refresh time), `markets_stale` (last-seen prices of
+**The served `start_time` is the canonical kickoff (2026-08-24).** Whenever the match is
+linked the payload carries `f.kickoff`, falling back to the bookmaker `m.start_time` only
+for uncorrelated rows. Filtering, day selection and ordering all stay on the indexed
+`m.start_time`, so query plans are untouched - only the displayed value moves. The reason
+is that `store.js` rewrites `start_time` from the provider feed on every odds refresh, so
+it goes stale for good on a reschedule the bookmaker never relists: 92 links measured 60+
+minutes adrift, showing games under never-played dates. Overwriting the stored column once
+linked would be undone within one light pass, so this is a read-time reconciliation of a
+display problem, mirroring the `sides_swapped` precedent above - the stored bookmaker data
+stays exactly as the provider sent it.
+
+Rows also carry `updated_at` (odds refresh time, and only that - since 2026-08-24 the
+link pass pins the column rather than bumping it; chapter 03), `markets_stale` (last-seen prices of
 vanished markets), `available` (false once the fixture is terminal, the match completed,
 or the latest update had no markets), and `elapsed` (live match minute, display-only - the
 Status tooltip appends it for in-play statuses; refreshed by the results settle pass, so at

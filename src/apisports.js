@@ -60,6 +60,16 @@ async function _getPage(path, params) {
             await _sleep(msToNextMinute(Date.now()));
             _minuteRemaining = Infinity; // fresh window; headers re-sync below
         }
+        // Reserve this request's slot BEFORE the awaited GET (audit A7): _batch
+        // runs fetchers at parallel 2, and both in-flight calls used to pass
+        // the floor checks above on the same pre-request counter values,
+        // overshooting the quota floor by a request or two. The decrements sit
+        // in the same synchronous block as the checks (no await between them),
+        // so check+reserve is atomic per call; the response headers re-sync the
+        // true values below. Infinity - 1 === Infinity, so an unseen header
+        // stays "unknown" rather than becoming a fake budget.
+        _remaining -= 1;
+        _minuteRemaining -= 1;
         // Transient socket/TLS/DNS faults AND transient HTTP statuses (the
         // live-observed 403-then-success edge throttle, 429/5xx) get a
         // bounded exponential-backoff retry so one blip doesn't abort the
