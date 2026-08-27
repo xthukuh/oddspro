@@ -16,10 +16,11 @@
 // between bumps. Decision math is pure src/db/warm-rules.js (offline-tested).
 //
 // Multi-instance: the memo is per-process, so the keeper runs in EVERY
-// instance (writer and followers alike); only the /api/columns loader
-// differs (the writer owns the odds_markets scan, followers read the
-// persisted meta catalog). Passes run one target at a time - DB_POOL_MAX is
-// 3 on the live host, and a parallel warm would starve real requests.
+// instance (writer and followers alike), and every instance loads the SAME
+// way - /api/columns reads the catalog persisted in shared meta rather than
+// re-running the odds_markets scan (see the target's own note below).
+// Passes run one target at a time - DB_POOL_MAX is small on the live host,
+// and a parallel warm would starve real requests.
 //
 // Deliberately NOT quiesced during a maintenance window: warming is local DB
 // reads (never billed/outbound work), and the caches should be hot the
@@ -28,10 +29,9 @@
 
 import { config } from './config.js';
 import { effective } from './settings.js';
-import { queryRecords, columnCatalog, columnCatalogFromMeta } from './db/records.js';
+import { queryRecords, columnCatalogFromMeta } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { magicSortCached } from './magic.js';
-import { isWriter } from './db/lease.js';
 import { warehouseVersion } from './meta.js';
 import { accessFromUser } from './db/access-rules.js';
 import { queryCacheKey } from './db/cache-rules.js';
@@ -79,7 +79,23 @@ function buildTargets() {
     const targets = [{
         key: '/api/columns',
         label: '/api/columns',
-        loader: () => (isWriter() ? columnCatalog() : columnCatalogFromMeta()),
+        // FIX (2026-08-28): EVERY instance - the writer included - serves the
+        // catalog persisted in shared meta. The writer used to call the raw
+        // columnCatalog() here, which re-ran the odds_markets aggregate on
+        // every warm pass: measured on the live host at ~15s over 12.9M rows
+        // / 3.5GB, returning 213k tuples, and a pass is due on every
+        // warehouse_version bump (each 15-minute light pass) plus every
+        // WARM_MAX_AGE_MINUTES (default 5). That is ~288 full scans a day of
+        // a catalog that changes when a bookmaker adds a market family, and
+        // under load the scan was being killed mid-flight - 175 of 297
+        // stderr lines were this one query, and meta.column_catalog had gone
+        // 6 days stale as a result.
+        //
+        // The scan still happens, exactly where it was always designed to:
+        // src/auto-refresh.js's _storeColumnCatalog, writer-only and
+        // throttled to once per 30 minutes (always on a full sweep). See the
+        // multi-instance note on columnCatalogFromMeta in src/db/records.js.
+        loader: () => columnCatalogFromMeta(),
     }];
     for (const { date, tier } of recordsWarmTargets({ dates, todayIso, tiers })) {
         targets.push({

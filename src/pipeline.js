@@ -7,8 +7,32 @@ import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
 import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
-import { makeStepGuard, summarizeSteps, hasDataBearingSuccess } from './db/auto-rules.js';
+import { makeStepGuard, summarizeSteps, hasDataBearingSuccess, hasOddsSaveData } from './db/auto-rules.js';
+import { setMeta } from './meta.js';
 import { _date, _dtime, debugLog } from './utils.js';
+
+// The collection heartbeat, shared with src/auto-refresh.js's light pass.
+//
+// FIX (2026-08-28): `last_odds_at` used to be stamped ONLY by lightRefresh,
+// but the single-slot job guard means a full sweep BLOCKS every light pass
+// for its whole duration - measured at 3.7-5.5h on the live host. The key
+// therefore froze for hours while this pipeline was busily saving odds, and
+// scripts/collection-watchdog.js (which reads exactly this key - see
+// src/db/watchdog-rules.js#resolveOddsSignal) read the freeze as a stalled
+// scrape: every night it declared a stall, recycled Passenger mid-sweep and
+// SMS-ed the admin, all while collection was healthy.
+//
+// Same contract as the light path: stamped ONLY when odds data actually
+// landed (hasOddsSaveData - a scraper that ran and returned nothing must not
+// read as healthy), and best-effort, so a meta write failure can never fail
+// the odds step that just succeeded. Deliberately NOT gated on isWriter():
+// unlike lightRefresh this pipeline is also the CLI `npm run start` entry
+// point that cron-only hosts drive, and odds collected there are just as real.
+function _stampOddsHeartbeat(counts) {
+    if (!hasOddsSaveData(counts)) return;
+    setMeta('last_odds_at', new Date().toISOString())
+        .catch(e => console.error('[pipeline] last_odds_at meta write failed:', e?.message ?? e));
+}
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
@@ -94,6 +118,7 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
             await guardStep(`${provider} odds ${dt}`, async () => {
                 const exclude = await completedMatchIds(provider, `${dates[0]} 00:00:00`);
                 const c = await saveMatches(await fetcher(dt, exclude));
+                _stampOddsHeartbeat(c);
                 console.debug(`[+] ${provider} ${dt}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
             });
         }
@@ -199,7 +224,9 @@ export async function runDateRefresh(date_, onStep = null, shouldCancel = null) 
     for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
         const res = await guardStep(`${provider} odds`, async () => {
             const exclude = await completedMatchIds(provider, `${dt} 00:00:00`);
-            return saveMatches(await fetcher(dt, exclude));
+            const c = await saveMatches(await fetcher(dt, exclude));
+            _stampOddsHeartbeat(c);
+            return c;
         });
         if (res) summary[provider] = { saved: res.inserted + res.updated, skipped: res.skipped, markets: res.markets };
     }
