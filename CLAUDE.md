@@ -71,6 +71,15 @@ node src/index.js enrich            # M4.1: 3-call AI enrichment for upcoming co
 node src/index.js aireview          # drain pending hot/tip AI verdicts once (the serve process runs this every 60s
                                     # in-process via src/ai-worker.js; cron-only hosts run it after the sweep)
 node scripts/ai-scorecard.js        # read-only per-model-tag AI health (chapter 06 "Instruments")
+node scripts/model-triage.js [--runs N] [--only a,b] [--grounded] [--min-output N] [--json out.json]
+                                    # read-only free-model discovery -> probe -> score -> rank. Probes the
+                                    # OpenRouter free catalog against 5 acceptance criteria (transport,
+                                    # content-not-just-reasoning, strict JSON, NO REFUSAL on a betting-domain
+                                    # prompt, latency) and prints a ranked table plus per-role picks honouring
+                                    # the blind-vs-anchored vendor rule. `--grounded` probes the way the
+                                    # adjudicator/facts tasks actually run (web plugin, ~$0.001/req) - results
+                                    # DIFFER from ungrounded, so use it before choosing those two roles.
+                                    # Writes nothing: apply picks via Admin -> Settings
 node src/index.js performance       # flat-stake ROI / hit-rate / bucket report for tips + hot picks (also GET /api/performance)
 node scripts/backtest-hotpicks.js   # replay historical fixtures to measure/tune hot-pick gate precision
 node scripts/analyze-safe-tips.js   # weekly: LODO grid of the Safe-only gates + runner-up hypothesis re-tests
@@ -209,6 +218,7 @@ client and server cannot drift.
 - `src/ai-worker.js` + `src/db/adjudicate-rules.js` - the background worker that owns every verdict write, its derived work predicate and the reuse keys.
 - `src/ai/harness.js` + `src/ai/adjudicators.js` + `src/db/ai-guard-rules.js` + `src/ai-parse.js` - the one guarded path every structured AI call takes, the prompts and model tags, the run guard, and the pure reply decoding.
 - `src/scorecard.js` + `src/db/scorecard-rules.js` - the read-only AI scorecard behind `scripts/ai-scorecard.js`.
+- `src/db/model-triage-rules.js` + `scripts/model-triage.js` - free-model discovery, triage and scoring: the pure acceptance criteria, refusal classifier and ranking, and the script that probes the live free catalog. Read-only; picks are applied by hand in Admin -> Settings.
 
 **Accounts, admin and analytics** (detail: `docs/engine/01-SYSTEM.md`)
 
