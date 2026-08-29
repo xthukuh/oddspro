@@ -6,7 +6,7 @@ import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
-    summarizeTimings,
+    summarizeTimings, DATA_BEARING_STEP_RE,
     hasOddsSaveData, fullSweepAttemptVerdict,
 } from '../src/db/auto-rules.js';
 
@@ -420,4 +420,27 @@ test('summarizeTimings is total against missing/garbage input', () => {
     assert.equal(summarizeTimings([{ step: 'x', ok: true }]), '');
     assert.equal(summarizeTimings([{ step: 'x', ok: true, ms: -5 }]), '');
     assert.equal(summarizeTimings([{ ms: 4000 }]), 'unknown 4s');
+});
+
+// The light pass's tail (2026-08-29) now runs through the SAME guardStep as
+// the data steps, so a tail failure lands in stepResults. That is only safe
+// while none of these labels reads as data-bearing: the outage detector
+// derives a notice span from DATA_BEARING_STEP_RE failures, so an auth-purge
+// hiccup that matched would publish a "we lost odds" warning to real users.
+test('light-pass tail labels are never data-bearing', () => {
+    for (const label of ['daily-slip settle', 'user-slip settle', 'auth purge', 'track prune']) {
+        assert.equal(DATA_BEARING_STEP_RE.test(label), false, `${label} must not be data-bearing`);
+        assert.equal(hasDataBearingSuccess([{ step: label, ok: true }]), false);
+    }
+});
+
+test('a tail failure alone still downgrades the verdict to partial', () => {
+    const results = [
+        { step: 'results', ok: true, ms: 1200 },
+        { step: 'auth purge', ok: false, error: 'boom', ms: 50 },
+    ];
+    assert.equal(summarizeSteps(results), 'partial');
+    // ...but the pass still counts as having collected something, so freshness
+    // stamping and the warehouse-version bump are unaffected.
+    assert.equal(hasDataBearingSuccess(results), true);
 });

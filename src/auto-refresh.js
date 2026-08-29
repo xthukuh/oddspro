@@ -400,34 +400,39 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
         summary.tips_settled = s.tips_settled;
     }
 
-    // Daily MultiBet slips settle on the same cadence (pure SQL + rollup, no
-    // fetches); best-effort like the auth purge - never fails the refresh.
-    try {
-        summary.daily_slips_settled = (await settleDailySlips()).settled;
-    } catch (e) {
-        console.error('[light] daily-slip settle failed:', e?.message ?? e);
-    }
-    try {
-        summary.user_slips_settled = (await settleUserSlips()).settled;
-    } catch (e) {
-        console.error('[light] user-slip settle failed:', e?.message ?? e);
-    }
+    // The tail: daily/user slip settle, auth housekeeping (E3) and tracking
+    // retention (M6). All four are best-effort - a hiccup here must never fail
+    // the data refresh - which is exactly what guardStep already provides, so
+    // since 2026-08-29 they run through the SAME guard as the steps above
+    // rather than four hand-rolled try/catch blocks.
+    //
+    // The reason is attribution: a light pass takes 37-52s on the live host and
+    // its guarded steps often account for almost none of that, because on an
+    // idle pass (nothing in-play, next kickoff far) the odds scrapes are
+    // skipped and the remaining time is spent right here. Unrepresented work
+    // cannot be profiled, so `slow=` was reporting nothing at all for those
+    // passes.
+    //
+    // Failure semantics are unchanged in the way that matters: guardStep
+    // catches and records exactly as the try/catch did, and a tail failure
+    // cannot raise a spurious data notice, because the detector only derives
+    // an outage span from DATA_BEARING_STEP_RE failures (results / either
+    // provider's odds - see src/db/notice-rules.js) and none of these labels
+    // match it. What DOES change is honest: a tail failure now downgrades the
+    // run's verdict from 'ok' to 'partial' and names itself on the summary
+    // line, where it used to vanish into stderr.
+    const ds = await guardStep('daily-slip settle', () => settleDailySlips());
+    if (ds) summary.daily_slips_settled = ds.settled;
 
-    // Auth housekeeping (E3): drop long-expired sessions/OTP rows. Best-effort -
-    // a purge hiccup must never fail the data refresh.
-    try {
-        summary.auth_purged = await purgeExpiredAuth();
-    } catch (e) {
-        console.error('[light] auth purge failed:', e?.message ?? e);
-    }
-    // Tracking retention (M6): same best-effort idiom; a no-op while
-    // TRACK_EVENTS_RETENTION_DAYS is 0 (the keep-forever default).
-    try {
-        const pruned = await pruneTrackEvents();
-        if (pruned) summary.track_events_pruned = pruned;
-    } catch (e) {
-        console.error('[light] track prune failed:', e?.message ?? e);
-    }
+    const us = await guardStep('user-slip settle', () => settleUserSlips());
+    if (us) summary.user_slips_settled = us.settled;
+
+    const ap = await guardStep('auth purge', () => purgeExpiredAuth());
+    if (ap != null) summary.auth_purged = ap;
+
+    // A no-op while TRACK_EVENTS_RETENTION_DAYS is 0 (the keep-forever default).
+    const pruned = await guardStep('track prune', () => pruneTrackEvents());
+    if (pruned) summary.track_events_pruned = pruned;
 
     // Final verdict over the guarded steps (results, odds idle check,
     // per-provider odds, link, settle picks). 'partial' is a normal return -
