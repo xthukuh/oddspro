@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
     shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
+    summarizeTimings,
     hasOddsSaveData, fullSweepAttemptVerdict,
 } from '../src/db/auto-rules.js';
 
@@ -85,19 +86,21 @@ test('makeStepGuard lets a cancel thrown by checkCancel propagate uncaught, unre
 test('makeStepGuard captures an ordinary step failure into results without throwing', async () => {
     const results = [];
     const failures = [];
-    const guard = makeStepGuard({ results, onFailure: (label, message) => failures.push([label, message]) });
+    let t = 1000;
+    const guard = makeStepGuard({ results, onFailure: (label, message) => failures.push([label, message]), now: () => (t += 250) });
     const out = await guard('flaky step', async () => { throw new Error('boom'); });
     assert.equal(out, undefined);
-    assert.deepEqual(results, [{ step: 'flaky step', ok: false, error: 'boom' }]);
+    assert.deepEqual(results, [{ step: 'flaky step', ok: false, error: 'boom', ms: 250 }]);
     assert.deepEqual(failures, [['flaky step', 'boom']]);
 });
 
 test('makeStepGuard records success and resolves to the step function\'s return value', async () => {
     const results = [];
-    const guard = makeStepGuard({ results });
+    let t = 1000;
+    const guard = makeStepGuard({ results, now: () => (t += 250) });
     const out = await guard('ok step', async () => 42);
     assert.equal(out, 42);
-    assert.deepEqual(results, [{ step: 'ok step', ok: true }]);
+    assert.deepEqual(results, [{ step: 'ok step', ok: true, ms: 250 }]);
 });
 
 test('makeStepGuard calls checkCancel with the label BEFORE the step function ever runs', async () => {
@@ -365,4 +368,56 @@ test('trimLogTail over the cap keeps <= half, at a line boundary, marked', () =>
     assert.ok(body.length <= 100);              // half the cap
     assert.ok(body.startsWith('line-'));        // starts at a whole line
     assert.ok(body.endsWith('line-099\n'));     // newest lines survive
+});
+
+// summarizeTimings (2026-08-29 profiling pass): the compact "where did the
+// time go" clause appended to the one-line run summary.
+test('summarizeTimings ranks phases slowest first, in seconds', () => {
+    const out = summarizeTimings([
+        { step: 'link', ok: true, ms: 5000 },
+        { step: 'deep stats', ok: true, ms: 60000 },
+        { step: 'standings', ok: true, ms: 20000 },
+    ]);
+    assert.equal(out, 'deep stats 60s, standings 20s, link 5s');
+});
+
+test('summarizeTimings groups per-date labels into one phase row', () => {
+    const out = summarizeTimings([
+        { step: 'betpawa odds 2026-08-29', ok: true, ms: 30000 },
+        { step: 'betpawa odds 2026-08-30', ok: true, ms: 30000 },
+        { step: 'betpawa odds 2026-08-31', ok: true, ms: 30000 },
+        { step: 'fixtures 2026-08-29', ok: true, ms: 10000 },
+    ]);
+    assert.equal(out, 'betpawa odds 90s, fixtures 10s');
+});
+
+test('summarizeTimings strips the explanatory parenthetical from a label', () => {
+    const out = summarizeTimings([
+        { step: 'deep stats (final correlated fixtures, fetch-once)', ok: true, ms: 7000 },
+    ]);
+    assert.equal(out, 'deep stats 7s');
+});
+
+test('summarizeTimings drops steps below minMs and honours top', () => {
+    const rows = [
+        { step: 'a', ok: true, ms: 9000 },
+        { step: 'b', ok: true, ms: 8000 },
+        { step: 'c', ok: true, ms: 7000 },
+        { step: 'trivial', ok: true, ms: 10 },
+    ];
+    assert.equal(summarizeTimings(rows, { top: 2 }), 'a 9s, b 8s');
+    assert.equal(summarizeTimings(rows).includes('trivial'), false);
+});
+
+test('summarizeTimings times a FAILED step too - a slow step that then threw still shows', () => {
+    const out = summarizeTimings([{ step: 'results', ok: false, error: 'boom', ms: 42000 }]);
+    assert.equal(out, 'results 42s');
+});
+
+test('summarizeTimings is total against missing/garbage input', () => {
+    assert.equal(summarizeTimings(null), '');
+    assert.equal(summarizeTimings([]), '');
+    assert.equal(summarizeTimings([{ step: 'x', ok: true }]), '');
+    assert.equal(summarizeTimings([{ step: 'x', ok: true, ms: -5 }]), '');
+    assert.equal(summarizeTimings([{ ms: 4000 }]), 'unknown 4s');
 });

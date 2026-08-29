@@ -13,7 +13,7 @@ import { purgeExpiredAuth } from './auth.js';
 import { pruneTrackEvents } from './track.js';
 import {
     parseDailyTime, eatDateKey, eatMinutesOfDay, isFullDue, isLightDue, trimLogTail, refreshOutcome,
-    shouldConsumeRefreshRequest, summarizeSteps, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
+    shouldConsumeRefreshRequest, summarizeSteps, summarizeTimings, makeStepGuard, hasDataBearingSuccess, shouldStampFreshness,
     hasOddsSaveData, fullSweepAttemptVerdict,
 } from './db/auto-rules.js';
 import { parseOddsTiers, lightPassIdle } from './db/odds-refresh-rules.js';
@@ -239,9 +239,18 @@ export function startJob({ mode, dates, run, onFinish = null }) {
             }
             const secs = Math.round((Date.now() - startedMs) / 1000);
             const failedSteps = refreshJob.summary?.step_failures?.map(f => f.step) ?? [];
+            // `slow=` is the per-run profile (2026-08-29 profiling pass): the
+            // slowest phases of THIS run, so a sweep that drifts from 2.7h to
+            // 5.5h says which phase moved without anyone re-running it. Kept
+            // on the existing summary line and capped to the top few phases -
+            // one line per run, so it costs the log nothing measurable, and
+            // it is deliberately NOT DEBUG-gated: a 3h job that only reports
+            // its own duration cannot be diagnosed after the fact.
+            const slow = refreshJob.summary?.step_timings ?? '';
             _log(`${mode} ${outcome.toUpperCase()} ${secs}s dates=${dates.join(',') || '-'}`
                 + (outcome === 'error' ? ` error=${refreshJob.error}` : '')
-                + (outcome === 'partial' && failedSteps.length ? ` failed=${failedSteps.join(',')}` : ''));
+                + (outcome === 'partial' && failedSteps.length ? ` failed=${failedSteps.join(',')}` : '')
+                + (slow ? ` slow=${slow}` : ''));
             refreshJob.cancelRequested = false; // clear for the next job
             try {
                 onFinish?.(refreshJob);
@@ -430,6 +439,7 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     summary.step_failures = stepResults.filter(x => !x.ok).map(({ step, error }) => ({ step, error }));
     summary.steps_verdict = summarizeSteps(stepResults);
     summary.data_bearing_ok = hasDataBearingSuccess(stepResults);
+    summary.step_timings = summarizeTimings(stepResults);
     if (summary.steps_verdict === 'error') {
         throw new Error(`light pass: every step failed (${summary.step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);
     }

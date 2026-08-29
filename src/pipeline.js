@@ -7,7 +7,7 @@ import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
 import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
-import { makeStepGuard, summarizeSteps, hasDataBearingSuccess, hasOddsSaveData } from './db/auto-rules.js';
+import { makeStepGuard, summarizeSteps, summarizeTimings, hasDataBearingSuccess, hasOddsSaveData } from './db/auto-rules.js';
 import { setMeta } from './meta.js';
 import { _date, _dtime, debugLog } from './utils.js';
 
@@ -170,7 +170,8 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     if (steps_verdict === 'error') {
         throw new Error(`full pipeline: every step failed (${step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);
     }
-    return { dates, quota_remaining: apisportsQuotaRemaining(), step_failures, steps_verdict, data_bearing_ok };
+    return { dates, quota_remaining: apisportsQuotaRemaining(), step_failures, steps_verdict, data_bearing_ok,
+        step_timings: summarizeTimings(stepResults) };
 }
 
 // On-demand single-date refresh (web UI refresh button): fixtures, results
@@ -261,6 +262,7 @@ export async function runDateRefresh(date_, onStep = null, shouldCancel = null) 
     summary.step_failures = stepResults.filter(x => !x.ok).map(({ step, error }) => ({ step, error }));
     summary.steps_verdict = summarizeSteps(stepResults);
     summary.data_bearing_ok = hasDataBearingSuccess(stepResults);
+    summary.step_timings = summarizeTimings(stepResults);
     console.debug(`[refresh ${dt}] Done - ${JSON.stringify(summary)}`);
     if (summary.steps_verdict === 'error') {
         throw new Error(`date refresh ${dt}: every step failed (${summary.step_failures.map(f => `${f.step}: ${f.error}`).join('; ')})`);

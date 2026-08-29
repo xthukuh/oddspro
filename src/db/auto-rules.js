@@ -87,20 +87,67 @@ export function summarizeSteps(results) {
 // rather than rejecting. A success pushes `{ step, ok:true }` and resolves to
 // `fn`'s return value. `results` is mutated in place (the same array
 // lightRefresh later hands to summarizeSteps/hasDataBearingSuccess).
-export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () => {} } = {}) {
+//
+// Each result also carries `ms`, the wall-clock the step took (2026-08-29
+// profiling pass). The full sweep runs 2.7-5.5h on the live host and the only
+// timing it ever emitted was DEBUG-gated and keyed by step NUMBER, so a slow
+// sweep could not be attributed to a phase without turning on a very noisy
+// switch and mapping numbers back to labels by hand. Timing lives HERE, at
+// the one choke point all three guarded paths (full sweep, light pass, single
+// date refresh) already share, so one measurement covers every one of them.
+// `now` is injectable purely so the offline tests stay deterministic.
+// A FAILED step is timed too: a step that burns 20 minutes and then throws is
+// exactly the one worth seeing.
+export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () => {}, now = Date.now } = {}) {
     return async function guardStep(label, fn) {
         checkCancel(label); // may throw - e.g. a cancel - never caught here
+        const started = now();
         try {
             const result = await fn();
-            results.push({ step: label, ok: true });
+            results.push({ step: label, ok: true, ms: now() - started });
             return result;
         } catch (e) {
             const message = String(e?.message ?? e);
-            results.push({ step: label, ok: false, error: message });
+            results.push({ step: label, ok: false, error: message, ms: now() - started });
             onFailure(label, message);
             return undefined;
         }
     };
+}
+
+// Compact "where did the time go" profile over the guarded step results, for
+// the one-line-per-run summary in logs/auto-refresh.log.
+//
+// Per-date labels are GROUPED into their phase before ranking: the full sweep
+// emits 'betpawa odds 2026-08-29' .. '2026-09-01' as four separate guarded
+// units, and four date rows each holding a quarter of the cost hide a phase
+// that a single summed row makes obvious. The trailing ISO date is stripped,
+// as is the explanatory parenthetical ('deep stats (final correlated
+// fixtures, fetch-once)' -> 'deep stats'), which keeps one log line readable
+// at a terminal width.
+//
+// Steps under `minMs` are dropped rather than ranked: a sweep has ~22 guarded
+// units and most cost nothing, so listing them all would bury the few that
+// matter. Returns '' when nothing qualifies, so the caller can append the
+// clause only when it says something.
+export function summarizeTimings(results, { top = 6, minMs = 1000 } = {}) {
+    if (!Array.isArray(results)) return '';
+    const totals = new Map();
+    for (const r of results) {
+        const ms = Number(r?.ms);
+        if (!Number.isFinite(ms) || ms < 0) continue;
+        const phase = String(r?.step ?? '')
+            .replace(/\s+\d{4}-\d{2}-\d{2}$/, '')
+            .replace(/\s*\(.*\)\s*$/, '')
+            .trim() || 'unknown';
+        totals.set(phase, (totals.get(phase) ?? 0) + ms);
+    }
+    return [...totals.entries()]
+        .filter(([, ms]) => ms >= minMs)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, Math.max(0, top))
+        .map(([phase, ms]) => `${phase} ${Math.round(ms / 1000)}s`)
+        .join(', ');
 }
 
 // Which guarded steps count as "the warehouse actually collected something
