@@ -130,7 +130,21 @@ export function makeStepGuard({ results, checkCancel = () => {}, onFailure = () 
 // units and most cost nothing, so listing them all would bury the few that
 // matter. Returns '' when nothing qualifies, so the caller can append the
 // clause only when it says something.
-export function summarizeTimings(results, { top = 6, minMs = 1000 } = {}) {
+//
+// The floor is 100ms, NOT the 1s it started at (2026-08-29, same day). A 1s
+// floor was chosen for the full sweep, where every phase costs minutes, and it
+// silently blanked the clause for every light pass: those run 16-52s with
+// guarded steps that individually finish well under a second, so the profiler
+// reported nothing at all for the passes that run 96 times a day. A blank
+// profile is indistinguishable from a fast one, which is the opposite of what
+// this exists to do. Seconds are still the unit, so a sub-second step prints
+// as e.g. `results 0.4s`; `top` keeps the line short either way.
+//
+// Reading the clause: the phases listed sum to the guarded time only. Work
+// outside the guarded steps (the warm keeper, the version bump, the run
+// ledger) is NOT represented, so a large gap between the run's own duration
+// and the sum here means the time went somewhere this profile cannot see.
+export function summarizeTimings(results, { top = 6, minMs = 100 } = {}) {
     if (!Array.isArray(results)) return '';
     const totals = new Map();
     for (const r of results) {
@@ -146,7 +160,7 @@ export function summarizeTimings(results, { top = 6, minMs = 1000 } = {}) {
         .filter(([, ms]) => ms >= minMs)
         .sort((a, b) => b[1] - a[1])
         .slice(0, Math.max(0, top))
-        .map(([phase, ms]) => `${phase} ${Math.round(ms / 1000)}s`)
+        .map(([phase, ms]) => `${phase} ${ms >= 10000 ? Math.round(ms / 1000) : (ms / 1000).toFixed(1)}s`)
         .join(', ');
 }
 

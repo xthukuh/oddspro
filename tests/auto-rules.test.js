@@ -378,7 +378,7 @@ test('summarizeTimings ranks phases slowest first, in seconds', () => {
         { step: 'deep stats', ok: true, ms: 60000 },
         { step: 'standings', ok: true, ms: 20000 },
     ]);
-    assert.equal(out, 'deep stats 60s, standings 20s, link 5s');
+    assert.equal(out, 'deep stats 60s, standings 20s, link 5.0s');
 });
 
 test('summarizeTimings groups per-date labels into one phase row', () => {
@@ -395,7 +395,7 @@ test('summarizeTimings strips the explanatory parenthetical from a label', () =>
     const out = summarizeTimings([
         { step: 'deep stats (final correlated fixtures, fetch-once)', ok: true, ms: 7000 },
     ]);
-    assert.equal(out, 'deep stats 7s');
+    assert.equal(out, 'deep stats 7.0s');
 });
 
 test('summarizeTimings drops steps below minMs and honours top', () => {
@@ -405,7 +405,7 @@ test('summarizeTimings drops steps below minMs and honours top', () => {
         { step: 'c', ok: true, ms: 7000 },
         { step: 'trivial', ok: true, ms: 10 },
     ];
-    assert.equal(summarizeTimings(rows, { top: 2 }), 'a 9s, b 8s');
+    assert.equal(summarizeTimings(rows, { top: 2 }), 'a 9.0s, b 8.0s');
     assert.equal(summarizeTimings(rows).includes('trivial'), false);
 });
 
@@ -419,7 +419,7 @@ test('summarizeTimings is total against missing/garbage input', () => {
     assert.equal(summarizeTimings([]), '');
     assert.equal(summarizeTimings([{ step: 'x', ok: true }]), '');
     assert.equal(summarizeTimings([{ step: 'x', ok: true, ms: -5 }]), '');
-    assert.equal(summarizeTimings([{ ms: 4000 }]), 'unknown 4s');
+    assert.equal(summarizeTimings([{ ms: 4000 }]), 'unknown 4.0s');
 });
 
 // The light pass's tail (2026-08-29) now runs through the SAME guardStep as
@@ -443,4 +443,21 @@ test('a tail failure alone still downgrades the verdict to partial', () => {
     // ...but the pass still counts as having collected something, so freshness
     // stamping and the warehouse-version bump are unaffected.
     assert.equal(hasDataBearingSuccess(results), true);
+});
+
+// The reporting floor is 100ms, not 1s (2026-08-29). A 1s floor blanked the
+// clause for every light pass - 16-52s runs whose guarded steps each finish
+// under a second - which made an unprofiled pass look identical to a fast one.
+test('summarizeTimings reports sub-second steps, which light passes are made of', () => {
+    const out = summarizeTimings([
+        { step: 'results', ok: true, ms: 420 },
+        { step: 'settle picks', ok: true, ms: 260 },
+        { step: 'auth purge', ok: true, ms: 140 },
+        { step: 'track prune', ok: true, ms: 9 },   // below the floor
+    ]);
+    assert.equal(out, 'results 0.4s, settle picks 0.3s, auth purge 0.1s');
+});
+
+test('summarizeTimings keeps whole seconds for the long phases a sweep is made of', () => {
+    assert.equal(summarizeTimings([{ step: 'deep stats', ok: true, ms: 3513000 }]), 'deep stats 3513s');
 });
