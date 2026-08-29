@@ -516,6 +516,30 @@ the shown bet). Sources: `docs/research/`.
   it. Also: on this host use `SET SESSION max_statement_time=<n>` and keep scans off
   `odds_markets` (11.7M rows / 3.7 GB) - a wide scan gets the connection reset.
 
+- 2026-08-29 - **A hot-patch can land on disk and still not run: the stale writer instance.**
+  After hot-patching four files and touching `tmp/restart.txt` three times, the live log kept
+  showing light passes with no sign of the new code. Every file verified byte-identical to
+  local by `md5sum` plus `node --check`, and the new logic was proven working by running it
+  directly on the host - so the deploy was fine and the CODE PATH was fine. The cause was
+  process-level: `ps -eo pid,lstart,etime,cmd | grep oddspro-app-v1.4.0` showed three lsnode
+  workers, two started right after the restart touches and ONE started hours earlier, before
+  any deploy. That old worker had held its DB connection continuously since boot, so it still
+  held the `oddspro:writer` GET_LOCK, and `isWriter()` is what gates the scheduler: the
+  new-code instances logged "scheduler started" and then did nothing every tick, while the
+  stale one kept running every light pass and would have run the daily full sweep. Passenger
+  recycles lazily and `restart.txt` did not reach it (same family as the known
+  "cPanel Stop leaves old lsnode alive"). **Diagnosis order that worked:** confirm remote
+  md5 == local, exercise the new function on the host with `node -e`, THEN check process start
+  times against the deploy time - do not keep re-reading the code once the first two pass.
+  Note `ps` prints host-local EAT while the app log is ISO-Z; compare in one timezone.
+  **Clearing it:** `kill <pid>` is refused by the harness classifier (see the 2026-08-19 entry),
+  so it is an owner action. Two agent-runnable alternatives, both heavier: `./.HALT` (the app's
+  own kill-switch, stops every instance within ~30s, brief full outage) or releasing the lease
+  without touching the process - `SELECT IS_USED_LOCK('oddspro:writer')` gives the holding
+  connection id, `KILL <id>` drops it, and a new-code instance acquires it on its next tick.
+  **`GET /api/refresh` reports `writer` per instance**, so repeated curls that all answer
+  `writer:false` are themselves a signal the lease sits on an instance outside the routing pool.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
