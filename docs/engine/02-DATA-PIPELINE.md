@@ -123,6 +123,42 @@ a single match's failure is logged (`[betpawa]`/`[betika] detail fetch failed fo
 game already fetched that day. Both fetchers log a `<Provider> <date> - N games, M detail
 failures` summary and return a compacted (no sparse/undefined) array.
 
+## Enrichment concurrency (`ENRICH_CONCURRENCY`, measured 2026-08-29)
+
+The four API-Football backfills - deep stats, standings, team history, API predictions -
+run their `_batch` at `ENRICH_CONCURRENCY` fixtures at a time (admin-editable, live,
+1..8, default 4). All four were hard-coded to 1 before this: two citing gap-lock deadlocks
+on concurrent delete+insert, two citing the repo convention for DB-writing batches.
+
+The profiling pass measured the constraint rather than inheriting it. Replaying the exact
+write path over 300 fixtures from a restored production dump, at the server default
+REPEATABLE READ:
+
+| concurrency | ms/fixture (two runs) | speedup | deadlocks | unrecovered |
+|---|---|---|---|---|
+| 1 | 53.9 | 1.00x | 0 | 0 |
+| 2 | 17.1 | 3.15x | 0 | 0 |
+| 4 | 14.2 / 10.4 | 4.38x | 0 / 0 | 0 |
+| 8 | 10.4 / 10.1 | 5.26x | 1 / 2 | 0 |
+| 12 | 9.2 / 9.9 | 5.64x | 5 / 2 | 0 |
+
+The deadlock warning is real but begins at 8, not at 2. Default 4 sits at the knee. The
+tail is already covered: each of these transactions is wrapped in `withRetry`
+(`src/db/retry-rules.js`), which treats `ER_LOCK_DEADLOCK` and `ER_LOCK_WAIT_TIMEOUT` as
+transient and retries with jittered backoff over idempotent full-snapshot writes - across
+every run above, zero deadlocks survived retry. Setting the knob to 1 restores the old
+behaviour exactly.
+
+READ COMMITTED eliminates the deadlocks entirely (0 at every level tested) but is
+deliberately not used: MySQL requires the isolation level before `BEGIN`, so it would have
+to live in the pool's `afterCreate` and would change read semantics for every query in the
+app.
+
+Why it matters: these four phases are 66% of the live sweep's wall clock (deep stats 36.5%,
+team history 21.2%, predictions 8.3%, standings 7.7% of a 9,626s run on 2026-08-29), and
+under 9% of that is network. Every guarded run now reports its own phase profile as
+`slow=` on its summary line in `logs/auto-refresh.log`.
+
 ## API-Football client: quota, pacing, per-item isolation
 
 `src/apisports.js` is the API-Football client plus all of its fetchers: quota-guarded (the

@@ -382,3 +382,27 @@ test('string settings are length-capped (STRING_MAX, or a tighter per-entry maxL
         assert.equal(validateSetting(e.key, over).ok, false, `${e.key} accepted an oversized value`);
     }
 });
+
+// ENRICH_CONCURRENCY (2026-08-29 profiling pass): the warehouse-enrichment
+// batch width. The bounds are the load-bearing part - 1 must stay reachable so
+// the old serial behaviour can be restored without a deploy, and the ceiling
+// must stay at the level the deadlock stress test actually covered.
+test('ENRICH_CONCURRENCY is an admin-editable live pipeline knob bounded 1..8', () => {
+    const e = catalogEntry('ENRICH_CONCURRENCY');
+    assert.ok(e, 'ENRICH_CONCURRENCY must be in the catalog');
+    assert.equal(e.type, 'int');
+    assert.equal(e.group, 'pipeline');
+    assert.equal(e.live, true);   // takes effect without a restart
+    assert.equal(e.public, false);
+    assert.equal(e.min, 1);       // 1 restores the pre-2026-08-29 serial behaviour
+    assert.equal(e.max, 8);       // beyond 8 was never stress-tested for deadlocks
+});
+
+test('ENRICH_CONCURRENCY rejects 0 and anything past the tested ceiling', () => {
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 1).ok, true);
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 4).ok, true);
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 8).ok, true);
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 0).ok, false);
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 9).ok, false);
+    assert.equal(validateSetting('ENRICH_CONCURRENCY', 2.5).ok, false);
+});

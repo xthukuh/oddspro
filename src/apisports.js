@@ -403,6 +403,41 @@ async function _fetchFixtureEvents(fixture_id, giveup) {
     return rows.length;
 }
 
+// ENRICH_CONCURRENCY governs the four backfills below (deep stats, standings,
+// team history, API predictions). All four used to be hard-coded to 1: two
+// citing "concurrent delete+insert transactions deadlock on index gap locks",
+// two citing the repo convention for DB-writing batches.
+//
+// The 2026-08-29 profiling pass measured that constraint instead of inheriting
+// it. On a restored production dump (300 fixtures, the same shape the live
+// sweep processes), replaying the exact write path at the server default
+// REPEATABLE READ:
+//
+//   concurrency 1  53.9 ms/fixture  1.00x   0 deadlocks
+//   concurrency 2  17.1 ms/fixture  3.15x   0 deadlocks
+//   concurrency 4  14.2 / 10.4 ms   4.38x   0 deadlocks   (both repeat runs)
+//   concurrency 8  10.4 / 10.1 ms   5.26x   1 and 2 deadlocks
+//   concurrency 12  9.2 /  9.9 ms   5.64x   5 and 2 deadlocks
+//
+// So the deadlock warning is REAL but starts at 8, not at 2. Default 4 sits at
+// the knee: most of the available speedup, no deadlock observed across two
+// runs. The tail is already covered - every one of these transactions is
+// wrapped in withRetry (src/db/retry-rules.js), which treats ER_LOCK_DEADLOCK
+// and ER_LOCK_WAIT_TIMEOUT as transient and retries with jittered backoff over
+// what are idempotent full-snapshot writes. Across every run above, 0 deadlocks
+// survived retry.
+//
+// READ COMMITTED removes them entirely (0 deadlocks at every level tested), but
+// it is deliberately NOT applied: MySQL wants the isolation level set before
+// BEGIN, so it would have to live in the pool's afterCreate and would change
+// read semantics for every query in the app - far too wide a blast radius for a
+// write-path speedup. Setting this knob back to 1 restores the old behaviour
+// exactly.
+//
+// Why this matters: the live sweep spends 66% of its wall clock in these four
+// phases (deep stats 36.5%, team history 21.2%, predictions 8.3% of a 9,626s
+// run), and under 9% of that is network.
+
 // Fetch deep stats for final fixtures correlated to at least one bookmaker
 // match, skipping whatever each fixture already has (fetch-once flags).
 export async function fetchApisportsStats() {
@@ -442,7 +477,7 @@ export async function fetchApisportsStats() {
             console.warn(`API-Football - deep stats: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
         }
         tick(len);
-    }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
+    }, effective('ENRICH_CONCURRENCY'));
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
@@ -494,7 +529,7 @@ export async function fetchApisportsHistory() {
             console.warn(`API-Football - team history: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
         }
         tick(len);
-    }, 1); // serial: repo convention for DB-writing batches
+    }, effective('ENRICH_CONCURRENCY'));
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
@@ -573,7 +608,7 @@ export async function fetchApisportsPredictions() {
             console.warn(`API-Football - predictions: skipping fixture ${f.id} (unparseable payload): ${e.message}`);
         }
         tick(len);
-    }, 1); // serial: repo convention for DB-writing batches
+    }, effective('ENRICH_CONCURRENCY'));
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }
 
@@ -609,6 +644,6 @@ export async function fetchApisportsStandings() {
             await db.batchInsert('standings', rows, 200).transacting(trx);
         }));
         counts.rows += rows.length;
-    }, 1); // serial: concurrent delete+insert transactions deadlock on index gap locks
+    }, effective('ENRICH_CONCURRENCY'));
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
 }

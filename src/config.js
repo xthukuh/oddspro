@@ -33,6 +33,7 @@ const EnvSchema = z.object({
     BETPAWA_BASE_URL: optionalStr(z.string().url().optional()),
     BETIKA_BASE_URL: optionalStr(z.string().url().optional()),
     APISPORTS_MIN_REMAINING: z.coerce.number().int().min(0).default(5),
+    ENRICH_CONCURRENCY: z.coerce.number().int().min(1).max(8).default(4),
     LINK_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(0.85),
     // Rolling windows for the pre-match goals aggregates (fixture_prematch)
     PREMATCH_TEAM_WINDOW: z.coerce.number().int().min(1).default(5),
