@@ -492,6 +492,30 @@ the shown bet). Sources: `docs/research/`.
   only by `(api_id, provider)`.
 - 2026-08-19 - **`sshStreamUpload`'s "100.0%" meter is not a completion proof, file-placement edition (fixed):** `node scripts/deploy-remote.js --app` printed `upload oddspro-app_20260819_174327.zip: 100.0%  2.4 MB/2.4 MB` and the ssh connection reset before the extract step. The abort was loud (good), but the file already on the host was 524,288 bytes against a 2,563,664-byte local original: truncated at exactly 512 KB while the meter said done. Re-running reproduced it identically. `scp` of the same file transferred all 2,563,664 bytes on the first try, and `unzip -tq` passed - the problem was never the file, it was trusting a local-pipe byte counter as proof the remote side committed anything. Same failure class as the truncated DB dumps above: a success signal that never verified the far end. **Fix: `scripts/lib/remote.js`'s new `sshUploadFile`** places a file with `scp` and then runs a remote `stat -c %s` against the local size (`transferVerdict` in `scripts/lib/sync-rules.js` is the pure comparison, unit-tested), retrying the whole transfer up to 3 times on a mismatch or a non-zero exit before giving up with the file left in place for inspection. `sshStreamUpload` itself is untouched and still used for true pipe targets with no landed file to stat (`gunzip | mysql` in db-sync.js) - it now carries a doc-comment warning pointing at `sshUploadFile` for anything that lands a file. Wired into `deploy-remote.js`'s app/web zip uploads and `hotfix-remote.js`'s per-file upload; the `mkdir -p` step for each stays a separate `ssh` call ahead of the upload, and the backup/`node --check`/rollback flow in `hotfix-remote.js` is unchanged.
 
+- 2026-08-29 - **Hot-patching a host under load 20+: push ONE file per invocation.** `node
+  scripts/hotfix-remote.js <3 files> --restart` aborted repeatedly mid-run (`Connection reset
+  by peer` during scp, `Timeout, server oddspro.ke not responding` on the pre-flight
+  `test -f`), leaving a HALF-APPLIED set: `src/db/auto-rules.js` landed while `pipeline.js`
+  and `auto-refresh.js` did not. The script's own safety held - `cp -n` backup before any
+  overwrite, and `sshUploadFile`'s remote `stat -c %s` meant nothing was left truncated - but
+  a multi-file invocation is only all-or-nothing if the connection survives all of it. What
+  worked: (1) verify actual state first, per file, with remote `md5sum` + `node --check`
+  compared against local `md5sum` (this is what proved auto-rules.js was byte-complete and
+  the other two untouched); (2) re-run `hotfix-remote.js` with ONE file per invocation - both
+  remaining files landed on their first attempt that way. Wrap every ssh call in a bounded
+  retry loop: 2 of 3 reachability probes failed outright at load average ~20. Restart proof
+  is unchanged (a fresh "scheduler started" line in `logs/auto-refresh.log`).
+- 2026-08-29 - **The fetch-once columns are DATETIME, `updated_at` is TIMESTAMP - one query
+  window cannot serve both.** `fixtures.stats_fetched_at` / `lineups_fetched_at` /
+  `events_fetched_at` / `history_fetched_at` / `predictions_fetched_at` are `datetime`, so
+  they hold whatever wall clock the app wrote (EAT, the pinned +03:00 session) and MySQL
+  never converts them; `updated_at` everywhere is `timestamp`, stored UTC and converted to
+  the reading session's `time_zone`. Querying a sweep window at `SET time_zone='+00:00'`
+  therefore returns correct counts for `updated_at` and a silent, entirely plausible ZERO for
+  every fetch-once column. Reconcile a suspicious zero against `MAX(col)` before believing
+  it. Also: on this host use `SET SESSION max_statement_time=<n>` and keep scans off
+  `odds_markets` (11.7M rows / 3.7 GB) - a wide scan gets the connection reset.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
