@@ -304,6 +304,31 @@ BTTS and DNB promoted `default`. STATS columns are discovered dynamically from
 `fixture_statistics`, and `providers` are discovered from `matches`, so a new bookmaker or
 stat type appears in the settings UI with no frontend change.
 
+**The coverage aggregate is BATCHED, and must stay that way (2026-08-31).** It ran as one
+statement over the whole 11.0M-row table and the shared live host killed it every single
+time (`PROTOCOL_CONNECTION_LOST` at ~18.7s), which is how `meta.column_catalog` came to sit
+nine days stale while every reader served the stored copy at 0.029s and nothing looked
+wrong. `_marketCoverageRows()` now walks an explicit list of `type_name` values,
+`CATALOG_TYPE_BATCH` (1000) at a time. Two cheaper-looking chunkings were measured on the
+live host and REFUTED - do not re-propose either without new evidence:
+
+| Approach | Result |
+|---|---|
+| `match_id` range window | 16.9s for 5,000 ids, no better than the full scan - `match_id` is the LAST column of `odds_markets_catalog_index`, so a range on it has no usable prefix |
+| keyset cursor on `type_name` | silently LOSSY: 201,390 of 220,755 tuples. `type_name > ?` compares under `utf8mb4_unicode_ci` while the JS boundary check compares exactly, so collation-equal variants are skipped |
+| explicit `type_name` batches | 220,755 tuples, exact, 37 queries, 16.3s, worst query 3.7s |
+
+Exactness is by construction rather than luck: SQL's own `DISTINCT` collapses each
+collation class to one representative, so every class lands in exactly one batch.
+`count(distinct match_id)` is KEPT - `count(*)` survives the full scan at 6.31s but
+overcounts by 0.087% (the catalog tuple is not unique per match), and 3s is not worth
+trading exactness for.
+
+`saveMatches`' per-provider prefetch is bounded the same way (`MATCH_LOOKUP_CHUNK`, 500).
+Its width came from the bookmaker's slate - a measured 2,007 games on Betika's 2026-08-29
+peak - and while an indexed lookup on that unique key has never been the step that failed,
+an unbounded statement width is exactly the shape that killed the two scans above.
+
 **Payload size is a standing tension.** The odds pivot (`_hydrate`) keys each price by
 `canonicalMarket().key` and skips only `filter-only` rows, so `row.markets`/
 `row.markets_stale` carry every canonical plus `column`/`grouped` key a match offers - on a

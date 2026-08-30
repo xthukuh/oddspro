@@ -378,6 +378,26 @@ click gets (`shouldConsumeRefreshRequest`, pure). On every OK completion the wri
 persists the column catalog to meta (`_storeColumnCatalog`, throttled to once per 30 minutes
 outside a full sweep, which always refreshes it).
 
+The throttle stores the EARLIEST time the next scan may run, not the last time one started
+(`nextCatalogStoreMs`), because the two differ on failure. A short retry window
+(`CATALOG_RETRY_INTERVAL_MS`, 5 min) is reserved BEFORE the await, which still stops two
+overlapping passes both scanning; the full 30 minutes is committed only once the scan lands.
+Stamping the full interval up front - the behaviour before 2026-08-31 - meant a scan that
+FAILED bought silence for the whole window, and on the live host that scan failed every
+time, so the refresher was neither succeeding nor retrying often enough to make its own
+failure visible.
+
+**`meta.updated_at` means "last written", not "last changed" (2026-08-31).** `setMeta`
+merges an explicit `{ v, updated_at }` list, bumping the timestamp itself. It previously
+merged only `v` and left `updated_at` to `ON UPDATE CURRENT_TIMESTAMP`, which MySQL skips
+when the value is unchanged - so a key rewritten with identical content kept its old
+timestamp and a healthy writer read exactly like a dead one. That is the signal that failed
+to expose the nine-day `column_catalog` outage: it read 2026-08-22 both while the scan was
+dying on every attempt and, after the fix, while the same 307-market catalog was being
+rewritten successfully. Any timestamp recorded before that date carries the old, weaker
+meaning. The explicit merge list also matters on MySQL, where a bare `.merge()` updates
+every column including the key.
+
 ## The HTTP API surface (`src/server.js`)
 
 The Express API on :3001 also serves `web/dist` when it has been built. `src/export.js` is

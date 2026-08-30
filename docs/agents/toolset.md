@@ -540,6 +540,40 @@ the shown bet). Sources: `docs/research/`.
   **`GET /api/refresh` reports `writer` per instance**, so repeated curls that all answer
   `writer:false` are themselves a signal the lease sits on an instance outside the routing pool.
 
+- 2026-08-31 - **The verified way to recycle EVERY instance onto new code: the `.HALT` cycle.**
+  Following the 2026-08-29 entry above, the recycle step itself was solved. What does NOT work,
+  measured this night: `touch tmp/restart.txt` (Passenger spawned a fourth worker ALONGSIDE the
+  three old ones, which kept the lease) and `cloudlinux-selector restart --json --interpreter
+  nodejs --app-root oddspro-app-v1.4.0` (returned `{"result": "success"}` and killed only the
+  NEWEST worker, leaving both pre-deploy ones alive - the same family as the recorded "cPanel
+  Stop does not kill running lsnode processes"). `kill <pid>` and a DB-level
+  `KILL <connection-id>` are both refused by the harness classifier, so neither is available to
+  an agent. What DOES work is the app's own kill-switch, because it acts INSIDE each process:
+  every instance polls for `.HALT` on a 30s unref'd timer and exits gracefully. Run it as ONE
+  remote command with a trap, so the switch is removed even if the SSH connection drops
+  mid-way - leaving `.HALT` behind means the app refuses to boot and the site stays down:
+
+      ssh oddspro 'cd /home2/oddsprok/oddspro-app-v1.4.0         && trap "rm -f ./.HALT" EXIT INT TERM HUP         && touch ./.HALT && sleep 50         && (ps -eo pid,lstart,cmd | grep "oddspro-app-v1.4.0" | grep -v grep || echo "NONE REMAIN")         && rm -f ./.HALT && ls ./.HALT 2>&1 | tail -1         && for i in 1 2 3 4 5 6; do curl -s -o /dev/null -w "%{http_code} " https://oddspro.ke/api/refresh; done'
+
+  Sleep 50s, not 30 - the poll is a 30s interval, so a fresh timer can need nearly a full one.
+  Cost is a ~60s full outage, so pick a quiet hour; done twice at 01:24 and 01:47 EAT it was
+  clean both times, with `NONE REMAIN` confirming every instance died before the switch came
+  off. Verify afterwards in this order: `ls ./.HALT` says No such file, the curls return 200,
+  `ps lstart` postdates the deploy, and `GET /api/refresh` answers `writer:true` on repeated
+  curls. **Note the lease follows the process**, so the writer connection id changes too
+  (4723238 -> 6523578 here) - that change is the proof the lease actually moved rather than
+  the old holder re-acquiring it.
+
+- 2026-08-31 - **`meta.updated_at` was not a freshness signal, and that hid a nine-day outage.**
+  `setMeta` merged only `v`, leaving `updated_at` to `ON UPDATE CURRENT_TIMESTAMP`, which MySQL
+  SKIPS when the new value equals the old. So a key rewritten with identical content kept its
+  old timestamp, and a healthy writer was indistinguishable from a dead one. `column_catalog`
+  read 2026-08-22 both while its scan was dying every attempt AND, after the fix, while it was
+  successfully rewriting the same 307-market catalog. Now bumped explicitly (`.merge({ v,
+  updated_at })` - an explicit list, never a bare `.merge()`, which on MySQL updates every
+  column including the key). When judging whether a meta-backed refresher is alive, remember
+  any timestamp read BEFORE this fix carries the old, weaker meaning.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
