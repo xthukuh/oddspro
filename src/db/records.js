@@ -112,6 +112,52 @@ const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 // `?markets=all` on /api/records bypasses the gate per request.
 let _pivotAllowed = null;
 
+// Catalog scan batch size: type_names per odds_markets aggregate query.
+//
+// The coverage aggregate used to run as ONE statement over the whole table
+// (11.0M rows) and the shared live host killed it every single time
+// (PROTOCOL_CONNECTION_LOST at ~18.7s; 17 `[auto] meta write failed` lines in
+// the live stderr on 2026-08-30). That is why meta.column_catalog froze at
+// 2026-08-22 and stayed frozen for nine days: the b4cf3ed warm fix moved every
+// READER onto the stored copy, so the only remaining writer was a query that
+// could never finish, and the staleness was invisible.
+//
+// Batching by an EXPLICIT list of type_names - rather than by a match_id range
+// or a keyset cursor - is deliberate, both alternatives were measured and
+// rejected on the live host:
+//   - a match_id range cannot use odds_markets_catalog_index
+//     (type_name,name,handicap,match_id): match_id is the LAST column, so
+//     there is no usable prefix and a 5,000-id window still took 16.9s, no
+//     better than the full scan it replaced;
+//   - a keyset cursor on type_name is silently LOSSY: `type_name > ?` compares
+//     under utf8mb4_unicode_ci while the JS boundary check compares exactly,
+//     so collation-equal variants get skipped entirely - it returned 201,390
+//     of the true 220,755 tuples.
+// SQL's own DISTINCT collapses each collation class to a single
+// representative, so every class lands in exactly one batch and the fold is
+// exact by construction rather than by luck. Measured live 2026-08-31:
+// 220,755 tuples, identical to the single-statement ground truth, in 37
+// queries, 16.3s total, worst query 3.7s - a 5x margin under the kill.
+const CATALOG_TYPE_BATCH = 1000;
+
+// Batched replacement for the aggregate above. Same rows, same
+// count(distinct match_id) semantics, bounded per-statement cost so no single
+// query is long enough for the host to reset the connection.
+async function _marketCoverageRows() {
+    const names = (await db('odds_markets').distinct('type_name').orderBy('type_name'))
+        .map(r => r.type_name);
+    const out = [];
+    for (let i = 0; i < names.length; i += CATALOG_TYPE_BATCH) {
+        const rows = await db('odds_markets')
+            .select('type_name', 'name', 'handicap')
+            .countDistinct({ matches: 'match_id' })
+            .whereIn('type_name', names.slice(i, i + CATALOG_TYPE_BATCH))
+            .groupBy('type_name', 'name', 'handicap');
+        for (const r of rows) out.push(r);
+    }
+    return out;
+}
+
 // Column catalog consumed by the settings modal (and the CSV default set).
 // `providers` is discovered from the warehouse so newly-integrated bookmakers
 // appear in the settings UI without frontend changes.
@@ -121,10 +167,7 @@ export async function columnCatalog() {
     // Per-distinct-tuple match coverage feeds discoverMarketColumns' coverage
     // threshold (see src/markets.js) - it aggregates this per canonical key,
     // not per raw (type_name,name,handicap) tuple.
-    const marketRows = await db('odds_markets')
-        .select('type_name', 'name', 'handicap')
-        .countDistinct({ matches: 'match_id' })
-        .groupBy('type_name', 'name', 'handicap');
+    const marketRows = await _marketCoverageRows();
     const markets = discoverMarketColumns(marketRows); // already carries sortable/filterable
     _pivotAllowed = new Set(markets.map(c => c.key));
     return {

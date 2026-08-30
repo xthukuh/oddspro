@@ -31,7 +31,7 @@ import { coverageFor } from './notices.js';
 export const ALGO_VERSION = 'v2.1-hunter-2026-08-08';   // gen-2 ladder + value-hunt singles (DEFAULT_GEN2 + DEFAULT_HUNT)
 
 const CALIBRATION_WINDOW_DAYS = 90;
-const SETTLED_WINDOW_CHUNK = 200;   // fixtures per odds_markets fetch in _settledWindow
+const SETTLED_WINDOW_CHUNK = 200;   // fixtures per odds_markets fetch - _settledWindow AND buildDailySlip's target load
 // Recency decay (grid round 4, owner's error-feedback directive): identical
 // green rate to the flat calibrator at n=35 days (26/30, streak 8, P&L +0.01u)
 // - adopted for the HEALING property (recent misses outweigh stale history as
@@ -234,31 +234,47 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
 
     const o = { ...DEFAULT_GEN2, ...(opts ?? {}) };
     let slip = null;
-    let byFixture = new Map();
+    const byFixture = new Map();
     let fxById = new Map();
     const linksByFixture = new Map();
     if (targets.length) {
         fxById = new Map(targets.map(f => [f.id, f]));
         const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
-        const oddsRows = await db('odds_markets as om')
-            .join('matches as m', 'm.id', 'om.match_id')
-            .whereIn('m.fixture_id', targets.map(f => f.id))
-            .where('om.is_stale', 0)
-            .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
-        const grouped = _menusByFixture(oddsRows, namesById);
-        byFixture = grouped.byFixture;
-        // Per-provider match links for legs whose markets are still live
-        // (completed matches excluded at capture; the client additionally
-        // hides links once a leg settles).
-        const linkRows = await db('matches')
-            .whereIn('fixture_id', targets.map(f => f.id))
-            .whereNull('completed_at')
-            .select('fixture_id', 'provider', 'match_url');
-        for (const r of linkRows) {
-            if (!r.match_url) continue;
-            let m = linksByFixture.get(r.fixture_id);
-            if (!m) linksByFixture.set(r.fixture_id, m = {});
-            m[r.provider] = r.match_url;
+        // Chunked for exactly the reason _settledWindow above was chunked on
+        // 2026-08-23 - this was its unchunked twin and it kept failing in
+        // production: one IN (...) over a whole slate joins ~177 odds_markets
+        // rows per match, and the shared live host kills the connection
+        // mid-query ("[warm] magic-sort failed: ... Connection lost", live
+        // stderr 2026-08-30). Chunking by FIXTURE keeps the fold exact - every
+        // row of a fixture lands in exactly one chunk, so merging per-chunk
+        // maps yields byte-identical output - and caps peak memory at one
+        // chunk's rows rather than the whole slate's.
+        const menus = new Map();
+        const targetIds = targets.map(f => f.id);
+        for (let i = 0; i < targetIds.length; i += SETTLED_WINDOW_CHUNK) {
+            const idChunk = targetIds.slice(i, i + SETTLED_WINDOW_CHUNK);
+            const oddsRows = await db('odds_markets as om')
+                .join('matches as m', 'm.id', 'om.match_id')
+                .whereIn('m.fixture_id', idChunk)
+                .where('om.is_stale', 0)
+                .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
+            const grouped = _menusByFixture(oddsRows, namesById);
+            for (const [id, menu] of grouped.menus) menus.set(id, menu);
+            for (const [id, rows] of grouped.byFixture) byFixture.set(id, rows);
+            // Per-provider match links for legs whose markets are still live
+            // (completed matches excluded at capture; the client additionally
+            // hides links once a leg settles). Chunked on the same ids so a
+            // wide slate never builds one oversized IN (...) here either.
+            const linkRows = await db('matches')
+                .whereIn('fixture_id', idChunk)
+                .whereNull('completed_at')
+                .select('fixture_id', 'provider', 'match_url');
+            for (const r of linkRows) {
+                if (!r.match_url) continue;
+                let m = linksByFixture.get(r.fixture_id);
+                if (!m) linksByFixture.set(r.fixture_id, m = {});
+                m[r.provider] = r.match_url;
+            }
         }
         const window = await _settledWindow(slipDate, CALIBRATION_WINDOW_DAYS);
         const cal = await loadCalibrator(slipDate, CALIBRATION_WINDOW_DAYS, window);
@@ -268,7 +284,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         // tip contradictions), eligible fixtures only.
         const rows = targets.map(f => ({
             id: f.id, league: f.league,
-            menuLegs: grouped.menus.get(f.id) ?? [],
+            menuLegs: menus.get(f.id) ?? [],
             eligible: f.tip_market != null,
             tipMarket: f.tip_market ?? null,
         }));
