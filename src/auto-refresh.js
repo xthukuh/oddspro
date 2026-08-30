@@ -70,8 +70,11 @@ const lastFresh = new Map();
 let lastOddsScrapeMs = null;
 
 // Column-catalog persistence throttle (writer-only, see _storeColumnCatalog).
-let lastCatalogStoreMs = 0;
+// Stored as the EARLIEST time the next scan may run, not the last time one
+// started - the difference is what lets a failure retry sooner than a success.
+let nextCatalogStoreMs = 0;
 const CATALOG_STORE_INTERVAL_MS = 30 * 60_000;
+const CATALOG_RETRY_INTERVAL_MS = 5 * 60_000;
 
 export function lastFreshAt(date) {
     return lastFresh.get(date) ?? null;
@@ -93,9 +96,20 @@ export function refreshStatus() {
 async function _storeColumnCatalog(mode) {
     if (!isWriter()) return;
     const now = Date.now();
-    if (mode !== 'full' && now - lastCatalogStoreMs < CATALOG_STORE_INTERVAL_MS) return;
-    lastCatalogStoreMs = now;
+    if (mode !== 'full' && now < nextCatalogStoreMs) return;
+    // Reserve the slot BEFORE the await so two overlapping passes can never
+    // both run the scan - but reserve only the SHORT retry window. The full
+    // interval is committed once the scan actually lands.
+    //
+    // The pre-2026-08-31 code stamped the whole 30 minutes up front, so a scan
+    // that FAILED still bought silence for the full window. On the live host it
+    // failed every time (see records.js's CATALOG_TYPE_BATCH note), which is a
+    // large part of why meta.column_catalog sat at 2026-08-22 for nine days:
+    // the refresher was neither succeeding nor retrying often enough to make
+    // its own failure obvious.
+    nextCatalogStoreMs = now + CATALOG_RETRY_INTERVAL_MS;
     await setMeta('column_catalog', await columnCatalog());
+    nextCatalogStoreMs = Date.now() + CATALOG_STORE_INTERVAL_MS;
 }
 
 // Per-date: when the writer's tick last actually STARTED a job for a

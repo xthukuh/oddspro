@@ -10,6 +10,8 @@ import {
     hotReviewPending,
     tipReviewPending,
     selectTipReviews,
+    modelMissingHeld,
+    MODEL_MISSING_COOLDOWN_MS,
     latencyStats,
     marketLine,
 } from '../src/db/adjudicate-rules.js';
@@ -202,4 +204,48 @@ test('marketLine: bare O/U keys yield their line, everything else null', () => {
     assert.equal(marketLine('GG'), null);
     assert.equal(marketLine('TT:H:O 1.5'), null, 'team totals are not the fixture O/U');
     assert.equal(marketLine(null), null);
+});
+
+// --- modelMissingHeld -----------------------------------------------------
+// A model-missing 404 is a configuration fault: latching the tag is what stops
+// the worker re-attempting the same doomed drain every 60s (the live
+// 2026-08-30 stderr was 99.8% that one loop).
+
+test('modelMissingHeld holds the latched tag inside the cooldown', () => {
+    const latch = { tag: 'vendor/model:free', at: 1_000_000 };
+    assert.equal(modelMissingHeld(latch, 'vendor/model:free', 1_000_000), true);
+    assert.equal(modelMissingHeld(latch, 'vendor/model:free', 1_000_000 + MODEL_MISSING_COOLDOWN_MS - 1), true);
+});
+
+test('modelMissingHeld releases once the cooldown elapses', () => {
+    const latch = { tag: 'vendor/model:free', at: 1_000_000 };
+    assert.equal(modelMissingHeld(latch, 'vendor/model:free', 1_000_000 + MODEL_MISSING_COOLDOWN_MS), false);
+    assert.equal(modelMissingHeld(latch, 'vendor/model:free', 1_000_000 + MODEL_MISSING_COOLDOWN_MS + 1), false);
+});
+
+test('modelMissingHeld releases immediately when the tag changes', () => {
+    // An admin picking a working model must take effect at once, not after the
+    // cooldown - the latch is about the BROKEN tag, not about the worker.
+    const latch = { tag: 'broken/model:free', at: 1_000_000 };
+    assert.equal(modelMissingHeld(latch, 'working/model:free', 1_000_000), false);
+});
+
+test('modelMissingHeld never holds work back on junk input', () => {
+    // Total by design: the costly failure is skipping real work, so anything
+    // unrecognisable resolves to "not held".
+    assert.equal(modelMissingHeld(null, 'm', 1), false);
+    assert.equal(modelMissingHeld(undefined, 'm', 1), false);
+    assert.equal(modelMissingHeld({}, 'm', 1), false);
+    assert.equal(modelMissingHeld({ tag: null, at: 1 }, null, 1), false);
+    assert.equal(modelMissingHeld({ tag: 'm', at: NaN }, 'm', 1), false);
+    assert.equal(modelMissingHeld({ tag: 'm', at: 'nope' }, 'm', 1), false);
+    assert.equal(modelMissingHeld({ tag: 'm', at: 0 }, 'm', NaN), false);
+    assert.equal(modelMissingHeld({ tag: 'm', at: 0 }, 'm', 1, 0), false);
+    assert.equal(modelMissingHeld({ tag: 'm', at: 0 }, 'm', 1, -5), false);
+});
+
+test('modelMissingHeld honours an explicit cooldown override', () => {
+    const latch = { tag: 'm', at: 500 };
+    assert.equal(modelMissingHeld(latch, 'm', 600, 200), true);
+    assert.equal(modelMissingHeld(latch, 'm', 700, 200), false);
 });
