@@ -21,10 +21,20 @@ export async function getMeta(key) {
     return row ? parseMetaValue(row.v) : null;
 }
 
+// `updated_at` is bumped EXPLICITLY, the same reason store.js bumps it on a
+// match row: ON UPDATE CURRENT_TIMESTAMP skips an update whose value is
+// unchanged, so a key rewritten with identical content kept its old timestamp.
+// No code reads this column - it exists for operators - and that is exactly why
+// it has to be honest. column_catalog reads 2026-08-22 whether the refresher
+// wrote the same catalog a minute ago or has not run in nine days, and during
+// those nine days it had genuinely stopped running (see records.js's
+// CATALOG_TYPE_BATCH note). The one signal that would have exposed the outage
+// was indistinguishable from healthy. It now means "last written", not "last
+// changed", so a stale timestamp is real evidence of a stalled writer.
 export async function setMeta(key, value) {
     await db('meta')
         .insert({ k: key, v: JSON.stringify(value) })
-        .onConflict('k').merge(['v']);
+        .onConflict('k').merge({ v: JSON.stringify(value), updated_at: db.fn.now() });
 }
 
 // Atomic v = v + 1 (stored as JSON text, so the column literally holds the

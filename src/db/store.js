@@ -8,6 +8,17 @@ import { isVirtualCompetition } from './collector-rules.js';
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
 
+// Chunk size for the per-provider match prefetch below. The prefetch builds one
+// IN (...) list from EVERY game in the fetched day, so its width is set by the
+// bookmaker's slate rather than by anything this code controls - a measured
+// 2,007 games on Betika's 2026-08-29 peak, with no ceiling on a busier one.
+// It is an indexed lookup on the (provider, provider_match_id) unique key and
+// has never been the thing that failed, but an unbounded statement width is
+// precisely the shape that killed the two odds_markets scans (see
+// records.js's CATALOG_TYPE_BATCH), so it is bounded here rather than left to
+// grow into the same failure.
+const MATCH_LOOKUP_CHUNK = 500;
+
 // Map a standardized fetcher record to a `matches` row.
 // Note: `completed_at` and `fixture_id` are intentionally excluded - they are
 // owned by the results/link actions and must survive odds refreshes.
@@ -133,11 +144,15 @@ export async function saveMatches(games) {
     // what the pipeline actually pays.
     const t0 = Date.now();
     const timing = { upsert: 0, selectOdds: 0, diffWrite: 0 };
-    const existing = await db('matches')
-        .select('id', 'provider_match_id', 'completed_at')
-        .where('provider', provider)
-        .whereIn('provider_match_id', games.map(g => g.match_id));
-    const byPid = new Map(existing.map(r => [Number(r.provider_match_id), r]));
+    const byPid = new Map();
+    const pids = games.map(g => g.match_id);
+    for (let i = 0; i < pids.length; i += MATCH_LOOKUP_CHUNK) {
+        const existing = await db('matches')
+            .select('id', 'provider_match_id', 'completed_at')
+            .where('provider', provider)
+            .whereIn('provider_match_id', pids.slice(i, i + MATCH_LOOKUP_CHUNK));
+        for (const r of existing) byPid.set(Number(r.provider_match_id), r);
+    }
     const tPrefetch = Date.now();
     for (const g of games) {
         const found = byPid.get(Number(g.match_id));

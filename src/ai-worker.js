@@ -7,7 +7,9 @@ import { effectiveAiConfig } from './enrich.js';
 import { pairedTeamGoalsAggregates, h2hGoalsAggregates, apiPredictionSignal } from './db/goals-rules.js';
 import {
     hotReviewPending, tipReviewPending, selectTipReviews, marketLine, latencyStats,
+    modelMissingHeld, MODEL_MISSING_COOLDOWN_MS,
 } from './db/adjudicate-rules.js';
+import { isModelMissingError } from './db/ai-guard-rules.js';
 import { eatDateKey } from './db/auto-rules.js';
 import { KICKOFF_SQL_EXPR } from './db/ai-rules.js';
 import { maintenanceActive } from './maintenance.js';
@@ -44,7 +46,8 @@ const state = {
     day: null,
     billed_tips: 0,
     billed_hot: 0,
-    last: null, // last drain summary (for logs/status probes)
+    last: null,         // last drain summary (for logs/status probes)
+    modelMissing: null, // { tag, at } while a model-missing latch holds (adjudicate-rules)
 };
 
 export function aiWorkerStatus() {
@@ -114,6 +117,13 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
     try {
         _rollDay(startedMs);
         const tag = aiModelTag();
+        // A latched model-missing tag means every call this drain would make is
+        // already known to 404. Skipping the whole pass - rather than loading
+        // pending rows and failing each one - is what keeps a misconfigured
+        // model from costing a full drain every 60s.
+        if (modelMissingHeld(state.modelMissing, tag, startedMs)) {
+            return { skipped: 'model-missing', model: tag };
+        }
         const tol = Number(effective('TIP_AI_REUSE_PRICE_TOL'));
         const conc = Number(effective('HOTPICK_AI_CONCURRENCY'));
         // T9 run guard: one per drain. Wall-clock budget (AI_RUN_MAX_MINUTES,
@@ -164,11 +174,32 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
                 if (stop() || consecErrors >= MAX_CONSEC_ERRORS) break;
                 const results = await _batch(chunk, async r => {
                     if (stop() || Date.now() >= Date.parse(r.kickoff)) return { skip: true };
+                    // The run guard is a DRAIN-level latch: once it trips, every
+                    // remaining call is refused instantly and identically. Bailing
+                    // here keeps that one fact to one log line instead of one per
+                    // fixture - 5,396 of the live 2026-08-30 stderr lines were the
+                    // same "AI run guard open: breaker-open" refusal, logged per call.
+                    if (guard.tripped) return { skip: true };
                     const t = Date.now();
                     try {
                         const verdict = await callFn(r);
                         return { verdict, ms: Date.now() - t };
                     } catch (e) {
+                        if (isModelMissingError(e)) {
+                            // Configuration fault, not a fixture fault: this tag is
+                            // wrong for every row, so latch it, say so ONCE naming
+                            // the model, and stop the drain rather than failing all
+                            // N and repeating the lot on the next 60s tick.
+                            if (!modelMissingHeld(state.modelMissing, tag, Date.now())) {
+                                state.modelMissing = { tag, at: Date.now() };
+                                console.error(`[ai-worker] model "${tag}" is missing at the provider `
+                                    + `(${e?.message ?? e}) - holding reviews for `
+                                    + `${Math.round(MODEL_MISSING_COOLDOWN_MS / 60_000)}m; `
+                                    + 'pick a working model in Admin -> Settings to clear it sooner');
+                            }
+                            guard.tripped = guard.tripped ?? 'model-missing';
+                            return { skip: true };
+                        }
                         console.warn(`[ai-worker] ${kind} review failed for fixture ${r.fixture_id} (kept): ${e?.message ?? e}`);
                         return { verdict: { verdict: 'error', reason: null, model: tag, review: null }, ms: Date.now() - t };
                     }
@@ -235,8 +266,11 @@ export async function drainAiReviews({ shouldStop = null } = {}) {
             });
         }, _progress('[ai-worker] tip review'));
 
-        summary.aborted = consecErrors >= MAX_CONSEC_ERRORS ? 'consecutive-errors'
-            : (stop() ? 'stop-requested' : null);
+        // model-missing outranks the other two: it names a fixable
+        // misconfiguration, where the others only say the drain stopped early.
+        summary.aborted = guard.tripped === 'model-missing' ? 'model-missing'
+            : (consecErrors >= MAX_CONSEC_ERRORS ? 'consecutive-errors'
+                : (stop() ? 'stop-requested' : null));
         summary.budget_left = Math.max(0, cfg.TIP_AI_DAILY_CAP - state.billed_tips);
         summary.ms = Date.now() - startedMs;
         summary.latency = latencyStats(latencies);

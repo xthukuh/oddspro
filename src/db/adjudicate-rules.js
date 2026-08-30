@@ -115,3 +115,31 @@ export function marketLine(market) {
     const m = /^[OU] (\d+(?:\.\d+)?)$/.exec(String(market ?? ''));
     return m ? Number(m[1]) : null;
 }
+
+// --- model-missing latch --------------------------------------------------
+//
+// A 404 / "no such model" from the provider is a CONFIGURATION fault, not a
+// per-fixture one: the configured tag is wrong for EVERY row in the drain, so
+// attempting the remaining fixtures changes nothing, and repeating the whole
+// drain on the next 60s tick changes nothing either. The worker latches the
+// offending tag; this decides whether that latch still holds.
+//
+// Two ways out, both deliberate: the TAG CHANGING clears it immediately (an
+// admin picked a working model in Admin -> Settings and should not have to
+// wait out a cooldown), and the cooldown expiring clears it on its own (the
+// provider restored a model that was briefly withdrawn).
+//
+// Without this the drain re-attempted the same five poisoned fixtures every
+// 60s indefinitely: 11,493 of the 11,515 lines in the live 2026-08-30 stderr
+// were that one loop. Total by design - junk in returns false, because the
+// failure that matters is holding real work back, never doing it twice.
+export const MODEL_MISSING_COOLDOWN_MS = 30 * 60_000;
+
+export function modelMissingHeld(latch, tag, nowMs, cooldownMs = MODEL_MISSING_COOLDOWN_MS) {
+    if (!latch || latch.tag == null || latch.tag !== tag) return false;
+    const at = Number(latch.at);
+    const cd = Number(cooldownMs);
+    const now = Number(nowMs);
+    if (!Number.isFinite(at) || !Number.isFinite(cd) || !Number.isFinite(now) || cd <= 0) return false;
+    return now - at < cd;
+}
