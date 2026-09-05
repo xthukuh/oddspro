@@ -574,6 +574,28 @@ the shown bet). Sources: `docs/research/`.
   column including the key). When judging whether a meta-backed refresher is alive, remember
   any timestamp read BEFORE this fix carries the old, weaker meaning.
 
+- 2026-09-05 - **Production damage audit after a late subscription payment (verified, read-only
+  probes):** the ledger is the evidence, not the fear. `collection_runs` by day (83-87 `ok`
+  light runs every day 08-27 to 09-04), `matches` by day/provider, `fixtures` by day
+  (final/NS/stale-past + the three fetch-once flags), and the linked-coverage join
+  (prematch / predictions / settled) answer "was anything lost" in one probe. Both paid
+  upstreams have a direct status call - run them from the host with the live `.env`:
+  API-Football `GET /status` (plan, `subscription.end`, `requests.current`/`limit_day`)
+  and OpenRouter `GET /api/v1/auth/key` + `/api/v1/credits` (`total_credits` minus
+  `total_usage`). Three traps met on the way: (1) the live `.env` is CRLF, so
+  `cut -d= -f2-` hands the client a password with a trailing CR and MariaDB answers
+  `Access denied` - pipe through `tr -d '\r'` and strip quotes; (2) statistics coverage
+  is NOT a health signal: only ~30-45% of linked final fixtures ever publish stats
+  (minor leagues), and the flag is set 48h after an empty answer, so a "collapse" on the
+  two most recent days is the normal lag; (3) an OpenRouter `404` on EVERY `:free` model
+  at once is an ACCOUNT setting, not a retired catalog - the error body says
+  "ZDR violation (account settings)": the privacy page has Zero-Data-Retention-only on,
+  which excludes every free endpoint. Only the owner can flip it
+  (https://openrouter.ai/settings/privacy). The false daily "No odds collected" notice
+  and the nightly watchdog restart+SMS were both the full sweep holding the single slot
+  for 2.5-7h: fixed in code the same day (gap measured finish-to-next-START;
+  `job_state` beacon + `busy` verdict).
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
@@ -606,6 +628,8 @@ the shown bet). Sources: `docs/research/`.
 - 2026-08-18: §3.8 append: `meta` table bump one-liner + the live two-process writer-lease
   check (`GET_LOCK` acquire/held-elsewhere/release round trip), plus the
   `db.raw(...).connection(conn)` returns `[rows, fields]` (not bare rows) gotcha.
+- 2026-09-05: §5 append: production damage audit playbook (ledger probes, the two upstream
+  status calls, CRLF `.env`, stats-coverage lag, OpenRouter ZDR-only 404s).
 - 2026-08-18: §5 append: narrowed `settleApisportsResults()` settle UPDATE (NULL-safe `<=>`
   guard, verified 13,021 → 0 rows locally) + `scripts/refetch-fixtures.js` recovery tool + the
   rolled-back-transaction replay idiom for safely verifying a SQL change against a live/shared DB.

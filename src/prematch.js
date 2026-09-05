@@ -18,6 +18,15 @@ const SNAPSHOT_COLUMNS = [
     'computed_at',
 ];
 
+// Team ids per standings/history statement. The live host closes the
+// connection on a long statement ("Connection lost: The server closed the
+// connection"); the 2026-09-04 sweep lost this whole step - and 102 of the
+// day's 261 snapshots, permanently, since snapshots never write after
+// kickoff - to one history query carrying ~3,800 team ids in two IN lists
+// over an unindexed column. Same class as the 2026-08-31 catalog and
+// daily-slip chunking: bound the statement, fold the chunks.
+const TEAM_ID_CHUNK = 500;
+
 // Upsert pre-match snapshots for all upcoming correlated fixtures.
 export async function updatePrematchSnapshots() {
     const targets = await db('fixtures as f')
@@ -30,16 +39,28 @@ export async function updatePrematchSnapshots() {
     const teamIds = [...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))];
 
     // Standings (rank/form) per league+season+team - same keying as records.js
-    const standings = await db('standings').whereIn('team_id', teamIds)
-        .select('league_id', 'season', 'team_id', 'rank', 'form');
+    const standings = [];
+    for (let i = 0; i < teamIds.length; i += TEAM_ID_CHUNK) {
+        const rows = await db('standings').whereIn('team_id', teamIds.slice(i, i + TEAM_ID_CHUNK))
+            .select('league_id', 'season', 'team_id', 'rank', 'form');
+        for (const r of rows) standings.push(r);
+    }
     const standing = new Map(standings.map(s => [`${s.league_id}:${s.season}:${s.team_id}`, s]));
 
     // Finished fixtures involving any target team, grouped per team. Status is
     // filtered here in SQL; the calc enforces scores + kickoff cutoff per row.
-    const history = await db('fixtures')
-        .whereIn('status', FINAL_STATUSES)
-        .where(q => q.whereIn('home_team_id', teamIds).orWhereIn('away_team_id', teamIds))
-        .select('home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff');
+    // Chunked by team id and folded by fixture id: a fixture whose two teams
+    // fall in different chunks is returned twice and must count once.
+    const historyById = new Map();
+    for (let i = 0; i < teamIds.length; i += TEAM_ID_CHUNK) {
+        const chunk = teamIds.slice(i, i + TEAM_ID_CHUNK);
+        const rows = await db('fixtures')
+            .whereIn('status', FINAL_STATUSES)
+            .where(q => q.whereIn('home_team_id', chunk).orWhereIn('away_team_id', chunk))
+            .select('id', 'home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff');
+        for (const r of rows) historyById.set(r.id, r);
+    }
+    const history = [...historyById.values()];
     const targetTeams = new Set(teamIds);
     const fixturesByTeam = new Map();
     for (const f of history) {

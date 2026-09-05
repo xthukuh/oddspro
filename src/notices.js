@@ -143,6 +143,7 @@ export async function runDetector() {
         .select('started_at', 'finished_at', 'mode', 'dates', 'verdict', 'step_failures'))
         .map(r => ({
             ...r,
+            started_at: r.started_at ? new Date(r.started_at).toISOString() : null,
             finished_at: new Date(r.finished_at).toISOString(),
             dates: _json(r.dates) ?? [],
             step_failures: _json(r.step_failures) ?? [],

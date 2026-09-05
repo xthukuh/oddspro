@@ -24,9 +24,23 @@
 //             scrape, this is not a failure
 //   'stale' - collection appears to have stopped; scripts/collection-watchdog.js
 //             attempts recovery on this state only
+//   'busy'  - a full sweep is in progress (the writer's `job_state` meta
+//             beacon, src/auto-refresh.js#startJob) and younger than
+//             busyGraceMinutes: the collector is holding the single job slot,
+//             not silent. Never restarted, never alerted. Past the grace the
+//             beacon is ignored, so a writer that died mid-sweep still trips
+//             'stale' (FIX 2026-09-05: the sweep runs 2.5-7h live and every
+//             sweep morning used to restart the app and SMS the admin).
 export function collectionVerdict({
     lastOddsMs = null, nowMs = Date.now(), fixturesNearby = 0, staleMinutes = 45, quietStaleMinutes = 240,
+    busyJob = null, busyGraceMinutes = 480,
 } = {}) {
+    if (busyJob && busyJob.mode === 'full' && Number.isFinite(Number(busyJob.startedMs))) {
+        const busyMinutes = Math.max(0, Math.round((Number(nowMs) - Number(busyJob.startedMs)) / 60_000));
+        if (busyMinutes <= Number(busyGraceMinutes)) {
+            return { state: 'busy', minutes: busyMinutes, reason: `full sweep in progress for ${busyMinutes}m (grace ${busyGraceMinutes}m)` };
+        }
+    }
     const nearby = Number(fixturesNearby) > 0;
     if (lastOddsMs == null || !Number.isFinite(Number(lastOddsMs))) {
         return nearby
@@ -46,9 +60,10 @@ export function collectionVerdict({
 
 // Advance the consecutive-stale run counter (persisted in
 // logs/watchdog-state.json across cron runs). 'stale' increments the streak;
-// 'ok' resets it (collection is confirmed moving again); 'idle' leaves it
-// unchanged - a quiet slate is neither proof collection resumed nor proof it
-// is still broken, so it does not reset an in-progress streak nor extend one.
+// 'ok' resets it (collection is confirmed moving again); 'idle' and 'busy'
+// leave it unchanged - a quiet slate (or a sweep still running) is neither
+// proof collection resumed nor proof it is still broken, so neither resets an
+// in-progress streak nor extends one.
 export function nextStaleStreak(state, prevCount = 0) {
     const n = Number.isFinite(prevCount) ? prevCount : 0;
     if (state === 'stale') return n + 1;

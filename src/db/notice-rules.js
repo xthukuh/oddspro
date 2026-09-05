@@ -55,21 +55,37 @@ export function datesBetween(fromDay, toDay) {
 }
 
 const finishedMs = r => Date.parse(String(r?.finished_at ?? ''));
+// When a run began. A row without a usable started_at (pre-ledger fixtures,
+// older test doubles) is read as instantaneous: started when it finished.
+const startedMs = r => {
+    const ms = Date.parse(String(r?.started_at ?? ''));
+    return Number.isFinite(ms) ? Math.min(ms, finishedMs(r)) : finishedMs(r);
+};
 
 const sortedRuns = runs => (Array.isArray(runs) ? runs : [])
     .filter(r => Number.isFinite(finishedMs(r)))
     .sort((a, b) => finishedMs(a) - finishedMs(b));
 
-// A stretch of wall-clock time with no finished run at all. The threshold
-// counts MISSING RUNS, not missing odds: a quiet-slate idle skip still runs
-// the pass and still records an `ok` row, so an idle night is never a gap.
+// A stretch of wall-clock time with no run finished OR in progress. The
+// threshold counts MISSING RUNS, not missing odds: a quiet-slate idle skip
+// still runs the pass and still records an `ok` row, so an idle night is
+// never a gap.
+//
+// FIX (2026-09-05): the gap is measured from the previous run's finish to the
+// NEXT run's start, never finish to finish. The full sweep holds the single
+// job slot for 2.5-7h on the live host and captures every provider's odds in
+// its first minutes; measured finish-to-finish, every sweep morning read as a
+// multi-hour outage (eleven false "No odds collected" proposals, 2026-08-26
+// to 2026-09-05, served to visitors as UNCONFIRMED). A run that is running
+// is the collector being busy, which is the opposite of the collector being
+// down.
 export function runGapSpans(runs, opts) {
     const { maxGapMinutes = 90 } = opts ?? {};
     const list = sortedRuns(runs);
     const out = [];
     for (let i = 1; i < list.length; i++) {
         const prev = finishedMs(list[i - 1]);
-        const next = finishedMs(list[i]);
+        const next = startedMs(list[i]);
         const gap = Math.round((next - prev) / 60_000);
         if (gap <= maxGapMinutes) continue;
         out.push({

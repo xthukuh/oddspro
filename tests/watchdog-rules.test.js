@@ -150,3 +150,35 @@ test('shouldRestart honors a custom maxAttempts override', () => {
     assert.equal(shouldRestart({ streakCount: 2, lastRestartMs: null, nowMs: NOW, maxAttempts: 2 }), true);
     assert.equal(shouldRestart({ streakCount: 3, lastRestartMs: null, nowMs: NOW, maxAttempts: 2 }), false);
 });
+// FIX 2026-09-05: a full sweep in progress (the writer's job_state beacon) is
+// 'busy', never 'stale' - the sweep runs 2.5-7h live and every sweep morning
+// used to restart the app and SMS the admin.
+test('collectionVerdict is busy (not stale) while a full sweep inside the grace window holds the slot', () => {
+    const v = collectionVerdict({
+        lastOddsMs: NOW - 176 * 60_000, nowMs: NOW, fixturesNearby: 12, staleMinutes: 45,
+        busyJob: { mode: 'full', startedMs: NOW - 180 * 60_000 }, busyGraceMinutes: 480,
+    });
+    assert.equal(v.state, 'busy');
+    assert.equal(v.minutes, 180);
+    assert.match(v.reason, /full sweep in progress/);
+});
+
+test('collectionVerdict ignores the beacon once the sweep is older than the grace window', () => {
+    const v = collectionVerdict({
+        lastOddsMs: NOW - 500 * 60_000, nowMs: NOW, fixturesNearby: 12, staleMinutes: 45,
+        busyJob: { mode: 'full', startedMs: NOW - 481 * 60_000 }, busyGraceMinutes: 480,
+    });
+    assert.equal(v.state, 'stale');
+});
+
+test('collectionVerdict ignores a non-full, malformed or absent beacon', () => {
+    const stale = { lastOddsMs: NOW - 100 * 60_000, nowMs: NOW, fixturesNearby: 3, staleMinutes: 45 };
+    assert.equal(collectionVerdict({ ...stale, busyJob: { mode: 'light', startedMs: NOW - 5 * 60_000 } }).state, 'stale');
+    assert.equal(collectionVerdict({ ...stale, busyJob: { mode: 'full', startedMs: NaN } }).state, 'stale');
+    assert.equal(collectionVerdict({ ...stale, busyJob: null }).state, 'stale');
+});
+
+test('nextStaleStreak holds on busy, like idle', () => {
+    assert.equal(nextStaleStreak('busy', 2), 2);
+    assert.equal(nextStaleStreak('busy', 0), 0);
+});
