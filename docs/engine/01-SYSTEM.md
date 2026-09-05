@@ -263,8 +263,10 @@ zero-import `src/db/auto-rules.js` and is offline-tested.
   first (it fired on five healthy days in a 45-day window - the capture regime
   shifted on 2026-08-05, and a thin midweek slate looks identical to an outage by
   volume alone - the measurement is section 2 of
-  `docs/dev/specs/2026-08-20-2114-data-notices.md`). No successful run inside `COLLECTION_GAP_MINUTES` (90) proposes an
-  `outage` for the dates spanned; a `partial` run proposes `degraded` for the dates
+  `docs/dev/specs/2026-08-20-2114-data-notices.md`). No run finished OR in progress for longer than `COLLECTION_GAP_MINUTES` (90)
+  proposes an `outage` for the dates spanned - the gap runs from one run's finish to the
+  NEXT run's start, so the 2.5-7h full sweep holding the slot reads as busy, not down (fixed
+  2026-09-05 after eleven false daily proposals, 08-26 to 09-05, each served UNCONFIRMED); a `partial` run proposes `degraded` for the dates
   it covered. Proposals insert as `unconfirmed` and are served immediately with a
   `UNCONFIRMED` title prefix - the warning must work before anyone reviews it;
   approving one only drops the prefix, dismissing one is permanent (the
@@ -738,6 +740,8 @@ cache.
 | `ODDS_REFRESH_TIERS` | `90:0,360:30,1440:120,*:360` | light-pass kickoff-proximity backoff |
 | `AUTO_IDLE_LOOKAHEAD_MINUTES` | 120 | skip odds+link on a quiet slate; 0 = off |
 | `COLLECTION_GAP_MINUTES` / `COLLECTION_RUNS_RETENTION_DAYS` | 90 / 90 | data-notice detection window and ledger retention |
+| `WATCHDOG_STALE_MINUTES` / `WATCHDOG_QUIET_STALE_MINUTES` / `WATCHDOG_ALERT_AFTER` / `WATCHDOG_RESTART_COOLDOWN_MINUTES` | 45 / 240 / 3 / 30 | `scripts/collection-watchdog.js`: stale floors (busy slate / quiet slate), SMS after N consecutive stale runs, one restart per cooldown |
+| `WATCHDOG_FULL_SWEEP_GRACE_MINUTES` | 480 | the watchdog reports `busy` (no restart, no SMS) while the writer's `job_state` meta beacon (`src/auto-refresh.js#startJob`, cleared when the job ends) shows a full sweep younger than this; past it a dead writer trips `stale` as before |
 | `WARM_ENABLED` / `WARM_DATES_BACK` / `WARM_DATES_AHEAD` / `WARM_MAX_AGE_MINUTES` | on / 1 / 2 / 5 | the warm keeper (keep the age under the 10-minute memo TTL) |
 
 **Deploy and ops (opt-in, off by default):** `MIGRATE_ON_BOOT` makes the server self-run

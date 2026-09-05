@@ -149,6 +149,15 @@ async function main() {
         .whereRaw('kickoff BETWEEN NOW() - INTERVAL 6 HOUR AND NOW() + INTERVAL 6 HOUR')
         .select(db.raw('COUNT(*) as c'));
 
+    // The writer's job beacon (src/auto-refresh.js#startJob): a full sweep in
+    // progress is the collector being busy, not silent (see
+    // collectionVerdict's 'busy' state for the grace bound).
+    const jobState = await getMeta('job_state');
+    const busyJob = jobState && jobState.mode
+        ? { mode: jobState.mode, startedMs: jobState.started_at ? Date.parse(jobState.started_at) : NaN }
+        : null;
+    const busyGraceMinutes = Number(effective('WATCHDOG_FULL_SWEEP_GRACE_MINUTES'));
+
     const staleMinutes = Number(effective('WATCHDOG_STALE_MINUTES'));
     const quietStaleMinutes = Number(effective('WATCHDOG_QUIET_STALE_MINUTES'));
     const alertAfter = Number(effective('WATCHDOG_ALERT_AFTER'));
@@ -156,6 +165,7 @@ async function main() {
 
     const verdict = collectionVerdict({
         lastOddsMs: signal.ms, nowMs: Date.now(), fixturesNearby: Number(fixturesNearby) || 0, staleMinutes, quietStaleMinutes,
+        busyJob, busyGraceMinutes,
     });
 
     // The signal source is ALWAYS printed so a stale reading is never

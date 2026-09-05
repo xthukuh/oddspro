@@ -295,6 +295,11 @@ const EnvSchema = z.object({
     // for a genuinely empty slate with nothing to scrape.
     WATCHDOG_STALE_MINUTES: z.coerce.number().min(1).default(45),
     WATCHDOG_QUIET_STALE_MINUTES: z.coerce.number().min(1).default(240),
+    // How long a full sweep's `job_state` beacon (src/auto-refresh.js) keeps
+    // the watchdog in 'busy' (no restart, no SMS) before it is ignored again.
+    // Live sweeps run 2.5-7h; 8h leaves headroom without hiding a writer that
+    // died mid-sweep for a whole day (FIX 2026-09-05).
+    WATCHDOG_FULL_SWEEP_GRACE_MINUTES: z.coerce.number().min(1).default(480),
     WATCHDOG_ALERT_AFTER: z.coerce.number().int().min(1).default(3),
     // Restart-attempt cooldown (fix round 1, 2026-08-19): a repeat 'stale'
     // reading must not bounce the app every cron tick - at most one restart

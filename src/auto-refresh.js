@@ -197,6 +197,18 @@ export function startJob({ mode, dates, run, onFinish = null }) {
         cancelRequested: false,
         summary: null,
     });
+    // Cross-instance job beacon for scripts/collection-watchdog.js (FIX
+    // 2026-09-05). A full sweep stamps last_odds_at in its first minutes and
+    // then holds the single job slot for hours of API-Football enrichment;
+    // the watchdog is a separate cron process that can only see meta, and it
+    // read that silence as a stall - a restart plus an SMS every sweep
+    // morning. Best-effort, cleared in the finally below; the reader bounds
+    // it with WATCHDOG_FULL_SWEEP_GRACE_MINUTES in case this process dies
+    // mid-run and leaves the beacon behind.
+    if (isWriter()) {
+        setMeta('job_state', { mode, started_at: refreshJob.started_at, dates })
+            .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
+    }
     // The run polls shouldCancel() between steps and aborts cooperatively; the
     // cancelRequested flag is the source of truth for the finish classifier.
     run(step => { refreshJob.step = step; }, () => refreshJob.cancelRequested)
@@ -241,6 +253,8 @@ export function startJob({ mode, dates, run, onFinish = null }) {
             // exactly like the meta writes above - a ledger hiccup must never
             // throw into this finally block.
             if (isWriter()) {
+                setMeta('job_state', null)
+                    .catch(e => console.error('[auto] meta write failed:', e?.message ?? e));
                 recordRun({
                     started_at: refreshJob.started_at ?? new Date(startedMs).toISOString(),
                     finished_at: refreshJob.finished_at,

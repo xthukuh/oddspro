@@ -221,3 +221,41 @@ test('runGapSpans and detectNotices tolerate a null options argument', () => {
     assert.deepEqual(detectNotices(null, null), []);
     assert.deepEqual(detectNotices([], null), []);
 });
+// FIX 2026-09-05: a run that is still running is not a gap. The live full
+// sweep holds the single slot for 2.5-7h after capturing every provider's
+// odds in its first minutes; finish-to-finish measurement proposed a false
+// "No odds collected" every sweep morning for eleven days.
+const fullRun = (started, finished) => ({
+    started_at: started, finished_at: finished, verdict: 'ok', dates: [], step_failures: [], mode: 'full',
+});
+
+test('runGapSpans measures from the previous finish to the next START, so a long full sweep is not a gap', () => {
+    const runs = [
+        run('2026-09-05T04:31:00+03:00'),
+        run('2026-09-05T04:46:00+03:00'),
+        fullRun('2026-09-05T05:00:00+03:00', '2026-09-05T08:04:00+03:00'),
+        run('2026-09-05T08:07:00+03:00'),
+    ];
+    assert.deepEqual(runGapSpans(runs, { maxGapMinutes: 90 }), []);
+});
+
+test('runGapSpans still reports a gap when the next run only STARTED long after the previous finish', () => {
+    const runs = [
+        run('2026-09-05T04:46:00+03:00'),
+        fullRun('2026-09-05T08:00:00+03:00', '2026-09-05T11:04:00+03:00'),
+    ];
+    const spans = runGapSpans(runs, { maxGapMinutes: 90 });
+    assert.equal(spans.length, 1);
+    assert.equal(spans[0].gap_minutes, 194);
+    assert.equal(spans[0].to_at, new Date('2026-09-05T08:00:00+03:00').toISOString());
+});
+
+test('runGapSpans reads a run without started_at as instantaneous (finish-to-finish)', () => {
+    const runs = [run('2026-09-05T04:46:00+03:00'), run('2026-09-05T08:04:00+03:00')];
+    assert.equal(runGapSpans(runs, { maxGapMinutes: 90 })[0].gap_minutes, 198);
+});
+
+test('runGapSpans clamps a started_at later than its own finished_at to the finish', () => {
+    const runs = [run('2026-09-05T04:46:00+03:00'), fullRun('2026-09-05T09:00:00+03:00', '2026-09-05T08:04:00+03:00')];
+    assert.equal(runGapSpans(runs, { maxGapMinutes: 90 })[0].gap_minutes, 198);
+});

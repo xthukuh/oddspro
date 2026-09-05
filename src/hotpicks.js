@@ -49,12 +49,22 @@ const PICK_COLUMNS = [
 // recorded. Team-total side resolution needs the team names, so the caller
 // passes namesById (fixture_id -> {homeName, awayName}). Returns
 // Map(fixture_id -> buildTipBooks(...) result).
+//
+// Chunked per MARKET_LOAD_CHUNK fixtures (FIX 2026-09-05): one statement over
+// every upcoming correlated fixture (947 on a Saturday, ~200 markets each per
+// provider) is exactly the shape the live host kills mid-flight. Same bound
+// as src/daily-slip.js's SETTLED_WINDOW_CHUNK.
+const MARKET_LOAD_CHUNK = 200;
 async function _loadMarkets(fixtureIds, namesById) {
-    const rows = await db('odds_markets as om')
-        .join('matches as m', 'm.id', 'om.match_id')
-        .whereIn('m.fixture_id', fixtureIds)
-        .where('om.is_stale', 0)
-        .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
+    const rows = [];
+    for (let i = 0; i < fixtureIds.length; i += MARKET_LOAD_CHUNK) {
+        const chunk = await db('odds_markets as om')
+            .join('matches as m', 'm.id', 'om.match_id')
+            .whereIn('m.fixture_id', fixtureIds.slice(i, i + MARKET_LOAD_CHUNK))
+            .where('om.is_stale', 0)
+            .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price');
+        for (const r of chunk) rows.push(r);
+    }
     const byFixture = new Map();
     for (const r of rows) {
         let list = byFixture.get(r.fixture_id);
