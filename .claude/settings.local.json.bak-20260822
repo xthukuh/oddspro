@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "PowerShell(Remove-Item *)",
+      "Bash(npm test *)",
+      "Bash(tar --version)",
+      "Bash(docker exec *)",
+      "Bash(echo \"exit:$?\")",
+      "Bash(docker compose *)"
+    ]
+  }
+}
