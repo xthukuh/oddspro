@@ -595,6 +595,36 @@ the shown bet). Sources: `docs/research/`.
   and the nightly watchdog restart+SMS were both the full sweep holding the single slot
   for 2.5-7h: fixed in code the same day (gap measured finish-to-next-START;
   `job_state` beacon + `busy` verdict).
+- 2026-09-10 - **Daily production health snapshot (verified live, zero tokens per run):**
+  `scripts/ops/prod-health.mjs` plus the cron wrapper `scripts/ops/prod-health.sh` live on
+  the host as `~/ops/prod-health.mjs` and `~/ops/prod-health.sh`; crontab line
+  `20 13 * * * /home2/oddsprok/ops/prod-health.sh` (host clock is EAT, the 05:00 sweep is
+  done by then; the harness classifier refuses `crontab -` from a session, so the owner
+  installs the line). The script imports the app's own `src/db/connection.js` by absolute
+  path (knex resolves from the app's `node_modules`; the wrapper `cd`s to the app root so
+  dotenv finds `.env`) and reads ONLY cheap signals: `MAX(<pk>)` per table, small tables
+  (`collection_runs`, `meta`, `data_notices`, `users`), indexed ranges on `matches.start_time`
+  and `fixtures.kickoff`, `information_schema` estimates, `ps`, `df`, `SHOW GLOBAL STATUS`,
+  and the API-Football `/status` call (key stays in the request header). Every run appends
+  one JSON line to `~/ops/health/ledger.ndjson`, rewrites `latest.json`/`latest.txt`/
+  `last-run.out`, writes `~/ops/health/ALERT` on RED (removed on non-RED) and sends ONE SMS
+  through `sendSms` to `OPS_ALERT_PHONE` or the active admin user's phone, RED only. Always
+  exits 0; 120 s hard timeout; about 2 s per run. Read it: `ssh oddspro 'cat
+  ~/ops/health/latest.txt'`, `ssh oddspro 'tail -n 7 ~/ops/health/ledger.ndjson'`,
+  `ssh oddspro 'test -e ~/ops/health/ALERT && cat ~/ops/health/ALERT || echo no alert'`.
+  Reason codes and thresholds are listed at the top of the script. Ledger traps: four
+  enrichment tables are keyed by `fixture_id` (`fixture_predictions`,
+  `fixture_api_predictions`, `fixture_prematch`, `fixture_ai_insights`), so their `max_id`
+  is the highest API fixture id, not an insert counter - read `rows_estimate` there;
+  `odds_markets` `max_id` (203 M) runs far ahead of its 17.4 M rows and measures write
+  activity, which is what the flatline rule wants; `information_schema` TABLE_ROWS said 0
+  for `users` while `COUNT(*)` is 1; there is no `fixtures.date` column, the indexed
+  kickoff column is `kickoff`. Known noise: the degraded-notice detector proposes an
+  `odds_degraded` notice for one failed bookmaker pass, so `notices_new:1` AMBER recurs.
+  Redeploy after an edit with the base64-argument upload idiom (2026-09-05 entry) and
+  verify md5 both ends plus `node --check`. A weekly local scheduled task
+  (`oddspro-weekly-health-digest`, Mondays 09:10, Opus subagent) reads the ledger and
+  writes a digest under the project memory folder.
 
 ## 6. Doc & knowledge topology
 
@@ -633,3 +663,6 @@ the shown bet). Sources: `docs/research/`.
 - 2026-08-18: §5 append: narrowed `settleApisportsResults()` settle UPDATE (NULL-safe `<=>`
   guard, verified 13,021 → 0 rows locally) + `scripts/refetch-fixtures.js` recovery tool + the
   rolled-back-transaction replay idiom for safely verifying a SQL change against a live/shared DB.
+- 2026-09-10: §5 append: daily production health snapshot (`scripts/ops/prod-health.mjs`, host
+  `~/ops/`, ledger + ALERT + SMS on RED, cheap-signal rules, ledger traps) and the weekly
+  Opus digest task; QUICK-REFERENCE §2.6 row added.
