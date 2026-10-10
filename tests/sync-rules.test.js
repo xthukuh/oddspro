@@ -124,6 +124,19 @@ test('windowDeleteSql is null for odds_markets (handled by the matches delete)',
     assert.equal(windowDeleteSql('odds_markets', SINCE, UNTIL), null);
 });
 
+test('odds history tables sync windowed by match, right after odds_markets, with no extra delete', () => {
+    const names = SYNC_TABLES.map(t => t.name);
+    const at = names.indexOf('odds_markets');
+    assert.deepEqual(names.slice(at + 1, at + 4), ['odds_observations', 'odds_changes', 'odds_target_snapshots']);
+    const plan = planPull({ tables: ['odds_changes', 'odds_target_snapshots', 'odds_observations'], since: SINCE, until: UNTIL });
+    assert.deepEqual(plan.map(p => p.table), ['odds_observations', 'odds_changes', 'odds_target_snapshots']);
+    for (const p of plan) {
+        assert.equal(p.mode, 'window');
+        assert.match(p.where, /^match_id IN \(SELECT id FROM matches WHERE start_time >= /);
+        assert.equal(windowDeleteSql(p.table, SINCE, UNTIL), null); // the matches delete cascades
+    }
+});
+
 test('windowDeleteSql is null for fixtures and every other canonical/derived table', () => {
     assert.equal(windowDeleteSql('fixtures', SINCE, UNTIL), null);
     assert.equal(windowDeleteSql('leagues', SINCE, UNTIL), null);

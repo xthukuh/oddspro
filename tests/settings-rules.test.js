@@ -406,3 +406,24 @@ test('ENRICH_CONCURRENCY rejects 0 and anything past the tested ceiling', () => 
     assert.equal(validateSetting('ENRICH_CONCURRENCY', 9).ok, false);
     assert.equal(validateSetting('ENRICH_CONCURRENCY', 2.5).ok, false);
 });
+
+// Odds history + due-queue (spec 2026-10-10-1600): they change what is
+// RECORDED and when it is fetched, never which picks are generated.
+test('odds history + due-queue knobs: live, not regime, bounded', () => {
+    for (const key of ['ODDS_HISTORY_ENABLED', 'ODDS_TARGET_MAX_LAG_MINUTES', 'ODDS_DUE_ENABLED',
+        'ODDS_DUE_LEAD_MINUTES', 'ODDS_DUE_MAX_PER_TICK', 'ODDS_DUE_DURING_SWEEP']) {
+        const e = catalogEntry(key);
+        assert.ok(e, `${key} must be in the catalog`);
+        assert.equal(e.live, true, `${key} is late-read`);
+        assert.equal(Boolean(e.regime), false, `${key} must not be a regime knob`);
+        assert.equal(e.public, false);
+    }
+    assert.equal(validateSetting('ODDS_DUE_LEAD_MINUTES', '5').ok, true);
+    assert.equal(validateSetting('ODDS_DUE_LEAD_MINUTES', '0').ok, false);
+    assert.equal(validateSetting('ODDS_DUE_LEAD_MINUTES', '61').ok, false);
+    assert.equal(validateSetting('ODDS_DUE_MAX_PER_TICK', '40').ok, true);
+    assert.equal(validateSetting('ODDS_DUE_MAX_PER_TICK', '2.5').ok, false);
+    assert.equal(validateSetting('ODDS_DUE_MAX_PER_TICK', '201').ok, false);
+    assert.equal(validateSetting('ODDS_TARGET_MAX_LAG_MINUTES', '-1').ok, false);
+    assert.equal(validateSetting('ODDS_HISTORY_ENABLED', '0').value, false);
+});

@@ -32,6 +32,9 @@ export const FEATURES = {
     methodology: { minTier: 'guest', label: 'Magic-sort methodology + backtest numbers' },
     // --- Cards / timeline ---
     daily_multibet: { minTier: 'guest', label: 'Daily MultiBet full card + timeline' },
+    // --- Signed-in floor (not guest-openable: GUEST_PREMIUM only opens
+    // 'guest'-tier features). Per-match odds timeline + frozen targets. ---
+    odds_history: { minTier: 'user', label: 'Odds history timeline + target snapshots (per match)' },
     // --- Account-bound: a session is a data requirement, not a paywall ---
     slip_sharing: { minTier: 'user', accountBound: true, label: 'Saved + shareable slips' },
     prefs_sync: { minTier: 'user', accountBound: true, label: 'Cross-device settings sync' },

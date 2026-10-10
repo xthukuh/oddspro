@@ -76,7 +76,7 @@ deadlock on InnoDB gap locks).
 |---|---|---|---|
 | Trigger | every `AUTO_LIGHT_MINUTES` (10) | once per EAT day at `AUTO_FULL_AT` (06:00) | `POST /api/refresh?date=` (web button) |
 | Scope | today only | today..+`AUTO_FULL_DAYS` (5) | one date (`runDateRefresh`) |
-| Does | results settle → odds (tiered kickoff-proximity backoff + idle skip) → link → `settleHotPicks` → auth purge | all 12 steps | fixtures/results/odds/link/stats for the date; history/prematch/predictions/hotpicks only when relevant to past/future |
+| Does | results settle → odds (tiered kickoff-proximity backoff + idle skip) → link → `settleHotPicks` → odds targets sweep → auth purge | all 12 steps | fixtures/results/odds/link/stats for the date; history/prematch/predictions/hotpicks only when relevant to past/future |
 | Skips | fixtures-by-date, deep stats, history, snapshots, predictions, AI | - | standings (owned by the full sweep), AI enrichment (cost) |
 
 ```mermaid
@@ -117,6 +117,35 @@ kickoff is farther out; the lookahead is clamped at or above the first tier so i
 never starve the 90-minute always-refresh guarantee. Both are wired through
 `store.oddsExcludeIds` into the LIGHT pass only - the full sweep and a manual refresh bypass
 the backoff.
+
+**The due-queue lane (2026-10-10, spec `docs/dev/specs/2026-10-10-1600-odds-history-targets.md`).**
+Blanket passes refresh on a decaying cadence, so a T-24h/T-3h/T-1h/closing target can pass
+hours after the last look. Between scheduled jobs, the writer tick also runs
+`src/odds-due.js#runDueRefresh`: the pure `planDueQueue` (`src/db/odds-history-rules.js`)
+opens a window `[target - ODDS_DUE_LEAD_MINUTES, target)` per timed target of every
+upcoming, uncompleted, non-virtual match (linked or not, canonical kickoff), and a match is
+due while its window is open and it has not been looked at since the window opened. Up to
+`ODDS_DUE_MAX_PER_TICK` most-urgent matches are fetched through the bookmakers' per-event
+detail endpoints (`fetchBetpawaGamesByIds`/`fetchBetikaGamesByIds`, 5 in flight, 15 s each;
+Betika's list-only fields come from our own `matches` row) and saved one at a time through
+`saveMatches` (`source = 'due'`). The plan is cached in memory: the database is read again
+only when the next window can have opened, after 5 minutes, or right after a run.
+
+It is deliberately NOT a `startJob` job. It runs awaited inside the tick (`tickInFlight` is
+its mutex) and only when the tick started nothing else, so a due light/full/manual job always
+wins and light passes are never starved. It is invisible to `refreshStatus()` (the refresh
+button never flickers busy) and writes none of the "a pass finished" signals:
+`warehouse_version` (a 30-second cadence would re-warm every cache each time; the next light
+pass bumps it), `job_state`, the run ledger, `last_odds_at`. A manual refresh POSTed while it
+runs starts normally; the lane polls the slot between saves and stops. While a full sweep
+holds the slot, `ODDS_DUE_DURING_SWEEP` (default on) lets the lane run only during the
+sweep's allow-listed enrichment steps (`sweepStepAllowsDue`: deep stats, standings, team
+history, pre-match snapshots, API predictions, hot picks, daily multibet, AI enrichment -
+steps that never write `matches`/`odds_markets`/history rows). An unknown step label fails
+closed. Off restores strict waiting, at the cost of targets inside the 2.5-7 h sweep being
+stored `lagged` or `missing`. The light pass also runs a bounded `odds targets` step
+(`sweepTargets`, 500 matches) that freezes targets which passed with no later look; the
+label is not data-bearing, so its failure only marks the pass partial.
 
 The "already swept today" marker (`lastFullKey`) is no longer stamped at START. It is
 stamped only from the full-sweep job's own `onFinish` callback, and only when
@@ -413,6 +442,7 @@ the CSV export action of the same read layer.
 | `POST /api/refresh?date=` | starts the single-slot background `runDateRefresh` job. 409 while ANY job runs (parallel refreshes deadlock on delete+insert gap locks), `200 {fresh:true}` when the date was successfully refreshed inside `REFRESH_CACHE_MINUTES`, 429 on the manual cooldown |
 | `GET /api/refresh` | job state + freshness signal (`data_version`, `last_success`, `warm`, `notices`). The web polls it slowly (60s) for silent reloads and fast (2s) while a job runs |
 | `GET /api/hotpicks`, `GET /api/performance`, `GET /api/coverage` | summaries backed by `hotpicksSummary()`, `performanceSummary()`, `coveragePayload()` |
+| `GET /api/odds-history/:matchId` | one match's logged looks, pre-match price changes (newest `limit`, default 2000, max 20000, `truncated` flag) and frozen targets with replayed markets (`src/odds-history.js#oddsHistoryPayload`, chapter 02). Gated by the `odds_history` registry feature (`minTier: 'user'`) plus the machine-bearer / `AUTH_ENABLED=0` legacy path; guests 401. Not memoized |
 | `/api/auth/*` | signup/login/verify-otp/resend-otp/change-phone/logout/me/profile - per-route JSON body limits, the ONE shared `csrfOk`, best-effort sliding-window rate limits keyed on IP/phone/user, an `authGuard` factory with role and verified variants plus the forced-PIN-change H4 gate |
 | `/api/prefs` GET/PUT | `requireAuth`, deliberately NOT `requireVerified` |
 | `GET /api/settings` | the public subset of the settings catalog |
@@ -564,7 +594,10 @@ floor: `tip_reasoning`, `future_dates`, `sure_bets`, `safe_picks`, `methodology`
 `daily_multibet` all default `minTier:'guest'`, plus the `accountBound` `slip_sharing`/
 `prefs_sync` pinned at `minTier:'user'` - structurally impossible to open to a guest
 since they read/write rows owned by a user id, so `GUEST_PREMIUM` can never touch them
-by construction, not by comment. `effectiveMinTier(feature, opts)` resolves the floor
+by construction, not by comment. `odds_history` (2026-10-10, `GET /api/odds-history`) is
+`minTier:'user'` without being account-bound: `GUEST_PREMIUM` only ever opens
+`guest`-tier entries, so it stays signed-in only, while a later move to `admin` or a
+subscription tier is one edit. `effectiveMinTier(feature, opts)` resolves the floor
 against runtime policy: `opts.guestPremium` off lifts every guest-tier feature to
 `'user'` (the pre-2026-08 behavior); on, it leaves them at `'guest'` except any key
 named in `opts.guestExcept` (the `GUEST_PREMIUM_EXCEPT` setting, parsed by
@@ -739,6 +772,8 @@ cache.
 | `REFRESH_CACHE_MINUTES` | 5 | a manual refresh inside this window is answered "fresh" |
 | `ODDS_REFRESH_TIERS` | `90:0,360:30,1440:120,*:360` | light-pass kickoff-proximity backoff |
 | `AUTO_IDLE_LOOKAHEAD_MINUTES` | 120 | skip odds+link on a quiet slate; 0 = off |
+| `ODDS_HISTORY_ENABLED` / `ODDS_TARGET_MAX_LAG_MINUTES` | on / 15 | the odds change log, observation ledger and target snapshots (chapter 02); a target last looked at further back than the tolerance is stored `lagged` |
+| `ODDS_DUE_ENABLED` / `ODDS_DUE_LEAD_MINUTES` / `ODDS_DUE_MAX_PER_TICK` / `ODDS_DUE_DURING_SWEEP` | on / 5 / 40 / on | the due-queue lane (below); the last lets it run during the sweep's allow-listed enrichment steps |
 | `COLLECTION_GAP_MINUTES` / `COLLECTION_RUNS_RETENTION_DAYS` | 90 / 90 | data-notice detection window and ledger retention |
 | `WATCHDOG_STALE_MINUTES` / `WATCHDOG_QUIET_STALE_MINUTES` / `WATCHDOG_ALERT_AFTER` / `WATCHDOG_RESTART_COOLDOWN_MINUTES` | 45 / 240 / 3 / 30 | `scripts/collection-watchdog.js`: stale floors (busy slate / quiet slate), SMS after N consecutive stale runs, one restart per cooldown |
 | `WATCHDOG_FULL_SWEEP_GRACE_MINUTES` | 480 | the watchdog reports `busy` (no restart, no SMS) while the writer's `job_state` meta beacon (`src/auto-refresh.js#startJob`, cleared when the job ends) shows a full sweep younger than this; past it a dead writer trips `stale` as before |

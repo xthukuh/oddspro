@@ -54,7 +54,7 @@ import { haltRequested, HALT_FILE } from './halt.js';
         const exclude = await completedMatchIds(action, `${_dtime(_date(value)).substring(0, 10)} 00:00:00`);
         const res = action === 'betpawa' ? await fetchBetpawaGames(value, exclude) : await fetchBetikaGames(value, exclude);
         console.debug(`Found ${res.length} games.`);
-        const c = await saveMatches(res);
+        const c = await saveMatches(res, { source: 'cli' });
         console.debug(`[+] ${action}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
         await linkMatches(action); // auto-correlate new matches
         return;

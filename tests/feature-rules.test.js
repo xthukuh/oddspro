@@ -63,6 +63,14 @@ test('parseFeatureList is total over admin-typed junk', () => {
     assert.equal(featureAllowed(GUEST, 'sure_bets', { guestPremium: true, guestExcept: 'nope' }), true);
 });
 
+test('odds_history is signed-in only and GUEST_PREMIUM can never open it', () => {
+    assert.equal(featureAllowed(GUEST, 'odds_history', {}), false);
+    assert.equal(featureAllowed(GUEST, 'odds_history', { guestPremium: true, guestExcept: '' }), false);
+    assert.equal(featureAllowed(USER, 'odds_history', {}), true);
+    assert.equal(featureAllowed(ADMIN, 'odds_history', {}), true);
+    assert.equal(GUEST_FEATURES.includes('odds_history'), false);
+});
+
 test('unknown feature keys throw - a typo\'d gate must never fail open', () => {
     assert.throws(() => featureAllowed(USER, 'nope'), /unknown feature/);
     assert.throws(() => effectiveMinTier('nope', {}), /unknown feature/);

@@ -27,6 +27,7 @@ copying content into this chapter, you are in the wrong file.
 | AI prompts/models/tags | `06-AI.md` | regime-neutral (bytes + tags identical) or bump the tag same-commit; `scripts/ai-scorecard.js` after |
 | Pipeline steps/schedulers/cadence | `01-SYSTEM.md` | offline suite (auto-rules tests) + one observed light pass in `logs/auto-refresh.log` |
 | Data invariants (freeze/fetch-once/settle) | `02-DATA-PIPELINE.md` | do NOT - these are load-bearing; propose to the user first |
+| Odds history / target snapshots / due-queue (`odds-diff.js#diffOddsChanges`, `odds-history-rules.js`, `src/odds-history.js`, `src/odds-due.js`, the history block in `store.js`) | `02-DATA-PIPELINE.md` "Odds history and target snapshots" + `01-SYSTEM.md` "The due-queue lane" | offline suite (`odds-history-*.test.js`); never prune/edit log rows (frozen snapshots point into them); after a deploy, the two QUICK-REFERENCE growth/coverage queries |
 | Web table/filters/betslip/caches | `08-WEB-CLIENT.md` | offline suite (client rules tests) + a manual pass in the browser |
 | A new ops recipe discovered | - | dated VERIFIED append to `docs/agents/toolset.md` (its protocol) |
 
@@ -55,7 +56,12 @@ APIs. It asserts:
 - 2026-08-19 added the writer-lease and meta cross-instance rules (`lease-rules.js`'s
   `lockOutcome`/`leaseTransition`, `auto-rules.js`'s `shouldConsumeRefreshRequest`) and the
   pure db-sync rules (`scripts/lib/sync-rules.js`: `planPull`, `dumpArgs`,
-  `dumpLooksComplete`, `planIdChunks`, `statusRows`/`compareStatus`).
+  `dumpLooksComplete`, `planIdChunks`, `statusRows`/`compareStatus`);
+- 2026-10-10 added the odds history rules: the change-log diff (`diffOddsChanges`, every
+  event and the baseline resync), the pre-match gate, `observationKind`, target freezing
+  (`planTargetFreezes`: opening, lag/quality, `missing`, reschedules), the log replay, the
+  due-queue plan and the sweep-step allow-list. The DB write/read paths (`store.js` history
+  block, `src/odds-history.js`, `src/odds-due.js`) are NOT covered offline.
 
 ## Doc updates are part of the change
 
