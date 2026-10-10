@@ -180,6 +180,7 @@ client and server cannot drift.
 - `src/http-cache.js` + `src/db/cache-rules.js`, `src/warm.js` + `src/db/warm-rules.js` - the version-keyed response memo and the warm keeper that precomputes it ahead of demand.
 - `src/notices.js` + `src/db/notice-rules.js` - data notices: `collection_runs` is the ledger, `data_notices` the published warnings, `/api/coverage` the machine surface.
 - `src/maintenance.js` + `src/db/maintenance-rules.js` - the scheduled-maintenance window, its 503 gate and the quiesce policy.
+- `src/health.js` + `src/health-collect.js` + `src/db/health-rules.js` - the writer-only daily production health snapshot (`health_snapshots`, `GET /api/admin/health/ledger|latest`); the collector and pure verdict are shared verbatim with the host cron `scripts/ops/prod-health.mjs`.
 - `src/halt.js`, `src/db/odds-refresh-rules.js` - the `.HALT` kill-switch and the light-pass odds backoff/idle rules.
 - `src/db/migrate-rules.js`, `src/db/retry-rules.js`, `src/db/net-rules.js`, `src/bot-rules.js`, `src/crypto-utils.js` - boot-migration summary, deadlock retry, transient-network classification, the bot-UA blocklist, and `sha256Hex`/`bearerMatches`.
 

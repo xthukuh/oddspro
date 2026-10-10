@@ -642,6 +642,23 @@ the shown bet). Sources: `docs/research/`.
   switches the session to ask mode; and a complex single-quoted ssh command pasted into
   PowerShell dies with `bash: -c: line 2: syntax error: unexpected end of file` (KNOWNS #2),
   so hand the owner `ssh oddspro "bash ~/ops/<script>.sh"` with the script already placed.
+- 2026-10-10 - **Health ledger readable over HTTP (monitoring no longer needs SSH).** SSH
+  broke twice (the IP allow-list, then the hosting migration that likely also wiped the
+  crontab) and the ledger went unread for 26 days. The writer instance now takes the same
+  snapshot in-process once per EAT day at `HEALTH_SNAPSHOT_AT` (13:20 default, Admin ->
+  Settings) into `health_snapshots`, and the digest reads it with
+  `curl -s -H "Authorization: Bearer $ADMIN_TOKEN" "https://<site>/api/admin/health/ledger?days=14"`
+  (or `/api/admin/health/latest`). Check `freshness.stale` and `freshness.missing_today`
+  before the verdicts: the in-app snapshot cannot report that the writer itself is dead, so an
+  absent row IS the alarm. The cron script `scripts/ops/prod-health.mjs` now imports
+  `src/health-collect.js` and `src/db/health-rules.js` from the app root (one verdict for
+  both), so redeploy the host copy only after an app build carrying those modules is live,
+  else it writes RED `rules_module_missing`. Two semantics changed with the extraction: a
+  failed sweep or pass is `error` in `collection_runs` (the old cron tested `failed`, which
+  never matched, so `full_failed`/`light_failed` could not fire before), and a sweep still
+  running at snapshot time no longer reads as `full_missing_today` (job_state beacon). A
+  timeout now reads `snapshot_error, timeout:120s`. With both running, a RED day can SMS
+  twice: `HEALTH_SNAPSHOT_SMS` off silences the in-app one.
 
 ## 6. Doc & knowledge topology
 
@@ -683,3 +700,6 @@ the shown bet). Sources: `docs/research/`.
 - 2026-09-10: §5 append: daily production health snapshot (`scripts/ops/prod-health.mjs`, host
   `~/ops/`, ledger + ALERT + SMS on RED, cheap-signal rules, ledger traps) and the weekly
   Opus digest task; QUICK-REFERENCE §2.6 row added.
+- 2026-10-10: §5 append: health ledger over HTTP (`health_snapshots`, `/api/admin/health/*`,
+  the shared collector + rules the cron now imports, the two verdict corrections);
+  QUICK-REFERENCE §2.6 row added.

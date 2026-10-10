@@ -316,6 +316,18 @@ const EnvSchema = z.object({
     // (keeps alerting) past MAX_RESTART_ATTEMPTS (5, src/db/watchdog-rules.js)
     // consecutive stale runs.
     WATCHDOG_RESTART_COOLDOWN_MINUTES: z.coerce.number().min(0).default(30),
+    // Daily production health snapshot (src/health.js, writer instance only):
+    // one row per EAT day in health_snapshots at or after this EAT time,
+    // readable via GET /api/admin/health/ledger|latest. ''/off disables. The
+    // default matches the host cron line (20 13 * * *): the early full sweep
+    // is normally done by then.
+    HEALTH_SNAPSHOT_AT: z.string().default('13:20'),
+    // One SMS on a RED snapshot (to OPS_ALERT_PHONE, else the active admin).
+    HEALTH_SNAPSHOT_SMS: boolStr('1'),
+    // Optional RED-alert recipient for the health snapshot (in-app and the
+    // host cron script alike); blank = the active admin user's phone. Read
+    // for the send only, never stored in a snapshot.
+    OPS_ALERT_PHONE: z.string().default(''),
     // Visitor geo backfill (src/geo.js): a background sweep resolves each newly
     // seen visitor IP to country/region and caches the result per-IP (ip_geo),
     // marking unresolvable/private IPs so they're never re-queried. Default
