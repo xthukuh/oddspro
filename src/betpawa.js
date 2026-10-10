@@ -2,7 +2,7 @@ import axios from 'axios';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { withRetry } from './db/retry-rules.js';
 import { isRetryableApiError } from './db/net-rules.js';
-import { listPageOutcome, listPageDone } from './db/collector-rules.js';
+import { listPageOutcome, listPageDone, betpawaHandicap } from './db/collector-rules.js';
 
 // Get axios client instance
 const BetpawaClient = axios.create({
@@ -97,7 +97,7 @@ function parseBetpawaGame(game) {
                         type_explainer: m.marketType.explainer,
                         name: p.name,
                         price: Number(Number(p.odds).toFixed(2)),
-                        handicap: /\d/.test(v = String(p.handicap)) ? Number(Number(v).toFixed(1)) : null,
+                        handicap: betpawaHandicap(p.handicap, row.specifier),
                         probability: /\d/.test(v = String(p.probability?.win ?? '')) ? Number(Number(v).toFixed(3)) : null,
                     });
                 }

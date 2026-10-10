@@ -152,3 +152,22 @@ export function isVirtualCompetition(competition) {
     // match when the token itself is this distinctive.
     return /-zoom\b/i.test(competition) || /\bsrl\b/i.test(competition);
 }
+
+// The numeric line of one BetPawa price, or null when the market has none.
+//
+// Most markets carry a plain number on the price (`"0.5"` for Over/Under), but
+// 3-Way Handicap prices carry text (`"Home -3"`, `"Away +3"`), and Number() of
+// that is NaN, which reached the DB as NULL: every line of the market then
+// collapsed onto one identity (type_name, name, NULL), so four different
+// prices for outcome "1" looked like one market. Measured 2026-10-10 on a live
+// day: 6,729 of 153,135 rows. The row's own `specifier.hcp` holds the clean
+// line from the home side ("-3") for all three outcomes of that row, which is
+// exactly the per-line identity needed.
+export function betpawaHandicap(priceHandicap, rowSpecifier) {
+    const asNumber = v => {
+        if (v == null || !/\d/.test(String(v))) return null;
+        const n = Number(v);
+        return Number.isFinite(n) ? Number(n.toFixed(1)) : null;
+    };
+    return asNumber(priceHandicap) ?? asNumber(rowSpecifier?.hcp) ?? asNumber(rowSpecifier?.total);
+}

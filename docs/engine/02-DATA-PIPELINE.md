@@ -90,18 +90,16 @@ layer), while hot-pick/tip *evaluation* rolls `HOTPICK_TEAM_WINDOW` = **7**
 (`src/db/goals-rules.js`, decision layer). They are independent consumers of the same
 history; only the H2H window is shared at 5.
 
-**Indexed team-id history lookup (`20261010000002_fixtures_team_id_indexes`):** both the
-history pull above and `src/hotpicks.js`'s `loadTeamHistory()` run the same shape of query
-in team-id chunks - `WHERE status IN (<FINAL_STATUSES>) AND (home_team_id IN (<chunk>) OR
-away_team_id IN (<chunk>))` - and `fixtures` carried no index on either team-id column until
-this migration, so every chunk full-scanned the table. This is what cost the 2026-09-04
-sweep its whole pre-match step (and 102 of that day's 261 snapshots PERMANENTLY, since a
-snapshot never writes again once kickoff has passed) to one history query over ~3,800 team
-ids. Fix: `fixtures_home_team_id_status_index (home_team_id, status)` and
-`fixtures_away_team_id_status_index (away_team_id, status)` - team_id leads each composite
-(far more selective than `status`'s handful of codes) and the two single-column-led
-composites let MySQL index-merge the OR rather than only serving one side of it. `kickoff`
-is deliberately left out of both: neither query filters or orders by it in SQL.
+**Team-id history lookup is already indexed (verified 2026-10-10):** both the history pull
+above and `src/hotpicks.js`'s `loadTeamHistory()` query `fixtures` by team-id chunks -
+`WHERE status IN (<FINAL_STATUSES>) AND (home_team_id IN (<chunk>) OR away_team_id IN (<chunk>))`.
+Both team-id columns carry foreign keys to `teams`, and InnoDB backs every foreign key with an
+index of its own, so this lookup was never a full scan. A proposed composite
+`(home_team_id, status)` migration was dropped before release: adding it made InnoDB silently
+retire the foreign-key index in its favour, its `down()` then failed with "needed in a foreign
+key constraint", and `status` adds almost nothing on top of team_id. The 2026-09-04 loss of the
+pre-match step came from the host killing ONE query over ~3,800 team ids, which the
+`TEAM_ID_CHUNK` 500 chunking already fixed.
 
 ## Collectors and silent-truncation durability
 
@@ -275,6 +273,16 @@ taxonomy is known. Because `_matchRow` feeds both the insert and the update bran
 correction to the predicate re-classifies existing rows on their next odds refresh, with no
 backfill script. Chapter 03 covers what that flag is used
 for downstream (excluding simulated competitions from linking work).
+
+**BetPawa handicap lines (fixed 2026-10-10).** A market's identity is (type_name, name,
+handicap), so the handicap must be the line's number. BetPawa's 3-Way Handicap prices carry
+it as text (`"Home -3"`, `"Away +3"`), and `Number()` of that is NaN, which reached the DB as
+NULL: every line of the market collapsed onto one identity, measured at 6,729 of 153,135
+rows on a live day. `betpawaHandicap` in `src/db/collector-rules.js` now falls back to the
+row's `specifier.hcp`, the home-side line shared by all three outcomes of that row. Upgrade
+effect: a match already holding the merged NULL rows gets the per-line rows on its next
+refresh, and the old NULL rows are flagged stale by the normal retention rule (kept, not
+deleted). Completed matches are never refetched, so their stored rows stay as they were.
 
 ## Odds history and target snapshots
 
