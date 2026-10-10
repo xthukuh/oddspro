@@ -1,9 +1,13 @@
 import { db } from './connection.js';
 import { debugLog } from '../utils.js';
-import { diffOddsRows, emptySnapshotIsSuspect } from './odds-diff.js';
+import { diffOddsRows, diffOddsChanges, emptySnapshotIsSuspect } from './odds-diff.js';
 import { withRetry } from './retry-rules.js';
 import { oddsRefreshDue } from './odds-refresh-rules.js';
 import { isVirtualCompetition } from './collector-rules.js';
+import { historyGateOpen, observationKind, parseEatMs } from './odds-history-rules.js';
+import {
+    historyEnabled, dbNowMs, lastObservations, writeObservation, materializeTargets, TOUCHED_SQL,
+} from '../odds-history.js';
 
 // Bulk insert chunk size for odds market rows
 const MARKETS_CHUNK = 200;
@@ -130,10 +134,18 @@ export async function oddsExcludeIds(provider, from_start_time = null, { tiers =
 // snapshot are replaced (delete + insert), markets that vanished are kept and
 // flagged stale (last-seen price survives for display; see odds-diff.js).
 // Matches already marked completed are skipped entirely (fetch throttle rule).
-export async function saveMatches(games) {
-    const counts = { inserted: 0, updated: 0, skipped: 0, markets: 0 };
+//
+// Odds history (spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md):
+// while ODDS_HISTORY_ENABLED is on, every non-suspect look at a match that is
+// still before its CANONICAL kickoff also writes one odds_observations row
+// and the odds_changes rows for what moved, in the SAME transaction as the
+// odds_markets update. `source` tags the observation (light/full/manual/due).
+// After the loop the logged matches' due targets are frozen, best-effort.
+export async function saveMatches(games, { source = null } = {}) {
+    const counts = { inserted: 0, updated: 0, skipped: 0, markets: 0, observations: 0, changes: 0 };
     if (!Array.isArray(games) || !games.length) return counts;
     const provider = games[0].provider;
+    const history = historyEnabled();
     // DEBUG-gated phase timing only (no logic change). This exists to answer one
     // question with numbers before anyone refactors: the per-match `existingOdds`
     // SELECT below is an N+1 (~1700 sequential round trips on a busy Betika day),
@@ -147,12 +159,24 @@ export async function saveMatches(games) {
     const byPid = new Map();
     const pids = games.map(g => g.match_id);
     for (let i = 0; i < pids.length; i += MATCH_LOOKUP_CHUNK) {
-        const existing = await db('matches')
-            .select('id', 'provider_match_id', 'completed_at')
-            .where('provider', provider)
-            .whereIn('provider_match_id', pids.slice(i, i + MATCH_LOOKUP_CHUNK));
+        // fixture_kickoff_iso: the CANONICAL kickoff of a linked match, for the
+        // history's pre-match gate (offset baked in - the TZ-decode hazard).
+        const existing = await db('matches as m')
+            .leftJoin('fixtures as f', 'f.id', 'm.fixture_id')
+            .select('m.id', 'm.provider_match_id', 'm.completed_at',
+                db.raw("DATE_FORMAT(f.kickoff, '%Y-%m-%dT%H:%i:%s+03:00') as fixture_kickoff_iso"))
+            .where('m.provider', provider)
+            .whereIn('m.provider_match_id', pids.slice(i, i + MATCH_LOOKUP_CHUNK));
         for (const r of existing) byPid.set(Number(r.provider_match_id), r);
     }
+    // History prefetch, outside the per-match transactions: the newest logged
+    // look per known match (feeds the baseline rule) and the database clock.
+    // If a concurrent process (a CLI run beside serve) logs the same match in
+    // between, this value is merely old: the baseline rule then fires one
+    // spare resync - more rows, never a wrong replay.
+    const lastObs = history ? await lastObservations([...byPid.values()].map(r => r.id)) : new Map();
+    if (history) await dbNowMs(); // warm the clock offset once per call
+    const loggedIds = [];
     const tPrefetch = Date.now();
     for (const g of games) {
         const found = byPid.get(Number(g.match_id));
@@ -166,10 +190,15 @@ export async function saveMatches(games) {
         // transaction is idempotent (recomputes the diff), so retry it
         // transiently rather than aborting the refresh (see retry-rules.js).
         // `counts` is bumped inside so a retried attempt starts from a fresh diff.
-        let inserted = false, updated = false, markets = 0;
+        let inserted = false, updated = false, markets = 0, logged = null;
+        // Observation instant, read OUTSIDE the transaction (a clock re-probe
+        // inside it would need a second pool connection while this one is
+        // held). A retried attempt reuses it: same look, same instant.
+        const nowMs = history ? await dbNowMs() : null;
         await withRetry(() => db.transaction(async trx => {
             inserted = updated = false;
             markets = 0;
+            logged = null;
             let match_id;
             const tUpsert = Date.now();
             if (found) {
@@ -186,8 +215,10 @@ export async function saveMatches(games) {
             const rows = _marketRows(match_id, g.markets);
             const tSelect = Date.now();
             timing.upsert += tSelect - tUpsert;
+            // price + touched_iso feed the odds history only (change diff and
+            // the baseline rule); the stale/delete diff ignores them.
             const existingOdds = await trx('odds_markets').where('match_id', match_id)
-                .select('id', 'type_name', 'name', 'handicap', 'is_stale');
+                .select('id', 'type_name', 'name', 'handicap', 'is_stale', 'price', trx.raw(TOUCHED_SQL));
             const tDiff = Date.now();
             timing.selectOdds += tDiff - tSelect;
             // A degraded-but-200 detail response can yield zero parsed markets
@@ -206,17 +237,56 @@ export async function saveMatches(games) {
                 if (deleteIds.length) await trx('odds_markets').whereIn('id', deleteIds).del();
                 if (rows.length) await db.batchInsert('odds_markets', rows, MARKETS_CHUNK).transacting(trx);
                 markets = rows.length;
+                // Odds history - same transaction, so a rollback/retry takes
+                // the log with it. Pre-match only: the gate uses the CANONICAL
+                // kickoff (the fixture's when linked, else this snapshot's own
+                // start_time), and the clock is the database's. Computed from
+                // `existingOdds` as read BEFORE the writes above.
+                if (history) {
+                    const kickoffMs = found?.fixture_kickoff_iso
+                        ? parseEatMs(found.fixture_kickoff_iso) : parseEatMs(g.start_time);
+                    if (historyGateOpen({ nowMs, kickoffMs })) {
+                        const touched = existingOdds.map(r => parseEatMs(r.touched_iso)).filter(Number.isFinite);
+                        const kind = observationKind({
+                            existingCount: existingOdds.length,
+                            lastObsMs: found ? (lastObs.get(Number(found.id)) ?? null) : null,
+                            touchedMaxMs: touched.length ? Math.max(...touched) : null,
+                        });
+                        const changes = diffOddsChanges(existingOdds, rows, { baseline: kind === 'baseline' });
+                        const n = await writeObservation(trx, {
+                            matchId: match_id, observedMs: nowMs, kickoffMs, kind, source, markets: rows.length, changes,
+                        });
+                        logged = { match_id, changes: n };
+                    }
+                }
             }
             timing.diffWrite += Date.now() - tDiff;
         }));
         if (inserted) counts.inserted++;
         if (updated) counts.updated++;
         counts.markets += markets;
+        if (logged) {
+            counts.observations++;
+            counts.changes += logged.changes;
+            loggedIds.push(logged.match_id);
+        }
+    }
+    // Freeze whatever targets the logged matches now owe (opening at once,
+    // timed targets once passed). Best-effort: a failure here must never fail
+    // a save that already committed - the next save or the light-pass sweep
+    // freezes the same rows with the same deterministic result.
+    if (loggedIds.length) {
+        try {
+            await materializeTargets({ matchIds: loggedIds, cap: 2000 });
+        } catch (e) {
+            console.error(`[store] ${provider}: target snapshot freeze failed:`, e?.message ?? e);
+        }
     }
     debugLog(`store.saveMatches ${provider}: prefetch ${tPrefetch - t0}ms, `
         + `loop ${Date.now() - tPrefetch}ms (upsert ${timing.upsert}ms, `
         + `select-odds ${timing.selectOdds}ms, diff-write ${timing.diffWrite}ms) `
         + `- ${games.length} games (${counts.inserted} ins, ${counts.updated} upd, `
-        + `${counts.skipped} skip, ${counts.markets} markets)`);
+        + `${counts.skipped} skip, ${counts.markets} markets, `
+        + `${counts.observations} logged looks, ${counts.changes} price changes)`);
     return counts;
 }

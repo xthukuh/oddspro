@@ -72,6 +72,13 @@ export const SYNC_TABLES = [
     { name: 'standings', cls: 'canonical', dateWhere: null },
     { name: 'matches', cls: 'trio', dateWhere: kickoffWindow('start_time') },
     { name: 'odds_markets', cls: 'trio', dateWhere: oddsMarketsWindow },
+    // Odds history (2026-10-10): hangs off matches exactly like odds_markets
+    // (FK ON DELETE CASCADE), so the windowed matches DELETE already empties
+    // the window locally and these REPLACE it from live - without these
+    // entries a pull would silently drop the local history of the window.
+    { name: 'odds_observations', cls: 'trio', dateWhere: oddsMarketsWindow },
+    { name: 'odds_changes', cls: 'trio', dateWhere: oddsMarketsWindow },
+    { name: 'odds_target_snapshots', cls: 'trio', dateWhere: oddsMarketsWindow },
     { name: 'fixture_statistics', cls: 'canonical', dateWhere: fixtureIdWindow },
     { name: 'fixture_events', cls: 'canonical', dateWhere: fixtureIdWindow },
     { name: 'fixture_lineups', cls: 'canonical', dateWhere: fixtureIdWindow },

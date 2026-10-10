@@ -169,6 +169,7 @@ change nothing and can go; a DIFFERS line is load-bearing (the 2026-07-26 lesson
 | Knob | Group |
 |---|---|
 | `AUTO_FULL_AT` (EAT), `AUTO_LIGHT_MINUTES` - refresh cadence | `refresh` (both restart-required) |
+| `ODDS_HISTORY_ENABLED` (on), `ODDS_TARGET_MAX_LAG_MINUTES` (15) - odds change log + target snapshots; `ODDS_DUE_ENABLED` (on), `ODDS_DUE_LEAD_MINUTES` (5), `ODDS_DUE_MAX_PER_TICK` (40), `ODDS_DUE_DURING_SWEEP` (on) - the due-queue lane | `refresh` (all live) |
 | `SMS_ENABLED=1` - required for real sign-ups (off = codes log server-side) | `sms` |
 | `DEBUG=0` - shared-host posture | `logging` |
 | AI caps/models (`TIP_AI_DAILY_CAP`, `AI_ENRICH_CAP`, `OPENROUTER_MODEL`, ...) | `ai`, `ai-dark` |
@@ -189,9 +190,12 @@ node scripts/deploy-remote.js --app --web     # code-only redeploy
 ```
 
 Emergency single-file fix (no release build): `node scripts/hotfix-remote.js <file...>
-[--from <dir>] [--restart] [--dry-run]`: remote-backs-up (`.orig-<stamp>`), uploads,
-`node --check`s `.js`/`.mjs`/`.cjs` (auto-restores + dies on a syntax error), prints the
-rollback command; detail `docs/DEPLOYMENT.md` §5.1.
+[--from <dir>] [--restart] [--dry-run]`: ONE ssh call total (tarball of the files + a
+generated apply script piped in via stdin, extracted and run server-side) - backs each file
+up (`.orig-<stamp>`), installs, `node --check`s `.js`/`.mjs`/`.cjs`, prints its md5sum, and on
+ANY failure rolls back every file the run already touched before exiting non-zero, all with
+no further round trips. Prints the manual rollback command too; detail `docs/DEPLOYMENT.md`
+§5.1.
 
 Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Restart**
 (with `MIGRATE_ON_BOOT=1` this applies any new migration first). Smoke test (§2.5).
@@ -219,7 +223,10 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Daily sweep | in-process (serve); optional cron backup ≥ 1h from `AUTO_FULL_AT` - Windows task `oddspro-pipeline` 08:00 / `scripts/pipeline-cron.sh` |
 | Cron-only host | run `node src/index.js aireview` after each sweep (else AI verdicts stop) |
 | Stalled-collection watchdog | cron every ~15 min: `node scripts/collection-watchdog.js`, flags stalled odds collection (`WATCHDOG_STALE_MINUTES`/`WATCHDOG_QUIET_STALE_MINUTES`), touches `tmp/restart.txt` to recycle Passenger, SMS-alerts the admin after `WATCHDOG_ALERT_AFTER` consecutive stale runs; reports `busy` (no restart, no SMS) while the writer's `job_state` beacon shows a full sweep younger than `WATCHDOG_FULL_SWEEP_GRACE_MINUTES` (480). Never exits non-zero; log in `logs/watchdog.log` |
-| Daily health snapshot | host cron 13:20 EAT: `~/ops/prod-health.sh` (source `scripts/ops/prod-health.mjs`) appends one JSON line per run to `~/ops/health/ledger.ndjson` (verdict GREEN/AMBER/RED with reason codes, light-pass counts and gaps, latest full sweep, odds freshness, per-table accumulation counters, bookmaker coverage, notices, host and API-Football plan status), rewrites `latest.txt`, leaves `~/ops/health/ALERT` and sends one SMS to the admin on RED only. Silent cron, always exit 0. Read: `ssh oddspro 'cat ~/ops/health/latest.txt'` |
+| Daily health snapshot | host cron 13:20 EAT (verdict shared with the app, see next row): `~/ops/prod-health.sh` (source `scripts/ops/prod-health.mjs`) appends one JSON line per run to `~/ops/health/ledger.ndjson` (verdict GREEN/AMBER/RED with reason codes, light-pass counts and gaps, latest full sweep, odds freshness, per-table accumulation counters, bookmaker coverage, notices, host and API-Football plan status), rewrites `latest.txt`, leaves `~/ops/health/ALERT` and sends one SMS to the admin on RED only. Silent cron, always exit 0. Read: `ssh oddspro 'cat ~/ops/health/latest.txt'` |
+| Health ledger over HTTP (survives SSH loss) | the writer instance takes the SAME snapshot in-process once per EAT day at `HEALTH_SNAPSHOT_AT` (default 13:20, Admin -> Settings, group refresh; a boot past the slot catches up within a minute) into table `health_snapshots`; one SMS on RED when `HEALTH_SNAPSHOT_SMS` is on (to `OPS_ALERT_PHONE`, else the active admin). Read: `curl -s -H "Authorization: Bearer $ADMIN_TOKEN" https://<site>/api/admin/health/ledger?days=14` (1..120, newest last) or `.../api/admin/health/latest`; check `freshness.stale` / `freshness.missing_today` first - no row means the writer itself is down. The cron and the app share `src/health-collect.js` + `src/db/health-rules.js`, so the host cron needs an app build carrying them |
+| Odds history of one match | `GET /api/odds-history/<match_id>[?limit=N]` (signed-in / PAT / machine bearer; guests 401): every logged look, every pre-match price change, the five frozen targets (opening, T-24h, T-3h, T-1h, closing) with replayed markets, lag, quality and `kickoff_moved`. `match_id` is the `match_id` field of `/api/records` rows |
+| Odds history growth check | `SELECT SUM(changes)/SUM(markets) FROM odds_observations WHERE kind='update';` = share of re-observed prices that moved (the storage driver, spec 2026-10-10-1600); `SELECT target, quality, COUNT(*) FROM odds_target_snapshots GROUP BY 1,2;` = target coverage. If disk runs short: Admin → Settings `ODDS_HISTORY_ENABLED` off (the next look per match re-baselines when it goes back on) |
 | Emergency stop | create `.HALT` in the app root - running serve exits ≤ ~30s, boot refused; delete to resume |
 | Scheduled maintenance window | Admin → Dashboard "Maintenance" card (or Admin → Settings group `maintenance`): toggle + EAT start/end + message. Guests: banner pre-window, full-screen notice + API 503 during; admins/bearers bypass; auto-expires at end (M14) |
 | User management (rescue a user) | Admin → Users: disable/enable, unlock, manual phone-verify (SMS-failure fallback), force PIN change, Reset PIN → temp PIN shown ONCE (user must change it at next sign-in). Self-disable/demote and last-admin removal are blocked (M8). Self-service alternative: Forgot PIN below (M13) |
@@ -252,6 +259,7 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | `scripts/reset-users.js` is DESTRUCTIVE | wipes all users/sessions/prefs |
 | Frozen ledger / fetch-once: never rewrite settled rows or refetch immutable data | the scoreboard is honest by construction - `docs/engine/02-DATA-PIPELINE.md` |
 | Odds market identity = `type_name`, never `type_id` | Betika reuses ids across different markets |
+| Never prune, update or hand-edit `odds_changes` / `odds_observations` / `odds_target_snapshots` | a target snapshot is a cutoff into the append-only change log, replayed on read - deleting log rows silently changes every frozen snapshot that points past them |
 | Secrets live in `.env` only | never in git |
 | **Live host runs three concurrent `lsnode` app instances** - only the `GET_LOCK` lease holder (`isWriter()`, `src/db/lease.js`) schedules/writes; the other two serve reads only | a follower running its own scheduler/AI worker would double-bill and gap-lock-deadlock the same rows it warns about above |
 | `gzip -t` alone is NOT a completeness check on a dump | a shared host killing the remote connection mid-dump still lets `gzip` close its own output cleanly (`scripts/db-sync.js`'s `dumpLooksComplete`) |
@@ -325,6 +333,11 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | `data_version` | shared `meta.warehouse_version` (cross-instance since 2026-08-19, not a per-process counter) bumped on successful refresh; keys the response cache + client silent reloads | `src/meta.js`, `src/auto-refresh.js` |
 | Fetch-once | immutable API detail fetched at most once per fixture (`*_fetched_at` flags) | `docs/engine/02-DATA-PIPELINE.md` |
 | Stale odds | vanished market kept flagged with its last-seen price (it IS the historical price) | `src/db/odds-diff.js` |
+| Observation (odds history) | one logged pre-match look at a match (`odds_observations`), written even when nothing moved - what makes target lag honest. `kind` first / baseline / update | `src/odds-history.js` |
+| Change log | `odds_changes`: one row per price event (first_seen / changed / stale / revived / baseline), never for an unchanged price, never at or after the canonical kickoff | `src/db/odds-diff.js` `diffOddsChanges` |
+| Baseline (odds history) | a look that re-states the whole snapshot because odds moved without the log seeing it (pre-existing match, history switched off, post-kickoff write); keeps the replay exact | `src/db/odds-history-rules.js` `observationKind` |
+| Target snapshot | frozen opening / T-24h / T-3h / T-1h / closing row: the last look at or before the target, its lag, quality (ok / lagged / missing / baseline) and a cutoff into the change log; written once, never rewritten | `src/db/odds-history-rules.js`, `docs/engine/02-DATA-PIPELINE.md` |
+| Due-queue lane | between scheduled passes, fetches just the matches whose target window `[target - lead, target)` is open and not yet looked at; never a job, never bumps `data_version` | `src/odds-due.js`, `docs/engine/01-SYSTEM.md` |
 | `coverage.status` | `ok`/`degraded`/`outage` for a date, worst active notice wins; served on `/api/records`, `/api/refresh`, `/api/daily-slip/timeline`, `/api/coverage` | `src/db/notice-rules.js` `coveragePayload` |
 | `UNCONFIRMED` prefix | an auto-detected, not-yet-approved notice; shown from the moment it is proposed, dropped on approval, never changes the notice text | `src/db/notice-rules.js` `noticeLabel` |
 | Alias | learned provider→canonical team/league name mapping - the linking fast-path | `src/link.js` |

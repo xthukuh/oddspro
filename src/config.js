@@ -262,6 +262,16 @@ const EnvSchema = z.object({
     // published games are discovered (0 = don't force-run while idle).
     AUTO_IDLE_LOOKAHEAD_MINUTES: z.coerce.number().int().min(0).default(120),
     AUTO_IDLE_EVERY_MINUTES: z.coerce.number().int().min(0).default(60),
+    // Odds history (spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md):
+    // the append-only price-change log + observation ledger + frozen target
+    // snapshots (src/odds-history.js), and the due-queue lane that fetches
+    // just the matches whose target is about to pass (src/odds-due.js).
+    ODDS_HISTORY_ENABLED: boolStr('1'),
+    ODDS_TARGET_MAX_LAG_MINUTES: z.coerce.number().min(0).default(15),
+    ODDS_DUE_ENABLED: boolStr('1'),
+    ODDS_DUE_LEAD_MINUTES: z.coerce.number().min(1).max(60).default(5),
+    ODDS_DUE_MAX_PER_TICK: z.coerce.number().int().min(1).max(200).default(40),
+    ODDS_DUE_DURING_SWEEP: boolStr('1'),
     // A stretch with no finished refresh run longer than this is proposed as
     // an odds outage. Counts MISSING RUNS, not missing odds: an idle-skip pass
     // still records an `ok` run, so a quiet night is never a gap. Nine missed
@@ -269,6 +279,15 @@ const EnvSchema = z.object({
     COLLECTION_GAP_MINUTES: z.coerce.number().int().min(5).default(90),
     // Rows older than this are pruned from collection_runs. 0 = keep forever.
     COLLECTION_RUNS_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+    // A `degraded` notice is proposed only for a SUSTAINED failure spell, never
+    // a single blip: at least this many partial/failed light passes with a
+    // data-bearing step failure, chained within NOTICE_DEGRADED_WINDOW_MINUTES
+    // of each other. One isolated miss (roughly 1-in-85 light passes, for all
+    // kinds of transient reasons) proposes nothing - the gap-based
+    // COLLECTION_GAP_MINUTES outage rule above still catches a collector that
+    // has actually stopped.
+    NOTICE_DEGRADED_MIN_FAILS: z.coerce.number().int().min(1).default(3),
+    NOTICE_DEGRADED_WINDOW_MINUTES: z.coerce.number().int().min(1).default(60),
     // Warm keeper (src/warm.js, runs inside `npm run serve` on every
     // instance): precomputes the heavy read payloads (records for
     // yesterday..today+ahead per reachable tier, columns, hotpicks,
@@ -307,6 +326,18 @@ const EnvSchema = z.object({
     // (keeps alerting) past MAX_RESTART_ATTEMPTS (5, src/db/watchdog-rules.js)
     // consecutive stale runs.
     WATCHDOG_RESTART_COOLDOWN_MINUTES: z.coerce.number().min(0).default(30),
+    // Daily production health snapshot (src/health.js, writer instance only):
+    // one row per EAT day in health_snapshots at or after this EAT time,
+    // readable via GET /api/admin/health/ledger|latest. ''/off disables. The
+    // default matches the host cron line (20 13 * * *): the early full sweep
+    // is normally done by then.
+    HEALTH_SNAPSHOT_AT: z.string().default('13:20'),
+    // One SMS on a RED snapshot (to OPS_ALERT_PHONE, else the active admin).
+    HEALTH_SNAPSHOT_SMS: boolStr('1'),
+    // Optional RED-alert recipient for the health snapshot (in-app and the
+    // host cron script alike); blank = the active admin user's phone. Read
+    // for the send only, never stored in a snapshot.
+    OPS_ALERT_PHONE: z.string().default(''),
     // Visitor geo backfill (src/geo.js): a background sweep resolves each newly
     // seen visitor IP to country/region and caches the result per-IP (ip_geo),
     // marking unresolvable/private IPs so they're never re-queried. Default

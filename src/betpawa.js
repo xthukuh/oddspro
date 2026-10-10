@@ -2,7 +2,7 @@ import axios from 'axios';
 import { _date, _dtime, _batch, _progress } from './utils.js';
 import { withRetry } from './db/retry-rules.js';
 import { isRetryableApiError } from './db/net-rules.js';
-import { listPageOutcome, listPageDone } from './db/collector-rules.js';
+import { listPageOutcome, listPageDone, betpawaHandicap } from './db/collector-rules.js';
 
 // Get axios client instance
 const BetpawaClient = axios.create({
@@ -97,7 +97,7 @@ function parseBetpawaGame(game) {
                         type_explainer: m.marketType.explainer,
                         name: p.name,
                         price: Number(Number(p.odds).toFixed(2)),
-                        handicap: /\d/.test(v = String(p.handicap)) ? Number(Number(v).toFixed(1)) : null,
+                        handicap: betpawaHandicap(p.handicap, row.specifier),
                         probability: /\d/.test(v = String(p.probability?.win ?? '')) ? Number(Number(v).toFixed(3)) : null,
                     });
                 }
@@ -128,6 +128,32 @@ function parseBetpawaGame(game) {
     result.markets = markets;
     result.metadata = JSON.stringify(game);
     return result;
+}
+
+// One event's detail (the same request the day walk makes per game), parsed
+// to the standardized record. Throws on a transport/parse failure - callers
+// isolate it per match. `timeout` (ms) overrides the client default for the
+// due-queue's short bounded fetches.
+export async function fetchBetpawaGame(id, { timeout } = {}) {
+    const { data } = await BetpawaClient.get('https://www.betpawa.co.ke/api/sportsbook/v4/events/' + id,
+        timeout ? { timeout } : undefined);
+    return parseBetpawaGame(data);
+}
+
+// Due-queue path (src/odds-due.js): just these events, no list walk. Each
+// fetch is isolated like the day walk's; returns { games, failures }.
+export async function fetchBetpawaGamesByIds(ids, { parallel = 5, timeout = 15_000 } = {}) {
+    const games = [];
+    let failures = 0;
+    await _batch(Array.isArray(ids) ? ids : [], async (id, i) => {
+        try {
+            games[i] = await fetchBetpawaGame(id, { timeout });
+        } catch (e) {
+            failures++;
+            console.warn(`[betpawa] due detail fetch failed for match ${id}: ${e?.message ?? e}`);
+        }
+    }, parallel);
+    return { games: games.filter(Boolean), failures };
 }
 
 // Fetch games with their available odds markets.
@@ -210,8 +236,7 @@ export async function fetchBetpawaGames(date_=null, exclude_=null) {
     const tick = _progress(`BetPawa ${lt.substring(0, 10)} - details`);
     await _batch(items, async (g, i, len) => {
         try {
-            const { data } = await BetpawaClient.get('https://www.betpawa.co.ke/api/sportsbook/v4/events/' + g.id);
-            games[i] = parseBetpawaGame(data);
+            games[i] = await fetchBetpawaGame(g.id);
         } catch (e) {
             detailFailures++;
             console.warn(`[betpawa] detail fetch failed for match ${g.id}: ${e?.message ?? e}`);

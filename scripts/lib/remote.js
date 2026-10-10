@@ -33,8 +33,8 @@ function redact(cfg, text) {
 // module) drives the two paths/names that derive from it.
 export function remoteConfig({ version }) {
     const dep = existsSync('.env.deploy') ? dotenv.parse(readFileSync('.env.deploy', 'utf8')) : {};
-    const SSH_TARGET = dep.DEPLOY_SSH || 'oddsprok@oddspro-p';
-    const REMOTE_HOME = dep.DEPLOY_REMOTE_HOME || '/home2/oddsprok';
+    const SSH_TARGET = dep.DEPLOY_SSH || 'oddspro';
+    const REMOTE_HOME = dep.DEPLOY_REMOTE_HOME || '/home/oddsprok';
     const APP_DIR = dep.DEPLOY_APP_DIR || `${REMOTE_HOME}/oddspro-app-v${version}`;
     const WEB_DIR = dep.DEPLOY_WEB_DIR || `${REMOTE_HOME}/public_html`;
     const DB_NAME = dep.DEPLOY_DB_NAME || `oddsprok_prod_${version.replace(/\./g, '_')}`;
@@ -126,6 +126,52 @@ export function sshStreamUpload(cfg, localFile, remoteCmd, label, { dry = false 
             if (code !== 0) reject(new Error(`${label} failed (exit ${code}): ${redact(cfg, stderr.trim())}`));
             else resolve();
         }));
+    });
+}
+
+// Stream a local file (a tarball) into `remoteCmd`'s stdin - same transport
+// as sshStreamUpload above, but for a remote command that JUDGES ITS OWN
+// SUCCESS (hotfix-remote.js's `tar -xzf - -C <dir> && sh <dir>/apply.sh`)
+// rather than one that merely lands a file. Two differences from
+// sshStreamUpload: stdout is CAPTURED (not inherited) as well as echoed live
+// - the caller needs the apply script's full backup/md5/checkfail trail to
+// report what happened, not just watch it scroll by - and a non-zero remote
+// exit RESOLVES rather than rejects, carrying {status, stdout, stderr}. That
+// apply script performs its own all-or-nothing rollback server-side on
+// failure, so "the remote command exited 1" is an outcome to report in
+// detail, not a transport error; only a LOCAL failure (ssh never started,
+// the read stream errored) rejects here, since those have no remote status
+// to report.
+export function sshStreamApply(cfg, localFile, remoteCmd, label, { dry = false } = {}) {
+    if (dry) { console.log(`[dry-run] stream+apply ${localFile} -> ssh: ${redact(cfg, remoteCmd)}`); return Promise.resolve({ status: 0, stdout: '', stderr: '' }); }
+    const total = statSync(localFile).size;
+    const started = Date.now();
+    let sent = 0, lastDraw = 0;
+    const child = spawn('ssh', ['-o', 'BatchMode=yes', cfg.SSH_TARGET, remoteCmd], { stdio: ['pipe', 'pipe', 'pipe'] });
+    const MAX_CAPTURE = 2 * 1048576; // the apply script's own output is a few KB; this just bounds a pathological remote echo
+    let stdout = '', stderr = '';
+    child.stdout.on('data', d => { if (stdout.length < MAX_CAPTURE) stdout += d; process.stdout.write(d); });
+    child.stderr.on('data', d => { if (stderr.length < MAX_CAPTURE) stderr += d; process.stderr.write(d); });
+    child.stdin.on('error', () => {}); // EPIPE if the remote side exits early - 'close' below reports the real status
+    const src = createReadStream(localFile, { highWaterMark: 1048576 });
+    src.on('data', chunk => {
+        sent += chunk.length;
+        const now = Date.now();
+        if (now - lastDraw > 250 || sent === total) {
+            lastDraw = now;
+            const pct = (sent / total * 100).toFixed(1);
+            const secs = (now - started) / 1000;
+            const rate = sent / Math.max(secs, 0.001) / 1048576;
+            process.stdout.write(`\r[hotfix] ${label}: ${pct}%  ${fmtMB(sent)}/${fmtMB(total)}  ${rate.toFixed(2)} MB/s   `);
+        }
+    });
+    src.pipe(child.stdin);
+    return new Promise((resolve, reject) => {
+        let settled = false;
+        const finish = fn => { if (settled) return; settled = true; process.stdout.write('\n'); fn(); };
+        src.on('error', e => finish(() => { child.kill(); reject(new Error(`${label} failed: reading "${localFile}": ${e.message}`)); }));
+        child.on('error', e => finish(() => reject(new Error(`ssh failed to start: ${e.message}`))));
+        child.on('close', code => finish(() => resolve({ status: code, stdout, stderr: redact(cfg, stderr) })));
     });
 }
 

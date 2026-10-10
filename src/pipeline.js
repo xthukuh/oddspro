@@ -117,7 +117,7 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
         for (const dt of dates) {
             await guardStep(`${provider} odds ${dt}`, async () => {
                 const exclude = await completedMatchIds(provider, `${dates[0]} 00:00:00`);
-                const c = await saveMatches(await fetcher(dt, exclude));
+                const c = await saveMatches(await fetcher(dt, exclude), { source: 'full' });
                 _stampOddsHeartbeat(c);
                 console.debug(`[+] ${provider} ${dt}: ${c.inserted} inserted, ${c.updated} updated, ${c.skipped} skipped (completed), ${c.markets} odds market rows saved.`);
             });
@@ -225,7 +225,7 @@ export async function runDateRefresh(date_, onStep = null, shouldCancel = null) 
     for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
         const res = await guardStep(`${provider} odds`, async () => {
             const exclude = await completedMatchIds(provider, `${dt} 00:00:00`);
-            const c = await saveMatches(await fetcher(dt, exclude));
+            const c = await saveMatches(await fetcher(dt, exclude), { source: 'manual' });
             _stampOddsHeartbeat(c);
             return c;
         });

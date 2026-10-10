@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { listPageOutcome, listPageDone, dataPageOutcome, isVirtualCompetition } from '../src/db/collector-rules.js';
+import { listPageOutcome, listPageDone, dataPageOutcome, isVirtualCompetition, betpawaHandicap } from '../src/db/collector-rules.js';
 
 // Shapes probed against the live BetPawa API on 2026-08-19.
 const withResults = n => ({ responses: [{ responses: Array.from({ length: n }, (_, i) => ({ id: i })) }] });
@@ -183,4 +183,23 @@ test('isVirtualCompetition matches the tokens case-insensitively', () => {
     assert.equal(isVirtualCompetition('premier-zoom'), true);
     assert.equal(isVirtualCompetition('LALIGA srl'), true);
     assert.equal(isVirtualCompetition('srl Club Friendlies'), true);
+});
+
+test('betpawaHandicap: plain numeric price handicap is used as-is', () => {
+    assert.equal(betpawaHandicap('0.5', { total: '0.5' }), 0.5);
+    assert.equal(betpawaHandicap('2.25', null), 2.3);
+});
+
+test('betpawaHandicap: 3-Way Handicap text falls back to the row hcp, same for every outcome', () => {
+    const row = { hcp: '-3' };
+    assert.equal(betpawaHandicap('Home -3', row), -3);
+    assert.equal(betpawaHandicap('Away +3', row), -3);
+    assert.equal(betpawaHandicap('Draw -3', row), -3);
+    assert.equal(betpawaHandicap('Home +1', { hcp: '1' }), 1);
+});
+
+test('betpawaHandicap: no line anywhere is null, never NaN', () => {
+    assert.equal(betpawaHandicap(undefined, undefined), null);
+    assert.equal(betpawaHandicap('', {}), null);
+    assert.equal(betpawaHandicap('Home', { hcp: 'n/a' }), null);
 });

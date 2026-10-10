@@ -23,6 +23,8 @@ import { isWriter } from './db/lease.js';
 import { bumpWarehouseVersion, getMeta, refreshMetaMemo, setMeta, warehouseVersion, lastSuccessMemo } from './meta.js';
 import { columnCatalog } from './db/records.js';
 import { recordRun, runDetector, pruneRuns } from './notices.js';
+import { runDueRefresh, sweepTargets, dueLaneEnabled } from './odds-due.js';
+import { sweepStepAllowsDue } from './db/odds-history-rules.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
 // warehouse near real time without external cron - a cheap LIGHT pass every
@@ -389,7 +391,7 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
         for (const [provider, fetcher] of [['betpawa', fetchBetpawaGames], ['betika', fetchBetikaGames]]) {
             const res = await guardStep(`${provider} odds`, async () => {
                 const ex = await oddsExcludeIds(provider, `${today} 00:00:00`, { tiers, nowMs: Date.now() });
-                const c = await saveMatches(await fetcher(today, ex.ids));
+                const c = await saveMatches(await fetcher(today, ex.ids), { source: 'light' });
                 debugLog(`[light] ${provider}: excluded ${ex.completed} completed + ${ex.backoff} fresh-under-backoff`);
                 // CRITICAL FIX (fix round 1, 2026-08-19): a dedicated
                 // freshness signal, bumped ONLY by a successful odds save -
@@ -427,6 +429,13 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
         summary.picks_settled = s.settled;
         summary.tips_settled = s.tips_settled;
     }
+
+    // Odds history: freeze the target snapshots that passed with no later
+    // look (most closings - nothing is observed after kickoff). Bounded (500
+    // matches); not a data-bearing label, so a failure here only marks the
+    // pass partial and never raises an outage notice.
+    const ts = await guardStep('odds targets', () => sweepTargets());
+    if (ts?.frozen) summary.targets_frozen = ts.frozen;
 
     // The tail: daily/user slip settle, auth housekeeping (E3) and tracking
     // retention (M6). All four are best-effort - a hiccup here must never fail
@@ -487,6 +496,36 @@ function _sweepDates(days) {
     );
 }
 
+// Due-queue lane (src/odds-due.js; spec docs/dev/specs/2026-10-10-1600-odds-
+// history-targets.md). Runs AWAITED inside the writer tick (tickInFlight is
+// its mutex), never through startJob: it is invisible to refreshStatus(), so
+// the web refresh button never flickers busy, and it writes none of the
+// "a pass finished" signals (warehouse_version, job_state, run ledger,
+// last_odds_at). It yields instead of blocking: a manual refresh POSTed while
+// it runs starts normally, and the lane stops before its next save.
+function _sweepAllowsDue() {
+    return refreshJob.running && refreshJob.mode === 'full'
+        && Boolean(effective('ODDS_DUE_DURING_SWEEP')) && sweepStepAllowsDue(refreshJob.step);
+}
+
+async function runDueLane({ duringSweep = false } = {}) {
+    if (!dueLaneEnabled()) return;
+    const shouldStop = () => (duringSweep ? !_sweepAllowsDue() : refreshJob.running);
+    try {
+        const s = await runDueRefresh({ shouldStop });
+        // Logged only when something is worth reading: a busy slate makes a
+        // due run every minute or two, which would push the light/full lines
+        // out of the self-truncating job log.
+        if (s && (s.failures || s.stopped)) {
+            _log(`due ${s.stopped ? 'STOPPED' : 'PARTIAL'} picked=${s.picked} saved=${s.saved} failures=${s.failures}`
+                + (duringSweep ? ' (during sweep)' : ''));
+        }
+    } catch (e) {
+        console.error('[due] lane failed:', e?.message ?? e);
+        _log(`due ERROR ${String(e?.message ?? e)}`);
+    }
+}
+
 let timer = null;
 let lastLightMs = 0;
 let lastFullKey = null;
@@ -532,8 +571,17 @@ export function startAutoRefresh() {
         try {
             if (!isWriter()) return; // only the writer instance schedules work
             await consumePendingRefreshRequest();
-            if (refreshJob.running) return;
+            if (refreshJob.running) {
+                // The one exception to "nothing else while a job holds the
+                // slot": the due lane during the full sweep's allow-listed
+                // enrichment steps (they never write odds/matches rows - see
+                // sweepStepAllowsDue), so targets inside the 2.5-7h sweep are
+                // still met. ODDS_DUE_DURING_SWEEP=off restores strict waiting.
+                if (_sweepAllowsDue()) await runDueLane({ duringSweep: true });
+                return;
+            }
             const nowMs = Date.now();
+            let started = false;
             if (isFullDue(nowMs, fullAt, lastFullKey)) {
                 // Task 2 (2026-08-19 round 2): lastFullKey is no longer
                 // stamped here at START (that used to burn the whole EAT day
@@ -554,7 +602,7 @@ export function startAutoRefresh() {
                 if (verdict === 'run') {
                     fullAttempts += 1;
                     const fullDays = effective('AUTO_FULL_DAYS');
-                    startJob({
+                    started = startJob({
                         mode: 'full',
                         dates: _sweepDates(fullDays),
                         run: (onStep, shouldCancel) => runStartPipeline(fullDays, onStep, shouldCancel),
@@ -591,12 +639,16 @@ export function startAutoRefresh() {
                 }
             } else if (isLightDue(nowMs, lastLightMs, effective('AUTO_LIGHT_MINUTES'))) {
                 lastLightMs = nowMs;
-                startJob({
+                started = startJob({
                     mode: 'light',
                     dates: [_dtime(_date()).substring(0, 10)],
                     run: (onStep, shouldCancel) => lightRefresh(onStep, shouldCancel),
                 });
             }
+            // Due lane last: a due scheduled job always wins the tick, so a
+            // light pass (about a minute) is never starved and only ever
+            // delays a due fetch by one pass - well inside the lead window.
+            if (!started && !refreshJob.running) await runDueLane();
         } catch (e) {
             console.error('[auto] tick failed:', e);
         } finally {

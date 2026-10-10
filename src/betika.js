@@ -102,6 +102,44 @@ function parseBetikaGame(game) {
     return result;
 }
 
+// One match's detail (the same request the day walk makes per game), merged
+// over `base` - the list item on the day walk, or, on the due-queue path,
+// the list-only fields rebuilt from our own matches row. Throws on failure;
+// callers isolate it per match.
+export async function fetchBetikaGame(base, { timeout } = {}) {
+    const { data } = await BetikaClient.get('/match?parent_match_id=' + base.parent_match_id,
+        timeout ? { timeout } : undefined);
+    const {odds: _, ...rest} = base;
+    return parseBetikaGame({...rest, ...Object(data.meta), odds: data.data});
+}
+
+// Due-queue path (src/odds-due.js): `rows` = [{ provider_match_id,
+// home_team_name, away_team_name, start_local ('YYYY-MM-DD HH:mm:ss' EAT),
+// competition_name, category_name }]. Betika's detail endpoint carries odds
+// and meta, not the list fields, so those come from the row we already
+// store - exactly what the day walk would have written. Returns
+// { games, failures }.
+export async function fetchBetikaGamesByIds(rows, { parallel = 5, timeout = 15_000 } = {}) {
+    const games = [];
+    let failures = 0;
+    await _batch(Array.isArray(rows) ? rows : [], async (r, i) => {
+        try {
+            games[i] = await fetchBetikaGame({
+                parent_match_id: r.provider_match_id,
+                home_team: r.home_team_name,
+                away_team: r.away_team_name,
+                start_time: r.start_local,
+                competition_name: r.competition_name,
+                category: r.category_name,
+            }, { timeout });
+        } catch (e) {
+            failures++;
+            console.warn(`[betika] due detail fetch failed for match ${r?.provider_match_id}: ${e?.message ?? e}`);
+        }
+    }, parallel);
+    return { games: games.filter(Boolean), failures };
+}
+
 // Fetch games with their available odds markets.
 // `exclude_` (optional Set of provider match ids) skips already-completed
 // matches before their per-game detail requests - fewer server hits.
@@ -172,9 +210,7 @@ export async function fetchBetikaGames(date_=null, exclude_=null) {
     const tick = _progress(`Betika ${dt} - details`);
     await _batch(items, async (g, i, len) => {
         try {
-            const { data } = await BetikaClient.get('/match?parent_match_id=' + g.parent_match_id);
-            const {odds: _, ...rest} = g;
-            games[i] = parseBetikaGame({...rest, ...Object(data.meta), odds: data.data});
+            games[i] = await fetchBetikaGame(g);
         } catch (e) {
             detailFailures++;
             console.warn(`[betika] detail fetch failed for match ${g.parent_match_id}: ${e?.message ?? e}`);

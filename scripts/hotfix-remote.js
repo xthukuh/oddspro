@@ -1,9 +1,7 @@
 // Emergency file-level live patch route for the cPanel SSH host (v1.4.0+
 // deploy-remote.js companion). For the rare case a single backend file needs
 // a hotfix between real deploys - no zip build, no npm install, no full
-// `deploy-remote.js --app` re-extract. Every write is preceded by a remote
-// backup so the exact rollback command can be printed up front, and every
-// JS upload is syntax-checked remotely before the fix is considered live.
+// `deploy-remote.js --app` re-extract.
 //
 // Usage:
 //   node scripts/hotfix-remote.js <repo-relative file...> [--from <dir>] [--restart] [--dry-run]
@@ -17,204 +15,180 @@
 // repo root (e.g. a scratch checkout of a specific commit) - the remote
 // destination path is always the plain repo-relative `<file>`.
 //
-// Safety: `.env*` paths are refused outright (before any host contact) - this
-// script is for code, never secrets. Paths containing `..` or a single quote
-// are refused too (repo-escape / remote-quoting hazards). Every file gets a
-// `cp -n <file> <file>.orig-<stamp>` backup first (one stamp for the whole
-// run, `cp -n` never clobbers an existing backup); `.js`/`.mjs`/`.cjs`
-// uploads are `node --check`ed remotely and auto-rolled-back on a syntax
-// error. `--restart` touches `tmp/restart.txt` (Passenger) once every file
-// in the run has landed cleanly.
+// ONE upload, ONE remote apply (2026-10 rework): the original version opened
+// roughly five ssh connections PER FILE (probe/backup/mkdir/upload/check),
+// which a shared host under load was observed resetting mid-run, landing a
+// half-applied set (docs/agents/toolset.md, 2026-08-29). This version builds
+// a local tarball of the files plus a generated POSIX apply script
+// (scripts/lib/hotfix-rules.js's buildApplyScript), and sends the whole
+// thing over a SINGLE ssh call that extracts it into a stamp-scoped staging
+// dir under the remote user's own home and runs the apply script:
+//
+//   ssh <target> 'mkdir -p ~/tmp/hotfix-<stamp> && tar -xzf - -C ~/tmp/hotfix-<stamp> && sh ~/tmp/hotfix-<stamp>/apply.sh'
+//
+// (`~` resolves to whatever the remote user's home actually is - never a
+// hardcoded /home or /home2 prefix; the live host's home directory has
+// already moved once). The apply script itself does the per-file work with
+// no further network round trips: back up (`cp -n <file> <file>.orig-<stamp>`,
+// skipped + noted for a brand-new file), install, `node --check` a
+// .js/.mjs/.cjs file, print its md5sum - and on ANY failure, restore every
+// file this run already touched from its backup (or remove it, if it was
+// new) before exiting non-zero. A `&&`-chained tar extract also means a
+// truncated/corrupted transfer never even reaches the apply script, so
+// nothing in APP_DIR is touched by a transfer that didn't fully land.
+//
+// Safety: `.env*` paths are refused outright (before any host contact), and
+// every file argument must match a safe character allow-list (letters,
+// digits, '.', '_', '-', '/') with no `..`/absolute segment - both checked by
+// scripts/lib/hotfix-rules.js's validateRelativePath, tested in
+// tests/hotfix-rules.test.js. `--restart` touches `tmp/restart.txt`
+// (Passenger) once every file in the run has landed cleanly.
 //
 // The ssh/config plumbing lives in scripts/lib/remote.js (shared with
-// deploy-remote.js) - this script adds no new ssh code of its own.
+// deploy-remote.js) - this script adds no new ssh code of its own beyond
+// remote.js's sshStreamApply.
 
-import { existsSync, readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import {
+    existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, copyFileSync,
+} from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
-import { remoteConfig, ssh as sshRemote, sshUploadFile as sshUploadFileRemote } from './lib/remote.js';
+import { remoteConfig, sshStreamApply } from './lib/remote.js';
+import {
+    parseHotfixArgs, validateRelativePath, utcStamp, buildRemoteApplyCommand,
+    buildApplyScript, parseApplyOutput, formatRollbackLine,
+} from './lib/hotfix-rules.js';
 
 const REPO_ROOT = process.cwd();
-const args = process.argv.slice(2);
-const has = f => args.includes(f);
-const argVal = f => { const i = args.indexOf(f); return i >= 0 ? args[i + 1] : null; };
-const DRY = has('--dry-run');
-const RESTART = has('--restart');
-const FROM = argVal('--from');
 
 function die(msg) { console.error(`[hotfix] ERROR: ${msg}`); process.exit(1); }
 
-// Positional args = files; `--from <dir>` consumes its value, `--restart`/
-// `--dry-run` are bare flags. Anything else starting with `--` is a typo.
-const files = [];
-for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--from') { i++; continue; }
-    if (a === '--restart' || a === '--dry-run') continue;
-    if (a.startsWith('--')) die(`unknown flag: ${a}`);
-    files.push(a);
-}
-if (files.length === 0) {
+let parsed;
+try {
+    parsed = parseHotfixArgs(process.argv.slice(2));
+} catch (e) { die(e.message); }
+const { files: rawFiles, FROM, RESTART, DRY } = parsed;
+
+if (rawFiles.length === 0) {
     console.log('Usage: node scripts/hotfix-remote.js <repo-relative file...> [--from <dir>] [--restart] [--dry-run]');
     process.exit(1);
 }
 
-// ---- config -------------------------------------------------------------
-const version = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
-let cfg;
-try {
-    cfg = remoteConfig({ version });
-} catch (e) {
-    die(e.message);
-}
-const { SSH_TARGET, APP_DIR, NODE_BIN } = cfg;
-
-const ssh = (cmd, opts = {}) => sshRemote(cfg, cmd, { dry: DRY, ...opts });
-const sshUpload = (localFile, remotePath, label, opts = {}) => sshUploadFileRemote(cfg, localFile, remotePath, label, { dry: DRY, ...opts });
-
-function utcStamp() {
-    const d = new Date();
-    const pad = n => String(n).padStart(2, '0');
-    return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}_${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}`;
-}
-const STAMP = utcStamp();
-
-// Single-quote a remote path for use inside a `ssh ... '<cmd>'` shell string.
-// Refuses (rather than escapes) a path containing a single quote - the
-// backend never needs one and it's not worth a quoting bug on this path.
-function q(p) {
-    if (p.includes("'")) die(`path contains a single quote (refusing to build a remote command): ${p}`);
-    return `'${p}'`;
-}
-
-// ---- validate every file BEFORE touching the host ------------------------
-// One bad argument (an .env path, a `..` escape, a missing local source)
-// must never leave an earlier file in the list already patched - build the
-// whole plan first, dying loudly on the first violation.
-const plan = files.map(rawFile => {
-    const file = rawFile.replace(/\\/g, '/'); // Windows callers may pass backslashes
-    const segments = file.split('/');
-    if (path.posix.isAbsolute(file) || /^[a-zA-Z]:/.test(file) || segments.includes('..')) {
-        die(`refusing path outside the repo: ${rawFile}`);
-    }
-    const base = path.posix.basename(file);
-    if (/^\.env/i.test(base)) die(`refusing .env* path (secrets never travel through hotfix-remote): ${rawFile}`);
-    if (file.includes("'")) die(`path contains a single quote: ${rawFile}`);
+// ---- validate every file BEFORE touching the host --------------------------
+// Build the whole plan first, dying loudly on the first violation - one bad
+// argument (an .env path, a `..` escape, a missing local source) must never
+// leave an earlier file in the list already staged.
+const plan = rawFiles.map(rawFile => {
+    let file;
+    try {
+        file = validateRelativePath(rawFile);
+    } catch (e) { die(e.message); }
 
     const localDir = FROM ? path.resolve(REPO_ROOT, FROM) : REPO_ROOT;
     const source = path.join(localDir, file);
     if (!existsSync(source)) {
         die(`local source not found: ${source}${FROM ? ` (--from ${FROM})` : ''}`);
     }
-
-    const remotePath = `${APP_DIR}/${file}`;
-    const backupPath = `${remotePath}.orig-${STAMP}`;
-    const remoteDir = path.posix.dirname(remotePath);
     const isJs = /\.(js|mjs|cjs)$/i.test(file);
-    return { file, source, remotePath, backupPath, remoteDir, isJs };
+    return { file, source, isJs };
 });
+
+// ---- config ------------------------------------------------------------------
+const version = JSON.parse(readFileSync(path.join(REPO_ROOT, 'package.json'), 'utf8')).version;
+let cfg;
+try {
+    cfg = remoteConfig({ version });
+} catch (e) { die(e.message); }
+const { SSH_TARGET, APP_DIR, NODE_BIN } = cfg;
+
+const STAMP = utcStamp();
 
 console.log(`[hotfix] target ${SSH_TARGET}  app root ${APP_DIR}  stamp ${STAMP}${DRY ? '  (DRY RUN)' : ''}`);
 console.log(`[hotfix] ${plan.length} file(s): ${plan.map(p => p.file).join(', ')}${RESTART ? '  (+ restart after)' : ''}`);
 
-// ---- run ------------------------------------------------------------------
-// Rollback lines are registered the moment a backup lands, not after the
-// whole run succeeds - a failure partway through (die() below, or a thrown
-// error) must still tell the operator how to revert every file already
-// touched, not just the ones from a clean full run.
-const rollbacks = []; // { file, hadBackup, backupPath, remotePath }
-
-function printRollbacks() {
-    console.log('\n[hotfix] rollback commands (run any of these to revert that one file):');
-    if (rollbacks.length === 0) {
-        console.log('  (none yet - no file was backed up before this run stopped)');
-        return;
-    }
-    for (const r of rollbacks) {
-        if (r.hadBackup || DRY) {
-            // The whole remote command is already wrapped in ONE pair of
-            // single quotes here for the operator's local shell to copy-
-            // paste - q() (which itself single-quotes) must not run inside
-            // that, or it breaks the quoting instead of protecting it.
-            console.log(`  ssh ${SSH_TARGET} 'cp ${r.backupPath} ${r.remotePath} && touch ${APP_DIR}/tmp/restart.txt'`);
-        } else {
-            console.log(`  # ${r.file}: no prior remote version existed - nothing to roll back to (remove ${r.remotePath} to undo)`);
-        }
-    }
-}
-
-// die() that also dumps whatever rollback lines are known so far, then exits.
-function dieWithRollbacks(msg) {
-    console.error(`[hotfix] ERROR: ${msg}`);
-    printRollbacks();
-    process.exit(1);
-}
-
-async function patchOne(item) {
-    const { file, source, remotePath, backupPath, remoteDir, isJs } = item;
-    console.log(`\n[hotfix] === ${file} ===`);
-
-    // 1. Backup first - only if the remote file actually exists (a brand-new
-    // file has nothing to back up); `cp -n` itself would just error on a
-    // missing source, so check first rather than treat that as fatal.
-    let hadBackup = false;
-    if (DRY) {
-        console.log(`[dry-run] would check: test -f ${remotePath}`);
-        console.log(`[dry-run] if present, would run: cp -n ${remotePath} ${backupPath}`);
-    } else {
-        const exists = ssh(`test -f ${q(remotePath)} && echo yes || echo no`).stdout === 'yes';
-        if (exists) {
-            ssh(`cp -n ${q(remotePath)} ${q(backupPath)}`);
-            hadBackup = true;
-            console.log(`[hotfix] backed up ${remotePath} -> ${backupPath}`);
-        } else {
-            console.log('[hotfix] remote file does not exist yet, skipping backup (new file)');
-        }
-    }
-    // Registered as soon as the backup decision is made (even "no backup
-    // needed, it's a new file") so printRollbacks() always has an entry for
-    // every file that reached this point, on every exit path.
-    rollbacks.push({ file, hadBackup, backupPath, remotePath });
-
-    // 2. Upload: mkdir first as its own remote call, then a byte-count-
-    // verified file placement (scripts/lib/remote.js's sshUploadFile - see
-    // its doc comment for why a streamed `cat >` alone isn't trustworthy).
-    ssh(`mkdir -p ${q(remoteDir)}`);
-    await sshUpload(source, remotePath, `upload ${file}`);
-
-    // 3. Syntax-check JS uploads; auto-restore + die loudly on failure.
-    if (isJs) {
-        if (DRY) {
-            console.log(`[dry-run] node --check (skipped, dry run): ${remotePath}`);
-        } else {
-            const check = ssh(`${NODE_BIN}/node --check ${q(remotePath)}`, { allowFail: true });
-            if (check.status !== 0) {
-                if (!hadBackup) {
-                    dieWithRollbacks(`node --check failed for ${file} (no prior backup existed to restore, the bad upload is still live at ${remotePath})\n${check.stderr}`);
-                }
-                const restore = ssh(`cp ${q(backupPath)} ${q(remotePath)}`, { allowFail: true });
-                if (restore.status === 0) {
-                    dieWithRollbacks(`node --check failed for ${file}, restored backup from ${backupPath}\n${check.stderr}`);
-                } else {
-                    dieWithRollbacks(`node --check failed for ${file}, AND THE AUTO-RESTORE ALSO FAILED - ${remotePath} is NOT RESTORED, still holds the broken upload. Restore manually: ssh ${SSH_TARGET} 'cp ${backupPath} ${remotePath}'\ncheck error: ${check.stderr}\nrestore error: ${restore.stderr}`);
-                }
-            }
-            console.log(`[hotfix] node --check OK: ${remotePath}`);
-        }
-    }
-}
-
+// ---- stage locally: copy files + generated apply.sh into one directory -----
+const localMd5 = new Map(); // file -> hex md5, computed before anything leaves this machine
+const stagingDir = mkdtempSync(path.join(os.tmpdir(), 'oddspro-hotfix-'));
+let tarPath = null;
 try {
     for (const item of plan) {
-        await patchOne(item);
+        const bytes = readFileSync(item.source);
+        localMd5.set(item.file, createHash('md5').update(bytes).digest('hex'));
+        const destPath = path.join(stagingDir, item.file);
+        mkdirSync(path.dirname(destPath), { recursive: true });
+        copyFileSync(item.source, destPath);
     }
 
-    if (RESTART) {
-        console.log(`\n[hotfix] restarting (touch ${APP_DIR}/tmp/restart.txt)...`);
-        ssh(`mkdir -p ${q(APP_DIR)}/tmp && touch ${q(APP_DIR)}/tmp/restart.txt`);
+    const applyScript = buildApplyScript({
+        stamp: STAMP, appDir: APP_DIR, nodeBin: NODE_BIN,
+        files: plan.map(p => p.file), restart: RESTART,
+    });
+    writeFileSync(path.join(stagingDir, 'apply.sh'), applyScript);
+
+    const remoteCmd = buildRemoteApplyCommand(STAMP);
+
+    if (DRY) {
+        console.log('\n[dry-run] generated apply.sh:\n' + applyScript);
+        console.log(`[dry-run] would run: ssh ${SSH_TARGET} '${remoteCmd}'`);
+        console.log('[dry-run] local file md5sums:');
+        for (const [file, md5] of localMd5) console.log(`  ${md5}  ${file}`);
+        process.exit(0);
     }
 
-    console.log('\n[hotfix] done.');
-    printRollbacks();
-} catch (e) {
-    dieWithRollbacks(e.message);
+    // ---- tar the staging dir into a single archive -------------------------
+    tarPath = path.join(os.tmpdir(), `oddspro-hotfix-${STAMP}.tar.gz`);
+    const tar = spawnSync('tar', ['-czf', tarPath, '-C', stagingDir, '.'], { encoding: 'utf8' });
+    if (tar.status !== 0) {
+        die(`failed to build the local tarball (exit ${tar.status}): ${(tar.stderr || '').trim()}`);
+    }
+
+    // ---- the one remote call: upload + extract + apply ----------------------
+    console.log(`\n[hotfix] ssh ${SSH_TARGET} '${remoteCmd}'`);
+    const result = await sshStreamApply(cfg, tarPath, remoteCmd, 'upload+apply');
+    const report = parseApplyOutput(result.stdout);
+
+    // ---- report --------------------------------------------------------------
+    console.log('\n[hotfix] per-file result:');
+    for (const item of plan) {
+        const r = report.files[item.file];
+        if (!r) {
+            console.log(`  ${item.file}: NO RESULT (run aborted before this file - see above)`);
+            continue;
+        }
+        const md5Match = r.md5 && localMd5.get(item.file) === r.md5
+            ? 'md5 OK' : r.md5 ? `md5 MISMATCH (local ${localMd5.get(item.file)}, remote ${r.md5})` : 'no md5 (not installed)';
+        console.log(`  ${item.file}: backup=${r.backedUp ? 'yes' : 'no'}${item.isJs ? ` check=${r.checked ? 'ok' : 'FAILED'}` : ''} ${md5Match}${r.failed ? ` FAIL(${r.failReason})` : ''}`);
+    }
+
+    if (result.status !== 0 || !report.ok) {
+        console.error(`\n[hotfix] FAILED (remote exit ${result.status}).`);
+        if (report.aborted) console.error(`[hotfix] aborted at: ${report.aborted}`);
+        if (report.rolledBack.length || report.removed.length) {
+            console.error(`[hotfix] server-side rollback already restored: ${[...report.rolledBack, ...report.removed].join(', ') || '(none)'}`);
+        }
+        process.exit(1);
+    }
+
+    for (const [file, md5] of localMd5) {
+        const remoteMd5 = report.files[file]?.md5;
+        if (remoteMd5 && remoteMd5 !== md5) {
+            die(`post-apply md5 mismatch for ${file}: local ${md5}, remote ${remoteMd5} - investigate before trusting this run`);
+        }
+    }
+
+    console.log('\n[hotfix] done.' + (report.restarted ? ' (restarted)' : ''));
+    console.log('\n[hotfix] rollback commands (run any of these to revert that one file):');
+    for (const item of plan) {
+        const hadBackup = report.files[item.file]?.backedUp === true;
+        console.log(formatRollbackLine({ sshTarget: SSH_TARGET, appDir: APP_DIR, file: item.file, stamp: STAMP, hadBackup }));
+    }
+} finally {
+    // Local staging is scratch - always clean it up, success or failure. The
+    // REMOTE staging dir (~/tmp/hotfix-<stamp>) is deliberately left in
+    // place, same ethos as the .orig-<stamp> backups: evidence for the next
+    // person to look at, not litter to race to delete.
+    rmSync(stagingDir, { recursive: true, force: true });
+    if (tarPath) rmSync(tarPath, { force: true });
 }

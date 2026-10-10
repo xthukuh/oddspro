@@ -12,6 +12,7 @@ import { isPatToken, patRouteAllowed } from './pat-rules.js';
 import { saveUserSlip, listUserSlips, getSlipByCode, deleteUserSlip } from './user-slips.js';
 import { createPat, listPats, revokePat, resolvePat } from './pats.js';
 import { renderedView, knownStrategy } from './view.js';
+import { oddsHistoryPayload } from './odds-history.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
@@ -28,6 +29,8 @@ import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js
 import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
+import { startHealthScheduler, stopHealthScheduler, healthLedger, latestHealth } from './health.js';
+import { parseLedgerDays } from './db/health-rules.js';
 import { isWriter, startWriterLease, stopWriterLease } from './db/lease.js';
 import { setMeta, refreshMetaMemo, startMetaPoll, stopMetaPoll, warehouseVersion } from './meta.js';
 import {
@@ -702,6 +705,29 @@ app.get('/api/view', optionalAuth, async (req, res, next) => {
     }
 });
 
+// GET /api/odds-history/:matchId[?limit=N] - one bookmaker match's odds
+// timeline (every logged look, every price change) and its frozen target
+// snapshots (opening / T-24h / T-3h / T-1h / closing) with their replayed
+// markets. Spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md.
+// Gated by the `odds_history` registry feature (minTier 'user'): sessions
+// and PATs of signed-in users, machine bearers and AUTH_ENABLED=0 installs.
+// Guests get 401 - GUEST_PREMIUM cannot open a 'user'-tier feature. Not
+// memoized: per-match, small, and a target can freeze between two reads.
+app.get('/api/odds-history/:matchId', optionalAuth, async (req, res, next) => {
+    try {
+        const full = !config.AUTH_ENABLED
+            || bearerMatches(req.get('authorization'), MACHINE_BEARERS)
+            || featureAllowed(req.user ?? null, 'odds_history', featureOpts());
+        if (!full) return res.status(401).json({ error: 'Sign in to see the odds history.', auth_required: true });
+        if (!/^\d{1,19}$/.test(String(req.params.matchId))) return res.status(400).json({ error: 'matchId must be a numeric match id.' });
+        const payload = await oddsHistoryPayload(req.params.matchId, { limit: Number(req.query.limit) || 2000 });
+        if (!payload) return res.status(404).json({ error: 'No match with that id.' });
+        res.json(payload);
+    } catch (e) {
+        next(e);
+    }
+});
+
 // Shareable user slips (engine-v2 Phase 4). Signed-in only (sessions, not
 // PATs - saving is a mutation and PATs are read-only by construction); the
 // slip_sharing premium seam gates the by-code load path. Legs are sanitized
@@ -1032,6 +1058,34 @@ app.get('/api/admin/db/overview', requireAdminRole, async (req, res, next) => {
 app.get('/api/admin/db/health', requireAdminRole, async (req, res, next) => {
     try {
         res.json(await dbHealth());
+    } catch (e) { next(e); }
+});
+
+// --- Daily production health snapshots (src/health.js). requireAdminDual,
+// like the settings routes: the weekly digest is a machine client and reads
+// these with `Authorization: Bearer <ADMIN_TOKEN>`, and an admin session works
+// too. Never through the public response memo (sendJson/apiCache), never
+// reachable by a guest or a PAT (patRouteAllowed denies /api/admin/*), and
+// no-store so no proxy keeps a copy. Read-only GETs, so no csrfOk.
+
+// GET /api/admin/health/ledger[?days=N] - snapshots of the last N EAT days
+// (default 14, 1..120, anything else 400), oldest first, plus `freshness`
+// (is the monitor itself alive: latest_day, age_h, missing_today, stale).
+app.get('/api/admin/health/ledger', requireAdminDual, async (req, res, next) => {
+    const p = parseLedgerDays(req.query.days);
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    try {
+        res.set('Cache-Control', 'no-store');
+        res.json(await healthLedger(p.days));
+    } catch (e) { next(e); }
+});
+
+// GET /api/admin/health/latest - the newest snapshot (null before the first)
+// plus the same `freshness` block.
+app.get('/api/admin/health/latest', requireAdminDual, async (req, res, next) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        res.json(await latestHealth());
     } catch (e) { next(e); }
 });
 
@@ -1459,6 +1513,7 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
+            startHealthScheduler();
             startWarmKeeper({ cache: apiCache });
             startHaltWatch(() => shutdown('halt-file'));
         });
@@ -1482,6 +1537,7 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
+    stopHealthScheduler();
     stopWarmKeeper();
     stopHaltWatch();
     stopMetaPoll();
