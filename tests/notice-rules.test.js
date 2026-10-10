@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-    severityRank, eatDay, datesBetween, runGapSpans, partialSpans,
+    severityRank, eatDay, datesBetween, runGapSpans, partialSpans, degradedSpans,
     detectNotices, noticesForDate, coverageStatus, noticeLabel, coveragePayload,
 } from '../src/db/notice-rules.js';
 
@@ -136,18 +136,136 @@ test('detectNotices proposes an outage notice with plain copy', () => {
     assert.ok(!/\d/.test(p.note));
 });
 
-test('detectNotices proposes a degraded notice for a partial run', () => {
+// A single failed/partial light pass out of roughly 85 per day is noise, not
+// a degraded spell: it must never propose a notice by itself (2026-10-10 fix
+// - this used to fire on every isolated miss and made the daily production
+// health snapshot AMBER every day for a one-off blip the very next pass
+// recovered from).
+test('detectNotices never proposes a degraded notice for a single isolated partial run', () => {
     const runs = [
         run('2026-08-20T06:00:00+03:00', 'ok', ['2026-08-20']),
         run('2026-08-20T06:10:00+03:00', 'partial', ['2026-08-20'],
             [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
     ];
-    const [p] = detectNotices(runs, { maxGapMinutes: 90 });
+    assert.deepEqual(detectNotices(runs, { maxGapMinutes: 90 }), []);
+});
+
+// Failures spread far apart (well outside the chain window) never cluster
+// into a notice either, however many of them accumulate over time.
+// Each gap here (70 minutes) is wider than the degraded-chain window (60) so
+// the misses never cluster, but narrower than the outage gap threshold (90)
+// so the outage rule does not fire either - isolating the behavior under
+// test from the unrelated gap-based rule above it.
+test('detectNotices never proposes a degraded notice for failures spread far apart', () => {
+    const runs = [
+        run('2026-08-20T06:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T07:10:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T08:20:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+    ];
+    assert.deepEqual(
+        detectNotices(runs, { maxGapMinutes: 90, minFails: 3, windowMinutes: 60 }),
+        [],
+    );
+});
+
+// A genuine spell - several failures within an hour - still proposes exactly
+// ONE notice, spanning every miss in the chain.
+test('detectNotices proposes one degraded notice for a cluster of failures within the window', () => {
+    const runs = [
+        run('2026-08-20T06:00:00+03:00', 'ok', ['2026-08-20']),
+        run('2026-08-20T06:10:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T06:30:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T06:55:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betika odds 2026-08-20', error: 'timeout' }]),
+    ];
+    const proposals = detectNotices(runs, { maxGapMinutes: 90, minFails: 3, windowMinutes: 60 });
+    assert.equal(proposals.length, 1);
+    const [p] = proposals;
     assert.equal(p.kind, 'odds_degraded');
     assert.equal(p.severity, 'degraded');
     assert.equal(p.title, 'Some odds missing');
     assert.equal(p.note, 'Collection ran but did not finish. Some games have no odds.');
     assert.deepEqual(p.evidence.steps, ['betika odds 2026-08-20']);
+    assert.equal(p.evidence.fail_count, 3);
+});
+
+// Unit-level coverage of the clustering rule itself, independent of
+// detectNotices' copy-wrapping.
+test('degradedSpans ignores a single isolated miss', () => {
+    const runs = [run('2026-08-20T06:10:00+03:00', 'partial', ['2026-08-20'],
+        [{ step: 'betika odds 2026-08-20', error: 'timeout' }])];
+    assert.deepEqual(degradedSpans(runs, { minFails: 3, windowMinutes: 60 }), []);
+});
+
+test('degradedSpans ignores misses spread wider than the window, however many accumulate', () => {
+    const runs = [
+        run('2026-08-20T06:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T08:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T10:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T12:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+    ];
+    assert.deepEqual(degradedSpans(runs, { minFails: 3, windowMinutes: 60 }), []);
+});
+
+test('degradedSpans merges a qualifying chain into one span covering every miss', () => {
+    const runs = [
+        run('2026-08-20T06:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T06:20:00+03:00', 'partial', ['2026-08-21'],
+            [{ step: 'betika odds 2026-08-21', error: 'timeout' }]),
+        run('2026-08-20T06:40:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+    ];
+    const spans = degradedSpans(runs, { minFails: 3, windowMinutes: 60 });
+    assert.equal(spans.length, 1);
+    assert.equal(spans[0].date_from, '2026-08-20');
+    assert.equal(spans[0].date_to, '2026-08-21');
+    assert.deepEqual(spans[0].steps, ['betpawa odds 2026-08-20', 'betika odds 2026-08-21']);
+    assert.equal(spans[0].fail_count, 3);
+});
+
+// A gap wider than the window breaks the chain: four misses where the third
+// is more than windowMinutes after the second never merge into one span of
+// four - they split into a sub-threshold leading pair and a sub-threshold
+// trailing pair, so NEITHER proposes.
+test('degradedSpans breaks the chain on a gap wider than the window, splitting what would otherwise be one qualifying run', () => {
+    const runs = [
+        run('2026-08-20T06:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T06:20:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T08:00:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+        run('2026-08-20T08:20:00+03:00', 'partial', ['2026-08-20'],
+            [{ step: 'betpawa odds 2026-08-20', error: 'timeout' }]),
+    ];
+    assert.deepEqual(degradedSpans(runs, { minFails: 3, windowMinutes: 60 }), []);
+});
+
+// The outage rule is completely independent of the degraded-clustering
+// thresholds: a real gap still proposes immediately even alongside a lone,
+// sub-threshold degraded blip that must NOT also propose.
+test('detectNotices: outage detection is unaffected by the degraded-notice thresholds', () => {
+    const runs = [
+        run('2026-08-16T01:20:00+03:00'),
+        run('2026-08-16T01:30:00+03:00', 'partial', ['2026-08-16'],
+            [{ step: 'betpawa odds 2026-08-16', error: 'timeout' }]),
+        run('2026-08-19T00:30:00+03:00'),
+    ];
+    const proposals = detectNotices(runs, { maxGapMinutes: 90, minFails: 3, windowMinutes: 60 });
+    assert.equal(proposals.length, 1);
+    assert.equal(proposals[0].kind, 'odds_outage');
+    assert.equal(proposals[0].date_from, '2026-08-16');
+    assert.equal(proposals[0].date_to, '2026-08-19');
 });
 
 // REGRESSION GUARD. These five days are healthy in the live warehouse but a

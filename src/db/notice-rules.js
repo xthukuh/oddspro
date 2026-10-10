@@ -101,8 +101,11 @@ export function runGapSpans(runs, opts) {
 
 const TRAILING_DATE_RE = /(\d{4}-\d{2}-\d{2})$/;
 
-// Dates a `partial` run's DATA-BEARING failures actually affected, merged
-// when consecutive partial runs propose an identical span.
+// Dates a `partial` run's DATA-BEARING failures actually affected, one entry
+// per qualifying run, in ascending finished-time order. This is the shared
+// derivation both `partialSpans` (folds adjacent identical spans for
+// display) and `degradedSpans` (time-clustered, for detection) build on -
+// one definition of "what did this run's own failure cover", not two.
 //
 // `summarizeSteps` returns 'partial' when ANY guarded step fails, and the
 // full sweep guards roughly fifteen steps - standings/history/prematch/
@@ -113,14 +116,14 @@ const TRAILING_DATE_RE = /(\d{4}-\d{2}-\d{2})$/;
 // a confident lie about the exact thing this feature exists to report.
 //
 // Only DATA_BEARING_STEP_RE failures (results/betpawa odds/betika odds, see
-// src/db/auto-rules.js) may produce a span, and the span is derived from
+// src/db/auto-rules.js) may produce an event, and the span is derived from
 // THOSE steps' own date labels ('betpawa odds 2026-08-20'), never the run's
 // full scope: min..max of the dates named on the failed data-bearing steps.
 // A bare label with no trailing date (the light pass's plain 'results') falls
 // back to the run's own `dates` array, since that is the only scope
 // information available for it. A run whose data-bearing failures list is
-// empty (every failure was a non-odds step) produces NO span at all.
-export function partialSpans(runs) {
+// empty (every failure was a non-odds step) produces NO event at all.
+function missEvents(runs) {
     const out = [];
     for (const r of sortedRuns(runs)) {
         if (r?.verdict !== 'partial') continue;
@@ -142,7 +145,18 @@ export function partialSpans(runs) {
             dateFrom = dates[0];
             dateTo = dates[dates.length - 1];
         }
-        const span = { date_from: dateFrom, date_to: dateTo, steps };
+        out.push({ date_from: dateFrom, date_to: dateTo, steps, finished_at: new Date(finishedMs(r)).toISOString() });
+    }
+    return out;
+}
+
+// Same spans as before (one per qualifying run), folded when two adjacent
+// runs propose an identical date span - unchanged from before `missEvents`
+// was split out, kept for its own tests and as the per-run detail view.
+export function partialSpans(runs) {
+    const out = [];
+    for (const ev of missEvents(runs)) {
+        const span = { date_from: ev.date_from, date_to: ev.date_to, steps: ev.steps };
         const last = out[out.length - 1];
         if (last && last.date_from === span.date_from && last.date_to === span.date_to) {
             last.steps = [...new Set([...last.steps, ...span.steps])];
@@ -153,10 +167,58 @@ export function partialSpans(runs) {
     return out;
 }
 
+// A degraded notice reports a SUSTAINED failure spell, not a single blip.
+// Roughly 1-in-85 light passes misses for all kinds of transient reasons (a
+// timeout, a slow upstream page) and recovers on the very next pass 10
+// minutes later; proposing a notice for every one of those trained visitors
+// to distrust a warning that was gone before anyone could act on it, and
+// turned the daily production health snapshot AMBER on days nothing was
+// actually wrong (`notices_new:1`, see docs/engine/01-SYSTEM.md's Data
+// notices section).
+//
+// Rule: chain consecutive misses (ascending finish order, from the SAME
+// unmerged `missEvents` feed so repeat failures of the identical date never
+// collapse into one count before they are counted) where each sits within
+// `windowMinutes` of the one immediately before it in the chain - the same
+// gap-makes-a-cluster idiom `runGapSpans` already uses to decide whether the
+// collector is still busy. A chain that reaches `minFails` misses is a
+// genuine spell and proposes ONE notice spanning every miss in it (min
+// date_from, max date_to, the union of failed steps); a chain that never
+// reaches the threshold - an isolated miss, or misses spread wider than the
+// window - proposes nothing. The gap-based outage rule above is still what
+// catches a collector that has stopped running altogether; this rule only
+// ever covers spells where the collector kept running and kept missing.
+export function degradedSpans(runs, opts) {
+    const { minFails = 3, windowMinutes = 60 } = opts ?? {};
+    const out = [];
+    let cluster = [];
+    const flush = () => {
+        if (cluster.length >= minFails) {
+            out.push({
+                date_from: cluster.map(e => e.date_from).sort()[0],
+                date_to: cluster.map(e => e.date_to).sort().slice(-1)[0],
+                steps: [...new Set(cluster.flatMap(e => e.steps))],
+                fail_count: cluster.length,
+            });
+        }
+        cluster = [];
+    };
+    for (const miss of missEvents(runs)) {
+        const prev = cluster[cluster.length - 1];
+        if (prev) {
+            const gapMinutes = (Date.parse(miss.finished_at) - Date.parse(prev.finished_at)) / 60_000;
+            if (gapMinutes > windowMinutes) flush();
+        }
+        cluster.push(miss);
+    }
+    flush();
+    return out;
+}
+
 // Proposals only. Nothing here decides what is SHOWN; that is the admin's
 // approve/dismiss call, and an unconfirmed proposal is shown meanwhile.
 export function detectNotices(runs, opts) {
-    const { maxGapMinutes = 90 } = opts ?? {};
+    const { maxGapMinutes = 90, minFails = 3, windowMinutes = 60 } = opts ?? {};
     const out = [];
     for (const g of runGapSpans(runs, { maxGapMinutes })) {
         out.push({
@@ -168,14 +230,14 @@ export function detectNotices(runs, opts) {
             evidence: { from_at: g.from_at, to_at: g.to_at, gap_minutes: g.gap_minutes },
         });
     }
-    for (const p of partialSpans(runs)) {
+    for (const p of degradedSpans(runs, { minFails, windowMinutes })) {
         out.push({
             kind: 'odds_degraded',
             severity: 'degraded',
             date_from: p.date_from,
             date_to: p.date_to,
             ...COPY.odds_degraded,
-            evidence: { steps: p.steps },
+            evidence: { steps: p.steps, fail_count: p.fail_count },
         });
     }
     return out;

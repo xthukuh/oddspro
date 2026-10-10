@@ -149,7 +149,11 @@ export async function runDetector() {
             step_failures: _json(r.step_failures) ?? [],
         }));
 
-    const proposals = detectNotices(runs, { maxGapMinutes: effective('COLLECTION_GAP_MINUTES') });
+    const proposals = detectNotices(runs, {
+        maxGapMinutes: effective('COLLECTION_GAP_MINUTES'),
+        minFails: effective('NOTICE_DEGRADED_MIN_FAILS'),
+        windowMinutes: effective('NOTICE_DEGRADED_WINDOW_MINUTES'),
+    });
     let inserted = 0;
     for (const p of proposals) {
         const n = await db('data_notices').insert({
