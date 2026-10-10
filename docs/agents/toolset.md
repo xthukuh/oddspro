@@ -659,6 +659,27 @@ the shown bet). Sources: `docs/research/`.
   running at snapshot time no longer reads as `full_missing_today` (job_state beacon). A
   timeout now reads `snapshot_error, timeout:120s`. With both running, a RED day can SMS
   twice: `HEALTH_SNAPSHOT_SMS` off silences the in-app one.
+- 2026-10-10 - **`hotfix-remote.js` reworked to ONE ssh call per run (supersedes the
+  "push ONE file per invocation" workaround above).** The per-file five-connections-per-file
+  design (probe/backup/mkdir/upload/check) was the root cause of the 2026-08-29 half-applied
+  run, not just something to work around by serializing files. Fix: the script now tars the
+  files plus a generated POSIX apply script (`scripts/lib/hotfix-rules.js`'s
+  `buildApplyScript`) and sends the whole thing over one ssh call -
+  `mkdir -p ~/tmp/hotfix-<stamp> && tar -xzf - -C ~/tmp/hotfix-<stamp> && sh ~/tmp/hotfix-<stamp>/apply.sh`
+  (`~`, never a hardcoded `/home`/`/home2` - the live host's home directory already moved
+  once, see `docs/engine/02-DATA-PIPELINE.md`). Verified locally end to end against a
+  sandboxed fake `$HOME`/`APP_DIR` (not the live host - no SSH access from this session):
+  (1) a clean multi-file run backs up, installs, `node --check`s and md5sums every file in
+  one apply-script execution with zero extra ssh calls; (2) a deliberately broken second
+  file triggers the apply script's OWN rollback - the first file's prior content was
+  restored byte-for-byte and the second (brand-new) file was removed, remote exit 1,
+  BEFORE the node-side script does anything - no second round trip needed to undo a
+  half-applied run, because the chain's `&&` means a truncated/corrupted tar transfer never
+  even reaches the apply step. `--dry-run`, `--from` and `--restart` are unchanged. Pure
+  parts (arg parsing, the path safe-list, the apply-script template, its output parser) are
+  isolated in `scripts/lib/hotfix-rules.js` with offline tests
+  (`tests/hotfix-rules.test.js`) - the next person touching this script can verify the
+  generated shell text without an SSH target at all.
 
 ## 6. Doc & knowledge topology
 
@@ -703,3 +724,6 @@ the shown bet). Sources: `docs/research/`.
 - 2026-10-10: §5 append: health ledger over HTTP (`health_snapshots`, `/api/admin/health/*`,
   the shared collector + rules the cron now imports, the two verdict corrections);
   QUICK-REFERENCE §2.6 row added.
+- 2026-10-10: §5 append: `hotfix-remote.js` rework to one ssh call per run (tarball +
+  generated apply script, server-side rollback); `docs/DEPLOYMENT.md` §5.1 and
+  QUICK-REFERENCE's emergency-hotfix line updated in the same pass.
