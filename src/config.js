@@ -269,6 +269,15 @@ const EnvSchema = z.object({
     COLLECTION_GAP_MINUTES: z.coerce.number().int().min(5).default(90),
     // Rows older than this are pruned from collection_runs. 0 = keep forever.
     COLLECTION_RUNS_RETENTION_DAYS: z.coerce.number().int().min(0).default(90),
+    // A `degraded` notice is proposed only for a SUSTAINED failure spell, never
+    // a single blip: at least this many partial/failed light passes with a
+    // data-bearing step failure, chained within NOTICE_DEGRADED_WINDOW_MINUTES
+    // of each other. One isolated miss (roughly 1-in-85 light passes, for all
+    // kinds of transient reasons) proposes nothing - the gap-based
+    // COLLECTION_GAP_MINUTES outage rule above still catches a collector that
+    // has actually stopped.
+    NOTICE_DEGRADED_MIN_FAILS: z.coerce.number().int().min(1).default(3),
+    NOTICE_DEGRADED_WINDOW_MINUTES: z.coerce.number().int().min(1).default(60),
     // Warm keeper (src/warm.js, runs inside `npm run serve` on every
     // instance): precomputes the heavy read payloads (records for
     // yesterday..today+ahead per reachable tier, columns, hotpicks,
