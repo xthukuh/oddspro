@@ -343,8 +343,9 @@ MariaDB `GET_LOCK('oddspro:writer', 0)`, held on a connection PINNED for as long
 process is the writer. It is re-acquired every 30s - really a renew, since `GET_LOCK` never
 expires on its own and is re-entrant on the same connection - which doubles as a liveness
 check on the pinned connection. Only the winner (`isWriter()`) runs the scheduler, the AI
-worker, the geo backfill and the catalog warm (`src/auto-refresh.js`, `src/ai-worker.js`,
-`src/geo.js` and `src/server.js` all gate on it); the other instances serve reads only.
+worker, the geo backfill, the catalog warm and the daily health snapshot
+(`src/auto-refresh.js`, `src/ai-worker.js`, `src/geo.js`, `src/server.js` and
+`src/health.js` all gate on it); the other instances serve reads only.
 
 Two details that are load-bearing: a server-level failure (query killed, connection limit
 hit) DESTROYS the pinned connection rather than returning it to the pool, because a plain
@@ -418,6 +419,7 @@ the CSV export action of the same read layer.
 | `GET /api/settings` | the public subset of the settings catalog |
 | `/api/admin/settings` PUT/DELETE | behind `requireAdminDual` - an admin-role session OR the legacy `ADMIN_TOKEN` bearer (transitional dual-auth, shared `adminBearerOk`) |
 | `/api/admin/users`, `/api/admin/sms/*`, `/api/admin/db/*`, `/api/admin/track/summary` | admin SESSION only |
+| `GET /api/admin/health/ledger?days=N`, `GET /api/admin/health/latest` | the daily health snapshots (see "Daily production health snapshot" below). `requireAdminDual` - `Authorization: Bearer <ADMIN_TOKEN>` (falls back to `API_TOKEN`) or an admin session; PATs are denied on `/api/admin/*`. `days` defaults to 14, must be a whole number 1..120 (else 400), and covers today plus the N-1 previous EAT days, oldest first. Both answer a `freshness` block (`today`, `latest_day`, `age_h`, `missing_today`, `stale`). `Cache-Control: no-store`, never through the response memo |
 | `GET /api/visits/daily-unique` | public, backs the status-bar visitor badge |
 | `GET /api/visits/summary`, `GET /admin` | behind `requireAdmin` - `ADMIN_TOKEN` bearer only, no `?token=` query path, constant-time compare |
 | `GET /robots.txt` | always disallows AI crawlers and `/api/` |
@@ -445,6 +447,73 @@ Cross-cutting server behavior:
   irrelevant at this stage; leftover `HUMAN_*` env lines are ignored, since the zod schema
   strips unknown keys. Two non-PoW helpers survive in `src/crypto-utils.js`: `sha256Hex` and
   `bearerMatches`, the latter still backing every machine-bearer and admin gate.
+
+## Daily production health snapshot (`src/health.js`)
+
+Why it exists: production monitoring started (2026-09-10) as a host cron script,
+`scripts/ops/prod-health.mjs`, writing `~/ops/health/ledger.ndjson`, read by the weekly digest
+over SSH. SSH broke twice (an IP allow-list, then a hosting migration that probably also wiped
+the crontab) and monitoring was blind for 26 days. Since 2026-10-10 the app takes the same
+snapshot itself and serves it over HTTP, so all a reader needs is the site URL and the admin
+bearer.
+
+**One verdict, two callers.** The signal readers live in `src/health-collect.js` (the SQL
+reads, the host view, the API-Football `/status` call through a tolerant zod schema) and the
+verdict in the pure `src/db/health-rules.js`. The cron script imports both from the deployed
+app root, the in-app snapshot imports them directly, so the two can never disagree about what
+was measured or how it was graded. The cron script keeps only the host side: the ledger
+files, `ps`/`statfs` with `unread:*` reasons when a host signal cannot be read, and the text
+rendering. Run against an app build without those modules, it records a RED
+`rules_module_missing` line.
+
+**Signals** (cheap reads only, never a big-table scan): light passes of the last 24 h from
+`collection_runs` (counts per verdict, the largest gap with full-sweep windows excused, and the
+tail to now), the newest full sweep of the last 36 h, the `meta` freshness keys, matches
+kicking off within -2 h..+6 h, `MAX(<pk>)` plus `information_schema` estimates per counter
+table, yesterday's finals, coverage by provider for yesterday/today/tomorrow, data notices,
+`SHOW GLOBAL STATUS`, disk free, lsnode instances, the watchdog log tail, and the API-Football
+plan and quota.
+
+**Verdict.** RED: odds older than 120 min with fixtures nearby, no full sweep started today
+past 13:00 EAT, a failed full sweep, 5+ failed light passes, a light gap over 90 min, an
+expired API plan, an `odds_markets` high-water mark unchanged against a snapshot 20 h+ older.
+AMBER: odds 60-120 min old with fixtures nearby, a partial full sweep, 1-4 failed or 5+
+partial light passes, a 45-90 min gap, the plan ending within 10 days, quota above 80%, disk
+under 25 GB, 4+ lsnode instances or one older than 14 days, a new unconfirmed notice, or any
+blind spot carried from the read pass (`unread:*`, `api_status_unavailable`). Two corrections
+landed with the extraction: the ledger's failure verdict is `error` (the cron tested for
+`failed`, a value `collection_runs` never holds, so failed sweeps and passes raised nothing),
+and a full sweep still running at snapshot time (not yet in the ledger, which records on
+finish) is recognised through the `job_state` beacon instead of reading as "missing".
+
+**Scheduling.** Writer only (`isWriter()`), one snapshot per EAT day, at or after
+`HEALTH_SNAPSHOT_AT` (default 13:20, live). The check runs every 60 s (first one a minute after
+boot) and is a memory lookup until the slot passes; then one indexed read per process per day
+asks `health_snapshots` whether the day already has a row, which covers restarts and lease
+handoffs alike. A boot past the slot catches up within a minute; a boot before it waits, so an
+early restart never takes a premature snapshot that would stand for the day. The pure
+`snapshotDecision` answers `not_writer | off | done | before_slot | exhausted | backoff | take`.
+
+**Bounded and honest about failure.** The collection races a 120 s hard timeout on top of the
+pool's `DB_STATEMENT_TIMEOUT`. A collection that throws or times out still lands a RED row
+with reason `snapshot_error` (plus `timeout:120s`) and the error text, so a blind day is
+recorded rather than skipped. Only a failed INSERT is retried: 15 min apart, at most 3 times a
+day. Nothing throws into the timer.
+
+**Alerting.** On RED, one SMS through `sendSms` when `HEALTH_SNAPSHOT_SMS` is on, to
+`OPS_ALERT_PHONE` (`.env`, optional) or else the active admin user's phone. The phone is read
+for the send only and never enters a payload. While the host cron is also installed, a RED day
+can alert twice; turn one of them off.
+
+**Storage.** `health_snapshots` (migration `20261010000001_health_snapshots`): `day` (EAT
+DATE, indexed, not unique), `taken_at`, `verdict` (GREEN/AMBER/RED), `reasons` JSON, `payload`
+JSON (the full snapshot, the same shape as a cron ledger line, with `source: 'app'`). About
+10 KB a day, append-only, no retention.
+
+**Reading it.** `GET /api/admin/health/ledger?days=14` and `GET /api/admin/health/latest`
+(table above). Read `freshness` first: `stale` (no row, or the newest older than 26 h) and
+`missing_today` (today's slot plus 30 min passed without a row) mean the monitor itself is
+down, which an in-app snapshot cannot report about itself.
 
 ## Accounts, sessions and OTP
 
@@ -742,6 +811,7 @@ cache.
 | `COLLECTION_GAP_MINUTES` / `COLLECTION_RUNS_RETENTION_DAYS` | 90 / 90 | data-notice detection window and ledger retention |
 | `WATCHDOG_STALE_MINUTES` / `WATCHDOG_QUIET_STALE_MINUTES` / `WATCHDOG_ALERT_AFTER` / `WATCHDOG_RESTART_COOLDOWN_MINUTES` | 45 / 240 / 3 / 30 | `scripts/collection-watchdog.js`: stale floors (busy slate / quiet slate), SMS after N consecutive stale runs, one restart per cooldown |
 | `WATCHDOG_FULL_SWEEP_GRACE_MINUTES` | 480 | the watchdog reports `busy` (no restart, no SMS) while the writer's `job_state` meta beacon (`src/auto-refresh.js#startJob`, cleared when the job ends) shows a full sweep younger than this; past it a dead writer trips `stale` as before |
+| `HEALTH_SNAPSHOT_AT` / `HEALTH_SNAPSHOT_SMS` | `13:20` EAT / on | the daily health snapshot (`src/health.js`): EAT time, `off`/blank disables; one SMS on RED. `OPS_ALERT_PHONE` (`.env`, optional) overrides the admin phone as the alert recipient |
 | `WARM_ENABLED` / `WARM_DATES_BACK` / `WARM_DATES_AHEAD` / `WARM_MAX_AGE_MINUTES` | on / 1 / 2 / 5 | the warm keeper (keep the age under the 10-minute memo TTL) |
 
 **Deploy and ops (opt-in, off by default):** `MIGRATE_ON_BOOT` makes the server self-run
@@ -784,7 +854,7 @@ the main `.env` paragraph - see "SMS and mail seams" above.
 added, light/full/manual scope or cadence knobs change, data-notice detection/serving
 changes, the writer lease or shared meta changes, a route or auth/admin surface changes, a
 settings-catalog group or feature-registry entry changes, or an `.env`/catalog knob is added
-or renamed (`src/pipeline.js`, `src/auto-refresh.js`, `src/server.js`, `src/notices.js`,
+or renamed (`src/pipeline.js`, `src/auto-refresh.js`, `src/server.js`, `src/health.js`, `src/notices.js`,
 `src/db/notice-rules.js`, `src/meta.js`, `src/db/lease.js`, `src/warm.js`,
 `src/http-cache.js`, `src/auth.js`, `src/settings.js`, `src/db/feature-rules.js`,
 `src/db/access-rules.js`, `src/admin-users.js`, `src/campaigns.js`, `src/track.js`,

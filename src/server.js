@@ -28,6 +28,8 @@ import { checkinSchema, eventsSchema, checkoutSchema } from './db/track-rules.js
 import { checkin, ingestEvents, checkout, dailyUniqueSessions, trackSummary } from './track.js';
 import { startGeoScheduler, stopGeoScheduler } from './geo.js';
 import { startAiWorker, stopAiWorker } from './ai-worker.js';
+import { startHealthScheduler, stopHealthScheduler, healthLedger, latestHealth } from './health.js';
+import { parseLedgerDays } from './db/health-rules.js';
 import { isWriter, startWriterLease, stopWriterLease } from './db/lease.js';
 import { setMeta, refreshMetaMemo, startMetaPoll, stopMetaPoll, warehouseVersion } from './meta.js';
 import {
@@ -1035,6 +1037,34 @@ app.get('/api/admin/db/health', requireAdminRole, async (req, res, next) => {
     } catch (e) { next(e); }
 });
 
+// --- Daily production health snapshots (src/health.js). requireAdminDual,
+// like the settings routes: the weekly digest is a machine client and reads
+// these with `Authorization: Bearer <ADMIN_TOKEN>`, and an admin session works
+// too. Never through the public response memo (sendJson/apiCache), never
+// reachable by a guest or a PAT (patRouteAllowed denies /api/admin/*), and
+// no-store so no proxy keeps a copy. Read-only GETs, so no csrfOk.
+
+// GET /api/admin/health/ledger[?days=N] - snapshots of the last N EAT days
+// (default 14, 1..120, anything else 400), oldest first, plus `freshness`
+// (is the monitor itself alive: latest_day, age_h, missing_today, stale).
+app.get('/api/admin/health/ledger', requireAdminDual, async (req, res, next) => {
+    const p = parseLedgerDays(req.query.days);
+    if (!p.ok) return res.status(400).json({ error: p.error });
+    try {
+        res.set('Cache-Control', 'no-store');
+        res.json(await healthLedger(p.days));
+    } catch (e) { next(e); }
+});
+
+// GET /api/admin/health/latest - the newest snapshot (null before the first)
+// plus the same `freshness` block.
+app.get('/api/admin/health/latest', requireAdminDual, async (req, res, next) => {
+    try {
+        res.set('Cache-Control', 'no-store');
+        res.json(await latestHealth());
+    } catch (e) { next(e); }
+});
+
 // (M10 DB export/import routes + M11 admin scorecard route removed
 // 2026-08-07 - the core-focus trim. DB transfer is superseded by the SSH
 // deploy route (scripts/deploy-remote.js); the scorecard stays available as
@@ -1459,6 +1489,7 @@ let server = null;
             startAutoRefresh();
             startGeoScheduler();
             startAiWorker();
+            startHealthScheduler();
             startWarmKeeper({ cache: apiCache });
             startHaltWatch(() => shutdown('halt-file'));
         });
@@ -1482,6 +1513,7 @@ function shutdown(why) {
     stopAutoRefresh();
     stopGeoScheduler();
     stopAiWorker();
+    stopHealthScheduler();
     stopWarmKeeper();
     stopHaltWatch();
     stopMetaPoll();
