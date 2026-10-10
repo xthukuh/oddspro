@@ -126,7 +126,7 @@ node scripts/deploy-remote.js --db           # subsequent: warehouse-only dump
                                              # so remote records/admin edits win),
                                              # then sessions/otp cleared
 node scripts/deploy-remote.js --app          # upload + extract backend into
-                                             # /home2/<user>/oddspro-app-v<version>/,
+                                             # /home/<user>/oddspro-app-v<version>/,
                                              # upload .env.server if absent,
                                              # remote npm install --omit=dev
 node scripts/deploy-remote.js --web          # tar.gz backup of public_html ->
@@ -253,9 +253,36 @@ For a single backend file that needs an urgent fix between real deploys (no zip 
 node scripts/hotfix-remote.js <repo-relative file...> [--from <dir>] [--restart] [--dry-run]
 ```
 
-Reuses `scripts/lib/remote.js` (same config/ssh plumbing as `deploy-remote.js`), so it targets the same `APP_DIR`/`SSH_TARGET` from `.env.deploy`. For each file it: refuses `.env*` paths and any path escaping the repo (`..`) before touching the host; takes a remote backup **first**, `cp -n <APP_DIR>/<file> <APP_DIR>/<file>.orig-<YYYYMMDD_HHMMSS>` (one UTC stamp per run, `cp -n` never overwrites an existing backup, and a brand-new file that doesn't exist remotely yet skips the backup step and says so); uploads via `sshStreamUpload`; and for `.js`/`.mjs`/`.cjs` files runs `node --check` remotely (via `NODE_BIN`), where a syntax error auto-restores the backup and dies loudly, so a broken upload never stays live. `--restart` touches `<APP_DIR>/tmp/restart.txt` (Passenger) once every file in the run has landed cleanly. `--dry-run` prints the full plan (backup check, upload, syntax check, rollback commands) without touching the host.
+**ONE ssh call for the whole run (2026-10 rework)** - the original version opened roughly
+five ssh connections PER FILE (probe/backup/mkdir/upload/check), which a shared host under
+load was observed resetting mid-run, landing a half-applied set across the files (see
+`docs/agents/toolset.md`, 2026-08-29 entry: "push ONE file per invocation" was the
+workaround at the time). Now the script: refuses `.env*` paths and any path escaping the
+repo (`..`, an absolute path, or a character outside `[A-Za-z0-9_.-]`) before touching the
+host; stages the files plus a generated POSIX apply script into one local tarball
+(`scripts/lib/hotfix-rules.js`'s `buildApplyScript`); and sends the whole thing over a
+single ssh call that extracts it under the remote user's own home and runs the apply script:
 
-The script always prints the exact rollback line for every file it backed up:
+```sh
+ssh <SSH_TARGET> 'mkdir -p ~/tmp/hotfix-<stamp> && tar -xzf - -C ~/tmp/hotfix-<stamp> && sh ~/tmp/hotfix-<stamp>/apply.sh'
+```
+
+(`~` - never a hardcoded `/home` or `/home2` prefix; the live host's home directory has
+already moved once, see `docs/engine/02-DATA-PIPELINE.md`.) A `&&`-chained extract means a
+truncated/corrupted transfer never even reaches the apply step, so a bad transfer touches
+nothing in `APP_DIR`. The apply script then does the actual per-file work locally on the
+host, no further round trips: backs each file up first, `cp -n <APP_DIR>/<file>
+<APP_DIR>/<file>.orig-<YYYYMMDD_HHMMSS>` (one UTC stamp per run, `cp -n` never overwrites an
+existing backup; a brand-new file that doesn't exist remotely yet skips the backup and says
+so); installs it; for `.js`/`.mjs`/`.cjs` files runs `node --check` (via `NODE_BIN`); prints
+its md5sum. On the FIRST failure anywhere, every file this run already touched is rolled
+back - a backed-up file restored, a brand-new file removed - before the script exits
+non-zero, so a run either lands completely or leaves the host exactly as it found it.
+`--restart` touches `<APP_DIR>/tmp/restart.txt` (Passenger) once every file has landed
+cleanly. `--dry-run` prints the generated apply script and local md5sums without touching
+the host. Local and remote md5s are cross-checked after a successful run.
+
+The script always prints the exact manual rollback line for every file it backed up:
 
 ```sh
 ssh <SSH_TARGET> 'cp <APP_DIR>/<file>.orig-<stamp> <APP_DIR>/<file> && touch <APP_DIR>/tmp/restart.txt'

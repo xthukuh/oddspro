@@ -84,6 +84,19 @@ layer), while hot-pick/tip *evaluation* rolls `HOTPICK_TEAM_WINDOW` = **7**
 (`src/db/goals-rules.js`, decision layer). They are independent consumers of the same
 history; only the H2H window is shared at 5.
 
+**Indexed team-id history lookup (`20261010000002_fixtures_team_id_indexes`):** both the
+history pull above and `src/hotpicks.js`'s `loadTeamHistory()` run the same shape of query
+in team-id chunks - `WHERE status IN (<FINAL_STATUSES>) AND (home_team_id IN (<chunk>) OR
+away_team_id IN (<chunk>))` - and `fixtures` carried no index on either team-id column until
+this migration, so every chunk full-scanned the table. This is what cost the 2026-09-04
+sweep its whole pre-match step (and 102 of that day's 261 snapshots PERMANENTLY, since a
+snapshot never writes again once kickoff has passed) to one history query over ~3,800 team
+ids. Fix: `fixtures_home_team_id_status_index (home_team_id, status)` and
+`fixtures_away_team_id_status_index (away_team_id, status)` - team_id leads each composite
+(far more selective than `status`'s handful of codes) and the two single-column-led
+composites let MySQL index-merge the OR rather than only serving one side of it. `kickoff`
+is deliberately left out of both: neither query filters or orders by it in SQL.
+
 ## Collectors and silent-truncation durability
 
 `src/betpawa.js` and `src/betika.js` are browser-mimicking axios clients against each
