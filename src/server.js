@@ -12,6 +12,7 @@ import { isPatToken, patRouteAllowed } from './pat-rules.js';
 import { saveUserSlip, listUserSlips, getSlipByCode, deleteUserSlip } from './user-slips.js';
 import { createPat, listPats, revokePat, resolvePat } from './pats.js';
 import { renderedView, knownStrategy } from './view.js';
+import { oddsHistoryPayload } from './odds-history.js';
 import { magicSortCached } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
@@ -699,6 +700,29 @@ app.get('/api/view', optionalAuth, async (req, res, next) => {
             oneEach: req.query.one_of_each === '1',
             providers: req.query.providers ? String(req.query.providers).split(',').filter(Boolean) : null,
         }));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/odds-history/:matchId[?limit=N] - one bookmaker match's odds
+// timeline (every logged look, every price change) and its frozen target
+// snapshots (opening / T-24h / T-3h / T-1h / closing) with their replayed
+// markets. Spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md.
+// Gated by the `odds_history` registry feature (minTier 'user'): sessions
+// and PATs of signed-in users, machine bearers and AUTH_ENABLED=0 installs.
+// Guests get 401 - GUEST_PREMIUM cannot open a 'user'-tier feature. Not
+// memoized: per-match, small, and a target can freeze between two reads.
+app.get('/api/odds-history/:matchId', optionalAuth, async (req, res, next) => {
+    try {
+        const full = !config.AUTH_ENABLED
+            || bearerMatches(req.get('authorization'), MACHINE_BEARERS)
+            || featureAllowed(req.user ?? null, 'odds_history', featureOpts());
+        if (!full) return res.status(401).json({ error: 'Sign in to see the odds history.', auth_required: true });
+        if (!/^\d{1,19}$/.test(String(req.params.matchId))) return res.status(400).json({ error: 'matchId must be a numeric match id.' });
+        const payload = await oddsHistoryPayload(req.params.matchId, { limit: Number(req.query.limit) || 2000 });
+        if (!payload) return res.status(404).json({ error: 'No match with that id.' });
+        res.json(payload);
     } catch (e) {
         next(e);
     }

@@ -58,6 +58,12 @@ stateDiagram-v2
   freshly scraped snapshot carries a number; the pure `oddsIdentity`/`diffOddsRows`
   helpers (zero imports, so their tests run without config/.env) normalize both sides
   before comparing.
+- **Odds history is append-only and pre-match only** (2026-10-10, section "Odds history and
+  target snapshots" below): `odds_changes`/`odds_observations` rows are only ever inserted,
+  in the same transaction as the `odds_markets` write, never at or after the CANONICAL
+  kickoff and never for a completed match; a target snapshot is written once and is a
+  cutoff into that log, so pruning or editing log rows would silently change frozen
+  snapshots. There is deliberately no retention knob.
 - **`matches.metadata` is insert-only:** the first-sight raw provider blob (~39 KB/row of
   provider JSON, with no code currently reading it back) is kept forever; refreshes never
   rewrite it (it alone was 556 MB of churn before the 2026-07-17 perf pass).
@@ -269,6 +275,74 @@ taxonomy is known. Because `_matchRow` feeds both the insert and the update bran
 correction to the predicate re-classifies existing rows on their next odds refresh, with no
 backfill script. Chapter 03 covers what that flag is used
 for downstream (excluding simulated competitions from linking work).
+
+## Odds history and target snapshots
+
+Owner requirement 2026-10-10: keep an accurate chronological account of every odds price
+and freeze snapshots at targets. `odds_markets` stays latest-only and untouched (no ALTER on
+the 17 M row table); three append-only tables sit beside it (migration
+`20261010000003_odds_history`, all `ON DELETE CASCADE` to `matches`; spec
+`docs/dev/specs/2026-10-10-1600-odds-history-targets.md`).
+
+| Table | One row per |
+|---|---|
+| `odds_observations` | logged look at a match (`kind` first / baseline / update, `source` light / full / manual / due / cli, the canonical `kickoff_at` the gate used, `markets`, `changes`) - written even when nothing moved |
+| `odds_changes` | price event of one identity: `first_seen`, `changed` (`prev_odds` = old), `revived` (stale market back), `stale` (vanished; `odds` = last seen), `baseline` |
+| `odds_target_snapshots` | target of a match, UNIQUE `(match_id, target)`, written once |
+
+**Write path.** `saveMatches` (`src/db/store.js`) computes the events with the pure
+`diffOddsChanges` (`src/db/odds-diff.js`; prices compared in integer cents, identity exactly
+as `oddsIdentity`) against the `odds_markets` rows it read BEFORE writing, and writes the
+observation plus changes through `src/odds-history.js#writeObservation` inside the same
+transaction - a rollback or `withRetry` retry takes the log with it. Unchanged prices write
+nothing. Gates: `ODDS_HISTORY_ENABLED`; not completed (already skipped); not a suspect empty
+snapshot (the guard suppresses history rows too); and the DATABASE clock (one `NOW(3)` probe
+kept as an offset for 5 minutes) strictly before the canonical kickoff - the fixture's when
+linked, else the snapshot's own `start_time`; an unparseable kickoff fails closed
+(`historyGateOpen`). Times are EAT wall-clock `DATETIME(3)`, read back through `DATE_FORMAT`
+(the TZ-decode hazard).
+
+**Baseline keeps replay exact.** The state at time X is, per identity, its last event at or
+before X (`replayState`). If `odds_markets` ever moved without the log seeing it - a match
+that pre-dates the feature, history switched off for a while, an odds write after the
+canonical kickoff followed by a reschedule - diffing against `odds_markets` would miss
+changes forever. `observationKind` detects all three the same way: odds on file and either
+no logged look yet, or the newest `odds_markets` timestamp (`GREATEST(created_at,
+updated_at)`) more than 60 s past the last logged look. That look is logged `baseline`:
+every snapshot market as `baseline` plus a `stale` for every on-file identity absent from
+it. A false baseline only costs rows, never correctness.
+
+**Targets.** `opening` = the first logged look; `t24h`/`t3h`/`t1h`/`closing` = canonical
+kickoff minus 24h / 3h / 1h / 0. `src/odds-history.js#materializeTargets` freezes, via the
+pure `planTargetFreezes`: opening as soon as a look exists; a timed target once the database
+clock is 2 minutes past `target_at` (so an in-flight look stamped just before has
+committed). The row stores the last logged look at or before `target_at` (`observed_at`),
+`lag_seconds = target_at - observed_at`, `quality` (`ok` within
+`ODDS_TARGET_MAX_LAG_MINUTES`, `lagged` beyond, `missing` when no look exists at or before
+the target - never filled from a later look, `baseline` for an opening captured by a
+baseline look), the market count, and `as_of_change_id` - the highest change id at or before
+`observed_at`. Markets are NOT copied: the read surface replays the log up to that id, which
+cannot change because the log is append-only. One `INSERT IGNORE` per match is the only
+write; an existing row is never touched. It runs after every `saveMatches` for the matches it
+logged (cap 2000) and as the light pass's bounded `odds targets` sweep over kickoffs in
+[now - 3d, now + 2d] (cap 500) for targets that passed with no later look (most closings).
+A failure there never fails a save: the next call freezes the same rows with the same
+deterministic result.
+
+**Reschedules.** `target_at` follows the canonical kickoff at freeze time, so a kickoff that
+moves before a target is due simply moves the target. Once frozen, a row keeps the
+`kickoff_at` it was frozen under; the read surface flags `kickoff_moved` when the current
+canonical kickoff differs by a minute or more. The change log keeps recording against the
+current kickoff, so raw history for the new schedule stays complete.
+
+**Sync.** `scripts/lib/sync-rules.js` windows the three tables by match like
+`odds_markets`: a windowed pull's `matches` DELETE cascades to them locally and the dump
+REPLACEs them from live.
+
+**Storage** is the open owner decision: estimated 23-46 GB/year at about 1,400 matches/day
+(first sightings ~248k rows/day plus the moved share of ~2.65 M re-observed prices/day, ~160
+B/row). The true moved share is one query away:
+`SELECT SUM(changes)/SUM(markets) FROM odds_observations WHERE kind='update'`.
 
 ## Market taxonomy (M2) and the column catalog
 

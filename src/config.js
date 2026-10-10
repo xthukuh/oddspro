@@ -262,6 +262,16 @@ const EnvSchema = z.object({
     // published games are discovered (0 = don't force-run while idle).
     AUTO_IDLE_LOOKAHEAD_MINUTES: z.coerce.number().int().min(0).default(120),
     AUTO_IDLE_EVERY_MINUTES: z.coerce.number().int().min(0).default(60),
+    // Odds history (spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md):
+    // the append-only price-change log + observation ledger + frozen target
+    // snapshots (src/odds-history.js), and the due-queue lane that fetches
+    // just the matches whose target is about to pass (src/odds-due.js).
+    ODDS_HISTORY_ENABLED: boolStr('1'),
+    ODDS_TARGET_MAX_LAG_MINUTES: z.coerce.number().min(0).default(15),
+    ODDS_DUE_ENABLED: boolStr('1'),
+    ODDS_DUE_LEAD_MINUTES: z.coerce.number().min(1).max(60).default(5),
+    ODDS_DUE_MAX_PER_TICK: z.coerce.number().int().min(1).max(200).default(40),
+    ODDS_DUE_DURING_SWEEP: boolStr('1'),
     // A stretch with no finished refresh run longer than this is proposed as
     // an odds outage. Counts MISSING RUNS, not missing odds: an idle-skip pass
     // still records an `ok` run, so a quiet night is never a gap. Nine missed
