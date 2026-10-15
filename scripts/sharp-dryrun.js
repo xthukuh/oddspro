@@ -26,6 +26,7 @@ try {
         date: r.date, status: r.row?.status, cards: r.row?.cards_total, legs: legs.length,
         kinds: legs.reduce((a, l) => ({ ...a, [l.kind]: (a[l.kind] ?? 0) + 1 }), {}),
         secs: (Date.now() - t0) / 1000,
+        maxRssMB: Math.round(process.resourceUsage().maxRSS / 1024),
     }));
     for (const l of sharp) {
         console.log(`  ${l.home} v ${l.away} | ${l.label} @ ${l.price} | BetPawa ${(100 * l.book_prob).toFixed(1)}% -> ours ${(100 * l.cal_prob).toFixed(1)}% | kickoff ${l.kickoff}`);
