@@ -332,29 +332,34 @@ function _simpleGroup(providers, keys) {
     return null;
 }
 
+// One raw odds row -> its tip book key ('1', 'O 2.5', 'TT:H:U 1.5', ...) or
+// null (period-tagged, untippable, or a team total whose side cannot be
+// resolved by EXACT normalized name). The single definition of market
+// identity for every tip book and for the Sharp card's BetPawa legs.
+export function tipBookKey(row, homeName, awayName) {
+    const desc = canonicalMarket(row);
+    if (desc.period != null) return null;               // FT only
+    if (_SIMPLE_FT_KEYS.has(desc.key) || _OU_KEY_RE.test(desc.key)) return desc.key;
+    if (desc.group !== 'team_total') return null;
+    const H = _upper(homeName), A = _upper(awayName);
+    const side = desc.tt?.side === 'home' ? 'H'
+        : desc.tt?.side === 'away' ? 'A'
+            : desc.tt?.team && _upper(desc.tt.team) === H ? 'H'
+                : desc.tt?.team && _upper(desc.tt.team) === A ? 'A'
+                    : null;
+    const ouKey = desc.key.startsWith('TT:') ? desc.key.slice(3) : null; // 'O 2.5'
+    return side && ouKey && _OU_KEY_RE.test(ouKey) ? `TT:${side}:${ouKey}` : null;
+}
+
 export function buildTipBooks(oddsRows, { homeName, awayName } = {}, opts = {}) {
     const t = { ...DEFAULT_TIP, ...opts };
-    const H = _upper(homeName), A = _upper(awayName);
 
     // Per-provider bag of lowest canonical prices (FULL TIME only). Team-total
     // rows are side-resolved into TT:<H|A>:<ouKey> book keys here so a two-way
     // over/under book can be paired per side+line downstream.
     const providers = {};
     for (const r of oddsRows) {
-        const desc = canonicalMarket(r);
-        if (desc.period != null) continue;               // FT only
-        let bookKey = null;
-        if (_SIMPLE_FT_KEYS.has(desc.key) || _OU_KEY_RE.test(desc.key)) {
-            bookKey = desc.key;
-        } else if (desc.group === 'team_total') {
-            const side = desc.tt?.side === 'home' ? 'H'
-                : desc.tt?.side === 'away' ? 'A'
-                    : desc.tt?.team && _upper(desc.tt.team) === H ? 'H'
-                        : desc.tt?.team && _upper(desc.tt.team) === A ? 'A'
-                            : null;
-            const ouKey = desc.key.startsWith('TT:') ? desc.key.slice(3) : null; // 'O 2.5'
-            if (side && ouKey && _OU_KEY_RE.test(ouKey)) bookKey = `TT:${side}:${ouKey}`;
-        }
+        const bookKey = tipBookKey(r, homeName, awayName);
         if (!bookKey) continue;                          // untippable / unresolved -> drop
         const price = Number(r.price);                   // DECIMAL arrives as string
         const bag = (providers[r.provider] ??= {});
