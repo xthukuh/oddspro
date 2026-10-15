@@ -110,6 +110,46 @@ Two same-session fixes belong with it: the daily-slip settle pass no longer keep
 legs on a day that is already decided, and a fixture that dies is voided after 7 days; the
 magic-sort memo is warmed at boot, which removed a 25s stall on the first hit.
 
+## Sharp 4x: the BetPawa Win Bonus card (2026-10-15)
+
+One extra card on the daily slip: **one BetPawa slip of exactly 3 legs, each priced
+1.30-2.00, combined odds >= 4, priced with BetPawa's own Win Bonus**
+(`src/db/sharp-rules.js`, `src/db/betpawa-bonus-rules.js`; research record
+`docs/research/2026-10-15-sharp-4x.md`).
+
+How it works, in order:
+
+1. **BetPawa's own probability is the input.** BetPawa stores a win probability `q` on every
+   price (`odds_markets.probability`; Betika has none). Its Win Bonus is computed FROM `q`:
+   80% of a compressed house edge is given back as extra odds, capped by leg count (1.05x at
+   3 legs, 1.08x at 4, 1.35x at 10, 13.5x at 60). With `q` correct, the bonus can never make
+   a slip profitable; it pays only where the punter's probability beats `q`.
+2. **Where `q` runs low.** Over 763,689 settled pre-kickoff BetPawa prices, realized hit
+   rates beat `q` in every band from 1.02 to 3.50 (by 0.4-1.0 points, both halves), and 1X2
+   favourites at 1.35-1.60 by about 2.5 points. The calibrator learns that gap walk-forward:
+   `P = q + sum(hit - q) / (n + 300)` per `groupOf(market) | bandOf(price)` cell, observing
+   only fixtures settled before the build day and only prices written before kickoff.
+3. **Selection.** Exact-3 group knapsack maximizing `sum ln P` with `sum ln price >= ln 4`,
+   one leg per fixture, never contradicting a leg already taken on that fixture or its tip.
+   The pool is ranked by efficiency `ln P / ln price`, never by raw `P` (a raw pool fills with
+   1.3x legs that cannot reach 4x, the silent zero-publish trap: measured 57/85 days
+   published before the fix, 85/85 after).
+4. **No upkeep.** Cells re-fit from settled results on every build; the bonus configuration
+   is read from BetPawa's public brand data (`fetchBetpawaBonusConfig`, 6h memo) with the
+   site-verified constants as fallback.
+
+Draw No Bet is excluded: BetPawa's `q` for DNB is the unconditional win chance and its
+calculator adds the draw back through a `voidProbability` the warehouse does not store.
+The Sharp card never decides the day verdict (the anchor still does).
+
+**Measured, not promised.** Replay 2026-07-23..10-15, one slip a day: published 85/85, won
+24 (28.2%) against BetPawa's own 23.2%, average 4.19x with the bonus, +18% gross (halves
++29% / +7%), about 0% net of the 20% withholding on winnings. Leg-level edge against `q`:
+4.5% +/- 2.2%. **A 4x slip can win at most EV/4 of days**, so with this edge the ceiling is
+about 27-28% of days: the card is a positive-expectation bet that wins about one day in four,
+never a daily guarantee. Single-slip ROI swings by about 20 points on small construction
+changes (SE about 19 points over 85 days), so the forward record, not the replay, decides it.
+
 ## `sure` - the default sort
 
 ```

@@ -87,6 +87,7 @@ const TIER_META = {
     top3: { label: 'Top-3 value', cls: 'text-hot', hint: 'The three safest markets at 1.5+ odds each (~3.4x combined). The replay-profitable value rung - positive every tested window.' },
     grand: { label: 'Grand 5x', cls: 'text-miss', hint: 'The 5x aspiration card - published ONLY when calibrated evidence clears the EV gate. Rare by design; a lottery arm, never a promise.' },
     value: { label: 'Value card', cls: 'text-hot', hint: 'Value arm: 1.5x-target card at real odds (legacy).' },
+    sharp: { label: 'Sharp 4x (BetPawa)', cls: 'text-hot', hint: "One BetPawa slip of exactly 3 legs at 4x or more, priced with BetPawa's own Win Bonus. Legs are where settled results keep beating BetPawa's own win probability (walk-forward). Replay: won 24 of 85 days (28%) at ~4.2x, +18% gross; wins about one day in four, never a daily guarantee. Place it on BetPawa: the bonus odds apply there only." },
     hunter: { label: 'Hunter singles', cls: 'text-accent', hint: 'High-odds SINGLE stakes (2.0-6.0), one per band, picked by the Dixon-Coles goal model + pattern cells + streak weapons. Each leg is its own bet, never a parlay. Replay: mid band +24.9% ROI over 37 days (train AND test positive); high band positive but volatile.' },
 };
 
@@ -133,7 +134,12 @@ function DayCard({ d, today, allPrices }) {
                                 <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide">
                                     <span className={`font-semibold ${meta?.cls ?? 'text-label-3'}`} title={meta?.hint ?? 'Survival card.'}>
                                         {(legs[0]?.tier_label ?? meta?.label ?? `Card ${ci + 1}`)}{isSingles ? ` · ${legs.length} bet${legs.length > 1 ? 's' : ''}` : ` · ${odds.toFixed(2)}x`}
+                                        {kind === 'sharp' && legs[0]?.bonus_odds > odds && ` → ${Number(legs[0].bonus_odds).toFixed(2)}x with Win Bonus`}
                                     </span>
+                                    {legs[0]?.backfilled && !d.backfilled && (
+                                        <span className="normal-case text-[10px] text-label-3 border border-separator rounded px-1"
+                                            title="Added later by hindsight-free replay (last pre-kickoff price), not a live call">backfilled</span>
+                                    )}
                                     {settled && !isSingles && (
                                         <span className={`font-bold ${won ? 'text-green' : 'text-miss'}`}>{won ? 'WON' : 'LOST'}</span>
                                     )}
