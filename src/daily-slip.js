@@ -27,7 +27,7 @@ import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
 import { coverageFor } from './notices.js';
-import { fetchBetpawaBonusConfig } from './betpawa.js';
+import { fetchBetpawaBonusConfig } from './betpawa-bonus.js';
 import { BETPAWA_KE_BONUS } from './db/betpawa-bonus-rules.js';
 import { makeSharpCalibrator, selectSharpCard, sharpLegsFromRows } from './db/sharp-rules.js';
 
