@@ -24,7 +24,7 @@ import { db, closeDb } from '../src/db/connection.js';
 import { loadSettledWindow, loadSharpCalibrator, sharpLegRecords, settleDailySlips } from '../src/daily-slip.js';
 import { selectSharpCard } from '../src/db/sharp-rules.js';
 import { contradicts } from '../src/db/ladder-rules.js';
-import { fetchBetpawaBonusConfig } from '../src/betpawa.js';
+import { fetchBetpawaBonusConfig } from '../src/betpawa-bonus.js';
 import { BETPAWA_KE_BONUS } from '../src/db/betpawa-bonus-rules.js';
 
 const arg = (k, d) => { const i = process.argv.indexOf(`--${k}`); return i > 0 ? process.argv[i + 1] : d; };
