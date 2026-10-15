@@ -80,6 +80,16 @@ the next link pass re-derives the correlation by scoring.
 Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
+Sharp 4x card (BetPawa 3-leg slip with its Win Bonus; chapter 05 "Sharp 4x"): research
+bundle = a SELECT-only host extract into `tmp/sharp/*.tsv.gz` (procedure in
+`docs/research/2026-10-15-sharp-4x.md`), then `node scripts/sharp-prep.js` (fold, drops
+prices written at/after kickoff) and `node scripts/sharp-backtest.js [--last 14]` (drives
+the production `sharp-rules.js`; must reproduce 24/85 on the 2026-10-15 bundle). Live-data
+check without writing: `node scripts/sharp-dryrun.js [date] --require-read-only` (needs a
+`tx_read_only = 1` session). Past days: `node scripts/backfill-sharp.js [--days 14] [--yes]`
+(appends a backfilled Sharp card to existing rows, saves `tmp/backfill-sharp-<stamp>.json`
+first; `--restore <file> --yes` undoes it). Nothing to retune by hand: the residual cells
+re-fit from settled results every build and the bonus config is read from BetPawa live.
 Gen-2 ladder evolution (MONTHLY routine): `node scripts/evolve-gen2.js [--json out.json]`
 (deterministic 120+ generation coordinate descent over the tier-card config, train/test
 split, per-tier refinement; bake = edit DEFAULT_GEN2 + bump ALGO_VERSION, then

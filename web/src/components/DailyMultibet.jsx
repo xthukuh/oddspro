@@ -136,6 +136,10 @@ function DayCard({ d, today, allPrices }) {
                                         {(legs[0]?.tier_label ?? meta?.label ?? `Card ${ci + 1}`)}{isSingles ? ` · ${legs.length} bet${legs.length > 1 ? 's' : ''}` : ` · ${odds.toFixed(2)}x`}
                                         {kind === 'sharp' && legs[0]?.bonus_odds > odds && ` → ${Number(legs[0].bonus_odds).toFixed(2)}x with Win Bonus`}
                                     </span>
+                                    {legs[0]?.backfilled && !d.backfilled && (
+                                        <span className="normal-case text-[10px] text-label-3 border border-separator rounded px-1"
+                                            title="Added later by hindsight-free replay (last pre-kickoff price), not a live call">backfilled</span>
+                                    )}
                                     {settled && !isSingles && (
                                         <span className={`font-bold ${won ? 'text-green' : 'text-miss'}`}>{won ? 'WON' : 'LOST'}</span>
                                     )}

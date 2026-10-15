@@ -77,6 +77,8 @@ function _menusByFixture(rows, namesById) {
 // Shared settled-window loader: final fixtures + their settled menus inside
 // the window strictly before `beforeDate`. Feeds BOTH the leg calibrator and
 // the value-hunt cell state (one query pass, two consumers).
+export async function loadSettledWindow(beforeDate, windowDays) { return _settledWindow(beforeDate, windowDays); }
+
 async function _settledWindow(beforeDate, windowDays) {
     const fixtures = await db('fixtures as f')
         .join('teams as th', 'th.id', 'f.home_team_id')
@@ -237,6 +239,49 @@ function _reasoning(leg) {
         : `no settled evidence in its price/market cell yet, so the book's own ${_pct(leg.calProb)} stands`;
     return `Safest qualifying pick of this fixture: ${tipMarketLabel(leg.market)} at ${leg.price.toFixed(2)}, `
         + `${ev}; bookmaker devig says ${_pct(leg.prob)}.`;
+}
+
+// Sharp 4x leg fields and wording - ONE definition shared by the builder and
+// the backfill (sharpLegRecords). `l` is a taken leg: { market, price, prob
+// (BetPawa q), calProb (ours), cell, sharp: { slipOdds, totalOdds, bonusPct } }.
+function _sharpExtras(l) {
+    return {
+        book_prob: l.prob,
+        slip_odds: +l.sharp.slipOdds.toFixed(2),
+        bonus_odds: +l.sharp.totalOdds.toFixed(2),
+        bonus_pct: l.sharp.bonusPct,
+    };
+}
+
+function _sharpReasoning(l) {
+    return `Sharp 4x leg (BetPawa): ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}. BetPawa's own model gives ${_pct(l.prob)}; `
+        + `walk-forward evidence from ${l.cell ? `${l.cell.n} settled legs in its market/price cell` : 'its market/price cell (no history yet)'} says ${_pct(l.calProb)}. `
+        + `The 3-leg slip pays ${l.sharp.slipOdds.toFixed(2)}x, ${l.sharp.totalOdds.toFixed(2)}x with BetPawa's Win Bonus. `
+        + 'Replay: won 24 of 85 days (28%); a positive-expectation card, never a daily guarantee.';
+}
+
+// Stored leg records for a selectSharpCard() result (the backfill path; the
+// builder maps its legs through the same helpers). `fxInfo`: Map(fixture id ->
+// { home_name, away_name, league, kickoff }).
+export function sharpLegRecords(card, cal, fxInfo, cardIndex, extra = {}) {
+    const sharpMeta = { slipOdds: card.slipOdds, totalOdds: card.totalOdds, bonusPct: card.bonus.pct };
+    return card.legs.map(leg => {
+        const f = fxInfo.get(leg.fixture) ?? {};
+        const l = { market: leg.market, price: leg.price, prob: leg.q, calProb: leg.P, cell: cal.cell(leg), sharp: sharpMeta };
+        return {
+            fixture_id: leg.fixture,
+            home: f.home_name ?? null, away: f.away_name ?? null, league: f.league ?? null,
+            kickoff: f.kickoff instanceof Date ? f.kickoff.toISOString() : (f.kickoff ?? null),
+            market: l.market, label: tipMarketLabel(l.market),
+            price: l.price, prices: { betpawa: l.price }, links: {},
+            prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: cellKey(l),
+            card: cardIndex, kind: 'sharp', tier_label: 'Sharp 4x (BetPawa)',
+            ..._sharpExtras(l),
+            reasoning: _sharpReasoning(l),
+            outcome: null,
+            ...extra,
+        };
+    });
 }
 
 // Build (or refresh) the slip for `date` (EAT date string, default today).
@@ -424,17 +469,9 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
                 kind: l.kind ?? 'safe',
                 tier_label: l.tierLabel ?? null,
                 ...(l.kind === 'hunter' ? { hunt_ev: +l.huntEv.toFixed(3), hunt_band: l.huntBand } : {}),
-                ...(l.kind === 'sharp' ? {
-                    book_prob: l.prob,
-                    slip_odds: +l.sharp.slipOdds.toFixed(2),
-                    bonus_odds: +l.sharp.totalOdds.toFixed(2),
-                    bonus_pct: l.sharp.bonusPct,
-                } : {}),
+                ...(l.kind === 'sharp' ? _sharpExtras(l) : {}),
                 reasoning: l.kind === 'sharp'
-                    ? `Sharp 4x leg (BetPawa): ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}. BetPawa's own model gives ${_pct(l.prob)}; `
-                        + `walk-forward evidence from ${l.cell ? `${l.cell.n} settled legs in its market/price cell` : 'its market/price cell (no history yet)'} says ${_pct(l.calProb)}. `
-                        + `The 3-leg slip pays ${l.sharp.slipOdds.toFixed(2)}x, ${l.sharp.totalOdds.toFixed(2)}x with BetPawa's Win Bonus. `
-                        + 'Replay: won 24 of 85 days (28%); a positive-expectation card, never a daily guarantee.'
+                    ? _sharpReasoning(l)
                     : l.kind === 'hunter'
                     ? `Hunter single (${l.huntBand} band): ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)} - model+cells estimate ${_pct(l.calProb)} win chance vs the book's ${_pct(l.prob)}, claimed edge ${(100 * l.huntEv).toFixed(0)}%. A single stake, not a parlay leg; replay record: mid band +24.9% ROI over 37 days, high band positive but volatile.`
                     : _reasoning(l),
