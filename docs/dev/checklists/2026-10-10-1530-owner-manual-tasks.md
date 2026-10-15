@@ -113,7 +113,34 @@ locally. You supply the value yourself, never in chat.
 
 **Check.** The next digest shows real ledger lines instead of UNREADABLE.
 
-## 7. Hygiene, no deadline
+## 7. Decide how much odds history to keep (two days after the deploy)
+
+- [ ] Done
+
+**Why.** The odds change log is on by default. Live testing showed that big-league BetPawa
+matches re-price 50 to 73 percent of their markets in the last minutes before kickoff, so
+volume depends on how busy a slate is. The estimate is 23 to 46 GB a year against a 5 GB
+warehouse today.
+
+**Steps.** Two days after the deploy, ask Claude to measure the real growth. Then choose,
+best first:
+
+1. Keep everything. Most accurate; needs the disk.
+2. Store each market's name once in a lookup table. About 30 percent smaller; needs a
+   migration.
+3. Log only core markets (1X2, double chance, over/under). About 88 percent smaller, but
+   the long tail of markets is lost.
+
+Emergency lever any time: Admin, Settings, `ODDS_HISTORY_ENABLED` off. Turning it back
+on re-baselines each match at its next look, so the replay stays correct.
+
+## 8. Hygiene, no deadline
+
+- [ ] Remove the four leftover builder worktrees (their work is merged in
+      xthukuh/oddspro#3; the permission classifier blocked Claude from force-removing
+      them): `git worktree prune` after deleting the folders under
+      `D:\Apps\lab\oddspro\.claude\worktrees\`, then `git branch -d` each
+      `worktree-agent-*` branch.
 
 - [ ] Rotate the GitHub personal access token embedded in the `origin` remote URL
       (`git remote -v`). Old leak, still worth rotating.
