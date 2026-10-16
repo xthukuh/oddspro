@@ -681,24 +681,41 @@ app.get('/api/daily-slip/timeline', optionalAuth, async (req, res, next) => {
 
 // GET /api/view - the RENDERED view (Phase 2): the exact dataset the
 // signed-in browser shows, computed server-side through the same shared
-// pure pipeline (magic-rules verbatim). Full tier only (session, PAT or
-// machine bearer) - it mirrors the signed-in table, so a guest teaser
-// makes no sense here. Params: date, strategy, safe_only=1, one_of_each=1,
+// pure pipeline (magic-rules verbatim). Gated by the `rendered_view`
+// registry feature since 2026-10-16 (guest-tier, so GUEST_PREMIUM opens it
+// and GUEST_PREMIUM_EXCEPT re-locks it); machine bearers and AUTH_ENABLED=0
+// stay full. Parity with /api/records (2026-10-16 security review): the
+// same access object, the same guest date gate, the same redaction (passed
+// into renderedView -> queryRecords), and the same version-keyed response
+// memo keyed on the normalized params plus the access tier, so a guest can
+// neither read past what /api/records shows them nor force a cold compute
+// per request. Params: date, strategy, safe_only=1, one_of_each=1,
 // providers=a,b (also the one-of-each priority order).
 app.get('/api/view', optionalAuth, async (req, res, next) => {
     try {
-        const full = !config.AUTH_ENABLED || req.user != null
-            || bearerMatches(req.get('authorization'), MACHINE_BEARERS);
-        if (!full) return res.status(401).json({ error: 'Sign in or use an access token for the rendered view.', auth_required: true });
+        const legacyFull = !config.AUTH_ENABLED || bearerMatches(req.get('authorization'), MACHINE_BEARERS);
+        if (!legacyFull && !featureAllowed(req.user ?? null, 'rendered_view', featureOpts())) {
+            return res.status(401).json({ error: 'Sign in or use an access token for the rendered view.', auth_required: true });
+        }
         const strategy = String(req.query.strategy || 'sure');
         if (!knownStrategy(strategy)) return res.status(400).json({ error: `unknown strategy: ${strategy}` });
         const day = _dtime(req.query.date || new Date()).slice(0, 10);
-        res.json(await renderedView({
-            date: day,
-            strategy,
-            safeOnly: req.query.safe_only === '1',
-            oneEach: req.query.one_of_each === '1',
-            providers: req.query.providers ? String(req.query.providers).split(',').filter(Boolean) : null,
+        const access = legacyFull ? null : accessFromUser(req.user, featureOpts());
+        if (access && !access.canFuture && !guestDateAllowed(day, _dtime(new Date()).slice(0, 10))) {
+            return res.status(403).json({ error: 'Sign in to see upcoming games.', auth_required: true });
+        }
+        const providers = req.query.providers
+            ? [...new Set(String(req.query.providers).split(',').map(p => p.trim()).filter(Boolean))].slice(0, 8)
+            : null;
+        const safeOnly = req.query.safe_only === '1';
+        const oneEach = req.query.one_of_each === '1';
+        const tier = access && !access.fullDetail ? 'guest' : 'full';
+        const key = queryCacheKey('/api/view', {
+            date: day, tier, strategy, safe_only: safeOnly ? 1 : 0, one_of_each: oneEach ? 1 : 0,
+            providers: providers ? providers.join(',') : null,
+        });
+        await apiCache.send(req, res, key, () => renderedView({
+            date: day, strategy, safeOnly, oneEach, providers, access,
         }));
     } catch (e) {
         next(e);
@@ -709,9 +726,9 @@ app.get('/api/view', optionalAuth, async (req, res, next) => {
 // timeline (every logged look, every price change) and its frozen target
 // snapshots (opening / T-24h / T-3h / T-1h / closing) with their replayed
 // markets. Spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md.
-// Gated by the `odds_history` registry feature (minTier 'user'): sessions
-// and PATs of signed-in users, machine bearers and AUTH_ENABLED=0 installs.
-// Guests get 401 - GUEST_PREMIUM cannot open a 'user'-tier feature. Not
+// Gated by the `odds_history` registry feature (guest-tier since 2026-10-16:
+// GUEST_PREMIUM opens it for signed-out visitors, GUEST_PREMIUM_EXCEPT
+// re-locks it); machine bearers and AUTH_ENABLED=0 stay full. Not
 // memoized: per-match, small, and a target can freeze between two reads.
 app.get('/api/odds-history/:matchId', optionalAuth, async (req, res, next) => {
     try {

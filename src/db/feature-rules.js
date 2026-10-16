@@ -32,9 +32,13 @@ export const FEATURES = {
     methodology: { minTier: 'guest', label: 'Magic-sort methodology + backtest numbers' },
     // --- Cards / timeline ---
     daily_multibet: { minTier: 'guest', label: 'Daily MultiBet full card + timeline' },
-    // --- Signed-in floor (not guest-openable: GUEST_PREMIUM only opens
-    // 'guest'-tier features). Per-match odds timeline + frozen targets. ---
-    odds_history: { minTier: 'user', label: 'Odds history timeline + target snapshots (per match)' },
+    // --- Opened to guests 2026-10-16 (owner: "allow premium features for
+    // guests; we can re-lock them later"). Both were signed-in floors; at
+    // 'guest' they follow GUEST_PREMIUM like everything above, so re-locking
+    // one is a GUEST_PREMIUM_EXCEPT entry (no deploy) and re-locking all is
+    // GUEST_PREMIUM off. ---
+    odds_history: { minTier: 'guest', label: 'Odds history timeline + target snapshots (per match)' },
+    rendered_view: { minTier: 'guest', label: 'Rendered view API (/api/view)' },
     // --- Account-bound: a session is a data requirement, not a paywall ---
     slip_sharing: { minTier: 'user', accountBound: true, label: 'Saved + shareable slips' },
     prefs_sync: { minTier: 'user', accountBound: true, label: 'Cross-device settings sync' },

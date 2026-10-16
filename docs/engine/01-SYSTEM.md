@@ -458,7 +458,7 @@ the CSV export action of the same read layer.
 | `POST /api/refresh?date=` | starts the single-slot background `runDateRefresh` job. 409 while ANY job runs (parallel refreshes deadlock on delete+insert gap locks), `200 {fresh:true}` when the date was successfully refreshed inside `REFRESH_CACHE_MINUTES`, 429 on the manual cooldown |
 | `GET /api/refresh` | job state + freshness signal (`data_version`, `last_success`, `warm`, `notices`). The web polls it slowly (60s) for silent reloads and fast (2s) while a job runs |
 | `GET /api/hotpicks`, `GET /api/performance`, `GET /api/coverage` | summaries backed by `hotpicksSummary()`, `performanceSummary()`, `coveragePayload()` |
-| `GET /api/odds-history/:matchId` | one match's logged looks, pre-match price changes (newest `limit`, default 2000, max 20000, `truncated` flag) and frozen targets with replayed markets (`src/odds-history.js#oddsHistoryPayload`, chapter 02). Gated by the `odds_history` registry feature (`minTier: 'user'`) plus the machine-bearer / `AUTH_ENABLED=0` legacy path; guests 401. Not memoized |
+| `GET /api/odds-history/:matchId` | one match's logged looks, pre-match price changes (newest `limit`, default 2000, max 20000, `truncated` flag) and frozen targets with replayed markets (`src/odds-history.js#oddsHistoryPayload`, chapter 02). Gated by the `odds_history` registry feature (guest-tier since 2026-10-16, so open to guests while `GUEST_PREMIUM` is on) plus the machine-bearer / `AUTH_ENABLED=0` legacy path; locked callers get 401. Not memoized |
 | `/api/auth/*` | signup/login/verify-otp/resend-otp/change-phone/logout/me/profile - per-route JSON body limits, the ONE shared `csrfOk`, best-effort sliding-window rate limits keyed on IP/phone/user, an `authGuard` factory with role and verified variants plus the forced-PIN-change H4 gate |
 | `/api/prefs` GET/PUT | `requireAuth`, deliberately NOT `requireVerified` |
 | `GET /api/settings` | the public subset of the settings catalog |
@@ -678,10 +678,11 @@ floor: `tip_reasoning`, `future_dates`, `sure_bets`, `safe_picks`, `methodology`
 `daily_multibet` all default `minTier:'guest'`, plus the `accountBound` `slip_sharing`/
 `prefs_sync` pinned at `minTier:'user'` - structurally impossible to open to a guest
 since they read/write rows owned by a user id, so `GUEST_PREMIUM` can never touch them
-by construction, not by comment. `odds_history` (2026-10-10, `GET /api/odds-history`) is
-`minTier:'user'` without being account-bound: `GUEST_PREMIUM` only ever opens
-`guest`-tier entries, so it stays signed-in only, while a later move to `admin` or a
-subscription tier is one edit. `effectiveMinTier(feature, opts)` resolves the floor
+by construction, not by comment. `odds_history` (2026-10-10, `GET /api/odds-history`) and
+`rendered_view` (`GET /api/view`) were signed-in floors until 2026-10-16, when the owner
+opened premium to guests: both are now `minTier:'guest'`, so they follow `GUEST_PREMIUM`
+like the rest and re-lock one at a time through `GUEST_PREMIUM_EXCEPT` (or all at once
+with `GUEST_PREMIUM` off). `effectiveMinTier(feature, opts)` resolves the floor
 against runtime policy: `opts.guestPremium` off lifts every guest-tier feature to
 `'user'` (the pre-2026-08 behavior); on, it leaves them at `'guest'` except any key
 named in `opts.guestExcept` (the `GUEST_PREMIUM_EXCEPT` setting, parsed by

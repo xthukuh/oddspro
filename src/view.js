@@ -34,11 +34,15 @@ export function knownStrategy(id) {
 
 // access is deliberately full-tier (null): the route gates entry instead -
 // this view exists to mirror the signed-in table, teasing it makes no sense.
+// `access` (2026-10-16): the caller's accessFromUser() result, or null for the
+// legacy full path (machine bearer, AUTH_ENABLED=0). Passed straight to
+// queryRecords so a guest sees exactly what /api/records would show them -
+// the same redaction and coarse buckets - never more.
 export async function renderedView({
-    date, strategy = 'sure', safeOnly = false, oneEach = false, providers = null,
+    date, strategy = 'sure', safeOnly = false, oneEach = false, providers = null, access = null,
 } = {}) {
     const [records, magic, slip] = await Promise.all([
-        queryRecords({ date, per_page: 'all', providers, access: null }),
+        queryRecords({ date, per_page: 'all', providers, access }),
         magicSortCached(),
         dailySlipPayload(date),
     ]);

@@ -384,9 +384,11 @@ const EnvSchema = z.object({
     // the same tip detail/reasoning, future dates, Daily MultiBet timeline and
     // Sure Bets a signed-in user gets - see src/db/access-rules.js. Account-
     // bound features (saved/shareable slips, prefs sync, admin) stay gated on
-    // an actual session regardless of this flag. Default OFF; the owner flips
-    // it live via Admin -> Settings once ready.
-    GUEST_PREMIUM: boolStr('0'),
+    // an actual session regardless of this flag. Default ON since 2026-10-16
+    // (owner: open premium to guests now, re-lock later); turn it off in
+    // Admin -> Settings to re-lock, or name single features in
+    // GUEST_PREMIUM_EXCEPT.
+    GUEST_PREMIUM: boolStr('1'),
     // Per-feature clawback on top of GUEST_PREMIUM: a CSV of src/db/feature-
     // rules.js keys that stay signed-in-only even while guest premium is on
     // (e.g. 'methodology'). Empty = the master switch opens everything it
