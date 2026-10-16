@@ -52,7 +52,31 @@ const DETAIL_FIELDS = ['tip_breakdown', 'tip_ai_reason', 'tip_ai_review', 'hot_r
 
 // Exact blend confidence is detail too, but nulling it would kill the guest
 // Tip sort/score - quantize to coarse buckets so ordering survives.
-const CONFIDENCE_STEP = 0.05;
+export const CONFIDENCE_STEP = 0.05;
+
+// THE one list of computed numbers a redacted tier only ever sees coarsened:
+// row field -> the queryRecords sort/filter key that reads it. The row
+// redaction below and the SQL bucketing in records.js both read this map, so
+// a field can never be rounded in the payload yet compared exactly in a
+// filter (the bisecting "filter oracle": `banker > 0.6612`, then 0.6613...).
+export const COARSE_FIELDS = Object.freeze({
+    tip_confidence: 'tip',
+    tip_banker_cal: 'banker',   // our calibrated Pick chance (2026-10-16)
+});
+const COARSE_KEYS = new Set(Object.values(COARSE_FIELDS));
+
+// Is this sort/filter key coarsened for a redacted tier?
+export const isCoarseKey = key => COARSE_KEYS.has(key);
+
+// The bucket a coarsened value reads as. Mirrors the SQL form records.js
+// emits, ROUND(col / step) * step: both round half away from zero, which for
+// these non-negative chances is the same as Math.round.
+export function coarseValue(v) {
+    if (v == null || v === '') return null;
+    const n = Number(v);
+    if (!Number.isFinite(n)) return null;
+    return Number((Math.round(n / CONFIDENCE_STEP) * CONFIDENCE_STEP).toFixed(2));
+}
 
 // Strip ONLY the heavy internal-reasoning JSON (no confidence quantizing) -
 // the API_DETAILS=off payload slim for signed-in tiers: a VITE_SHOW_DETAILS=0
@@ -72,10 +96,8 @@ export function stripDetails(row) {
 export function redactRecordForRole(row, role) {
     if (!row || role !== 'guest') return row;
     const out = stripDetails(row);
-    // Our calibrated Pick chance (2026-10-16) is the same class of computed
-    // number, so it gets the same coarsening.
-    for (const f of ['tip_confidence', 'tip_banker_cal']) {
-        if (out[f] != null) out[f] = Number((Math.round(Number(out[f]) / CONFIDENCE_STEP) * CONFIDENCE_STEP).toFixed(2));
+    for (const f of Object.keys(COARSE_FIELDS)) {
+        if (out[f] != null) out[f] = coarseValue(out[f]);
     }
     return out;
 }
