@@ -10,7 +10,7 @@ import { sortValue } from '../sortValues.js';
 import { orderRows } from '../ordering.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
-import { scoreTip, STRATEGIES } from '../../../src/db/magic-rules.js';
+import { scoreTip, STRATEGIES, pickView, tipMarketLabel } from '../../../src/db/magic-rules.js';
 // Pure settler (zero-import) - grades a runner-up market from the final score
 // (the settle pass only stores the CHOSEN tip's outcome). tipHitSafe never
 // throws (unknown key -> null) and returns 'void' for a DNB push, so the
@@ -50,8 +50,8 @@ const HEADER_META = {
     fixture: { info: 'Bookmaker match name (links to the bookmaker page)' },
     provider: { info: 'Bookmaker' },
     score: { info: 'Final score (home-away), canonical API-Football result' },
-    tip: { info: 'Safest bettable outcome + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
-    banker: { info: 'The SAFEST market this bookmaker offers on the fixture, with its devigged win probability. Not the value pick - the survival pick. Wins far more often than the Tip; does not win more money.' },
+    tip: { info: 'Stats tip: our rolling-stats blend pick (1.35+ odds) + how confident we are - 🔥 marks a likely 3+ goals game. Click any tip for the reasoning in plain words' },
+    banker: { info: 'The tip: the most likely market at 1.50+ odds on this game, with OUR calibrated win chance (learned from our own settled results). One obvious bet per game - never an Over 0.5 filler.' },
     status: { info: 'Fixture status - hover a cell for the odds-refresh & betting-closed times' },
     league: { info: 'Country - league' },
     season: { info: 'Season (starting year)' },
@@ -309,26 +309,23 @@ function _cell(row, col, linkProviders, openTip) {
         );
     }
     if (key === 'banker') {
-        // The safest market the book offers on this fixture (ladder-rules
-        // bankerPick). Deliberately a SEPARATE column from Tip, not a
-        // replacement: Tip is the value pick behind its price floor, Banker is
-        // the survival pick behind a 1.01 floor, and keeping both lets the two
-        // accumulate settled evidence side by side on one population.
-        if (!row.tip_banker_market) return <span className="text-label-3">-</span>;
-        const prob = row.tip_banker_prob != null ? `${Math.round(row.tip_banker_prob * 100)}%` : null;
-        const missed = row.tip_banker_outcome === 'miss';
-        // A banker at or above this bar is what the Sure Bets list publishes.
-        const sure = row.tip_banker_prob != null && Number(row.tip_banker_prob) >= 0.95;
+        // The Pick (src/db/pick-rules.js), headed "Tip": the one obvious bet
+        // per game - market, price and OUR calibrated win chance. pickView
+        // admits only real Picks, so rows from before 2026-10-16 (the retired
+        // Banker: O 0.5 at 1.03 and the like) show a dash, never a filler.
+        const p = pickView(row);
+        if (!p) return <span className="text-label-3">-</span>;
+        const pct = `${Math.round(p.cal * 100)}%`;
+        const missed = p.outcome === 'miss';
+        const won = p.outcome === 'hit';
         return (
             <div className={`whitespace-nowrap ${missed ? 'text-miss' : ''}`}
-                title={`${row.tip_banker_market} @ ${row.tip_banker_price}\n`
-                    + `Book's own win probability: ${prob ?? '-'}\n`
-                    + (sure ? 'Clears the Sure Bets bar (>=95%)\n' : '')
-                    + 'Safest market offered - survival, not value'}>
-                {sure ? '\u2b50 ' : ''}
-                <span className={`font-semibold ${missed ? '' : 'text-accent'}`}>{row.tip_banker_market}</span>
-                {prob && <span className={missed ? '' : 'text-label-2'}> · {prob}</span>}
-                {_tick(row.tip_banker_outcome)}
+                title={`${tipMarketLabel(p.market)} @ ${p.price.toFixed(2)}\n`
+                    + `Our calibrated win chance: ${pct}\n`
+                    + 'The most likely market at 1.50+ odds on this game, chosen by our own settled results'}>
+                <span className={`font-semibold ${missed ? '' : won ? 'text-hit' : 'text-accent'}`}>{tipMarketLabel(p.market)}</span>
+                <span className={missed ? '' : 'text-label-2'}> @ {p.price.toFixed(2)} · {pct}</span>
+                {_tick(p.outcome)}
             </div>
         );
     }

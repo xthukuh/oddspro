@@ -12,26 +12,23 @@
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import { buildTipBooks, tipOutcome } from './db/tip-rules.js';
-import { marketMenu, contradicts } from './db/ladder-rules.js';
+import { marketMenu } from './db/ladder-rules.js';
 import { makeCalibrator, cellKey } from './db/leg-calibration.js';
 import {
-    DEFAULT_DAILY_SLIP, DEFAULT_GEN2, selectLadderCards,
-    slipOutcomeRollup, slipStreaks,
+    DEFAULT_GEN2, slipOutcomeRollup, slipStreaks,
 } from './db/daily-slip-rules.js';
 import {
-    DEFAULT_HUNT, makeHuntState, observeHuntLeg, selectHunterPicks, huntDayNum,
+    makeHuntState, observeHuntLeg,
 } from './db/value-hunt.js';
-import { DEFAULT_MODEL, fitGoalModel, modelMarkets } from './db/goal-model.js';
-import { tipMarketLabel } from './db/magic-rules.js';
+import { tipMarketLabel, pickView } from './db/magic-rules.js';
+import { DEFAULT_PICK, selectTopPicks, picksDayScore } from './db/pick-rules.js';
 import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
 import { coverageFor } from './notices.js';
-import { fetchBetpawaBonusConfig } from './betpawa-bonus.js';
-import { BETPAWA_KE_BONUS } from './db/betpawa-bonus-rules.js';
-import { makeSharpCalibrator, selectSharpCard, sharpLegsFromRows } from './db/sharp-rules.js';
+import { makeSharpCalibrator, sharpLegsFromRows } from './db/sharp-rules.js';
 
-export const ALGO_VERSION = 'v2.1-hunter-2026-08-08';   // gen-2 ladder + value-hunt singles (DEFAULT_GEN2 + DEFAULT_HUNT)
+export const ALGO_VERSION = 'v3.0-picks-2026-10-16';   // Top-3 picks: singles at 1.50-2.20 ranked by our calibrated chance
 
 const CALIBRATION_WINDOW_DAYS = 90;
 const SETTLED_WINDOW_CHUNK = 200;   // fixtures per odds_markets fetch - _settledWindow AND buildDailySlip's target load
@@ -93,7 +90,7 @@ async function _settledWindow(beforeDate, windowDays) {
             db.raw("DATE_FORMAT(f.kickoff, '%Y-%m-%d') as day"),
             'l.name as league',
             'th.name as home_name', 'ta.name as away_name');
-    if (!fixtures.length) return { fixtures, menus: new Map(), sharp: new Map() };
+    if (!fixtures.length) return { fixtures, menus: new Map(), sharp: new Map(), preMenus: new Map() };
     const namesById = new Map(fixtures.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
     // Chunked on purpose (2026-08-23). A 90-day window is ~10k settled
     // fixtures and ~7M odds_markets rows; one IN (...) statement over all of
@@ -104,6 +101,7 @@ async function _settledWindow(beforeDate, windowDays) {
     // the output is identical and the peak is one chunk's rows.
     const menus = new Map();
     const sharp = new Map();   // fixture id -> BetPawa sharp legs (pre-kickoff prices only)
+    const preMenus = new Map();   // fixture id -> menu from pre-kickoff prices only (the Pick calibrator feed)
     const kickoffById = new Map(fixtures.map(f => [f.id, new Date(f.kickoff).getTime()]));
     const ids = fixtures.map(f => f.id);
     for (let i = 0; i < ids.length; i += SETTLED_WINDOW_CHUNK) {
@@ -114,17 +112,21 @@ async function _settledWindow(beforeDate, windowDays) {
                 'om.probability', 'om.updated_at');
         const grouped = _menusByFixture(rows, namesById);
         for (const [id, menu] of grouped.menus) menus.set(id, menu);
-        // Sharp legs keep only prices last written BEFORE kickoff: a row
-        // touched in-play carries an in-play probability, which would teach
-        // the residual with hindsight (2.2% of rows, measured 2026-10-15).
+        // Sharp legs and the Pick calibrator keep only prices last written
+        // BEFORE kickoff: a row touched in-play carries an in-play price,
+        // which would teach a calibrator with hindsight (2.2% of rows,
+        // measured 2026-10-15).
+        const preRows = [];
         for (const [id, fRows] of grouped.byFixture) {
             const ko = kickoffById.get(id);
             const pre = fRows.filter(r => new Date(r.updated_at).getTime() < ko);
             const names = namesById.get(id) ?? {};
             sharp.set(id, sharpLegsFromRows(pre, names.homeName, names.awayName));
+            for (const r of pre) preRows.push(r);
         }
+        for (const [id, menu] of _menusByFixture(preRows, namesById).menus) preMenus.set(id, menu);
     }
-    return { fixtures, menus, sharp };
+    return { fixtures, menus, sharp, preMenus };
 }
 
 // Calibration feed: every settled menu leg of the final fixtures inside the
@@ -203,18 +205,6 @@ export async function loadSharpCalibrator(beforeDate, windowDays = CALIBRATION_W
     return cal;
 }
 
-// BetPawa's live Win Bonus config, memoized for 6h; the verified constants
-// stand in whenever the fetch or its schema fails, so a BetPawa outage never
-// blocks the slip and a BetPawa config change needs no code edit.
-let _bonusMemo = { at: 0, cfg: null };
-async function _bonusConfig() {
-    if (Date.now() - _bonusMemo.at < 6 * 3600_000 && _bonusMemo.cfg) return _bonusMemo.cfg;
-    const live = await fetchBetpawaBonusConfig();
-    _bonusMemo = { at: Date.now(), cfg: live ?? BETPAWA_KE_BONUS };
-    if (!live) debugLog('daily-slip: BetPawa bonus config fetch failed, using the pinned constants');
-    return _bonusMemo.cfg;
-}
-
 // Per-provider prices for one canonical market key, from the fixture's raw
 // odds rows (display data for the one-per-provider toggle; the chosen price
 // stays the family-book one the selection was made on).
@@ -233,12 +223,11 @@ function _providerPrices(fixtureRows, marketKey) {
 
 const _pct = p => `${(100 * p).toFixed(1)}%`;
 
-function _reasoning(leg) {
-    const ev = leg.cell
-        ? `calibrated ${_pct(leg.calProb)} from ${leg.cell.n} settled legs in its price/market cell (${leg.cell.hit} hit)`
-        : `no settled evidence in its price/market cell yet, so the book's own ${_pct(leg.calProb)} stands`;
-    return `Safest qualifying pick of this fixture: ${tipMarketLabel(leg.market)} at ${leg.price.toFixed(2)}, `
-        + `${ev}; bookmaker devig says ${_pct(leg.prob)}.`;
+// pick: { market, price, prob (devig), calProb (ours) }.
+function _pickReasoning(pick, rank, of) {
+    return `Pick ${rank} of today's ${of}, ranked by our own win chance: ${tipMarketLabel(pick.market)} at ${pick.price.toFixed(2)}. `
+        + `Our calibrated chance is ${_pct(pick.calProb)}, learned walk-forward from our settled results in its market and price group. `
+        + 'A single stake: one miss never cancels the other picks. At 1.50+ odds no pick wins much more than 65% of the time.';
 }
 
 // Sharp 4x leg fields and wording - ONE definition shared by the builder and
@@ -288,6 +277,16 @@ export function sharpLegRecords(card, cal, fxInfo, cardIndex, extra = {}) {
 // Returns { date, frozen } | { date, slip } | { date, noSlip } | { date, dryRun, row }.
 // dryRun: compute the row exactly as published but never write it (and skip
 // the freeze check, which only guards writes) - for read-only verification.
+//
+// v3 (2026-10-16, owner directive): the card is the day's TOP 3 PICKS - the
+// three games whose Pick (src/db/pick-rules.js, written by the sweep into
+// fixture_predictions just before this step) carries the highest calibrated
+// win chance, every one priced 1.50-2.20. Each pick is a single stake, shown
+// in kickoff order as the day's path; the settle pass scores the day
+// ("2 of 3 won, +0.04u"). The gen-2 ladder, Hunter singles and the Sharp 4x
+// card are no longer built (their modules stay for the history rows and the
+// restore path of scripts/backfill-sharp.js). `opts` passes through to
+// selectTopPicks (e.g. { cardSize }).
 export async function buildDailySlip(date = null, { opts = null, algoVersion = ALGO_VERSION, dryRun = false } = {}) {
     // DATE_FORMAT keeps the day a STRING inside the pinned +03:00 session
     // (the magic.js idiom) - a bare CURDATE() decodes to a JS Date that
@@ -308,179 +307,74 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         }
     }
 
-    // v2.0: LEFT JOIN the tip row - `tip_market IS NOT NULL` is the live
-    // eligibility screen (population parity with the evolve-gen2 replay:
-    // evidence-less fixtures never enter the pick universe) and the tip
-    // market feeds the contradiction guard.
     const targets = await db('fixtures as f')
         .join('leagues as l', 'l.id', 'f.league_id')
         .join('teams as th', 'th.id', 'f.home_team_id')
         .join('teams as ta', 'ta.id', 'f.away_team_id')
-        .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
+        .join('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
         .whereRaw('DATE(f.kickoff) = ?', [slipDate])
         .where('f.kickoff', '>', db.raw('NOW()'))
+        .whereNotNull('fp.tip_banker_cal')
         .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
-        .select('f.id', 'f.kickoff', 'f.home_team_id', 'f.away_team_id', 'f.league_id',
-            'l.name as league', 'th.name as home_name', 'ta.name as away_name', 'fp.tip_market');
+        .select('f.id', 'f.kickoff', 'l.name as league', 'th.name as home_name', 'ta.name as away_name',
+            'fp.tip_banker_market', 'fp.tip_banker_price', 'fp.tip_banker_prob', 'fp.tip_banker_cal');
 
-    const o = { ...DEFAULT_GEN2, ...(opts ?? {}) };
-    let slip = null;
-    const byFixture = new Map();
-    let fxById = new Map();
-    const linksByFixture = new Map();
-    if (targets.length) {
-        fxById = new Map(targets.map(f => [f.id, f]));
-        const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
-        // Chunked for exactly the reason _settledWindow above was chunked on
-        // 2026-08-23 - this was its unchunked twin and it kept failing in
-        // production: one IN (...) over a whole slate joins ~177 odds_markets
-        // rows per match, and the shared live host kills the connection
-        // mid-query ("[warm] magic-sort failed: ... Connection lost", live
-        // stderr 2026-08-30). Chunking by FIXTURE keeps the fold exact - every
-        // row of a fixture lands in exactly one chunk, so merging per-chunk
-        // maps yields byte-identical output - and caps peak memory at one
-        // chunk's rows rather than the whole slate's.
-        const menus = new Map();
-        const targetIds = targets.map(f => f.id);
-        for (let i = 0; i < targetIds.length; i += SETTLED_WINDOW_CHUNK) {
-            const idChunk = targetIds.slice(i, i + SETTLED_WINDOW_CHUNK);
-            const oddsRows = await db('odds_markets as om')
-                .join('matches as m', 'm.id', 'om.match_id')
-                .whereIn('m.fixture_id', idChunk)
-                .where('om.is_stale', 0)
-                .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price',
-                    'om.probability');
-            const grouped = _menusByFixture(oddsRows, namesById);
-            for (const [id, menu] of grouped.menus) menus.set(id, menu);
-            for (const [id, rows] of grouped.byFixture) byFixture.set(id, rows);
-            // Per-provider match links for legs whose markets are still live
-            // (completed matches excluded at capture; the client additionally
-            // hides links once a leg settles). Chunked on the same ids so a
-            // wide slate never builds one oversized IN (...) here either.
-            const linkRows = await db('matches')
-                .whereIn('fixture_id', idChunk)
-                .whereNull('completed_at')
-                .select('fixture_id', 'provider', 'match_url');
-            for (const r of linkRows) {
-                if (!r.match_url) continue;
-                let m = linksByFixture.get(r.fixture_id);
-                if (!m) linksByFixture.set(r.fixture_id, m = {});
-                m[r.provider] = r.match_url;
-            }
-        }
-        const window = await _settledWindow(slipDate, CALIBRATION_WINDOW_DAYS);
-        const cal = await loadCalibrator(slipDate, CALIBRATION_WINDOW_DAYS, window);
-        // v2.0 ladder: tier cards (anchor 1.5x / double 2x / top-3 >=1.5 /
-        // EV-gated grand 5x) from the gen-2 baked config - coherent by
-        // construction (one leg per fixture per card, no cross-card or
-        // tip contradictions), eligible fixtures only.
-        const rows = targets.map(f => ({
-            id: f.id, league: f.league,
-            menuLegs: menus.get(f.id) ?? [],
-            eligible: f.tip_market != null,
-            tipMarket: f.tip_market ?? null,
-        }));
-        const ladder = selectLadderCards(rows, cal, o);
-        // v2.1 Hunter singles (value-hunt.js): high-odds EV picks scored by
-        // the Dixon-Coles model + hunt cells + streak weapons; SINGLES, not
-        // a parlay - the settle keeps them out of the parlay rollups.
-        const huntState = await loadHuntState(slipDate, CALIBRATION_WINDOW_DAYS, window);
-        const history = await db('fixtures')
-            .whereIn('status', FINAL_STATUSES).whereNotNull('ft_home')
-            .select('home_team_id', 'away_team_id', 'ft_home', 'ft_away', 'kickoff', 'league_id');
-        const model = fitGoalModel(history, Date.parse(`${slipDate}T00:00:00+03:00`), DEFAULT_MODEL);
-        const usedFixtures = new Set(ladder.flatMap(c => c.legs.map(l => l.fixture)));
-        const huntRows = rows.map(r => ({
-            ...r,
-            fx: { impliedOver: r.menuLegs.find(l => l.market === 'O 2.5')?.prob ?? null },
-            modelProbs: (() => {
-                const f = fxById.get(r.id);
-                try { return modelMarkets(model, f.home_team_id, f.away_team_id, f.league_id); } catch { return null; }
-            })(),
-        }));
-        const hunters = selectHunterPicks(huntRows, huntState, huntDayNum(slipDate), DEFAULT_HUNT, usedFixtures);
-        // Sharp 4x (2026-10-15): one BetPawa slip, exactly 3 legs, >= 4x,
-        // priced with BetPawa's own Win Bonus. A leg may share a fixture with
-        // another card but never contradicts that fixture's tip or any leg
-        // already taken on it.
-        const sharpCal = await loadSharpCalibrator(slipDate, CALIBRATION_WINDOW_DAYS, window);
-        const takenByFixture = new Map();
-        const _take = (fixture, market) => {
-            const a = takenByFixture.get(fixture) ?? []; a.push(market); takenByFixture.set(fixture, a);
+    const games = targets.map(f => {
+        const v = pickView(f);
+        return {
+            id: f.id, kickoff: f.kickoff instanceof Date ? f.kickoff.toISOString() : f.kickoff, f,
+            pick: v ? { market: v.market, price: v.price, prob: v.prob, calProb: v.cal } : null,
         };
-        for (const c of ladder) for (const l of c.legs) _take(l.fixture, l.market);
-        for (const h of hunters) _take(h.fixture, h.market);
-        const sharpRows = targets.map(f => {
-            const block = [...(takenByFixture.get(f.id) ?? []), ...(f.tip_market ? [f.tip_market] : [])];
-            return {
-                id: f.id, league: f.league,
-                legs: sharpLegsFromRows(byFixture.get(f.id), f.home_name, f.away_name)
-                    .filter(l => !block.some(m => contradicts(m, l.market))),
-            };
-        });
-        const sharp = selectSharpCard(sharpRows, sharpCal, {}, await _bonusConfig());
-        const taken = [
-            ...ladder.flatMap((card, i) =>
-                card.legs.map(l => ({ ...l, id: l.fixture, card: i, kind: card.tier, tierLabel: card.label }))),
-            ...hunters.map(h => ({
-                market: h.market, price: h.price, prob: h.prob, calProb: h.p, cell: null,
-                fixture: h.fixture, league: h.league, id: h.fixture,
-                card: ladder.length, kind: 'hunter', tierLabel: 'Hunter singles',
-                huntEv: h.ev, huntBand: h.band,
-            })),
-            ...(sharp ? sharp.legs.map(l => ({
-                market: l.market, price: l.price, prob: l.q, calProb: l.P, cell: sharpCal.cell(l),
-                fixture: l.fixture, league: fxById.get(l.fixture)?.league ?? null, id: l.fixture,
-                card: ladder.length + (hunters.length ? 1 : 0), kind: 'sharp', tierLabel: 'Sharp 4x (BetPawa)',
-                sharp: {
-                    slipOdds: sharp.slipOdds, totalOdds: sharp.totalOdds, bonusPct: sharp.bonus.pct,
-                    predProb: sharp.predProb, bookProb: sharp.bookProb,
-                },
-            })) : []),
-        ];
-        const anchor = ladder.find(x => x.tier === 'anchor');
-        slip = (ladder.length || hunters.length || sharp) ? {
-            legs: taken, cards: ladder.length + (hunters.length ? 1 : 0) + (sharp ? 1 : 0),
-            // Headline combined odds = the ANCHOR card (the 1.5x-floor rung
-            // whose strict result is the day verdict); other tiers carry
-            // their own products in the cards view.
-            combinedOdds: (anchor ?? ladder[0])?.product ?? 1,
-            // Display mood from ladder completeness: all four rungs = green,
-            // an anchor plus company = amber, anything else = red-ish thin.
-            mood: ladder.length >= 3 && anchor ? 'green' : (anchor ? 'amber' : 'red'),
-        } : null;
+    });
+    const top = selectTopPicks(games, { ...DEFAULT_PICK, ...(opts ?? {}) });
+
+    // Display data for the chosen games only: per-provider prices (the "all
+    // bookmakers" toggle) and live match links (completed matches excluded).
+    const ids = top.map(g => g.id);
+    const oddsRows = ids.length ? await db('odds_markets as om')
+        .join('matches as m', 'm.id', 'om.match_id')
+        .whereIn('m.fixture_id', ids)
+        .where('om.is_stale', 0)
+        .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price') : [];
+    const rowsByFixture = new Map();
+    for (const r of oddsRows) {
+        let list = rowsByFixture.get(r.fixture_id);
+        if (!list) rowsByFixture.set(r.fixture_id, list = []);
+        list.push(r);
+    }
+    const linksByFixture = new Map();
+    const linkRows = ids.length ? await db('matches').whereIn('fixture_id', ids).whereNull('completed_at')
+        .select('fixture_id', 'provider', 'match_url') : [];
+    for (const r of linkRows) {
+        if (!r.match_url) continue;
+        let m = linksByFixture.get(r.fixture_id);
+        if (!m) linksByFixture.set(r.fixture_id, m = {});
+        m[r.provider] = r.match_url;
     }
 
-    const row = slip ? {
+    const size = { ...DEFAULT_PICK, ...(opts ?? {}) }.cardSize;
+    const row = top.length ? {
         slip_date: slipDate,
         status: 'published',
-        mood: slip.mood,
-        legs: JSON.stringify(slip.legs.map(l => {
-            const f = fxById.get(l.id);
-            return {
-                fixture_id: l.id,
-                home: f.home_name, away: f.away_name, league: l.league,
-                kickoff: f.kickoff instanceof Date ? f.kickoff.toISOString() : f.kickoff,
-                market: l.market, label: tipMarketLabel(l.market),
-                price: l.price, prices: _providerPrices(byFixture.get(l.id), l.market),
-                links: linksByFixture.get(l.id) ?? {},
-                prob: l.prob, cal_prob: l.calProb, cell: l.cell, cell_key: cellKey(l),
-                card: l.card ?? 0,
-                kind: l.kind ?? 'safe',
-                tier_label: l.tierLabel ?? null,
-                ...(l.kind === 'hunter' ? { hunt_ev: +l.huntEv.toFixed(3), hunt_band: l.huntBand } : {}),
-                ...(l.kind === 'sharp' ? _sharpExtras(l) : {}),
-                reasoning: l.kind === 'sharp'
-                    ? _sharpReasoning(l)
-                    : l.kind === 'hunter'
-                    ? `Hunter single (${l.huntBand} band): ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)} - model+cells estimate ${_pct(l.calProb)} win chance vs the book's ${_pct(l.prob)}, claimed edge ${(100 * l.huntEv).toFixed(0)}%. A single stake, not a parlay leg; replay record: mid band +24.9% ROI over 37 days, high band positive but volatile.`
-                    : _reasoning(l),
-                outcome: null,
-            };
-        })),
-        combined_odds: Math.round(slip.combinedOdds * 100) / 100,
-        legs_total: slip.legs.length,
-        cards_total: slip.cards,
+        mood: top.length >= size ? 'green' : 'amber',
+        legs: JSON.stringify(top.map((g, i) => ({
+            fixture_id: g.id,
+            home: g.f.home_name, away: g.f.away_name, league: g.f.league,
+            kickoff: g.kickoff,
+            market: g.pick.market, label: tipMarketLabel(g.pick.market),
+            price: g.pick.price, prices: _providerPrices(rowsByFixture.get(g.id), g.pick.market),
+            links: linksByFixture.get(g.id) ?? {},
+            prob: g.pick.prob, cal_prob: g.pick.calProb, cell_key: cellKey(g.pick),
+            card: i,
+            kind: 'pick',
+            tier_label: 'Top picks',
+            reasoning: _pickReasoning(g.pick, i + 1, top.length),
+            outcome: null,
+        }))),
+        // Singles, not a parlay: no combined price is offered.
+        combined_odds: null,
+        legs_total: top.length,
+        cards_total: top.length,
         algo_version: algoVersion,
         backfilled: false,
         computed_at: db.fn.now(),
@@ -504,11 +398,8 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
     await db('daily_slips').insert(row).onConflict('slip_date')
         .merge(['status', 'mood', 'legs', 'combined_odds', 'legs_total', 'cards_total', 'algo_version', 'computed_at']);
 
-    if (!slip) return { date: slipDate, noSlip: true, fixtures: targets.length };
-    return {
-        date: slipDate,
-        slip: { mood: slip.mood, legs: slip.legs.length, combined_odds: row.combined_odds },
-    };
+    if (!top.length) return { date: slipDate, noSlip: true, fixtures: targets.length };
+    return { date: slipDate, slip: { mood: row.mood, legs: top.length, combined_odds: null } };
 }
 
 // Settle pending slips from canonical final scores. Cheap (SQL + pure
@@ -576,6 +467,16 @@ export async function settleDailySlips() {
         // flagship 1.5x rung keeps the green-streak meaning); pre-v2 rows
         // fall back to the old safe-arm rule, and legacy/backfilled legs
         // carry no kind and all count. Other tiers ride cards_won only.
+        // v3 Top-3 picks: singles, so the day is SCORED (picksDayScore) - won
+        // when the settled picks made money, with the per-pick record in
+        // legs_hit/cards_won - instead of rolled up as one parlay.
+        if (r.legs.some(l => l.kind === 'pick')) {
+            const score = picksDayScore(r.legs);
+            const patch = { legs: JSON.stringify(r.legs), legs_hit: score.won, cards_won: score.won };
+            if (r.outcome == null && score.outcome != null) { patch.outcome = score.outcome; patch.settled_at = db.fn.now(); settled++; }
+            await db('daily_slips').where('id', r.id).update(patch);
+            continue;
+        }
         const anchorLegs = r.legs.filter(l => l.kind === 'anchor');
         const safeLegs = anchorLegs.length ? anchorLegs : r.legs.filter(l => l.kind !== 'value' && l.kind !== 'sharp');
         const roll = slipOutcomeRollup((safeLegs.length ? safeLegs : r.legs).map(l => l.outcome ?? null));

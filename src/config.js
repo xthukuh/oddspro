@@ -2,7 +2,6 @@ import 'dotenv/config';
 import { z } from 'zod';
 import { DEFAULT_THRESHOLDS, LINE_THRESHOLDS, parseLinesCsv } from './db/goals-rules.js'; // zero-import module - no cycle
 import { DEFAULT_TIP } from './db/tip-rules.js';
-import { DEFAULT_LADDER } from './db/ladder-rules.js'; // pure; imports tip-rules only, no cycle
 import { DEFAULT_SAFE, STRATEGIES } from './db/magic-rules.js'; // imports only perf-rules - no cycle
 import { shouldMigrateOnBoot } from './db/migrate-rules.js'; // zero-import module - no cycle
 import { DEFAULT_ODDS_TIERS } from './db/odds-refresh-rules.js'; // zero-import module - no cycle
@@ -60,11 +59,6 @@ const EnvSchema = z.object({
     TIP_MIN_PRICE: z.coerce.number().min(1).default(DEFAULT_TIP.minPrice),
     TIP_MIN_CONFIDENCE: z.coerce.number().min(0).max(1).default(DEFAULT_TIP.minConfidence),
     TIP_MIN_UNDER_LINE: z.coerce.number().min(0).default(DEFAULT_TIP.minUnderLine),
-    // Banker floor: the SAFETY product's own price floor, deliberately far below
-    // TIP_MIN_PRICE. The two express different things - "worth betting" vs
-    // "safe" - and collapsing them into one number is exactly what caused the
-    // adverse selection the 2026-07-26 study found. See src/db/ladder-rules.js.
-    TIP_BANKER_FLOOR: z.coerce.number().min(1).default(DEFAULT_LADDER.bankerFloor),
     // Book-integrity guards (M3): family-book overround band + cross-provider
     // devigged-probability divergence veto (see src/db/tip-rules.js)
     TIP_MIN_OVERROUND: z.coerce.number().default(DEFAULT_TIP.minOverround),

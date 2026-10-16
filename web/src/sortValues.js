@@ -5,6 +5,8 @@
 // sortValue(row, col) -> number | string | null. A null always sorts last
 // regardless of direction: missing data never tops a ranking.
 
+import { isPick } from '../../src/db/pick-rules.js';
+
 // "WWDLW" -> league form points (W=3, D=1)
 function _formPoints(v) {
     if (typeof v !== 'string' || !v) return null;
@@ -67,10 +69,11 @@ const VALUES = {
     // the % the tip cell displays - a filter-only field (no hot bonus, no table
     // column) so users can screen by "win % ≥ 70".
     tip_confidence: r => (r.tip_confidence == null ? null : Math.round(Number(r.tip_confidence) * 100)),
-    // Banker sorts on the book's own devigged probability - the number the cell
-    // shows and the number the selection ranks by, so all three agree. Tipless
-    // rows sink; there is no hot bonus because the banker has no hot concept.
-    banker: r => (r.tip_banker_prob == null ? null : Number(r.tip_banker_prob)),
+    // The Pick (column 'Tip') sorts on OUR calibrated win chance - the number
+    // the cell shows and the number Top picks rank by, so all three agree.
+    // Rows without a real Pick (incl. the retired pre-2026-10-16 Banker) sink.
+    banker: r => (r.tip_banker_cal != null && isPick(r.tip_banker_market, r.tip_banker_price)
+        ? Number(r.tip_banker_cal) : null),
     banker_price: r => (r.tip_banker_price == null ? null : Number(r.tip_banker_price)),
     status: r => _str(r.status),
     updated_at: r => _date(r.updated_at),

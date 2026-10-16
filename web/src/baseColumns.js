@@ -11,7 +11,10 @@ export const BASE_COLUMNS = [
     { key: 'fixture', label: 'Fixture' },
     { key: 'provider', label: 'Provider' },
     { key: 'score', label: 'Score' },
-    { key: 'tip', label: 'Tip' },
-    { key: 'banker', label: 'Banker' },
+    // The Pick leads (2026-10-16): one obvious tip per game at 1.50+ odds,
+    // chosen by our calibration. Its key stays 'banker' so saved filters and
+    // sort chains keep working; the stats-blend tip follows as 'Stats tip'.
+    { key: 'banker', label: 'Tip' },
+    { key: 'tip', label: 'Stats tip' },
     { key: 'status', label: 'Status' },
 ];

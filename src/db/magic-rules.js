@@ -19,6 +19,7 @@
 // toggle. Thresholds in DEFAULT_SAFE, re-tuned via scripts/analyze-safe-tips.js.
 import { confidenceBand, marketGroup } from './perf-rules.js';
 import { cellKey } from './leg-calibration.js';
+import { isPick } from './pick-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0; // + 0 normalizes -0
 
@@ -64,8 +65,20 @@ export function bankerView(r) {
         market: r.tip_banker_market,
         price: _num(r.tip_banker_price),
         prob: _num(r.tip_banker_prob),
+        cal: _num(r.tip_banker_cal),
         outcome: r.tip_banker_outcome ?? null,
     };
+}
+
+// The Pick view (2026-10-16, src/db/pick-rules.js): the same columns, admitted
+// only when they hold a real Pick - priced 1.50-2.20, not DNB, carrying our
+// calibrated chance. Rows written before the switch hold the retired Banker
+// (O 0.5 at 1.03 and the like) and read as "no pick" on every product
+// surface; bankerView above stays the raw view for history and analysis.
+export function pickView(r) {
+    const b = bankerView(r);
+    if (!b || b.cal == null || !isPick(b.market, b.price)) return null;
+    return b;
 }
 
 // Price band label - boundaries bracket the observed tip price distribution
@@ -185,13 +198,13 @@ export function legCellProb(market, price, devig, legCells) {
     return _round((c.hit + k * base) / (c.n + k));
 }
 
-// The banker leg's calibrated survival probability for one records/ledger row.
-// Shared by the 'banker' strategy and sureBetsSelection so the number the UI
-// ranks by is the number it displays.
-export function bankerProb(row, cal) {
-    const b = bankerView(row);
-    if (!b || b.price == null) return null;
-    return legCellProb(b.market, b.price, b.prob, cal?.leg_cells);
+// The Pick's calibrated win chance for one records/ledger row: the number the
+// sweep chose it by (tip_banker_cal), never re-derived here. Shared by the
+// 'banker' strategy and sureBetsSelection so the number the UI ranks by is the
+// number it displays. Null for a row without a Pick. `cal` is unused since
+// 2026-10-16 (kept so existing callers stay valid).
+export function bankerProb(row, cal) {   // eslint-disable-line no-unused-vars
+    return pickView(row)?.cal ?? null;
 }
 
 // Betslip-playground survival input: the tip's calibrated win probability,
@@ -222,14 +235,12 @@ export function estimateLegProb(tip, cal) {
 // reuses tipView (chosen) + the runners_up carried in tip_breakdown.
 export function legPicks(r, cal) {
     const chosen = tipView(r);
-    const banker = bankerView(r);
-    // The banker is offered as a leg option even with no tip on the row - a
-    // stats-vetoed fixture still has a perfectly good safe bet on it.
-    const bankerPick = banker && banker.price != null
-        // Its prob is the DEVIGGED book probability, which needs no calibration
-        // bucket: it is already the market's own answer, and the whole point of
-        // the banker is that our stats add nothing to a price this short.
-        ? [{ market: banker.market, price: banker.price, prob: banker.prob, kind: 'banker' }]
+    const banker = pickView(r);
+    // The Pick is offered as a leg option even with no stats tip on the row -
+    // a stats-vetoed fixture still has its Pick. Its prob is OUR calibrated
+    // chance, the number the table shows beside it.
+    const bankerPick = banker
+        ? [{ market: banker.market, price: banker.price, prob: banker.cal, kind: 'banker' }]
         : [];
     if (!chosen) return bankerPick;
     const picks = [{ market: chosen.market, price: chosen.price, prob: estimateLegProb(chosen, cal), kind: 'tip' }];
@@ -417,11 +428,12 @@ export const STRATEGIES = [
     // scorers stay exported for replay/analysis and remain API-callable).
     {
         id: 'banker',
-        label: 'Banker (safest first)',
-        // The DEFAULT sort and the same ordering family the Daily MultiBet
-        // uses: the row's safest offered leg by CALIBRATED survival. rowScore
-        // sees the full row, so a stats-vetoed fixture with no tip still
-        // ranks by its banker instead of sinking.
+        label: 'Tip (most likely first)',
+        // The DEFAULT sort and the same ordering the Daily MultiBet uses: the
+        // row's Pick (1.50+ odds) by OUR calibrated win chance. rowScore sees
+        // the full row, so a stats-vetoed fixture with no stats tip still
+        // ranks by its Pick instead of sinking. The id stays 'banker' so
+        // stored sort chains keep working.
         rowScore: (row, cal) => {
             const p = bankerProb(row, cal);
             if (p != null) return p;
@@ -648,17 +660,12 @@ export function sureBetsSelection(rows, cal, opts = DEFAULT_SURE_BETS) {
         // banker carries no blend (see bankerSelection's rationale below).
         // Rows without a banker keep the legacy tip path + gates, so the
         // feature degrades gracefully on pre-banker data.
-        const b = bankerView(r);
-        let prob = null, market = null, price = null, kind = null;
-        if (b && b.price != null) {
-            prob = bankerProb(r, cal);
-            market = b.market; price = b.price; kind = 'banker';
-        } else if (safeQualifies(r, o, cal)) {
-            const t = tipView(r);
-            prob = estimateLegProb(t, cal);
-            market = t?.market ?? null; price = t?.price ?? null; kind = 'tip';
-        }
-        if (prob == null) continue;
+        // 2026-10-16: Sure Bets = the day's Picks (pickView) by our calibrated
+        // chance, every one at 1.50+ odds. The old stats-tip fallback is gone:
+        // it admitted 1.35-1.49 tips, below the owner's 1.50 floor.
+        const b = pickView(r);
+        if (!b) continue;
+        const prob = b.cal, market = b.market, price = b.price, kind = 'banker';
         const day = _dayKey(r);
         let list = byDay.get(day);
         if (!list) byDay.set(day, list = []);

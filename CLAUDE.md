@@ -137,6 +137,8 @@ node scripts/hotfix-remote.js <file...> [--from <dir>] [--restart] [--dry-run]
                                     # remote-backs-up each file (cp -n <file>.orig-<stamp>), uploads, node
                                     # --check's .js/.mjs/.cjs (auto-restores + dies on a syntax error),
                                     # prints the rollback command; --restart touches tmp/restart.txt
+node scripts/replay-picks.js        # read-only walk-forward replay of the Pick + Top-3 picks card over
+                                    # tmp/sharp/fx.ndjson (chapter 05 "The Pick"); must print `below 1.50: 0`
 node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seconds): anchoring effect,
                                     # AI-market dissent, dissent calibration over fixture_ai_insights
 
@@ -212,7 +214,8 @@ client and server cannot drift.
 
 - `src/db/magic-rules.js` - calibration, the legacy 11 strategies and the v2 `banker`/`target`/`value` menu, `magicSortRows`, the safe pool, sure bets, `tipMarketLabel`. Shared VERBATIM with the web.
 - `src/magic.js` - the thin knex loader behind `GET /api/magic-sort` (`settledTipRows`, the resolved `safe` policy, the per-day memo).
-- `src/daily-slip.js` - the Daily MultiBet builder (`buildDailySlip`) and the walk-forward leg-cell calibrator (`loadCalibrator`).
+- `src/db/pick-rules.js` + `src/picks.js` - the Pick (one obvious tip per game, 1.50-2.20, the residual-calibrated most likely market; stored in `tip_banker_*` since 2026-10-16), its walk-forward calibrator cached daily in `meta.pick_cells`, the Top-3 picks selection and the day score. Replay: `scripts/replay-picks.js`.
+- `src/daily-slip.js` - the Daily MultiBet builder (`buildDailySlip` v3: the day's top 3 Picks as singles, scored per day) and the walk-forward leg-cell calibrator (`loadCalibrator`, still behind `/api/magic-sort`'s `leg_cells`).
 - `src/db/mine-rules.js` + `scripts/mine-patterns.js` - the read-only pattern mine, its anti-false-positive controls and its closed class vocabulary.
 
 **AI layers** (detail: `docs/engine/06-AI.md`)

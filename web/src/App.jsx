@@ -14,7 +14,7 @@ import { availableColumnKeys } from './columns.js';
 import { recordsCacheKey, makeLruCache } from './recordsCache.js';
 import { hydrateRecordsCache, persistRecordsCache } from './recordsPersist.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, sanitizeFilters, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
-import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS } from '../../src/db/magic-rules.js';
+import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS, STRATEGIES } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
 import { buildRecordCsv } from './exportCsv.js';
 import BetslipPlayground, { seedSlip } from './components/BetslipPlayground.jsx';
@@ -1019,7 +1019,7 @@ export default function App() {
 
     // Human label for a chain entry (pills + settings drag list)
     const entryLabel = useCallback(e => {
-        if (e.type === 'magic') return `✨ ${magicData?.strategies.find(s => s.id === e.id)?.label ?? e.id}`;
+        if (e.type === 'magic') return `✨ ${magicData?.strategies.find(s => s.id === e.id)?.label ?? STRATEGIES.find(s => s.id === e.id)?.label ?? e.id}`;
         const base = BASE_COLUMNS.find(c => c.key === e.key);
         if (base) return base.label;
         const stat = catalog?.stats.find(c => c.key === e.key);
@@ -1108,7 +1108,7 @@ export default function App() {
     const seedTopSlip = () => {
         if (!surePicks.length) return;
         track(EV.BETSLIP_BUILD, Math.min(surePicks.length, DEFAULT_SURE_BETS.slipSize));
-        seedSlip(surePicks.slice(0, DEFAULT_SURE_BETS.slipSize), date || 'all', 'Sure top-3');
+        seedSlip(surePicks.slice(0, DEFAULT_SURE_BETS.slipSize), date || 'all', 'Top picks');
         setShowMagic(false);
         openSlips();
     };

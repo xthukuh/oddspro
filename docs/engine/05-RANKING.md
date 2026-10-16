@@ -80,7 +80,7 @@ The UI strategy menu is now the calibration trio, filtered into the payload by `
 
 | id | Scores by |
 |---|---|
-| `banker` | **default sort** - the row's safest offered leg by CALIBRATED survival (`bankerProb`/`legCellProb`), scored through `rowScore` so a tipless-but-bankered row ranks instead of sinking |
+| `banker` | **default sort**, labelled "Tip (most likely first)" since 2026-10-16 - the row's Pick by OUR calibrated win chance (`bankerProb` = `tip_banker_cal` through `pickView`), scored through `rowScore` so a row with a Pick but no stats tip ranks instead of sinking. The id stays `banker` so stored sort chains keep working |
 | `target` | efficiency: survival cost per unit of log-odds - the odds-bearing arm |
 | `value` | calibrated edge `p × price − 1` - an ordering signal, NOT an EV claim |
 
@@ -89,10 +89,64 @@ The legacy 11 stay exported, replayable and API-callable; they simply leave the 
 `calibration.leg_cells` (the `loadCalibrator` export, about 77 cells - the layer the
 2026-08-06 daily-slip grids proved load-bearing), so client and server score off ONE layer,
 and `estimateLegProb` prefers a leg cell with n >= 30 over the tip-bucket posterior.
-**Sure Bets are now banker top-N** on calibrated `bankerProb`; `safeQualifies` survives only
-as the no-banker fallback path.
+**Sure Bets (shown as "Top picks" since 2026-10-16) are the day's Picks** ranked by
+`tip_banker_cal`; the old stats-tip fallback through `safeQualifies` was removed with the
+switch, because it admitted 1.35-1.49 tips below the 1.50 floor.
 
-## Daily MultiBet: the GEN-2 value ladder (2026-08-08)
+## The Pick and the Top-3 picks card (2026-10-16, current)
+
+Owner directive 2026-10-16: tips must be obvious, priced at 1.50 or more, never an Over 0.5
+filler, chosen by our own data and computations (no bookmaker bonus, no tax modelling), and
+the daily card must stop reading "Lost" while showing its winning path.
+
+**What it replaced.** The Banker was the shortest price on the board (floor 1.01). Over
+28,843 settled fixtures (2026-07-02..10-15) it hit 90.6% at -4.1% flat ROI, but O 0.5 was
+30% of all Bankers at an average 1.03 and it carried no information of ours. The old Daily
+MultiBet tiers lost most days by construction: Hunter 4 won / 44 lost, top-3 11/26, Sharp
+5 of 14 backfilled days.
+
+**The Pick** (`src/db/pick-rules.js`, written by `hotpicks.js` into `tip_banker_market`/
+`_price`/`_prob` plus the new `tip_banker_cal`, migration 20261016000001): per game, among
+markets priced 1.50-2.20 and not Draw No Bet, the one with the highest calibrated win
+chance. Calibration is the **residual** form, walk-forward over 90 days of pre-kickoff
+prices (`src/picks.js`, cells cached once a day in `meta.pick_cells`):
+
+    P(leg) = clamp(devig + sum(hit - devig) / (n + 300), 0.005, 0.995)   per group|band cell
+
+The shared leg-cell calibrator was tried first and rejected for this job: it replaces a
+leg's number with its cell's average, so inside the wide 1.60-2.20 band a 2.15 leg rates like
+a 1.61 leg, the Pick drifts to the longest price and over-claims (claimed 60.5%, realized
+57.4%). The residual form keeps each leg's own price information.
+
+**Top-3 picks** (`buildDailySlip` v3, `ALGO_VERSION v3.0-picks-2026-10-16`): the day's
+three games with the highest `tip_banker_cal`, read from the stored Picks so the card always
+equals the table. Each is a single stake (`kind: 'pick'`, one card index each), shown in
+kickoff order. The settle pass scores the day with `picksDayScore`: units = sum of
+(price - 1) per hit and -1 per miss; the day is `won` when units > 0. `legs_hit` and
+`cards_won` carry the pick record.
+
+**Measured** (`node scripts/replay-picks.js`, the production functions over the local
+settled extract, train 2026-07-16..09-13 / untouched test 09-14..10-15):
+
+| | train (60 days) | test (32 days) |
+|---|---|---|
+| every game's Pick: hit / claimed | 59.4% / 59.4% | 59.4% / 59.2% |
+| every game's Pick: avg price, flat ROI | 1.58, -6.3% | 1.58, -6.4% |
+| Top 3: picks hit | 59.4% | 63.5% |
+| Top 3: days with 2+ of 3 won | 61.7% | 65.6% |
+| Top 3: days in profit | 50.0% | 65.6% |
+| picks below 1.50 | 0 | 0 |
+
+Honest reading: a 1.50+ price caps a single pick near 65%, so the card can never be
+guaranteed, and flat ROI stays negative (no positive-EV market is established on our books).
+What changed is what the user sees: one obvious tip per game, a score per day instead of a
+verdict word, and the path of which picks won. Not modelled in the replay: the live
+`errorBoost`.
+
+The GEN-2 ladder, Hunter singles and the Sharp 4x card below are **no longer built**; their
+sections stay as the record of what the historical `daily_slips` rows contain.
+
+## Daily MultiBet: the GEN-2 value ladder (2026-08-08, retired 2026-10-16)
 
 `buildDailySlip` v2.0 ships four tier cards per day: the **anchor** at 1.5x (the day
 verdict), a **double** at 2x, a **top-3** card whose legs are each >= 1.5 odds, and an
@@ -110,7 +164,12 @@ Two same-session fixes belong with it: the daily-slip settle pass no longer keep
 legs on a day that is already decided, and a fixture that dies is voided after 7 days; the
 magic-sort memo is warmed at boot, which removed a 25s stall on the first hit.
 
-## Sharp 4x: the BetPawa Win Bonus card (2026-10-15)
+## Sharp 4x: the BetPawa Win Bonus card (2026-10-15, retired 2026-10-16)
+
+Retired the day after it shipped by owner directive ("we only trust our data and
+computations"): the card was built on BetPawa's own probability and its Win Bonus. Its
+14-day live backfill stays in `daily_slips`; `scripts/backfill-sharp.js --restore <file>`
+remains the undo path.
 
 One extra card on the daily slip: **one BetPawa slip of exactly 3 legs, each priced
 1.30-2.00, combined odds >= 4, priced with BetPawa's own Win Bonus**

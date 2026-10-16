@@ -23,9 +23,9 @@ const EXTRA_BASE_LABELS = {
     hot_score: 'Over 2.5 score',
     // Client-only derived filter field: the chosen tip's confidence as an
     // integer win % (0-100). Not a table column - filterable only.
-    tip_confidence: 'Tip confidence %',
-    banker: 'Banker win probability',
-    banker_price: 'Banker price',
+    tip_confidence: 'Stats tip confidence %',
+    banker: 'Tip win chance',
+    banker_price: 'Tip price',
     // Filterable data fields that are no longer their own TABLE column (id folds
     // into Start; updated/locked fold into the Status tooltip; goals folds into
     // Score) but stay queryable.
