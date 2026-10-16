@@ -329,7 +329,10 @@ test('a vetoed tip scores and ranks exactly like a confirmed one (veto is not ac
         assert.equal(scoreTip(vetoed, s.id, cal), scoreTip(confirmed, s.id, cal),
             `strategy ${s.id} must ignore the AI veto`);
         // Pin the value, not just the equality - both sides null would also
-        // satisfy the assertion above.
+        // satisfy the assertion above. 'banker' (the Tip sort) scores only
+        // rows carrying a Pick since 2026-10-16; this row has a stats tip
+        // only, so it sinks by design.
+        if (s.id === 'banker') continue;
         assert.notEqual(scoreTip(confirmed, s.id, cal), null, `strategy ${s.id} must score the confirmed tip`);
     }
 });
