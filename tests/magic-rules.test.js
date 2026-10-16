@@ -10,6 +10,7 @@ import {
     safePrior, WAREHOUSE_WLO, SAFE_TIERS, hasSufficientStats, tipMarketLabel,
     sureBetsSelection, DEFAULT_SURE_BETS,
     bankerView, bankerSelection, DEFAULT_BANKERS, BANKER_TIERS, hotTip, DEFAULT_HOT_TIP,
+    pickView, bankerProb,
 } from '../src/db/magic-rules.js';
 
 const _round = v => Math.round(v * 10000) / 10000 + 0;
@@ -467,73 +468,61 @@ test('safeSelection passes its calibration through to the maturity floor', () =>
     assert.deepEqual(safeSelection(rows, matureCal).map(r => r.api_id), [1, 2]);
 });
 
-// --- sureBetsSelection (daily top-10 safe list, 2026-07-17 spec) ---
+// --- sureBetsSelection (2026-10-16: the day's Picks by our calibrated chance) ---
 
-test('sureBetsSelection ranks by calibrated leg prob desc and carries the prob', () => {
-    const rows = [
-        safe({ api_id: 1, tip_confidence: 0.70 }),
-        safe({ api_id: 2, tip_confidence: 0.78 }),
-        safe({ api_id: 3, tip_confidence: 0.74 }),
-    ];
-    const picks = sureBetsSelection(rows, null);
+const pickRow = (api_id, cal, extra = {}) => ({
+    api_id, day: '2026-07-01', tip_banker_market: '1', tip_banker_price: 1.6,
+    tip_banker_prob: 0.6, tip_banker_cal: cal, ...extra,
+});
+
+test('sureBetsSelection ranks Picks by our calibrated chance and carries it', () => {
+    const picks = sureBetsSelection([pickRow(1, 0.61), pickRow(2, 0.66), pickRow(3, 0.63)], null);
     assert.deepEqual(picks.map(e => e.row.api_id), [2, 3, 1]);
-    // prob IS estimateLegProb's number (cal-less fallback = blend confidence)
-    assert.deepEqual(picks.map(e => e.prob), [0.78, 0.74, 0.7]);
+    assert.deepEqual(picks.map(e => e.prob), [0.66, 0.63, 0.61]);
+    assert.ok(picks.every(e => e.kind === 'banker' && e.price >= 1.5));
 });
 
 test('sureBetsSelection caps at maxPerDay (10) and shows what exists unpadded', () => {
-    const twelve = Array.from({ length: 12 }, (_, i) => safe({ api_id: i + 1, tip_confidence: 0.6 + i * 0.01 }));
+    const twelve = Array.from({ length: 12 }, (_, i) => pickRow(i + 1, 0.55 + i * 0.01));
     assert.equal(sureBetsSelection(twelve, null).length, DEFAULT_SURE_BETS.maxPerDay);
-    // thin day: 4 qualifiers -> 4 entries, no padding
     assert.equal(sureBetsSelection(twelve.slice(0, 4), null).length, 4);
-    // empty pool -> [] (also for non-array input)
     assert.deepEqual(sureBetsSelection([], null), []);
     assert.deepEqual(sureBetsSelection(null, null), []);
 });
 
 test('sureBetsSelection dedups one entry per canonical fixture, first row represents', () => {
-    const rows = [
-        safe({ api_id: 7, provider: 'betpawa' }),
-        safe({ api_id: 7, provider: 'betika' }),
-        safe({ api_id: 8 }),
-    ];
+    const rows = [pickRow(7, 0.6, { provider: 'betpawa' }), pickRow(7, 0.6, { provider: 'betika' }), pickRow(8, 0.6)];
     const picks = sureBetsSelection(rows, null);
     assert.deepEqual(picks.map(e => e.row.api_id), [7, 8]);
     assert.equal(picks[0].row.provider, 'betpawa');
 });
 
-test('sureBetsSelection reuses the safe gates - a safeQualifies reject never enters', () => {
+test('sureBetsSelection never lists a retired Banker, a sub-1.50 tip or a pick without our chance', () => {
     const rows = [
-        safe({ api_id: 1, tip_price: 1.7, tip_confidence: 0.95 }), // price > maxPrice 1.6
-        safe({ api_id: 2, tip_market: null }),                     // tipless
-        safe({ api_id: 3 }),
+        { api_id: 1, day: '2026-07-01', tip_banker_market: 'O 0.5', tip_banker_price: 1.03, tip_banker_prob: 0.95 },
+        { api_id: 2, day: '2026-07-01', tip_banker_market: '1', tip_banker_price: 1.6, tip_banker_prob: 0.6 },   // no cal
+        { ...safe({ api_id: 3 }) },                                                                              // stats tip only
+        pickRow(4, 0.6, { tip_banker_market: 'DNB1' }),
+        pickRow(5, 0.6),
     ];
-    assert.deepEqual(sureBetsSelection(rows, null).map(e => e.row.api_id), [3]);
-    // caller gate overrides are honored (maxPrice 1.2 rejects the 1.25 default)
-    assert.deepEqual(sureBetsSelection(rows, null, { ...DEFAULT_SURE_BETS, maxPrice: 1.2 }), []);
-});
-
-test('sureBetsSelection excludes rows whose leg prob is null', () => {
-    // Passes every gate (2 parts, agreement 0.75, price ok) but with no cal and
-    // no confidence there is no number to rank by - excluded, never NaN-sorted.
-    const noProb = safe({ api_id: 1, tip_confidence: null, tip_breakdown: { market_prob: 0.8, stats_prob: 0.75 } });
-    assert.deepEqual(sureBetsSelection([noProb, safe({ api_id: 2 })], null).map(e => e.row.api_id), [2]);
+    assert.deepEqual(sureBetsSelection(rows, null).map(e => e.row.api_id), [5]);
 });
 
 test('sureBetsSelection caps per EAT day independently', () => {
-    const rows = [
-        safe({ api_id: 1, day: '2026-07-01', tip_confidence: 0.8 }),
-        safe({ api_id: 2, day: '2026-07-01', tip_confidence: 0.7 }),
-        safe({ api_id: 3, day: '2026-07-02', tip_confidence: 0.6 }),
-    ];
+    const rows = [pickRow(1, 0.7), pickRow(2, 0.6), pickRow(3, 0.5, { day: '2026-07-02' })];
     const picks = sureBetsSelection(rows, null, { ...DEFAULT_SURE_BETS, maxPerDay: 1 });
-    assert.deepEqual(picks.map(e => e.row.api_id), [1, 3]); // one per day, day order
+    assert.deepEqual(picks.map(e => e.row.api_id), [1, 3]);
 });
 
-test('sureBetsSelection enforces the market maturity floor when a calibration is supplied', () => {
-    const rows = [safe({ api_id: 1 })]; // tip_market '1X'
-    const thinCal = { markets: { '1X': { n: 5, hits: 4 } } };
-    assert.deepEqual(sureBetsSelection(rows, thinCal), []);
+test('pickView admits only real Picks; bankerView stays the raw history view', () => {
+    const legacy = { tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 };
+    assert.equal(pickView(legacy), null);
+    assert.equal(bankerView(legacy).market, 'O 0.5');
+    assert.equal(pickView({ ...legacy, tip_banker_cal: 0.95 }), null);   // cal alone does not make a Pick
+    assert.deepEqual(pickView(pickRow(1, '0.6123')),
+        { market: '1', price: 1.6, prob: 0.6, cal: 0.6123, outcome: null });
+    assert.equal(bankerProb(pickRow(1, 0.62), null), 0.62);
+    assert.equal(bankerProb(legacy, null), null);
 });
 
 // --- tipMarketLabel (plain-language market names) ---
@@ -862,7 +851,7 @@ test('bankerView normalizes the banker columns and tolerates absence', () => {
     assert.equal(bankerView({ tip_market: 'O 2.5' }), null);   // tip without banker
     assert.deepEqual(
         bankerView({ tip_banker_market: 'O 0.5', tip_banker_price: '1.04', tip_banker_prob: '0.8964', tip_banker_outcome: 'hit' }),
-        { market: 'O 0.5', price: 1.04, prob: 0.8964, outcome: 'hit' },
+        { market: 'O 0.5', price: 1.04, prob: 0.8964, cal: null, outcome: 'hit' },
     );
     // a banker with NO tip is legitimate (the stats veto drops the tip only)
     assert.equal(bankerView({ tip_banker_market: 'U 5.5', tip_banker_price: 1.02 }).market, 'U 5.5');
@@ -898,23 +887,26 @@ test('bankerSelection dedupes provider rows and drops long/incomplete bankers', 
     assert.deepEqual(bankerSelection(null), []);
 });
 
-test('legPicks offers the banker as a leg option, last, and never duplicates the tip', () => {
+test('legPicks offers the Pick as a leg option, last, and never duplicates the tip', () => {
     const base = {
         tip_market: 'O 2.5', tip_price: 1.8, tip_confidence: 0.62,
         tip_breakdown: JSON.stringify({ market_prob: 0.6, runners_up: [] }),
     };
-    const withBanker = { ...base, tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 };
-    const picks = legPicks(withBanker, null);
-    assert.deepEqual(picks.map(p => p.market), ['O 2.5', 'O 0.5']);
+    const withPick = { ...base, tip_banker_market: 'U 3.5', tip_banker_price: 1.55, tip_banker_prob: 0.6, tip_banker_cal: 0.63 };
+    const picks = legPicks(withPick, null);
+    assert.deepEqual(picks.map(p => p.market), ['O 2.5', 'U 3.5']);
     assert.deepEqual(picks.map(p => p.kind), ['tip', 'banker']);
-    // the banker's probability is the book's devigged number, used as-is
-    assert.equal(picks[1].prob, 0.94);
-    // when the banker IS the tip there is nothing to switch to
-    const same = { ...base, tip_banker_market: 'O 2.5', tip_banker_price: 1.8, tip_banker_prob: 0.58 };
+    // the Pick's probability is OUR calibrated chance
+    assert.equal(picks[1].prob, 0.63);
+    // when the Pick IS the tip there is nothing to switch to
+    const same = { ...base, tip_banker_market: 'O 2.5', tip_banker_price: 1.8, tip_banker_prob: 0.58, tip_banker_cal: 0.57 };
     assert.deepEqual(legPicks(same, null).map(p => p.market), ['O 2.5']);
-    // a vetoed fixture has a banker and no tip - still offer the banker
-    const bankerOnly = { tip_banker_market: 'U 5.5', tip_banker_price: 1.05, tip_banker_prob: 0.93 };
-    assert.deepEqual(legPicks(bankerOnly, null).map(p => p.market), ['U 5.5']);
+    // a vetoed fixture has a Pick and no tip - still offer the Pick
+    const pickOnly = { tip_banker_market: '2', tip_banker_price: 1.7, tip_banker_prob: 0.57, tip_banker_cal: 0.58 };
+    assert.deepEqual(legPicks(pickOnly, null).map(p => p.market), ['2']);
+    // a retired Banker (O 0.5 at 1.04) is never offered
+    const legacy = { ...base, tip_banker_market: 'O 0.5', tip_banker_price: 1.04, tip_banker_prob: 0.94 };
+    assert.deepEqual(legPicks(legacy, null).map(p => p.market), ['O 2.5']);
     assert.deepEqual(legPicks({}, null), []);
 });
 

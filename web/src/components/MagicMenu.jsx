@@ -88,16 +88,16 @@ export default function MagicMenu({
                         <div className={`px-3 py-2.5 rounded-xl ${sureBets ? 'bg-accent-soft' : ''}`}>
                             <button onClick={() => onSureBets(!sureBets)} className="cursor-pointer block w-full text-left">
                                 <span className="flex items-center text-[15px]">
-                                    <span className="font-semibold text-label">⭐ Sure bets</span>
+                                    <span className="font-semibold text-label">⭐ Top picks</span>
                                     <span className="ml-2 text-xs text-label-2 tabular-nums">{sureCount} of {sureCap} today</span>
                                     {sureBets && <span className="ml-auto text-accent">✓</span>}
                                 </span>
                                 <span className="block text-[12.5px] text-label-2">
-                                    Filter the table to the day's safest list, ranked by calibrated win chance.
+                                    Filter the table to the day's strongest tips, all at 1.50+ odds, ranked by our calibrated win chance.
                                 </span>
                             </button>
                             {sureBets && sureCount === 0 && (
-                                <div className="mt-1 text-xs text-hot">No sure bets today - no fixture passed the safety gates.</div>
+                                <div className="mt-1 text-xs text-hot">No picks today - none of today's games has a 1.50+ tip yet.</div>
                             )}
                             <div className="mt-1.5 flex items-center gap-3">
                                 <button
@@ -109,15 +109,15 @@ export default function MagicMenu({
                                     Top-{slipSize} slip
                                 </button>
                                 {showDetails && (
-                                    <span className="text-xs text-label-3" title="Live replay numbers - survival odds, not profit. Flat-stake EV stays ~ -vig.">
-                                        legs ~72-76% · 3-leg slip lands ~40% of days
+                                    <span className="text-xs text-label-3" title="Hindsight-free replay (scripts/replay-picks.js) - win chances, not profit.">
+                                        top picks win ~59-64% each · 2+ of 3 land on ~62-66% of days
                                     </span>
                                 )}
                             </div>
                         </div>
                     ) : (
                         <div className="px-3 py-2.5 text-[13px] text-label-2">
-                            ⭐ Sure bets - sign in to unlock the daily top-10 safe list.
+                            ⭐ Top picks - sign in to unlock the day's 10 strongest tips.
                         </div>
                     )}
                 </div>

@@ -5,7 +5,9 @@ import {
     apiPredictionSignal, scoreOverLine, LINE_THRESHOLDS, parseLinesCsv,
 } from './db/goals-rules.js';
 import { pairedTeamOutcomeAggregates, h2hOutcomeAggregates, tipEligibility, bestTip, tipOutcome, buildTipBooks } from './db/tip-rules.js';
-import { marketMenu, bankerPick, rungGap, coherentAlternatives } from './db/ladder-rules.js';
+import { marketMenu, rungGap, coherentAlternatives } from './db/ladder-rules.js';
+import { fixturePick } from './db/pick-rules.js';
+import { todaysPickCalibrator } from './picks.js';
 import { summarizePerformance } from './db/perf-rules.js';
 import { aiEnabled, aiModelTag } from './ai/adjudicators.js';
 import { canReuseHotVerdict, hotReviewPending, tipReviewPending } from './db/adjudicate-rules.js';
@@ -35,9 +37,10 @@ const PICK_COLUMNS = [
     'market', 'hot', 'score', 'signals', 'over_price', 'under_price', 'implied_over',
     'api_advice_supports',
     'tip_market', 'tip_price', 'tip_confidence', 'tip_breakdown', 'tip_skip_reason',
-    // Banker columns are sweep-owned like the tip ones; tip_banker_outcome is
-    // deliberately ABSENT (settle-pass owned, same idiom as tip_outcome).
-    'tip_banker_market', 'tip_banker_price', 'tip_banker_prob',
+    // Pick columns (tip_banker_*, the Pick since 2026-10-16) are sweep-owned
+    // like the tip ones; tip_banker_outcome is deliberately ABSENT (settle-
+    // pass owned, same idiom as tip_outcome).
+    'tip_banker_market', 'tip_banker_price', 'tip_banker_prob', 'tip_banker_cal',
     'computed_at',
 ];
 
@@ -241,6 +244,13 @@ export async function updateHotPicks() {
     // effective() hands back either the admin's CSV string or the config
     // default (already an array) - parseLinesCsv normalizes both (M6).
     const hotLines = parseLinesCsv(effective('HOTPICK_LINES'));
+    // The Pick's walk-forward calibrator: built once per EAT day, then
+    // rehydrated from meta (src/picks.js). A failure degrades to the devig
+    // (fixturePick with no calibrator) rather than failing the sweep.
+    const pickCal = await todaysPickCalibrator().catch(e => {
+        console.error(`[hotpicks] pick calibrator unavailable, using the devig: ${e.message}`);
+        return null;
+    });
 
     const rows = [];
     for (const f of targets) {
@@ -319,19 +329,19 @@ export async function updateHotPicks() {
             });
         }
 
-        // The Banker: safest market on the board, priced not reasoned. Computed
-        // from the SAME books the tip used, but independently of it - it needs no
-        // stats, so it survives the stats veto and is available on any eligible
-        // fixture that has a book at all.
-        const menu = elig.eligible ? marketMenu(groups) : {};
-        const banker = elig.eligible
-            ? bankerPick(menu, { bankerFloor: effective('TIP_BANKER_FLOOR') })
-            : null;
+        // The Pick (src/db/pick-rules.js): the one obvious tip per game - the
+        // market priced 1.50-2.20 with the highest calibrated win chance.
+        // Computed from the SAME books the tip used but independently of the
+        // stats eligibility screen, so every game with a book gets one (the
+        // replay universe: every linked game with a priced menu).
+        const menu = marketMenu(groups);
+        const pick = fixturePick(Object.entries(menu)
+            .map(([market, l]) => ({ market, price: l.price, prob: l.prob })), pickCal);
 
         // Stats veto is enforced HERE, not inside bestTip: the calculator
         // reports, the writer decides (see tip-rules DEFAULT_TIP.statsVetoGap).
         // The tip is dropped and the reason recorded like any other skip; the
-        // banker above is untouched.
+        // Pick above is untouched.
         const vetoed = tip?.veto ?? null;
         if (vetoed) tip = null;
 
@@ -361,9 +371,10 @@ export async function updateHotPicks() {
             tip_skip_reason: (elig.eligible
                 ? (tip ? null : (vetoed ?? 'no_pick'))
                 : elig.reason)?.substring(0, 64) ?? null,
-            tip_banker_market: banker?.market ?? null,
-            tip_banker_price: banker?.price ?? null,
-            tip_banker_prob: banker?.prob ?? null,
+            tip_banker_market: pick?.market ?? null,
+            tip_banker_price: pick?.price ?? null,
+            tip_banker_prob: pick?.prob ?? null,
+            tip_banker_cal: pick?.calProb ?? null,
             computed_at: db.fn.now(),
         };
         // Read-only veto re-apply: a stored AI veto that is still reusable

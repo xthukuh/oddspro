@@ -52,7 +52,7 @@ Semantics authority: `CLAUDE.md` `## Commands` (names duplicated here, annotatio
 | `link [provider]` | correlate matches ↔ fixtures |
 | `stats` / `standings` / `history` / `prematch` / `predictions` | deep data (fetch-once) |
 | `hotpicks` | settle + recompute picks/tips (bills NO AI) |
-| `dailyslip [date]` | settle + build the Daily MultiBet card (freezes at first leg kickoff) |
+| `dailyslip [date]` | settle + build the Daily MultiBet card - the day's top 3 Picks, read from `fixture_predictions`, so run it after `hotpicks` (freezes at first pick kickoff) |
 | `aireview` | drain pending AI verdicts once |
 | `enrich` | AI enrichment (BILLED; full-sweep-only) |
 | `performance` | flat-stake ROI / hit-rate report |
@@ -77,10 +77,15 @@ linker onto the wrong team/league): `node scripts/forget-alias.js (--list <term>
 <name> | --league <name>) [--provider p] [--yes]` - `--list` searches both tables, `--team`/
 `--league` delete an exact match (dry-run by default); deleting only removes the shortcut,
 the next link pass re-derives the correlation by scoring.
-Daily MultiBet grid + timeline backfill: `node scripts/simulate-daily-slip.js --db oddspro`
+The Pick + Top-3 picks card (current since 2026-10-16; chapter 05 "The Pick"): replay the
+production `pick-rules.js` over the settled extract with `node scripts/replay-picks.js
+[tmp/sharp/fx.ndjson]` (`WINDOW=<days>` env overrides the 90-day window; read-only). It must
+print `below 1.50: 0` and claimed within about a point of hit. Build the extract with the
+Sharp procedure below (host extract, then `sharp-prep.js`).
+Daily MultiBet grid + timeline backfill (pre-2026-10-16 ladder): `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
-Sharp 4x card (BetPawa 3-leg slip with its Win Bonus; chapter 05 "Sharp 4x"): research
+Sharp 4x card (RETIRED 2026-10-16, no longer built; BetPawa 3-leg slip with its Win Bonus; chapter 05 "Sharp 4x"): research
 bundle = a SELECT-only host extract into `tmp/sharp/*.tsv.gz` (procedure in
 `docs/research/2026-10-15-sharp-4x.md`), then `node scripts/sharp-prep.js` (fold, drops
 prices written at/after kickoff) and `node scripts/sharp-backtest.js [--last 14]` (drives
@@ -263,7 +268,8 @@ Then in cPanel: create/point the Node.js app at `oddspro-app-v<version>` + **Res
 | Never move a live generation knob (`TIP_MIN_PRICE`, `SAFE_*`) mid-experiment undated - change it via Admin → Settings so `admin_audit` dates it (M6); a raw `.env` move still needs a dated `docs/memory-bank.md` note | it partitions the measurement ledger (the 2026-07-10 lesson) |
 | Never touch `DEFAULT_SAFE` without a fresh `analyze-safe-tips.js` run | the gates are LODO-tuned, not opinions |
 | `DEFAULT_TIP.suppressedMarkets` / `statsVetoGap` ship DISABLED - do not enable without a re-test | both looked strong on the live ledger and REVERSED SIGN under re-derivation; the ledger spans two config regimes (`docs/research/2026-07-26-banker-ladder.md` §7) |
-| The Banker is a SURVIVAL product, never an EV claim - label it that way in every surface | measured -2.7% flat-stake ROI; it wins more often, not more money |
+| The Pick and Top picks are WIN-CHANCE products, never an EV claim - label them that way in every surface | replay flat ROI -6.3% (train) / -6.4% (test); a 1.50+ price caps one pick near 65%, so no day is guaranteed |
+| Never write sub-1.50 markets into `tip_banker_*` again (the deleted `backfill-banker.js` did) | readers treat those columns as the Pick since 2026-10-16; pre-switch rows only survive because `pickView` rejects them |
 | `.env` overrides silently differ from code defaults (`TIP_MIN_PRICE` 1.35 vs 1.2, `TIP_MIN_UNDER_LINE` 3.5 vs 4.5) | any backtest run on code defaults is measuring a DIFFERENT engine than the live one |
 | DARK switches (`AI_INJECTION_PREAMBLE`, `AI_CONSENSUS_*`) need an explicit user go BEFORE flipping; flip them in Admin → Settings (group `ai-dark`) so `admin_audit` dates the change (M6 - replaced the manual memory-bank note) | AI regime changes must be attributable |
 | `scripts/reset-users.js` is DESTRUCTIVE | wipes all users/sessions/prefs |
@@ -304,7 +310,8 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 |---|---|---|
 | Canonical fixture | the API-Football record every bookmaker match correlates to (`matches.fixture_id`) | `docs/engine/02-DATA-PIPELINE.md` |
 | Tip | best-supported outcome across 7 families; confidence = 0.6 market + 0.3 stats + 0.1 API | `tip-rules.js`, `docs/engine/04-PREDICTIONS.md` |
-| Banker | safest market the book offers on the fixture, floor `TIP_BANKER_FLOOR` (1.01) - a SEPARATE output from the Tip, not a re-ranking of it. 92.1% hit-rate vs the Tip's 66-71%, still -EV | `ladder-rules.js`, `docs/research/2026-07-26-banker-ladder.md` |
+| Pick (column "Tip") | one market per game priced 1.50-2.20 (not DNB) with the highest walk-forward residual-calibrated chance; stored in `tip_banker_*` + `tip_banker_cal` since 2026-10-16. Replaced the Banker (shortest price on the board, O 0.5 in 30% of games) | `pick-rules.js`, `src/picks.js`, `docs/engine/05-RANKING.md` |
+| Stats tip | the rolling-stats blend pick (`tip_*`, floor `TIP_MIN_PRICE`), second column since 2026-10-16 | `tip-rules.js` |
 | Market lattice | `marketRelation(a,b)` -> contradictory / nested / identical / overlapping, derived from `tipOutcome` over every 0-6 scoreline so it cannot drift from settlement | `ladder-rules.js` |
 | Coherent alternatives | displayed runners-up may never contradict the tip (`O 2.5` beside `U 2.5`) nor be a nested rung of it (`O 1.5` beside `O 2.5`) | `ladder-rules.js` |
 | `rung_gap` | tip price minus the safest available price; strongest non-trivial hit/miss discriminator found (-0.20 sd). Persisted in `tip_breakdown` | `ladder-rules.js` |
@@ -315,7 +322,7 @@ plain-language definitions live in `web/src/glossary.js`; canonical display name
 | Blend / parts | the components present in a tip's confidence (market/stats/api) | `tip-rules.js` |
 | `safePrior` | market's live hit-rate beta-shrunk (k=20) toward its `WAREHOUSE_WLO` anchor | `magic-rules.js` |
 | `sure` (strategy) | default sort = `safePrior × confidence` - win probability, NOT profit | `magic-rules.js`, `docs/engine/05-RANKING.md` |
-| Sure bets ⭐ | top-10/day list, Safe-gated but ranked by `estimateLegProb` - **not** the `sure` strategy | `magic-rules.js`, `docs/engine/05-RANKING.md` |
+| Top picks ⭐ (code: sure bets) | the day's 10 strongest Picks by `tip_banker_cal`, all 1.50+ - **not** the `sure` strategy | `magic-rules.js` `sureBetsSelection`, `docs/engine/05-RANKING.md` |
 | Safe pool 🛡 | `safeQualifies` gates (parts/agreement/price/stats/maturity) + top-3/day | `magic-rules.js` |
 | `estimateLegProb` | `bucketPosterior ?? confidence`, clamped [0.05, 0.98] - the slip survival number | `magic-rules.js` |
 | Unbettable | pattern-mine class: real statistical lift priced below 1.20 - lift you cannot buy | `mine-rules.js` |

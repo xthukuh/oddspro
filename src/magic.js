@@ -39,7 +39,7 @@ export async function settledTipRows() {
             'p.tip_breakdown', 'p.tip_ai_verdict',
             // Banker columns (Phase 3): the v2 strategies and analysis
             // scripts read them off the same ledger rows.
-            'p.tip_banker_market', 'p.tip_banker_price', 'p.tip_banker_prob', 'p.tip_banker_outcome',
+            'p.tip_banker_market', 'p.tip_banker_price', 'p.tip_banker_prob', 'p.tip_banker_cal', 'p.tip_banker_outcome',
             db.raw('COALESCE(f.ft_home, f.goals_home) as fh'),
             db.raw('COALESCE(f.ft_away, f.goals_away) as fa'),
         );

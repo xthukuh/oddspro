@@ -200,15 +200,23 @@ is documented in `docs/guides/safety-net-protocol.md`.
 
 ## Daily MultiBet, Safe pool and Sure bets surfaces
 
-**Daily MultiBet (2026-08-06, engine-v2):** a Magic-sheet row opens `DailyMultibet.jsx`
-(the `Sheet` idiom): today's server-built survival card (per-leg collapsible reasoning,
-calibrated percentages, a provider-price toggle) sits over the reverse-chronological settled
-timeline with streak chips and `backfilled` tags. Guests get teaser rows plus a sign-in nudge
-(the `/api/daily-slip/timeline` premium seam).
+**Tip column (2026-10-16):** the first pick column is headed "Tip" and shows the Pick
+(`pickView`: market in plain words, price, OUR calibrated chance, settled tick). Its key
+stays `banker` so saved filters and sort chains keep working. Rows from before the switch
+hold the retired Banker and render a dash. The stats-blend tip follows as "Stats tip".
 
-**Sure bets (2026-07-17, signed-in only):** a Magic-sheet row (guests get a sign-in nudge)
-toggles `oddspro.show.sureBets` - membership is cut by `api_id` over the whole loaded
-selection exactly like Safe-only - with a ViewPills chip "Sure bets (N of 10)" including an
+**Daily MultiBet (2026-08-06; v3 picks path 2026-10-16):** a Magic-sheet row opens
+`DailyMultibet.jsx` (the `Sheet` idiom). A v3 day (legs of `kind: 'pick'`) renders as a
+vertical path in kickoff order - a node per pick (won tick, missed cross, or its number while
+to play), the game, the pick, price, our chance, the final score and a collapsible "Why this
+pick" - under a score headline from `picksDayScore` ("2/3 won · +0.04u", neutral grey when
+the day lost money). The word LOST is gone everywhere: older tier days show "x/y legs".
+Streak chips read run / best / profit days; the self-check counts settled picks only.
+Guests get teaser rows plus a sign-in nudge (the `/api/daily-slip/timeline` premium seam).
+
+**Top picks (formerly Sure bets; 2026-07-17, signed-in only):** a Magic-sheet row (guests
+get a sign-in nudge) toggles `oddspro.show.sureBets` - membership is cut by `api_id` over
+the whole loaded selection exactly like Safe-only - with a ViewPills chip "Top picks (N of 10)" including an
 explicit zero-day warning pill, and a "Top-3 slip" action that seeds the top legs into the
 betslip book (`seedSlip`, exported from `BetslipPlayground.jsx`, the one owner of the
 `oddspro.betslips` format) and opens the playground.

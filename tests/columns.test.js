@@ -13,7 +13,8 @@ const CATALOG = {
 };
 
 test('labelFor matches the table title for base / extra / stat / market keys', () => {
-    assert.equal(labelFor('tip', CATALOG), 'Tip');            // BASE_COLUMNS
+    assert.equal(labelFor('banker', CATALOG), 'Tip');         // BASE_COLUMNS: the Pick leads (2026-10-16)
+    assert.equal(labelFor('tip', CATALOG), 'Stats tip');      // BASE_COLUMNS
     assert.equal(labelFor('status', CATALOG), 'Status');      // BASE_COLUMNS
     assert.equal(labelFor('hot', CATALOG), 'Over 2.5 pick');  // extra base
     assert.equal(labelFor('home_form', CATALOG), 'Home Form'); // stat label
