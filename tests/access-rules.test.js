@@ -82,6 +82,13 @@ test('redactRecordForRole(guest) strips internal reasoning, keeps the tip itself
     assert.equal(row.tip_confidence, 0.873);
 });
 
+test('redactRecordForRole(guest) coarsens our Pick chance like the confidence', () => {
+    assert.equal(redactRecordForRole({ tip_banker_cal: 0.6612 }, 'guest').tip_banker_cal, 0.65);
+    assert.equal(redactRecordForRole({ tip_banker_cal: '0.6789' }, 'guest').tip_banker_cal, 0.7);
+    assert.equal(redactRecordForRole({ tip_banker_cal: null }, 'guest').tip_banker_cal, null);
+    assert.equal(redactRecordForRole({ tip_banker_cal: 0.6612 }, 'user').tip_banker_cal, 0.6612);
+});
+
 test('redactRecordForRole: confidence buckets are clean numbers, null stays null', () => {
     assert.equal(redactRecordForRole({ tip_confidence: 0.926 }, 'guest').tip_confidence, 0.95);
     assert.equal(redactRecordForRole({ tip_confidence: 0.9 }, 'guest').tip_confidence, 0.9);

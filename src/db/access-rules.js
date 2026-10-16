@@ -72,8 +72,10 @@ export function stripDetails(row) {
 export function redactRecordForRole(row, role) {
     if (!row || role !== 'guest') return row;
     const out = stripDetails(row);
-    if (out.tip_confidence != null) {
-        out.tip_confidence = Number((Math.round(Number(out.tip_confidence) / CONFIDENCE_STEP) * CONFIDENCE_STEP).toFixed(2));
+    // Our calibrated Pick chance (2026-10-16) is the same class of computed
+    // number, so it gets the same coarsening.
+    for (const f of ['tip_confidence', 'tip_banker_cal']) {
+        if (out[f] != null) out[f] = Number((Math.round(Number(out[f]) / CONFIDENCE_STEP) * CONFIDENCE_STEP).toFixed(2));
     }
     return out;
 }
