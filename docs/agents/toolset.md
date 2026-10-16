@@ -680,6 +680,40 @@ the shown bet). Sources: `docs/research/`.
   isolated in `scripts/lib/hotfix-rules.js` with offline tests
   (`tests/hotfix-rules.test.js`) - the next person touching this script can verify the
   generated shell text without an SSH target at all.
+- 2026-10-16 - **First full deploy on the migrated host (23.106.59.129, DirectAdmin +
+  CloudLinux), verified end to end.** What held and what bit, in run order:
+  - Tools present on the host: `mariadb-dump`, `mysqldump`, `cloudlinux-selector`, `gzip`,
+    `tar`, `unzip`, node v24.18.0 under `~/.nvm` (the app itself runs on the selector's
+    Node 22). ABSENT: `/usr/bin/time`, `bc`. Check with `command -v` before any script uses
+    a tool; a `| grep` filter will otherwise hide the "not found" (cost one 12-minute run).
+  - `scripts/lib/remote.js` defaults already match the new host (`oddspro`,
+    `/home/oddsprok`), so `.env.deploy` is optional. `.env.production` (gitignored) only
+    needs `VITE_GA_ID`; read the live value off the public page
+    (`curl -s https://oddspro.ke/ | grep -oE "G-[A-Z0-9]+"`). Live `API_TOKEN` is unset, so
+    no `VITE_API_TOKEN` is needed; `MIGRATE_ON_BOOT=1` is set, so migrations apply on start.
+  - Pre-deploy backups on the host's own disk (1.7 TB free): `mariadb-dump
+    --single-transaction --quick --ignore-table=<db>.odds_markets` gzip'd plus a
+    `--no-data` schema dump, each checked for the trailing `Dump completed` line (78 MB,
+    `~/backups/predeploy-<stamp>-*.sql.gz`); app dir tar minus `node_modules`
+    (`~/backups/app-v1.4.0-predeploy-<stamp>.tar.gz`). `deploy-remote.js --web` makes its
+    own `public_html` tar, named after the OLDEST app dir it finds (`~/v1.3.0.2-web.tar.gz`
+    this time) - a naming quirk, contents are the live `public_html`.
+  - Order that worked: `cloudlinux-selector stop --json --interpreter nodejs --app-root
+    oddspro-app-v1.4.0` -> `node scripts/deploy-remote.js --app --web` -> `... start ...`
+    -> warm-up curl -> the `.HALT` cycle. Stop/Start again left the two 7-day-old instances
+    alive beside the new one; `.HALT` (one detached remote command with the `trap` removing
+    the file) cleared them, and migrations logged as applied at the first boot.
+  - Trap: a wait loop of `ssh host 'pgrep -f "<pattern>"'` never ends, because pgrep matches
+    the ssh-spawned shell whose own command line carries the pattern. Use
+    `ps -u <user> -o pid,args | grep -E "<pattern>" | grep -v grep` (the grep in the shell's
+    command line drops it), or test a file instead of a process.
+  - Throttling still applies on the new host: after ~40 short ssh calls a session was closed
+    mid-command ("Connection to oddspro.ke closed by remote host"). Detach anything longer
+    than a few seconds (`nohup ... > ~/tmp/x.log 2>&1 < /dev/null &`) and read the log in a
+    separate short call; space polling to one call per 2 minutes.
+  - Verification that settled it: `/api/refresh` shows `writer: true` and the new `build`
+    id; `knex_migrations` lists `20261010000001`/`000003` at the boot timestamp; the four new
+    tables exist (empty until the first light pass).
 
 ## 6. Doc & knowledge topology
 
@@ -727,3 +761,6 @@ the shown bet). Sources: `docs/research/`.
 - 2026-10-10: §5 append: `hotfix-remote.js` rework to one ssh call per run (tarball +
   generated apply script, server-side rollback); `docs/DEPLOYMENT.md` §5.1 and
   QUICK-REFERENCE's emergency-hotfix line updated in the same pass.
+- 2026-10-16: §5 append: first full deploy on the migrated host (tools present/absent,
+  backups, the stop -> deploy -> start -> `.HALT` order, the pgrep self-match trap, ssh
+  throttling on the new host).
