@@ -120,7 +120,8 @@ import { haltRequested, HALT_FILE } from './halt.js';
         if (s.settled) console.debug(`[+] dailyslip: settled ${s.settled} pending slip(s).`);
         if (r.frozen) console.debug(`[+] dailyslip ${r.date}: frozen (started/settled), left as published.`);
         else if (r.noSlip) console.debug(`[+] dailyslip ${r.date}: NO SLIP (fewer than the minimum qualifying legs among ${r.fixtures} fixtures).`);
-        else console.debug(`[+] dailyslip ${r.date}: ${r.slip.mood.toUpperCase()} card, ${r.slip.legs} legs @ ${r.slip.combined_odds}x.`);
+        else console.debug(`[+] dailyslip ${r.date}: ${r.slip.mood.toUpperCase()} card, ${r.slip.picks} picks`
+            + `${r.slip.slip_odds != null ? ` + ${r.slip.slip_odds}x slip` : ', no slip'}.`);
         return;
     }
 
