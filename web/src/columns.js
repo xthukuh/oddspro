@@ -23,6 +23,7 @@ const EXTRA_BASE_LABELS = {
     hot_score: 'Over 2.5 score',
     // Client-only derived filter field: the chosen tip's confidence as an
     // integer win % (0-100). Not a table column - filterable only.
+    tip: 'Stats tip',
     tip_confidence: 'Stats tip confidence %',
     banker: 'Tip win chance',
     banker_price: 'Tip price',

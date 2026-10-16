@@ -496,8 +496,15 @@ function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
                     {total != null && <span className="text-label-3"> · {total} gls</span>}
                 </div>
             )}
-            <div className="group/tip cursor-pointer whitespace-nowrap" onClick={e => openTip(row, e)}>
-                {row.tip_market ? _tipMainInner(row) : <span className="text-label-3">-</span>}
+            {/* The Pick (2026-10-16), the same one obvious tip the Tip column
+                shows; the stats-blend tip is no longer surfaced in the table. */}
+            <div className="whitespace-nowrap">
+                {(() => {
+                    const p = pickView(row);
+                    if (!p) return <span className="text-label-3">-</span>;
+                    const cls = p.outcome === 'miss' ? 'text-miss' : p.outcome === 'hit' ? 'text-hit' : 'text-accent';
+                    return <span className={`font-semibold ${cls}`}>{tipMarketLabel(p.market)} @ {p.price.toFixed(2)}{_tick(p.outcome)}</span>;
+                })()}
             </div>
             {magicMeta && <div className="text-label-3">{_magicCell(row, magicMeta)}</div>}
         </div>
@@ -610,7 +617,7 @@ export default function DataTable({
     const displayColumns = useMemo(() => {
         if (!magicMeta) return columns;
         const col = { key: 'magic', label: '✨', group: 'base' };
-        const i = columns.findIndex(c => c.key === 'tip');
+        const i = columns.findIndex(c => c.key === 'banker');
         return i < 0 ? [...columns, col] : [...columns.slice(0, i), col, ...columns.slice(i)];
     }, [columns, magicMeta]);
 
@@ -638,7 +645,7 @@ export default function DataTable({
     // oscillate at the boundary. The score line shows only when the day HAS
     // scores; the magic line only when a magic strategy is active.
     const scoreHasData = rows.some(r => r.score != null && r.score !== '');
-    const ANCHOR_KEY = 'tip';
+    const ANCHOR_KEY = 'banker';   // the Tip column (the Pick) since 2026-10-16
     const SELECT_W = 44;
     // The summary column is CONTENT-FIT (no fixed width) so it never wastes
     // horizontal space; this is only the hysteresis fallback until the real

@@ -13,8 +13,9 @@ export const BASE_COLUMNS = [
     { key: 'score', label: 'Score' },
     // The Pick leads (2026-10-16): one obvious tip per game at 1.50+ odds,
     // chosen by our calibration. Its key stays 'banker' so saved filters and
-    // sort chains keep working; the stats-blend tip follows as 'Stats tip'.
+    // sort chains keep working. The stats-blend tip is no longer a table column
+    // (owner 2026-10-16: one obvious tip per game, no Over 0.5); it stays a
+    // filterable field labelled 'Stats tip' (columns.js EXTRA_BASE_LABELS).
     { key: 'banker', label: 'Tip' },
-    { key: 'tip', label: 'Stats tip' },
     { key: 'status', label: 'Status' },
 ];
