@@ -84,6 +84,10 @@ print `below 1.50: 0` and claimed within about a point of hit. Build the extract
 Sharp procedure below (host extract, then `sharp-prep.js`). The daily 2-leg 2.5x slip:
 `node scripts/replay-slips.js [file]` replays it and the alternative designs through the
 production `selectSlip` (read-only; `DUMP=<file.json>` writes the per-day rows).
+Backfill past days with the current algorithm: `node scripts/backfill-algo.js --dry-run`,
+then `--yes` (writes `tmp/backfill-algo-<stamp>.json` first; undo with `--restore <file>
+--yes`). Local DB for analysis: Docker `oddspro-db` on 127.0.0.1:3307 (`.env` DB_PORT=3307,
+DB_DOCKER_CONTAINER=oddspro-db); the name `mariadb` and port 3306 belong to local-web.
 Daily MultiBet grid + timeline backfill (pre-2026-10-16 ladder): `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).
