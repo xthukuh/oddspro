@@ -7,7 +7,7 @@ import { queryRecords, columnCatalogFromMeta } from './db/records.js';
 import { startWarmKeeper, stopWarmKeeper, warmStatus } from './warm.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { dailySlipPayload, dailyTimelinePayload } from './daily-slip.js';
-import { featureAllowed } from './db/feature-rules.js';
+import { featureAllowed, featureMap } from './db/feature-rules.js';
 import { isPatToken, patRouteAllowed } from './pat-rules.js';
 import { saveUserSlip, listUserSlips, getSlipByCode, deleteUserSlip } from './user-slips.js';
 import { createPat, listPats, revokePat, resolvePat } from './pats.js';
@@ -710,12 +710,18 @@ app.get('/api/view', optionalAuth, async (req, res, next) => {
         const safeOnly = req.query.safe_only === '1';
         const oneEach = req.query.one_of_each === '1';
         const tier = access && !access.fullDetail ? 'guest' : 'full';
+        // Per-feature gates for the sibling payloads (safe/sure/daily): the
+        // caller's resolved feature set rides the memo key, so re-locking one
+        // feature via GUEST_PREMIUM_EXCEPT can never serve a cached body
+        // computed under the old set.
+        const features = legacyFull ? null : featureMap(req.user ?? null, featureOpts());
+        const featureSig = features ? Object.keys(features).filter(k => features[k]).sort().join(',') : 'all';
         const key = queryCacheKey('/api/view', {
-            date: day, tier, strategy, safe_only: safeOnly ? 1 : 0, one_of_each: oneEach ? 1 : 0,
+            date: day, tier, features: featureSig, strategy, safe_only: safeOnly ? 1 : 0, one_of_each: oneEach ? 1 : 0,
             providers: providers ? providers.join(',') : null,
         });
         await apiCache.send(req, res, key, () => renderedView({
-            date: day, strategy, safeOnly, oneEach, providers, access,
+            date: day, strategy, safeOnly, oneEach, providers, access, features,
         }));
     } catch (e) {
         next(e);
@@ -728,18 +734,33 @@ app.get('/api/view', optionalAuth, async (req, res, next) => {
 // markets. Spec docs/dev/specs/2026-10-10-1600-odds-history-targets.md.
 // Gated by the `odds_history` registry feature (guest-tier since 2026-10-16:
 // GUEST_PREMIUM opens it for signed-out visitors, GUEST_PREMIUM_EXCEPT
-// re-locks it); machine bearers and AUTH_ENABLED=0 stay full. Not
-// memoized: per-match, small, and a target can freeze between two reads.
+// re-locks it); machine bearers and AUTH_ENABLED=0 stay full and unmemoized.
+// Every other caller (guests since 2026-10-16) is capped at 2,000 timeline
+// rows and served from its OWN version-keyed memo, so repeated or scripted
+// reads cost one log read per match per warehouse version and can never
+// evict the table's warmed apiCache slots. The full log is still read once
+// per compute: the frozen targets replay from it (security review 2026-10-16).
+const historyCache = makeJsonCache({
+    max: 64, ttlMs: 10 * 60_000,
+    version: () => warehouseVersion(),
+});
 app.get('/api/odds-history/:matchId', optionalAuth, async (req, res, next) => {
     try {
-        const full = !config.AUTH_ENABLED
-            || bearerMatches(req.get('authorization'), MACHINE_BEARERS)
-            || featureAllowed(req.user ?? null, 'odds_history', featureOpts());
-        if (!full) return res.status(401).json({ error: 'Sign in to see the odds history.', auth_required: true });
+        const legacyFull = !config.AUTH_ENABLED || bearerMatches(req.get('authorization'), MACHINE_BEARERS);
+        if (!legacyFull && !featureAllowed(req.user ?? null, 'odds_history', featureOpts())) {
+            return res.status(401).json({ error: 'Sign in to see the odds history.', auth_required: true });
+        }
         if (!/^\d{1,19}$/.test(String(req.params.matchId))) return res.status(400).json({ error: 'matchId must be a numeric match id.' });
-        const payload = await oddsHistoryPayload(req.params.matchId, { limit: Number(req.query.limit) || 2000 });
-        if (!payload) return res.status(404).json({ error: 'No match with that id.' });
-        res.json(payload);
+        const id = String(req.params.matchId);
+        if (legacyFull) {
+            const payload = await oddsHistoryPayload(id, { limit: Number(req.query.limit) || 2000 });
+            if (!payload) return res.status(404).json({ error: 'No match with that id.' });
+            return res.json(payload);
+        }
+        if (!(await db('matches').where('id', id).first('id'))) return res.status(404).json({ error: 'No match with that id.' });
+        const limit = Math.min(Math.max(Number(req.query.limit) || 2000, 1), 2000);
+        await historyCache.send(req, res, `/api/odds-history/${id}?limit=${limit}`,
+            () => oddsHistoryPayload(id, { limit }));
     } catch (e) {
         next(e);
     }
