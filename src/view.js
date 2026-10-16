@@ -38,9 +38,17 @@ export function knownStrategy(id) {
 // legacy full path (machine bearer, AUTH_ENABLED=0). Passed straight to
 // queryRecords so a guest sees exactly what /api/records would show them -
 // the same redaction and coarse buckets - never more.
+// `features` (2026-10-16 security review): the caller's featureMap(), or null
+// on the legacy full path. Each sibling payload follows its OWN registry
+// feature, so re-locking one surface via GUEST_PREMIUM_EXCEPT re-locks it
+// here too: safe_picks (Safe-only list, its policy, the safe_only param),
+// sure_bets (Top picks membership and chances), daily_multibet (which games
+// sit on the day's card; the teaser-level day summary stays, as on
+// /api/daily-slip). A locked flag reads null, never a misleading false.
 export async function renderedView({
-    date, strategy = 'sure', safeOnly = false, oneEach = false, providers = null, access = null,
+    date, strategy = 'sure', safeOnly = false, oneEach = false, providers = null, access = null, features = null,
 } = {}) {
+    const allow = k => !features || features[k] === true;
     const [records, magic, slip] = await Promise.all([
         queryRecords({ date, per_page: 'all', providers, access }),
         magicSortCached(),
@@ -52,29 +60,34 @@ export async function renderedView({
     // Day-level memberships computed over the WHOLE loaded selection (the
     // web's Safe-only/Sure-bets discipline: toggles never change who wins
     // the per-day caps), keyed by canonical fixture id.
-    const safeSet = new Set(safeSelection(rows, cal, magic.safe).map(r => r.api_id));
-    const sureProb = new Map(sureBetsSelection(rows, cal).map(({ row, prob }) => [row.api_id, prob]));
-    const daily = new Set((slip?.legs ?? []).map(l => l.fixture_id));
+    const safeSet = new Set(allow('safe_picks') ? safeSelection(rows, cal, magic.safe).map(r => r.api_id) : []);
+    const sureProb = new Map(allow('sure_bets') ? sureBetsSelection(rows, cal).map(({ row, prob }) => [row.api_id, prob]) : []);
+    const daily = new Set(allow('daily_multibet') ? (slip?.legs ?? []).map(l => l.fixture_id) : []);
 
     if (oneEach) rows = _oneOfEach(rows, providers ?? DEFAULT_PROVIDER_ORDER);
-    if (safeOnly) rows = rows.filter(r => safeSet.has(r.api_id));
+    if (safeOnly && allow('safe_picks')) rows = rows.filter(r => safeSet.has(r.api_id));
 
     return {
         date,
         strategy,
         generated_at: new Date().toISOString(),
         strategies: ['sure', ...magic.strategies.map(s => s.id).filter(id => id !== 'sure')],
-        safe_policy: magic.safe,
+        safe_policy: allow('safe_picks') ? magic.safe : null,
         daily_slip: slip && { status: slip.status, mood: slip.mood, legs_total: slip.legs_total, outcome: slip.outcome },
-        counts: { rows: rows.length, safe: safeSet.size, sure: sureProb.size, daily_slip_legs: daily.size },
+        counts: {
+            rows: rows.length,
+            safe: allow('safe_picks') ? safeSet.size : null,
+            sure: allow('sure_bets') ? sureProb.size : null,
+            daily_slip_legs: allow('daily_multibet') ? daily.size : null,
+        },
         rows: rows.map((r, i) => ({
             rank: i + 1,
             magic_score: scoreTip(r, strategy, cal),
             flags: {
-                safe: safeSet.has(r.api_id),
-                sure: sureProb.has(r.api_id),
-                sure_prob: sureProb.get(r.api_id) ?? null,
-                daily_slip: daily.has(r.api_id),
+                safe: allow('safe_picks') ? safeSet.has(r.api_id) : null,
+                sure: allow('sure_bets') ? sureProb.has(r.api_id) : null,
+                sure_prob: allow('sure_bets') ? (sureProb.get(r.api_id) ?? null) : null,
+                daily_slip: allow('daily_multibet') ? daily.has(r.api_id) : null,
             },
             ...r,
         })),
