@@ -148,7 +148,7 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
         const dsSettle = await settleDailySlips();
         const ds = await buildDailySlip();
         console.debug(`[+] dailyslip: ${dsSettle.settled} settled; today ${ds.frozen ? 'frozen'
-            : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.legs} legs @ ${ds.slip.combined_odds}x`}.`);
+            : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.picks} picks${ds.slip.slip_odds != null ? ` + ${ds.slip.slip_odds}x slip` : ', no slip'}`}.`);
     });
 
     const e = await guardStep('AI enrichment (upcoming correlated fixtures; collection only)', () => enrichFixtures());
