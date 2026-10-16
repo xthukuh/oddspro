@@ -22,6 +22,7 @@ import {
 } from './db/value-hunt.js';
 import { tipMarketLabel, pickView } from './db/magic-rules.js';
 import { DEFAULT_PICK, DEFAULT_SLIP, isPick, selectTopPicks, selectSlip, picksDayScore } from './db/pick-rules.js';
+import { sotVolume, shadowLegs } from './db/shadow-rules.js';
 import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
@@ -223,6 +224,46 @@ function _providerPrices(fixtureRows, marketKey) {
 
 const _pct = p => `${(100 * p).toFixed(1)}%`;
 
+// Shots-on-target history for the shadow rules: teamId -> [{ t0, total, fid }]
+// newest first, one entry per final game with both sides' 'Shots on Goal'
+// (placeholder games with zero shots on both sides dropped - the analysis's
+// own filter). Chunked by team id (the 2026-09-05 prematch lesson: one
+// statement over thousands of ids is killed by the host).
+const SOT_TEAM_CHUNK = 400;
+export async function _sotHistory(teamIds) {
+    const byFixture = new Map();
+    for (let i = 0; i < teamIds.length; i += SOT_TEAM_CHUNK) {
+        const ids = teamIds.slice(i, i + SOT_TEAM_CHUNK);
+        const rows = await db('fixture_statistics as s')
+            .join('fixtures as f', 'f.id', 's.fixture_id')
+            .whereIn('s.type', ['Shots on Goal', 'Total Shots'])
+            .whereIn('f.status', FINAL_STATUSES)
+            .where(q => q.whereIn('f.home_team_id', ids).orWhereIn('f.away_team_id', ids))
+            .select('s.fixture_id', 's.team_id', 's.type', 's.value', 'f.kickoff', 'f.home_team_id', 'f.away_team_id');
+        for (const r of rows) {
+            let fx = byFixture.get(r.fixture_id);
+            if (!fx) byFixture.set(r.fixture_id, fx = { t0: new Date(r.kickoff).getTime(), teams: [r.home_team_id, r.away_team_id], stat: {} });
+            (fx.stat[r.team_id] ??= {})[r.type] = r.value;
+        }
+    }
+    const num = v => { const x = parseFloat(String(v ?? '').replace('%', '')); return Number.isFinite(x) ? x : null; };
+    const out = new Map();
+    for (const [fid, fx] of byFixture) {
+        const [h, a] = fx.teams;
+        const sh = num(fx.stat[h]?.['Shots on Goal']), sa = num(fx.stat[a]?.['Shots on Goal']);
+        if (sh == null || sa == null) continue;
+        const th = num(fx.stat[h]?.['Total Shots']) ?? 0, ta = num(fx.stat[a]?.['Total Shots']) ?? 0;
+        if (sh + sa === 0 && th + ta === 0) continue;
+        for (const tid of fx.teams) {
+            let list = out.get(tid);
+            if (!list) out.set(tid, list = []);
+            list.push({ t0: fx.t0, total: sh + sa, fid });
+        }
+    }
+    for (const list of out.values()) list.sort((x, y) => y.t0 - x.t0);
+    return out;
+}
+
 // pick: { market, price, prob (devig), calProb (ours) }.
 function _pickReasoning(pick, rank, of) {
     return `Pick ${rank} of today's ${of}, ranked by our own win chance: ${tipMarketLabel(pick.market)} at ${pick.price.toFixed(2)}. `
@@ -280,6 +321,78 @@ export function sharpLegRecords(card, cal, fxInfo, cardIndex, extra = {}) {
     });
 }
 
+// The day's card from already-loaded data - ONE definition shared by the live
+// builder (buildDailySlip) and the backfill (scripts/backfill-algo.js), so a
+// replayed day can never be chosen differently from a live one.
+// games: [{ id, kickoff (ISO), f: { home_name, away_name, league,
+//          home_team_id, away_team_id }, pick: { market, price, prob, calProb } | null }]
+// menus: Map(fixture id -> [{ market, price, prob }]); pickCal: { prob(leg) } | null
+// sot: Map(team id -> [{ t0, total, fid }]) newest first (_sotHistory).
+// Returns { top, slip, slipLegs, shadow }.
+export function composeCard({ games, menus, pickCal, sot, opts = null }) {
+    const top = selectTopPicks(games, { ...DEFAULT_PICK, ...(opts ?? {}) });
+
+    // The daily slip (pick-rules selectSlip): 2 legs, one per game, 1.50-2.20
+    // each, combined >= 2.5x, chosen by OUR calibrated chances. A leg may not
+    // contradict its game's Pick (the table and the card must agree).
+    const cands = [];
+    if (pickCal) {
+        for (const g of games) {
+            for (const l of menus.get(g.id) ?? []) {
+                if (!isPick(l.market, l.price) || !(l.prob > 0 && l.prob < 1)) continue;
+                if (g.pick && contradicts(g.pick.market, l.market)) continue;
+                cands.push({ fixture: g.id, game: g, market: l.market, price: Number(l.price), prob: Number(l.prob),
+                    calProb: Math.round(pickCal.prob(l) * 10000) / 10000 });
+            }
+        }
+    }
+    const slip = selectSlip(cands, { ...DEFAULT_SLIP, ...(opts?.slip ?? {}) });
+    const slipLegs = slip
+        ? [...slip.legs].sort((a, b) => (Date.parse(a.game.kickoff) || 0) - (Date.parse(b.game.kickoff) || 0))
+        : [];
+
+    // Stats shadow (shadow-rules.js): logged, graded, never shown or counted.
+    const shadow = [];
+    for (const g of games) {
+        const ko = Date.parse(g.kickoff);
+        const prior = tid => (sot?.get(tid) ?? []).filter(x => x.t0 < ko && x.fid !== g.id);
+        const vol = sotVolume(prior(g.f.home_team_id), prior(g.f.away_team_id));
+        for (const l of shadowLegs(vol, menus.get(g.id) ?? [])) shadow.push({ g, l });
+    }
+    return { top, slip, slipLegs, shadow };
+}
+
+// Stored leg records for a composeCard() result. Display maps are optional
+// (the backfill has no live prices or links).
+export function cardLegs({ top, slip, slipLegs, shadow }, { rowsByFixture = new Map(), linksByFixture = new Map() } = {}) {
+    const _leg = (g, l, extra) => ({
+        fixture_id: g.id,
+        home: g.f.home_name, away: g.f.away_name, league: g.f.league,
+        kickoff: g.kickoff,
+        market: l.market, label: tipMarketLabel(l.market),
+        price: l.price, prices: _providerPrices(rowsByFixture.get(g.id), l.market),
+        links: linksByFixture.get(g.id) ?? {},
+        prob: l.prob, cal_prob: l.calProb, cell_key: cellKey(l),
+        outcome: null,
+        ...extra,
+    });
+    return [
+        ...top.map((g, i) => _leg(g, g.pick, {
+            card: i, kind: 'pick', tier_label: 'Top picks', reasoning: _pickReasoning(g.pick, i + 1, top.length),
+        })),
+        ...slipLegs.map(l => _leg(l.game, l, {
+            card: top.length, kind: 'slip', tier_label: `Daily slip ${slip.odds.toFixed(2)}x`,
+            slip_odds: slip.odds, slip_chance: slip.chance,
+            reasoning: _slipReasoning(l, slip),
+        })),
+        ...shadow.map(({ g, l }) => _leg(g, { ...l, calProb: null }, {
+            card: null, kind: 'shadow', tier_label: `Shadow ${l.rule}`, shadow_rule: l.rule,
+            sot_volume: l.V, sot_games: [l.nh, l.na],
+            reasoning: `Shadow leg (not published): combined shots on target ${l.V} per game over the two teams' recent stat games (${l.nh} and ${l.na}).`,
+        })),
+    ];
+}
+
 // Build (or refresh) the slip for `date` (EAT date string, default today).
 // Returns { date, frozen } | { date, slip } | { date, noSlip } | { date, dryRun, row }.
 // dryRun: compute the row exactly as published but never write it (and skip
@@ -323,7 +436,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         .where('f.kickoff', '>', db.raw('NOW()'))
         .whereNotNull('fp.tip_banker_cal')
         .whereRaw('EXISTS (SELECT 1 FROM matches m WHERE m.fixture_id = f.id)')
-        .select('f.id', 'f.kickoff', 'l.name as league', 'th.name as home_name', 'ta.name as away_name',
+        .select('f.id', 'f.kickoff', 'f.home_team_id', 'f.away_team_id', 'l.name as league', 'th.name as home_name', 'ta.name as away_name',
             'fp.tip_banker_market', 'fp.tip_banker_price', 'fp.tip_banker_prob', 'fp.tip_banker_cal');
 
     const games = targets.map(f => {
@@ -333,8 +446,6 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
             pick: v ? { market: v.market, price: v.price, prob: v.prob, calProb: v.cal } : null,
         };
     });
-    const top = selectTopPicks(games, { ...DEFAULT_PICK, ...(opts ?? {}) });
-
     // Every non-stale price of the day's games, chunked by fixture (the
     // 2026-08-23 rule: one IN (...) over a whole slate is killed by the host).
     // Feeds the slip's candidate menus AND the per-provider display prices.
@@ -353,9 +464,6 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         for (const [id, rows] of grouped.byFixture) rowsByFixture.set(id, rows);
     }
 
-    // The daily slip (pick-rules selectSlip): 2 legs, one per game, 1.50-2.20
-    // each, combined >= 2.5x, chosen by OUR calibrated chances. A leg may not
-    // contradict its game's Pick (the table and the card must agree).
     // Dynamic import: picks.js imports this module, so a static import would
     // be a cycle.
     const { todaysPickCalibrator } = await import('./picks.js');
@@ -363,21 +471,9 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         console.error(`[daily-slip] pick calibrator unavailable, no slip today: ${e.message}`);
         return null;
     });
-    const cands = [];
-    if (pickCal) {
-        for (const g of games) {
-            for (const l of menus.get(g.id) ?? []) {
-                if (!isPick(l.market, l.price) || !(l.prob > 0 && l.prob < 1)) continue;
-                if (g.pick && contradicts(g.pick.market, l.market)) continue;
-                cands.push({ fixture: g.id, game: g, market: l.market, price: Number(l.price), prob: Number(l.prob),
-                    calProb: Math.round(pickCal.prob(l) * 10000) / 10000 });
-            }
-        }
-    }
-    const slip = selectSlip(cands, { ...DEFAULT_SLIP, ...(opts?.slip ?? {}) });
-    const slipLegs = slip
-        ? [...slip.legs].sort((a, b) => (Date.parse(a.game.kickoff) || 0) - (Date.parse(b.game.kickoff) || 0))
-        : [];
+    const sot = await _sotHistory([...new Set(targets.flatMap(f => [f.home_team_id, f.away_team_id]))]);
+    const card = composeCard({ games, menus, pickCal, sot, opts });
+    const { top, slip, slipLegs } = card;
 
     // Live match links (completed matches excluded) for every game on a card.
     const ids = [...new Set([...top.map(g => g.id), ...slipLegs.map(l => l.fixture)])];
@@ -391,37 +487,18 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         m[r.provider] = r.match_url;
     }
 
-    const _leg = (g, l, extra) => ({
-        fixture_id: g.id,
-        home: g.f.home_name, away: g.f.away_name, league: g.f.league,
-        kickoff: g.kickoff,
-        market: l.market, label: tipMarketLabel(l.market),
-        price: l.price, prices: _providerPrices(rowsByFixture.get(g.id), l.market),
-        links: linksByFixture.get(g.id) ?? {},
-        prob: l.prob, cal_prob: l.calProb, cell_key: cellKey(l),
-        outcome: null,
-        ...extra,
-    });
-    const legs = [
-        ...top.map((g, i) => _leg(g, g.pick, {
-            card: i, kind: 'pick', tier_label: 'Top picks', reasoning: _pickReasoning(g.pick, i + 1, top.length),
-        })),
-        ...slipLegs.map(l => _leg(l.game, l, {
-            card: top.length, kind: 'slip', tier_label: `Daily slip ${slip.odds.toFixed(2)}x`,
-            slip_odds: slip.odds, slip_chance: slip.chance,
-            reasoning: _slipReasoning(l, slip),
-        })),
-    ];
+    const legs = cardLegs(card, { rowsByFixture, linksByFixture });
+    const shown = legs.filter(l => l.kind !== 'shadow');
 
     const size = { ...DEFAULT_PICK, ...(opts ?? {}) }.cardSize;
-    const row = legs.length ? {
+    const row = shown.length ? {
         slip_date: slipDate,
         status: 'published',
         mood: top.length >= size && slip ? 'green' : 'amber',
         legs: JSON.stringify(legs),
         // The slip's combined price; the Top picks are singles and carry none.
         combined_odds: slip ? slip.odds : null,
-        legs_total: legs.length,
+        legs_total: shown.length,
         cards_total: top.length + (slip ? 1 : 0),
         algo_version: algoVersion,
         backfilled: false,
@@ -446,7 +523,7 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
     await db('daily_slips').insert(row).onConflict('slip_date')
         .merge(['status', 'mood', 'legs', 'combined_odds', 'legs_total', 'cards_total', 'algo_version', 'computed_at']);
 
-    if (!legs.length) return { date: slipDate, noSlip: true, fixtures: targets.length };
+    if (!shown.length) return { date: slipDate, noSlip: true, fixtures: targets.length };
     return { date: slipDate, slip: { mood: row.mood, picks: top.length, slip_odds: slip?.odds ?? null } };
 }
 
@@ -528,7 +605,7 @@ export async function settleDailySlips() {
             const slipRoll = slipLegs.length ? slipOutcomeRollup(slipLegs.map(l => l.outcome ?? null)).outcome : null;
             const patch = {
                 legs: JSON.stringify(r.legs),
-                legs_hit: r.legs.filter(l => l.outcome === 'hit').length,
+                legs_hit: r.legs.filter(l => l.kind !== 'shadow' && l.outcome === 'hit').length,
                 cards_won: score.won + (slipRoll === 'won' ? 1 : 0),
             };
             const dayOutcome = pickLegs.length ? score.outcome : slipRoll;

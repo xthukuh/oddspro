@@ -166,6 +166,27 @@ publishes. A first version of the replay sorted its candidate pool backwards and
 40 least efficient legs (it reported ~30% won); the selector now lives in `pick-rules.js`
 and the replay calls it, so the two cannot drift again.
 
+**Stats shadow (2026-10-16).** `src/db/shadow-rules.js` logs the one rule family that survived
+the 2026-10-16 four-analyst study (tmp/analysis/*.md: strength gaps, per-fixture goal
+profiles and API-Football/H2H signals found no edge the price does not already hold):
+combined **shots-on-target volume**. V = mean of (both sides' shots on target per game) over
+each team's last 8 earlier stat games, averaged across the two teams, both teams needing >= 3
+such games (no league-average stand-in). GG fires at V >= 10.25 and O 2.5 at V >= 10.13, at
+1.50+. Shadow legs ride the daily_slips row as `kind: 'shadow'`: graded by the settle pass,
+never shown, never counted in legs/cards, so the record accrues without risking the card.
+A full-slip comparison on identical days kept the shipped slip as headline (only it held a
+positive 95% interval and it publishes every day; the stats-only slip found a slip on about
+half the days).
+
+**One selection, live and backfill.** `composeCard` (Top picks + slip + shadow from loaded
+data) and `cardLegs` (the stored records) are the single definition `buildDailySlip` and
+`scripts/backfill-algo.js` both call. The backfill recomputes only derived rows for past days
+(the Pick in `tip_banker_*` and `daily_slips`, `backfilled = 1`), walk-forward over pre-kickoff
+prices with the live 90-day window, grades through the normal settle passes, and writes
+`tmp/backfill-algo-<stamp>.json` first (`--restore` undoes it). Local run over 2026-07-16..
+10-15 on the fully synced warehouse: daily slip won 43 / lost 48 (47.3%), +19.49 units at
+1 unit a day; Top picks 174 / 100 (63.5%); shadow 403 / 226 (64.1%).
+
 The GEN-2 ladder, Hunter singles and the Sharp 4x card below are **no longer built**; their
 sections stay as the record of what the historical `daily_slips` rows contain.
 
