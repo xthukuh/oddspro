@@ -63,12 +63,15 @@ test('parseFeatureList is total over admin-typed junk', () => {
     assert.equal(featureAllowed(GUEST, 'sure_bets', { guestPremium: true, guestExcept: 'nope' }), true);
 });
 
-test('odds_history is signed-in only and GUEST_PREMIUM can never open it', () => {
-    assert.equal(featureAllowed(GUEST, 'odds_history', {}), false);
-    assert.equal(featureAllowed(GUEST, 'odds_history', { guestPremium: true, guestExcept: '' }), false);
-    assert.equal(featureAllowed(USER, 'odds_history', {}), true);
-    assert.equal(featureAllowed(ADMIN, 'odds_history', {}), true);
-    assert.equal(GUEST_FEATURES.includes('odds_history'), false);
+test('odds_history and rendered_view follow GUEST_PREMIUM since 2026-10-16, and re-lock per feature', () => {
+    for (const f of ['odds_history', 'rendered_view']) {
+        assert.equal(featureAllowed(GUEST, f, {}), false);                                    // switch off: signed-in only
+        assert.equal(featureAllowed(GUEST, f, { guestPremium: true, guestExcept: '' }), true); // switch on: open
+        assert.equal(featureAllowed(GUEST, f, { guestPremium: true, guestExcept: f }), false); // named exception re-locks
+        assert.equal(featureAllowed(USER, f, {}), true);
+        assert.equal(featureAllowed(ADMIN, f, {}), true);
+        assert.equal(GUEST_FEATURES.includes(f), true);
+    }
 });
 
 test('unknown feature keys throw - a typo\'d gate must never fail open', () => {

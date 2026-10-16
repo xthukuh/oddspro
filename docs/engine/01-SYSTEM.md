@@ -678,10 +678,11 @@ floor: `tip_reasoning`, `future_dates`, `sure_bets`, `safe_picks`, `methodology`
 `daily_multibet` all default `minTier:'guest'`, plus the `accountBound` `slip_sharing`/
 `prefs_sync` pinned at `minTier:'user'` - structurally impossible to open to a guest
 since they read/write rows owned by a user id, so `GUEST_PREMIUM` can never touch them
-by construction, not by comment. `odds_history` (2026-10-10, `GET /api/odds-history`) is
-`minTier:'user'` without being account-bound: `GUEST_PREMIUM` only ever opens
-`guest`-tier entries, so it stays signed-in only, while a later move to `admin` or a
-subscription tier is one edit. `effectiveMinTier(feature, opts)` resolves the floor
+by construction, not by comment. `odds_history` (2026-10-10, `GET /api/odds-history`) and
+`rendered_view` (`GET /api/view`) were signed-in floors until 2026-10-16, when the owner
+opened premium to guests: both are now `minTier:'guest'`, so they follow `GUEST_PREMIUM`
+like the rest and re-lock one at a time through `GUEST_PREMIUM_EXCEPT` (or all at once
+with `GUEST_PREMIUM` off). `effectiveMinTier(feature, opts)` resolves the floor
 against runtime policy: `opts.guestPremium` off lifts every guest-tier feature to
 `'user'` (the pre-2026-08 behavior); on, it leaves them at `'guest'` except any key
 named in `opts.guestExcept` (the `GUEST_PREMIUM_EXCEPT` setting, parsed by

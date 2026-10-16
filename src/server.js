@@ -681,14 +681,16 @@ app.get('/api/daily-slip/timeline', optionalAuth, async (req, res, next) => {
 
 // GET /api/view - the RENDERED view (Phase 2): the exact dataset the
 // signed-in browser shows, computed server-side through the same shared
-// pure pipeline (magic-rules verbatim). Full tier only (session, PAT or
-// machine bearer) - it mirrors the signed-in table, so a guest teaser
-// makes no sense here. Params: date, strategy, safe_only=1, one_of_each=1,
+// pure pipeline (magic-rules verbatim). Gated by the `rendered_view`
+// registry feature since 2026-10-16 (guest-tier, so GUEST_PREMIUM opens it
+// and GUEST_PREMIUM_EXCEPT re-locks it); machine bearers and AUTH_ENABLED=0
+// stay full. Params: date, strategy, safe_only=1, one_of_each=1,
 // providers=a,b (also the one-of-each priority order).
 app.get('/api/view', optionalAuth, async (req, res, next) => {
     try {
-        const full = !config.AUTH_ENABLED || req.user != null
-            || bearerMatches(req.get('authorization'), MACHINE_BEARERS);
+        const full = !config.AUTH_ENABLED
+            || bearerMatches(req.get('authorization'), MACHINE_BEARERS)
+            || featureAllowed(req.user ?? null, 'rendered_view', featureOpts());
         if (!full) return res.status(401).json({ error: 'Sign in or use an access token for the rendered view.', auth_required: true });
         const strategy = String(req.query.strategy || 'sure');
         if (!knownStrategy(strategy)) return res.status(400).json({ error: `unknown strategy: ${strategy}` });
