@@ -715,6 +715,32 @@ the shown bet). Sources: `docs/research/`.
     id; `knex_migrations` lists `20261010000001`/`000003` at the boot timestamp; the four new
     tables exist (empty until the first light pass).
 
+- 2026-10-16 (PM) - **Second deploy of the day plus a live algorithm backfill, verified.**
+  - Local warehouse: Docker `oddspro-db` (mariadb:11.7.2) on 127.0.0.1:3307, volume
+    `oddspro-mariadb-data`; `.env` DB_PORT=3307 + DB_DOCKER_CONTAINER=oddspro-db (the name
+    `mariadb` and port 3306 belong to the owner's WSL local-web stack - a second container
+    named `mariadb` blocked its `docker compose up`). `.env.deploy` rebuilt from the live app
+    `.env` by piping a small script over `ssh oddspro 'bash -s'` into the gitignored file, so
+    the password never prints. Full pull: roll the local-only migration back first (`knex
+    migrate:down`) so heads match, `db-sync.js pull --full --yes --tables <all but
+    odds_markets>` (19 tables, about 6 min), then `--tables odds_markets` alone (353.6 MB gz,
+    29.4M rows, 43 min import); the first odds attempt was reset by the host at ~320 MB, the
+    built-in retry finished it. Re-apply the migration after.
+  - Deploy: host backup script (DB minus odds_markets + schema with `Dump completed` tails,
+    app tar) detached with `nohup`, then rebuild `web/dist` (the shared pure modules ship in
+    the web bundle too - a stale dist ships old ranking code) and `npm run package:deploy`,
+    selector stop -> `deploy-remote.js --app --web` -> start -> detached `.HALT` cycle
+    (script with `trap 'rm -f .HALT' EXIT`, waits until `ps ... lsnode` shows 0, wakes with a
+    curl). `/api/version` is not a route (404); check `/api/refresh` for `writer` + `build`.
+  - Live backfill: `scripts/backfill-algo.js` from the app dir with `~/.nvm/.../v24.18.0`
+    node, `NODE_OPTIONS=--max-old-space-size=1536`, month-sized chunks in one detached
+    script (load times 300 / 606 / 695 s per chunk); each chunk writes its own
+    `tmp/backfill-algo-<stamp>.json` and prints its `--restore` undo. Host query helper must
+    pin `APP=~/oddspro-app-v1.4.0`: `ls -d ~/oddspro-app*` picks the dead v1.3.0 dir first
+    (no `.env`, "Access denied ... using password: NO").
+  - Verify a backfill from outside with the public timeline: `curl -s
+    "https://oddspro.ke/api/daily-slip/timeline?days=120"` and count legs under 1.50 per day.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
@@ -764,3 +790,4 @@ the shown bet). Sources: `docs/research/`.
 - 2026-10-16: §5 append: first full deploy on the migrated host (tools present/absent,
   backups, the stop -> deploy -> start -> `.HALT` order, the pgrep self-match trap, ssh
   throttling on the new host).
+- 2026-10-16: §5 append: local Docker warehouse (oddspro-db :3307), full production pull, PM deploy, chunked live algorithm backfill and its outside verification.
