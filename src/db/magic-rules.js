@@ -434,12 +434,11 @@ export const STRATEGIES = [
         // the full row, so a stats-vetoed fixture with no stats tip still
         // ranks by its Pick instead of sinking. The id stays 'banker' so
         // stored sort chains keep working.
-        rowScore: (row, cal) => {
-            const p = bankerProb(row, cal);
-            if (p != null) return p;
-            const tip = tipView(row);
-            return tip ? estimateLegProb(tip, cal) : null;
-        },
+        // Rows without a Pick sink (null). No fallback to the stats tip: its
+        // floor is 1.35 and its number is a different estimate, so it used
+        // to rank games with no 1.50+ tip ABOVE real Picks (seen 2026-10-16
+        // on backfilled days).
+        rowScore: (row, cal) => bankerProb(row, cal),
         // Ledger-replay path (tip views carry no banker fields): the tip's
         // calibrated survival - same layer, total by construction.
         score: (tip, cal) => estimateLegProb(tip, cal),
