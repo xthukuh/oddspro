@@ -81,7 +81,9 @@ The Pick + Top-3 picks card (current since 2026-10-16; chapter 05 "The Pick"): r
 production `pick-rules.js` over the settled extract with `node scripts/replay-picks.js
 [tmp/sharp/fx.ndjson]` (`WINDOW=<days>` env overrides the 90-day window; read-only). It must
 print `below 1.50: 0` and claimed within about a point of hit. Build the extract with the
-Sharp procedure below (host extract, then `sharp-prep.js`).
+Sharp procedure below (host extract, then `sharp-prep.js`). The daily 2-leg 2.5x slip:
+`node scripts/replay-slips.js [file]` replays it and the alternative designs through the
+production `selectSlip` (read-only; `DUMP=<file.json>` writes the per-day rows).
 Daily MultiBet grid + timeline backfill (pre-2026-10-16 ladder): `node scripts/simulate-daily-slip.js --db oddspro`
 (report; `--write-daily --yes` backfills `daily_slips` walk-forward; findings doc
 `docs/research/2026-08-06-daily-multibet-simulations.md`).

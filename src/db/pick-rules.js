@@ -139,3 +139,61 @@ export function picksDayScore(legs) {
     const outcome = pending > 0 ? null : (won + lost === 0 ? 'void' : (units > 0 ? 'won' : 'lost'));
     return { won, lost, void: voided, pending, units, outcome };
 }
+
+// --- Daily slip (owner wizard 2026-10-16: 2 legs, combined 2.5x or more) ----
+// The fewest-legs multiplier card: exactly `legs` legs, one per game, each a
+// 1.50-2.20 market (not DNB), maximizing the product of our calibrated
+// chances subject to combined odds >= minOdds. Candidates are any qualifying
+// market of the day's games (not only each game's Pick); a candidate that
+// contradicts its game's Pick is dropped by the caller.
+//
+// Replay (scripts/replay-slips.js, this selector, walk-forward, one slip a
+// day, train 2026-07-16..09-13 / untouched test 09-14..10-15):
+//   2 legs >= 2.5x: won 46.7% / 56.3% of days at 2.56x, flat ROI +21% / +42%
+//   2 legs >= 3x:   won 35.0% / 40.6% at 3.03x, ROI +7% / +23%
+//   3 legs >= 4x:   won 25.0% / 34.4% at 4.13x, ROI +4.5% / +38.7%
+// Small samples (60 / 32 days): early evidence, not proof. The claimed chance
+// ran BELOW realized (38-40% claimed). Gating days on the claimed chance did
+// not separate winners from losers, so every day publishes.
+export const DEFAULT_SLIP = Object.freeze({
+    legs: 2,
+    minOdds: 2.5,
+    minPrice: 1.5,
+    maxPrice: 2.2,
+    pool: 40,
+});
+
+// cands: [{ fixture, market, price, calProb, ... }]. Returns
+// { legs (kickoff order not applied), odds, chance } | null.
+export function selectSlip(cands, opts = DEFAULT_SLIP) {
+    const o = { ...DEFAULT_SLIP, ...opts };
+    const eff = c => Math.log(c.calProb) / Math.log(c.price);   // survival cost per unit of log-odds
+    const pool = (cands ?? [])
+        .filter(c => c && isPick(c.market, c.price, o) && c.calProb > 0 && c.calProb < 1)
+        .sort((a, b) => (eff(b) - eff(a)) || (b.calProb - a.calProb))
+        .slice(0, o.pool)
+        .sort((a, b) => (b.calProb - a.calProb) || (a.price - b.price));
+    const need = Math.log(o.minOdds) - 1e-9;
+    let top = null;
+    const chosen = [], used = new Set();
+    const rec = (start, lp, lo) => {
+        if (chosen.length === o.legs) {
+            if (lo >= need && (!top || lp > top.lp)) top = { lp, lo, legs: [...chosen] };
+            return;
+        }
+        for (let i = start; i < pool.length; i++) {
+            const c = pool[i];
+            if (used.has(c.fixture)) continue;
+            used.add(c.fixture); chosen.push(c);
+            rec(i + 1, lp + Math.log(c.calProb), lo + Math.log(c.price));
+            chosen.pop(); used.delete(c.fixture);
+        }
+    };
+    rec(0, 0, 0);
+    if (!top) return null;
+    return {
+        legs: top.legs,
+        odds: Math.round(Math.exp(top.lo) * 100) / 100,
+        chance: Math.round(Math.exp(top.lp) * 10000) / 10000,
+    };
+}

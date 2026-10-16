@@ -143,6 +143,29 @@ What changed is what the user sees: one obvious tip per game, a score per day in
 verdict word, and the path of which picks won. Not modelled in the replay: the live
 `errorBoost`.
 
+**The daily slip (2026-10-16, owner wizard: fewest legs, 2.5x minimum).** Below the Top-3
+singles, `buildDailySlip` adds one parlay card (`kind: 'slip'`, `combined_odds` = its
+price): exactly 2 legs, one per game, each a 1.50-2.20 market (not DNB), chosen by
+`pick-rules.js` `selectSlip` to maximize the product of our calibrated chances subject to
+combined odds >= 2.5x. Candidates are every qualifying market of the day's games (menus
+from non-stale prices, chances from the cached Pick calibrator), minus any leg that
+contradicts its game's Pick. The settle pass counts a won slip in `cards_won`; the day
+verdict stays the picks score unless a day has no picks. Replay (`node
+scripts/replay-slips.js`, the same selector, one slip a day):
+
+| Design | train won | test won | avg odds | flat ROI train / test |
+|---|---|---|---|---|
+| **2 legs >= 2.5x (shipped)** | 46.7% | 56.3% | 2.56x | +21% / +42% |
+| 2 legs >= 3x | 35.0% | 40.6% | 3.03x | +7% / +23% |
+| 3 legs >= 4x | 25.0% | 34.4% | 4.13x | +4.5% / +38.7% |
+| 2 legs >= 4x | 21.7% | 12.5% | 4.09x | -12% / -50% |
+
+Samples are 60 and 32 days, so the ROI is early evidence, not an established edge. Gating
+days on the claimed pair chance did not separate winners from losers, so every day
+publishes. A first version of the replay sorted its candidate pool backwards and kept the
+40 least efficient legs (it reported ~30% won); the selector now lives in `pick-rules.js`
+and the replay calls it, so the two cannot drift again.
+
 The GEN-2 ladder, Hunter singles and the Sharp 4x card below are **no longer built**; their
 sections stay as the record of what the historical `daily_slips` rows contain.
 
