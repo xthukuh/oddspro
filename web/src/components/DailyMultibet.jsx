@@ -25,14 +25,15 @@ const _kick = iso => {
 };
 
 const _units = u => `${u >= 0 ? '+' : ''}${u.toFixed(2)}u`;
-const _isPicksDay = d => Array.isArray(d.legs) && d.legs.some(l => l.kind === 'pick');
+const _isPicksDay = d => Array.isArray(d.legs) && d.legs.some(l => l.kind === 'pick' || l.kind === 'slip');
+const _ofKind = (d, kind) => (Array.isArray(d.legs) ? d.legs.filter(l => l.kind === kind) : []);
 
 // The day's score line. Picks days: "2 of 3 won" (+ units once anything
 // settled); older days: legs landed. Green when the day made money.
 function OutcomeBadge({ d }) {
     if (d.status === 'no_slip') return <span className="text-[11px] text-label-3">no card</span>;
     if (_isPicksDay(d)) {
-        const s = picksDayScore(d.legs);
+        const s = picksDayScore(_ofKind(d, 'pick'));
         const decided = s.won + s.lost;
         if (!decided) return <span className="text-[11px] text-label-2">{s.pending ? 'to play' : 'void'}</span>;
         return (
@@ -131,6 +132,36 @@ function PathStep({ leg, index, last, allPrices }) {
     );
 }
 
+// The 2-leg daily slip (2026-10-16): one parlay at 2.5x or more, drawn as the
+// same kickoff-order path. Its result reads WON or "1/2 legs", never LOST.
+function SlipCard({ legs, allPrices }) {
+    if (!legs.length) return null;
+    const odds = Number(legs[0].slip_odds ?? legs.reduce((p, l) => p * Number(l.price), 1));
+    const hits = legs.filter(l => l.outcome === 'hit').length;
+    const decided = legs.filter(l => l.outcome === 'hit' || l.outcome === 'miss').length;
+    const missed = legs.some(l => l.outcome === 'miss');
+    const won = legs.every(l => l.outcome === 'hit' || l.outcome === 'void') && hits > 0;
+    return (
+        <div className="mt-2.5 pt-2 border-t border-separator-2">
+            <div className="flex items-center gap-2 text-[11px] uppercase tracking-wide">
+                <span className="font-semibold text-accent"
+                    title="Two legs chosen together as the pair most likely to win at 2.5x or more. Replay: won 46.7% of training days, 56.3% of the test month.">
+                    Daily slip · {odds.toFixed(2)}x
+                </span>
+                {legs[0].slip_chance != null && (
+                    <span className="normal-case text-label-3" title="Our calibrated chance that both legs land">
+                        {Math.round(legs[0].slip_chance * 100)}% by our numbers
+                    </span>
+                )}
+                <span className={`ml-auto font-bold normal-case tabular-nums ${won ? 'text-hit' : 'text-label-2'}`}>
+                    {won ? 'WON' : missed || decided ? `${hits}/${legs.length} legs` : 'to play'}
+                </span>
+            </div>
+            <PicksPath legs={legs} allPrices={allPrices} />
+        </div>
+    );
+}
+
 function PicksPath({ legs, allPrices }) {
     const ordered = [...legs].sort((a, b) => (Date.parse(a.kickoff) || 0) - (Date.parse(b.kickoff) || 0));
     return (
@@ -218,13 +249,19 @@ function DayCard({ d, today, allPrices }) {
                 )}
                 <span className="ml-auto text-[12px] tabular-nums text-label-2">
                     {d.status !== 'published' ? ' - '
-                        : picks || d.combined_odds == null ? `${d.legs_total} picks`
-                            : `${d.legs_total} legs @ ${Number(d.combined_odds).toFixed(2)}x`}
+                        : picks ? `${_ofKind(d, 'pick').length} picks${d.combined_odds != null ? ` + ${Number(d.combined_odds).toFixed(2)}x slip` : ''}`
+                            : d.combined_odds == null ? `${d.legs_total} picks`
+                                : `${d.legs_total} legs @ ${Number(d.combined_odds).toFixed(2)}x`}
                 </span>
                 <OutcomeBadge d={d} />
             </div>
             {!teaser && Array.isArray(d.legs) && d.legs.length > 0 && (
-                picks ? <PicksPath legs={d.legs} allPrices={allPrices} /> : <LegacyCards d={d} allPrices={allPrices} />
+                picks
+                    ? <>
+                        <PicksPath legs={_ofKind(d, 'pick')} allPrices={allPrices} />
+                        <SlipCard legs={_ofKind(d, 'slip')} allPrices={allPrices} />
+                    </>
+                    : <LegacyCards d={d} allPrices={allPrices} />
             )}
         </div>
     );
@@ -258,8 +295,10 @@ export default function DailyMultibet({ onClose, premium, onSignIn }) {
                 <p className="px-6 pb-2 text-[13px] text-label-2 leading-relaxed">
                     Today's <span className="text-accent font-semibold">top 3 picks</span>: the three games whose tip at 1.50+ odds
                     carries our highest win chance, learned from our own settled results. Each pick is its own bet, so one miss
-                    never wipes out the day. Follow the path in kickoff order: <span className="text-hit font-semibold">✓</span> won,{' '}
-                    <span className="text-miss font-semibold">✗</span> missed, numbers still to play.
+                    never wipes out the day. Below them, the <span className="text-accent font-semibold">daily slip</span>: two
+                    legs that together pay 2.5x or more, the pair most likely to win. Follow each path in kickoff
+                    order: <span className="text-hit font-semibold">✓</span> won, <span className="text-miss font-semibold">✗</span> missed,
+                    numbers still to play.
                 </p>
                 {s && (
                     <div className="px-6 pb-2 flex flex-wrap gap-2 text-[12px]">
