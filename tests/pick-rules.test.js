@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
     DEFAULT_PICK, isPickMarket, isPick, fixturePick, selectTopPicks, picksDayScore,
+    selectSlip, DEFAULT_SLIP,
 } from '../src/db/pick-rules.js';
 import { makeCalibrator } from '../src/db/leg-calibration.js';
 
@@ -101,4 +102,31 @@ test('DEFAULT_PICK is frozen at the owner directive values', () => {
     assert.equal(DEFAULT_PICK.minPrice, 1.5);
     assert.equal(DEFAULT_PICK.cardSize, 3);
     assert.throws(() => { DEFAULT_PICK.minPrice = 1.01; });
+});
+
+const leg = (fixture, market, price, calProb) => ({ fixture, market, price, calProb });
+
+test('selectSlip: 2 legs, one per game, combined >= 2.5x, best product of chances', () => {
+    const s = selectSlip([
+        leg(1, '1', 1.5, 0.66), leg(1, 'U 3.5', 1.55, 0.65),   // same game: at most one leg
+        leg(2, '2', 1.6, 0.63), leg(3, 'X2', 1.7, 0.61), leg(4, 'O 2.5', 2.1, 0.5),
+    ]);
+    assert.equal(s.legs.length, 2);
+    assert.equal(new Set(s.legs.map(l => l.fixture)).size, 2);
+    assert.ok(s.odds >= 2.5, `odds ${s.odds}`);
+    // 1.5 x 1.6 = 2.40 and 1.55 x 1.6 = 2.48 miss the floor; the best
+    // qualifying pair is 1 (0.66) x X2 (0.61) = 2.55x at 0.4026
+    assert.deepEqual(s.legs.map(l => l.market).sort(), ['1', 'X2']);
+    assert.equal(s.odds, 2.55);
+    assert.equal(s.chance, 0.4026);
+});
+
+test('selectSlip never takes a sub-1.50, DNB or over-2.20 leg, and is null when 2.5x is unreachable', () => {
+    assert.equal(selectSlip([leg(1, 'O 0.5', 1.03, 0.95), leg(2, 'O 0.5', 1.04, 0.94)]), null);
+    assert.equal(selectSlip([leg(1, 'DNB1', 1.8, 0.6), leg(2, 'DNB2', 1.9, 0.6)]), null);
+    assert.equal(selectSlip([leg(1, '1', 1.5, 0.66), leg(2, '1', 1.5, 0.66)]), null);   // 2.25x < 2.5x
+    assert.equal(selectSlip([leg(1, 'X', 3.4, 0.3), leg(2, 'X', 3.2, 0.3)]), null);
+    assert.equal(selectSlip([]), null);
+    assert.equal(DEFAULT_SLIP.minOdds, 2.5);
+    assert.equal(DEFAULT_SLIP.legs, 2);
 });

@@ -139,6 +139,8 @@ node scripts/hotfix-remote.js <file...> [--from <dir>] [--restart] [--dry-run]
                                     # prints the rollback command; --restart touches tmp/restart.txt
 node scripts/replay-picks.js        # read-only walk-forward replay of the Pick + Top-3 picks card over
                                     # tmp/sharp/fx.ndjson (chapter 05 "The Pick"); must print `below 1.50: 0`
+node scripts/replay-slips.js        # read-only replay of the daily 2-leg 2.5x slip and alternative designs
+                                    # through the production selectSlip (chapter 05 "The daily slip")
 node scripts/edge-sentinel.js       # standing M4.3 instrument (read-only, ~seconds): anchoring effect,
                                     # AI-market dissent, dissent calibration over fixture_ai_insights
 

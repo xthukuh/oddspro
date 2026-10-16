@@ -12,7 +12,7 @@
 import { db } from './db/connection.js';
 import { FINAL_STATUSES } from './apisports.js';
 import { buildTipBooks, tipOutcome } from './db/tip-rules.js';
-import { marketMenu } from './db/ladder-rules.js';
+import { marketMenu, contradicts } from './db/ladder-rules.js';
 import { makeCalibrator, cellKey } from './db/leg-calibration.js';
 import {
     DEFAULT_GEN2, slipOutcomeRollup, slipStreaks,
@@ -21,7 +21,7 @@ import {
     makeHuntState, observeHuntLeg,
 } from './db/value-hunt.js';
 import { tipMarketLabel, pickView } from './db/magic-rules.js';
-import { DEFAULT_PICK, selectTopPicks, picksDayScore } from './db/pick-rules.js';
+import { DEFAULT_PICK, DEFAULT_SLIP, isPick, selectTopPicks, selectSlip, picksDayScore } from './db/pick-rules.js';
 import { canonicalMarket } from './markets.js';
 import { effective } from './settings.js';
 import { debugLog } from './utils.js';
@@ -230,6 +230,13 @@ function _pickReasoning(pick, rank, of) {
         + 'A single stake: one miss never cancels the other picks. At 1.50+ odds no pick wins much more than 65% of the time.';
 }
 
+// l: a slip leg { market, price, calProb }; slip: selectSlip's result.
+function _slipReasoning(l, slip) {
+    return `Daily slip leg: ${tipMarketLabel(l.market)} at ${l.price.toFixed(2)}, our calibrated chance ${_pct(l.calProb)}. `
+        + `The two legs were chosen together as the pair most likely to win among all 1.50-2.20 markets that reach ${slip.odds.toFixed(2)}x, `
+        + `about ${_pct(slip.chance)} for the pair by our numbers. Replay: 2-leg 2.5x slips won 46.7% of training days and 56.3% of the untouched test month.`;
+}
+
 // Sharp 4x leg fields and wording - ONE definition shared by the builder and
 // the backfill (sharpLegRecords). `l` is a taken leg: { market, price, prob
 // (BetPawa q), calProb (ours), cell, sharp: { slipOdds, totalOdds, bonusPct } }.
@@ -328,20 +335,52 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
     });
     const top = selectTopPicks(games, { ...DEFAULT_PICK, ...(opts ?? {}) });
 
-    // Display data for the chosen games only: per-provider prices (the "all
-    // bookmakers" toggle) and live match links (completed matches excluded).
-    const ids = top.map(g => g.id);
-    const oddsRows = ids.length ? await db('odds_markets as om')
-        .join('matches as m', 'm.id', 'om.match_id')
-        .whereIn('m.fixture_id', ids)
-        .where('om.is_stale', 0)
-        .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price') : [];
+    // Every non-stale price of the day's games, chunked by fixture (the
+    // 2026-08-23 rule: one IN (...) over a whole slate is killed by the host).
+    // Feeds the slip's candidate menus AND the per-provider display prices.
     const rowsByFixture = new Map();
-    for (const r of oddsRows) {
-        let list = rowsByFixture.get(r.fixture_id);
-        if (!list) rowsByFixture.set(r.fixture_id, list = []);
-        list.push(r);
+    const targetIds = targets.map(f => f.id);
+    const namesById = new Map(targets.map(f => [f.id, { homeName: f.home_name, awayName: f.away_name }]));
+    const menus = new Map();
+    for (let i = 0; i < targetIds.length; i += SETTLED_WINDOW_CHUNK) {
+        const chunk = await db('odds_markets as om')
+            .join('matches as m', 'm.id', 'om.match_id')
+            .whereIn('m.fixture_id', targetIds.slice(i, i + SETTLED_WINDOW_CHUNK))
+            .where('om.is_stale', 0)
+            .select('m.fixture_id', 'm.provider', 'om.type_name', 'om.name', 'om.handicap', 'om.price', 'om.probability');
+        const grouped = _menusByFixture(chunk, namesById);
+        for (const [id, menu] of grouped.menus) menus.set(id, menu);
+        for (const [id, rows] of grouped.byFixture) rowsByFixture.set(id, rows);
     }
+
+    // The daily slip (pick-rules selectSlip): 2 legs, one per game, 1.50-2.20
+    // each, combined >= 2.5x, chosen by OUR calibrated chances. A leg may not
+    // contradict its game's Pick (the table and the card must agree).
+    // Dynamic import: picks.js imports this module, so a static import would
+    // be a cycle.
+    const { todaysPickCalibrator } = await import('./picks.js');
+    const pickCal = await todaysPickCalibrator().catch(e => {
+        console.error(`[daily-slip] pick calibrator unavailable, no slip today: ${e.message}`);
+        return null;
+    });
+    const cands = [];
+    if (pickCal) {
+        for (const g of games) {
+            for (const l of menus.get(g.id) ?? []) {
+                if (!isPick(l.market, l.price) || !(l.prob > 0 && l.prob < 1)) continue;
+                if (g.pick && contradicts(g.pick.market, l.market)) continue;
+                cands.push({ fixture: g.id, game: g, market: l.market, price: Number(l.price), prob: Number(l.prob),
+                    calProb: Math.round(pickCal.prob(l) * 10000) / 10000 });
+            }
+        }
+    }
+    const slip = selectSlip(cands, { ...DEFAULT_SLIP, ...(opts?.slip ?? {}) });
+    const slipLegs = slip
+        ? [...slip.legs].sort((a, b) => (Date.parse(a.game.kickoff) || 0) - (Date.parse(b.game.kickoff) || 0))
+        : [];
+
+    // Live match links (completed matches excluded) for every game on a card.
+    const ids = [...new Set([...top.map(g => g.id), ...slipLegs.map(l => l.fixture)])];
     const linksByFixture = new Map();
     const linkRows = ids.length ? await db('matches').whereIn('fixture_id', ids).whereNull('completed_at')
         .select('fixture_id', 'provider', 'match_url') : [];
@@ -352,29 +391,38 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
         m[r.provider] = r.match_url;
     }
 
+    const _leg = (g, l, extra) => ({
+        fixture_id: g.id,
+        home: g.f.home_name, away: g.f.away_name, league: g.f.league,
+        kickoff: g.kickoff,
+        market: l.market, label: tipMarketLabel(l.market),
+        price: l.price, prices: _providerPrices(rowsByFixture.get(g.id), l.market),
+        links: linksByFixture.get(g.id) ?? {},
+        prob: l.prob, cal_prob: l.calProb, cell_key: cellKey(l),
+        outcome: null,
+        ...extra,
+    });
+    const legs = [
+        ...top.map((g, i) => _leg(g, g.pick, {
+            card: i, kind: 'pick', tier_label: 'Top picks', reasoning: _pickReasoning(g.pick, i + 1, top.length),
+        })),
+        ...slipLegs.map(l => _leg(l.game, l, {
+            card: top.length, kind: 'slip', tier_label: `Daily slip ${slip.odds.toFixed(2)}x`,
+            slip_odds: slip.odds, slip_chance: slip.chance,
+            reasoning: _slipReasoning(l, slip),
+        })),
+    ];
+
     const size = { ...DEFAULT_PICK, ...(opts ?? {}) }.cardSize;
-    const row = top.length ? {
+    const row = legs.length ? {
         slip_date: slipDate,
         status: 'published',
-        mood: top.length >= size ? 'green' : 'amber',
-        legs: JSON.stringify(top.map((g, i) => ({
-            fixture_id: g.id,
-            home: g.f.home_name, away: g.f.away_name, league: g.f.league,
-            kickoff: g.kickoff,
-            market: g.pick.market, label: tipMarketLabel(g.pick.market),
-            price: g.pick.price, prices: _providerPrices(rowsByFixture.get(g.id), g.pick.market),
-            links: linksByFixture.get(g.id) ?? {},
-            prob: g.pick.prob, cal_prob: g.pick.calProb, cell_key: cellKey(g.pick),
-            card: i,
-            kind: 'pick',
-            tier_label: 'Top picks',
-            reasoning: _pickReasoning(g.pick, i + 1, top.length),
-            outcome: null,
-        }))),
-        // Singles, not a parlay: no combined price is offered.
-        combined_odds: null,
-        legs_total: top.length,
-        cards_total: top.length,
+        mood: top.length >= size && slip ? 'green' : 'amber',
+        legs: JSON.stringify(legs),
+        // The slip's combined price; the Top picks are singles and carry none.
+        combined_odds: slip ? slip.odds : null,
+        legs_total: legs.length,
+        cards_total: top.length + (slip ? 1 : 0),
         algo_version: algoVersion,
         backfilled: false,
         computed_at: db.fn.now(),
@@ -398,8 +446,8 @@ export async function buildDailySlip(date = null, { opts = null, algoVersion = A
     await db('daily_slips').insert(row).onConflict('slip_date')
         .merge(['status', 'mood', 'legs', 'combined_odds', 'legs_total', 'cards_total', 'algo_version', 'computed_at']);
 
-    if (!top.length) return { date: slipDate, noSlip: true, fixtures: targets.length };
-    return { date: slipDate, slip: { mood: row.mood, legs: top.length, combined_odds: null } };
+    if (!legs.length) return { date: slipDate, noSlip: true, fixtures: targets.length };
+    return { date: slipDate, slip: { mood: row.mood, picks: top.length, slip_odds: slip?.odds ?? null } };
 }
 
 // Settle pending slips from canonical final scores. Cheap (SQL + pure
@@ -470,10 +518,21 @@ export async function settleDailySlips() {
         // v3 Top-3 picks: singles, so the day is SCORED (picksDayScore) - won
         // when the settled picks made money, with the per-pick record in
         // legs_hit/cards_won - instead of rolled up as one parlay.
-        if (r.legs.some(l => l.kind === 'pick')) {
-            const score = picksDayScore(r.legs);
-            const patch = { legs: JSON.stringify(r.legs), legs_hit: score.won, cards_won: score.won };
-            if (r.outcome == null && score.outcome != null) { patch.outcome = score.outcome; patch.settled_at = db.fn.now(); settled++; }
+        // The 2-leg daily slip (kind 'slip', 2026-10-16) is one parlay card on
+        // top: it adds to cards_won when both legs land, and decides the day
+        // only on a day that published no picks.
+        if (r.legs.some(l => l.kind === 'pick' || l.kind === 'slip')) {
+            const pickLegs = r.legs.filter(l => l.kind === 'pick');
+            const slipLegs = r.legs.filter(l => l.kind === 'slip');
+            const score = picksDayScore(pickLegs);
+            const slipRoll = slipLegs.length ? slipOutcomeRollup(slipLegs.map(l => l.outcome ?? null)).outcome : null;
+            const patch = {
+                legs: JSON.stringify(r.legs),
+                legs_hit: r.legs.filter(l => l.outcome === 'hit').length,
+                cards_won: score.won + (slipRoll === 'won' ? 1 : 0),
+            };
+            const dayOutcome = pickLegs.length ? score.outcome : slipRoll;
+            if (r.outcome == null && dayOutcome != null) { patch.outcome = dayOutcome; patch.settled_at = db.fn.now(); settled++; }
             await db('daily_slips').where('id', r.id).update(patch);
             continue;
         }
