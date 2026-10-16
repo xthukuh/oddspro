@@ -711,6 +711,19 @@ itself, its price, outcome and veto flag stay; the "why" is the guarded part. It
 purely on `role`, so a premium guest's row is spared redaction one level up, in
 `records.js`'s `!access.fullDetail` check, not inside this function.
 
+**Coarse fields and the filter oracle (2026-10-16).** `COARSE_FIELDS` in
+`access-rules.js` is the one list of computed numbers a redacted tier only sees in 0.05
+buckets: `tip_confidence` (sort/filter key `tip`) and our calibrated Pick chance
+`tip_banker_cal` (key `banker`). `redactRecordForRole` rounds them in the payload, and
+`queryRecords` resolves those keys to `ROUND(col / 0.05) * 0.05` for every filter, column
+comparison and sort while `!access.fullDetail`. Without the second half, a guest could
+recover the exact number by bisecting filters (`banker > 0.6612`, then `0.6613`, and so
+on); with it, any two thresholds inside one bucket select the same rows (proven on a
+throwaway MariaDB: 0.6501, 0.6612 and 0.6999 all return the same set for a guest, while
+full access separates them). Full-detail tiers, premium guests and `access=null` callers
+are untouched. A new computed number that guests must not see exactly joins
+`COARSE_FIELDS`; nothing else changes.
+
 This is enforced in `records.js` (the guest all-dates ceiling
 `start_time < CURDATE() + 1 day` in the pinned +03:00 session, plus post-hydrate
 redaction) and in `server.js` (`optionalAuth` on `/api/records`,

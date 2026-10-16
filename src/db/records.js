@@ -2,7 +2,7 @@ import { db } from './connection.js';
 import { discoverMarketColumns, canonicalMarket, marketIdentity, isKnownMarketKey } from '../markets.js';
 import { h2hSummary, formatGoals } from './prematch-calc.js';
 import { parseFilterList } from './filter-csv.js';
-import { redactRecordForRole, stripDetails } from './access-rules.js';
+import { redactRecordForRole, stripDetails, isCoarseKey, CONFIDENCE_STEP } from './access-rules.js';
 import { getMeta } from '../meta.js';
 import { coverageFor } from '../notices.js';
 
@@ -201,10 +201,14 @@ export async function columnCatalogFromMeta() {
 // pivot subquery per referenced market column (one join per key, reused).
 // `op` is the filter operator: a base field with a `like_sql` text target
 // resolves there for `like` conditions (e.g. tip -> fp.tip_market).
-function _sqlTarget(query, key, joined, op = null) {
+// `coarse` (a redacted tier): the access-rules COARSE_FIELDS keys resolve to
+// their bucket, ROUND(col / step) * step, so a filter or sort can never read
+// finer than the payload the same caller receives.
+function _sqlTarget(query, key, joined, op = null, coarse = false) {
     const base = BASE_FIELDS[key];
     if (base) {
         if (TEXT_TARGET_OPS.has(op) && base.like_sql) return base.like_sql;
+        if (coarse && isCoarseKey(key)) return db.raw(`ROUND(${base.sql} / ?) * ?`, [CONFIDENCE_STEP, CONFIDENCE_STEP]);
         return base.raw ? db.raw(base.sql) : base.sql;
     }
     // Base fields handled above; stats (fs:) are display-only (never sort/
@@ -334,15 +338,16 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     }
 
     const joined = new Map();
+    const coarse = !!access && !access.fullDetail;
     for (const f of Array.isArray(filters) ? filters : []) {
-        const target = _sqlTarget(query, f?.key, joined, f?.op);
+        const target = _sqlTarget(query, f?.key, joined, f?.op, coarse);
         if (!target) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
         if (f?.col != null) {
             // Column-to-column comparison: the RHS resolves like the LHS
             // (sharing market joins) and binds as an identifier (??), never
             // a value. SQL NULL semantics drop rows missing either side.
             const op = COL_OPS[f?.op];
-            const rhs = _sqlTarget(query, f.col, joined);
+            const rhs = _sqlTarget(query, f.col, joined, null, coarse);
             if (!op || !rhs) throw new TypeError(`Invalid filter: ${JSON.stringify(f)}`);
             query.where(target, op, typeof rhs === 'string' ? db.raw('??', [rhs]) : rhs);
         } else {
@@ -358,7 +363,7 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     const [{ total }] = await query.clone().count('m.id as total');
 
     for (const s of Array.isArray(sort) ? sort : []) {
-        const target = _sqlTarget(query, s?.key, joined);
+        const target = _sqlTarget(query, s?.key, joined, null, coarse);
         if (!target) throw new TypeError(`Invalid sort key: ${JSON.stringify(s?.key)}`);
         query.orderBy(target, s.dir === 'desc' ? 'desc' : 'asc');
     }

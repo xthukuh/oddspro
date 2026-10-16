@@ -3,7 +3,7 @@
 // server applies to /api/records for guests.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { accessFromUser, guestDateAllowed, redactRecordForRole } from '../src/db/access-rules.js';
+import { accessFromUser, guestDateAllowed, redactRecordForRole, COARSE_FIELDS, isCoarseKey, coarseValue } from '../src/db/access-rules.js';
 
 test('accessFromUser: no user = guest, signed-in = full, admin keeps its role', () => {
     assert.deepEqual(accessFromUser(null), { role: 'guest', canFuture: false, fullDetail: false });
@@ -80,6 +80,29 @@ test('redactRecordForRole(guest) strips internal reasoning, keeps the tip itself
     // input row untouched (redaction returns a copy)
     assert.equal(row.tip_breakdown.parts, 2);
     assert.equal(row.tip_confidence, 0.873);
+});
+
+test('COARSE_FIELDS: one shared list drives payload rounding and filter bucketing', () => {
+    assert.deepEqual(COARSE_FIELDS, { tip_confidence: 'tip', tip_banker_cal: 'banker' });
+    assert.equal(isCoarseKey('tip'), true);
+    assert.equal(isCoarseKey('banker'), true);
+    assert.equal(isCoarseKey('banker_price'), false);   // prices are public bookmaker data
+    assert.equal(isCoarseKey('O 2.5'), false);
+    assert.equal(coarseValue(0.6612), 0.65);
+    assert.equal(coarseValue('0.675'), 0.7);
+    assert.equal(coarseValue(null), null);
+    assert.equal(coarseValue('x'), null);
+});
+
+test('filter oracle closed: thresholds inside one bucket select the same rows', () => {
+    // A guest compares against the bucket (records.js ROUND(col / step) * step,
+    // mirrored by coarseValue), so bisecting 0.6612 vs 0.6650 learns nothing.
+    const chances = [0.6401, 0.6488, 0.6512, 0.6612, 0.6649, 0.6651, 0.6789, 0.7012];
+    const pick = t => chances.filter(c => coarseValue(c) > t);
+    assert.deepEqual(pick(0.6612), pick(0.6501));
+    assert.deepEqual(pick(0.6612), pick(0.6999));
+    // and the redacted payload agrees with what the filter compared
+    for (const c of chances) assert.equal(redactRecordForRole({ tip_banker_cal: c }, 'guest').tip_banker_cal, coarseValue(c));
 });
 
 test('redactRecordForRole(guest) coarsens our Pick chance like the confidence', () => {

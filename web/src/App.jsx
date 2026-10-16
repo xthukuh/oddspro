@@ -72,7 +72,7 @@ const LS_SAFE_OVERRIDES = 'oddspro.safe.overrides';
 // sureBetsSelection). Signed-in only - guest rows are redacted server-side
 // (no tip_breakdown), so the gates cannot evaluate.
 const LS_SURE_BETS = 'oddspro.show.sureBets';
-// Risk gate (settings; default ON): when a magic sort or Safe-only is active,
+// Risk gate (settings; default OFF since 2026-10-16): when a magic sort or Safe-only is active,
 // hide games without sufficient stats (thin rolling sample / H2H / no tip) -
 // the "exclude risky bets" filter. Uses the shared hasSufficientStats gate.
 const LS_RISK_GATE = 'oddspro.show.riskGate';
@@ -281,7 +281,9 @@ export default function App() {
     const [safeOverrides, setSafeOverrides] = useState(() => _loadObj(LS_SAFE_OVERRIDES));
     const [sureBets, setSureBets] = useState(() => localStorage.getItem(LS_SURE_BETS) === '1');
     // Risk gate defaults ON (absent key = on); only an explicit '0' disables it.
-    const [riskGate, setRiskGate] = useState(() => localStorage.getItem(LS_RISK_GATE) !== '0');
+    // Default OFF since 2026-10-16 (owner: "clear filters for a clean slate"):
+    // every game shows until the user turns the thin-stats gate on themselves.
+    const [riskGate, setRiskGate] = useState(() => localStorage.getItem(LS_RISK_GATE) === '1');
     // Base/synthetic column visibility (null = all shown), No pin, and the
     // "Hide selection" cut. Row selection (per display date) is loaded below.
     const [visibleBaseKeys, setVisibleBaseKeys] = useState(() => _load(LS_COLS_BASE));
