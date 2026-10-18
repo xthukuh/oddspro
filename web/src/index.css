@@ -157,6 +157,20 @@ button, [role="button"], a, label, summary {
     touch-action: manipulation;
 }
 
+/* Header/footer glass. The blur runs only where a fine pointer can hover
+   (desktop). On a phone, a backdrop-filter over the scrolling table forces a
+   GPU re-blur every frame - a measured cause of heat and scroll lag on iOS
+   Safari - so touch devices get the solid nav colour instead. */
+@media (hover: hover) and (pointer: fine) {
+    .nav-glass {
+        -webkit-backdrop-filter: blur(25px) saturate(180%);
+        backdrop-filter: blur(25px) saturate(180%);
+    }
+}
+@media (hover: none), (pointer: coarse) {
+    .nav-glass { background-color: var(--color-nav); }
+}
+
 /* iOS sheet/popover animations (from the v3 prototype). */
 @keyframes op-sheet-in { from { opacity: 0; transform: translateY(24px) scale(0.98); } to { opacity: 1; transform: none; } }
 @keyframes op-fade { from { opacity: 0; } to { opacity: 1; } }

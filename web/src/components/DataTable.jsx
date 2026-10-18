@@ -41,6 +41,8 @@ const PROVIDER_STYLE = {
 // tone, adjacent fixtures always differ. Opaque classes on purpose - the
 // sticky Score cell reuses them to cover content scrolling underneath.
 const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
+// Rows mounted per lazy-render page (see the rowLimit block in DataTable).
+const ROW_PAGE = 60;
 
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
@@ -623,15 +625,21 @@ export default function DataTable({
 
     // Column-header sort indicators: each column entry's priority index across
     // the WHOLE chain; the magic column shows the primary magic entry's slot.
-    const order = new Map();
-    chain.forEach((e, i) => { if (e.type === 'column') order.set(e.key, { dir: e.dir, i }); });
+    const order = useMemo(() => {
+        const m = new Map();
+        chain.forEach((e, i) => { if (e.type === 'column') m.set(e.key, { dir: e.dir, i }); });
+        return m;
+    }, [chain]);
     const magicPos = chain.findIndex(e => e.type === 'magic');
     const magicLabels = chain.filter(e => e.type === 'magic')
         .map(e => STRATEGIES.find(s => s.id === e.id)?.label ?? e.id);
-    const tint = new Map();
-    for (const row of rows) {
-        if (!tint.has(row.api_id)) tint.set(row.api_id, ROW_TINTS[tint.size % ROW_TINTS.length]);
-    }
+    const tint = useMemo(() => {
+        const m = new Map();
+        for (const row of rows) {
+            if (!m.has(row.api_id)) m.set(row.api_id, ROW_TINTS[m.size % ROW_TINTS.length]);
+        }
+        return m;
+    }, [rows]);
 
     // ONE left-pinned SUMMARY cell (v1.0.2) keeps the key decision fields (Score
     // / Tip / Magic) in view once the real Tip column scrolls off the left edge,
@@ -683,6 +691,7 @@ export default function DataTable({
         if (!cont) return;
         posRef.current = { top: cont.scrollTop, left: cont.scrollLeft };
         setAtEnd(_atEnd(cont));
+        loadMoreIfNear(cont);
         const th = pinThRefs.current[ANCHOR_KEY];
         if (!th) return;
         const dx = th.getBoundingClientRect().left - cont.getBoundingClientRect().left;
@@ -695,6 +704,31 @@ export default function DataTable({
             return next === prev ? prev : next;
         });
     };
+    // Lazy row rendering: mount the first ROW_PAGE sorted rows and append the
+    // next page whenever the reader scrolls within ~800px of the scroll
+    // container's bottom edge. A busy day is ~1,600 rows x 40+ cells; mounting
+    // them all at once (each hidden-content cell a Tooltip) is what made phones
+    // lag and heat up. The sort, counts, selection and export still see every
+    // row - only the DOM is paged. A date/server-filter change (scrollKey)
+    // starts again at one page; a silent background refresh keeps the depth the
+    // reader already scrolled to, so the restored scroll position stays valid.
+    const [rowLimit, setRowLimit] = useState(ROW_PAGE);
+    const limitKeyRef = useRef(scrollKey);
+    if (limitKeyRef.current !== scrollKey) {
+        limitKeyRef.current = scrollKey;
+        if (rowLimit !== ROW_PAGE) setRowLimit(ROW_PAGE);
+    }
+    const shownRows = useMemo(() => sorted.slice(0, rowLimit), [sorted, rowLimit]);
+    const hasMoreRows = rowLimit < sorted.length;
+    // Appended from the existing onScroll handler (no observer): one
+    // arithmetic check per scroll event, independent of rendering frames.
+    const LOAD_AHEAD_PX = 800;
+    const loadMoreIfNear = cont => {
+        if (hasMoreRows && cont.scrollTop + cont.clientHeight >= cont.scrollHeight - LOAD_AHEAD_PX) {
+            setRowLimit(n => Math.min(n + ROW_PAGE, sorted.length));
+        }
+    };
+
     // The Select column (R28) is a permanent left-pinned column (fixed width, no
     // scrolling duplicate) at the very left edge; the summary pin sits to its
     // right and appears only while the real Tip column is scrolled out of view.
@@ -718,11 +752,11 @@ export default function DataTable({
         <>
         {tipPop && <TipPopover row={tipPop.row} x={tipPop.x} y={tipPop.y} catalog={catalog} cal={cal} onClose={() => setTipPop(null)} />}
         <div className="relative flex-1 min-h-0 flex flex-col">
-        {/* Non-silent load: blur the stale table + float a spinner over it
+        {/* Non-silent load: dim the stale table + float a spinner over it
             (silent background reloads pass loading=false, so they never dim). */}
         {loading && (
             <div className="absolute inset-0 z-10 flex items-center justify-center pointer-events-none">
-                <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface/90 border border-separator-2 shadow-lg [backdrop-filter:blur(6px)]">
+                <div className="flex items-center gap-2 px-3.5 py-2 rounded-full bg-surface border border-separator-2 shadow-lg">
                     <IconSpinner className="[animation:op-spin_0.8s_linear_infinite] text-accent" />
                     <span className="text-xs font-medium text-label-2">Loading...</span>
                 </div>
@@ -731,7 +765,7 @@ export default function DataTable({
         <div
             ref={containerRef}
             onScroll={onScroll}
-            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm transition-[filter,opacity] ${loading ? 'blur-[1.5px] opacity-70' : ''}`}
+            className={`flex-1 min-h-0 overflow-auto bg-surface border border-separator-2 shadow-sm transition-opacity ${loading ? 'opacity-60' : ''}`}
         >
             <table className="w-full text-xs whitespace-nowrap">
                 <thead>
@@ -807,7 +841,7 @@ export default function DataTable({
                     </tr>
                 </thead>
                 <tbody>
-                    {sorted.map(row => (
+                    {shownRows.map(row => (
                         <tr
                             key={row.match_id}
                             // Opaque bg fallback MUST match the pinned cell's fallback below
@@ -857,6 +891,19 @@ export default function DataTable({
                             })}
                         </tr>
                     ))}
+                    {hasMoreRows && (
+                        <tr>
+                            <td colSpan={pinned.length} className="px-2 py-3 text-left text-label-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setRowLimit(n => n + ROW_PAGE)}
+                                    className="sticky left-2 cursor-pointer text-xs text-accent font-medium"
+                                >
+                                    Showing {shownRows.length} of {sorted.length} rows. Show more
+                                </button>
+                            </td>
+                        </tr>
+                    )}
                     {!rows.length && !loading && (
                         <tr>
                             <td colSpan={pinned.length} className="px-2 py-10 text-center">

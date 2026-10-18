@@ -273,6 +273,27 @@ cross-deploy shape drift, and the key is DEVICE-LOCAL: excluded from prefs sync
 (`configSnapshot.js`'s `isTransient`), because multi-MB response bodies must never ride
 either channel.
 
+**Lite devices and lazy rows (2026-10-18):** an iPhone heated up and lagged on a busy day.
+Measured on 2026-10-17: `/api/records` is 1,600 rows, 7.8 MB of JSON (0.9 MB gzipped;
+`markets` alone is 51%), while the in-browser scoring is small (desktop Node: orderRows 2 ms,
+safeSelection 35 ms, JSON.parse 81 ms). The heat came from DOM, GPU and storage work, so:
+- `web/src/device.js` exports `LITE_DEVICE` (no hover or coarse pointer, or Data Saver), read
+  once. Lite devices skip the localStorage seed entirely (hydrate removes any old one), keep 3
+  days in the LRU instead of 8, and skip the neighbour-day prefetch. The server's warm keeper
+  already answers each day from its memo, so a lite visit simply fetches.
+- `DataTable` mounts the first `ROW_PAGE` (60) sorted rows and appends 60 more whenever the
+  reader scrolls within 800px of the container's bottom, checked inside the existing
+  `onScroll` handler (no IntersectionObserver: it never fires in a pane that is not painting
+  frames). A "Showing N of M rows. Show more" row is the manual fallback. Sorting, counts,
+  selection and export still see every row; a `scrollKey` change resets to one page, a silent
+  refresh keeps the depth. The `order` and `tint` maps are memoised.
+- The header/footer blur is the `nav-glass` class in `index.css`, applied only under
+  `(hover: hover) and (pointer: fine)`; touch devices get the solid nav colour. The loading
+  state dims the table with opacity only (the 1.5px blur filter and the pill's backdrop blur
+  are gone).
+- The footer betting ledger (`displayedSummary`) is memoised in App instead of recomputed on
+  every render.
+
 ## Auth, session and the admin panel
 
 **v1.1.0 web:** `web/src/auth/*` - `SessionProvider` + `AuthGate` render sign-in/sign-up/
