@@ -9,6 +9,8 @@ import { MARKET_GROUP_ORDER, marketGroupLabel } from '../columns.js';
 import { THEMES } from '../theme.js';
 import { DEFAULT_SAFE, SAFE_TIERS } from '../../../src/db/magic-rules.js';
 import { exportConfig, importConfig } from '../configSnapshot.js';
+import { keysToClear } from '../appVersion.js';
+import { useSession } from '../auth/SessionProvider.jsx';
 
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : null;
 
@@ -115,16 +117,21 @@ export default function SettingsModal({
     const heading = 'font-semibold text-label mb-2';
     const [pinned, setPinned] = useState(false);
 
-    // Wipe every persisted Odds Pro preference on this device and reload (E5).
-    // Confirmed first - this resets slips, selections, filters, columns, theme...
-    const clearCacheReload = () => {
+    // Wipe every persisted Odds Pro preference and reload (E5). Signed in, the
+    // session survives and the cleared prefs are pushed, so every synced
+    // device resets too (otherwise the next pull restores the old settings).
+    const session = useSession();
+    const signedIn = Boolean(session?.user?.id);
+    const clearCacheReload = async () => {
         const ok = window.confirm(
-            'Clear all saved Odds Pro settings on this device and reload?\n\n'
+            'Clear all saved Odds Pro settings and reload?\n\n'
             + 'This resets your betslips, row selections, filters, column choices, '
-            + 'sort order and theme. It does not touch any data on the server.',
+            + 'column order, sort order and theme'
+            + (signedIn ? ' on every device signed in to your account. You stay signed in.' : ' on this device.'),
         );
         if (!ok) return;
-        for (const k of Object.keys(localStorage)) if (k.startsWith('oddspro.')) localStorage.removeItem(k);
+        for (const k of keysToClear(Object.keys(localStorage))) localStorage.removeItem(k);
+        if (signedIn) await session.resetPrefs();
         location.reload();
     };
 

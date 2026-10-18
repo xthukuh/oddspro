@@ -7,7 +7,7 @@ import {
     nextDelay, reduceBackoff, shouldWarnOffline, DEFAULT_BACKOFF, WARN_AFTER_FAILURES,
 } from '../web/src/backoff.js';
 import {
-    isStaleBuild, isKnownKey, keysToPrune, NEVER_PRUNE,
+    isStaleBuild, isKnownKey, keysToPrune, keysToClear, NEVER_PRUNE,
 } from '../web/src/appVersion.js';
 
 const noJitter = () => 0.5; // rand()=0.5 -> the jitter term is exactly 0
@@ -132,4 +132,17 @@ test('keysToPrune is total on junk input', () => {
     for (const junk of [null, undefined, 'nope', 42, [null, 7, {}]]) {
         assert.deepEqual(keysToPrune(junk, { clientBuild: 'v1', serverBuild: 'v1' }), []);
     }
+});
+
+test('keysToClear wipes every oddspro pref but keeps the sign-in and sync cursor', () => {
+    const keys = [
+        'oddspro.cols.order', 'oddspro.theme', 'oddspro.select.d.2026-10-18', 'oddspro.retired.thing',
+        'oddspro.session', 'oddspro.prefs.sync', 'oddspro.visitor', 'oddspro.maintenance',
+        'other.app.key',
+    ];
+    assert.deepEqual(keysToClear(keys), [
+        'oddspro.cols.order', 'oddspro.theme', 'oddspro.select.d.2026-10-18', 'oddspro.retired.thing',
+    ]);
+    for (const k of NEVER_PRUNE) assert.ok(!keysToClear([k]).includes(k));
+    assert.deepEqual(keysToClear(null), []);
 });

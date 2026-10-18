@@ -72,6 +72,17 @@ export function keysToPrune(allKeys, { clientBuild, serverBuild } = {}) {
         .filter(k => !isKnownKey(k));
 }
 
+// Which keys does "Clear cache & reload" remove? Every oddspro.* preference,
+// known or not, but never NEVER_PRUNE: wiping the sign-in token logged the user
+// out, so the next sign-in pulled the server's prefs copy straight back and the
+// reset (column order included) silently undid itself. The cursor stays so the
+// follow-up push lands one version past the server.
+export function keysToClear(allKeys) {
+    return (Array.isArray(allKeys) ? allKeys : [])
+        .filter(k => typeof k === 'string' && k.startsWith('oddspro.'))
+        .filter(k => !NEVER_PRUNE.includes(k));
+}
+
 // --- effects ----------------------------------------------------------------
 
 // Remove this build's obsolete keys. Returns the pruned list (for logging).
