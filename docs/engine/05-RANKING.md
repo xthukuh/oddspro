@@ -191,6 +191,14 @@ best Kenyan price x Pinnacle fair probability reached 1.00 returned +8.0% (n 271
 not proof, so the strategy runs as a **shadow**: stored, settled and reported, never shown,
 never part of the live Pick or the daily card.
 
+Forward test clock (owner decision 2026-10-18): day 1 = 2026-10-18, the day the capture went
+live (migration at the 11:41Z boot, 2,064 due-lane lines by 15:10Z, first today..+2 page
+sweep 1,940 lines for 251 fixtures). The pool fills as kickoff approaches: the page sweep
+found 2 eligible legs of 127 with a line for the day itself, 5 of 92 for the next day and
+0 of 54 for day +2, while the T-3h/T-1h due captures had already built ten legs for the day.
+At roughly 10 pool legs a day the 400-leg bar lands near day 40. Read the report weekly
+(`node scripts/report-anchored.js`); the bar and the knobs do not move mid-test.
+
 The pure rules live in `src/db/anchor-rules.js` (named so they never collide with the retired
 Sharp 4x `sharp-rules.js`); the shell is `src/reference-odds.js`. Per fixture:
 

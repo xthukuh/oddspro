@@ -741,6 +741,33 @@ the shown bet). Sources: `docs/research/`.
   - Verify a backfill from outside with the public timeline: `curl -s
     "https://oddspro.ke/api/daily-slip/timeline?days=120"` and count legs under 1.50 per day.
 
+- 2026-10-18 (PM) - **Sharp-anchored shadow confirmed live and the forward test started.**
+  - The PR #21 backend (`src/reference-odds.js`, `src/db/anchor-rules.js`, migration
+    `20261018000001_reference_odds`) shipped with the morning backend deploy; proof is a
+    byte comparison, not a memory: `sed 's/$//' <file> | md5sum` on the host against
+    `git show HEAD:<file> | sed 's/$//' | md5sum` locally (the host copies are CRLF), ten
+    files identical. `knex_migrations` shows the migration at the 11:41:35Z boot.
+  - The host `mariadb` client refused the `.env` credentials (`Access denied`, the shell
+    mangles the password); query through the app's own connection instead, which is how the
+    app itself logs in: `cd ~/oddspro-app-v1.4.0 && $(ls -d ~/.nvm/versions/node/*/bin/node
+    | tail -1) --input-type=module -e 'import { db } from "./src/db/connection.js"; ...;
+    await db.destroy();'`. nvm now carries v26.5.0 (was v24.18.0); the selector app still
+    runs Node 22.
+  - `REFERENCE_ODDS_ENABLED` has no `settings` row, so the config default (`1`) applies:
+    the T-3h/T-1h due lane had already written 2,064 `reference_odds` rows between 11:43Z
+    and 15:10Z and ten `anchored_picks` for 2026-10-18 before anyone looked.
+  - Day-zero instrument: `node scripts/report-anchored.js` from the app dir prints the pool
+    and card lines plus the pass bar (30 forward days, >= 400 legs, ROI > 0 with lower 95%
+    > -2%, hit within 2 points of Pinnacle's claim). The first today..+2 page sweep was run
+    by hand, detached (`nohup node src/index.js reference > ~/tmp/reference-run-<stamp>.log
+    2>&1 < /dev/null &`), because the daily 05:00 sweep had not run since the deploy and
+    Pinnacle lines purge after about 7 days. Verified `ps ... | grep "index.js reference"
+    | grep -v grep` before trusting the pid: the first `ls` of the log glob printed nothing
+    although the file existed (the globbed `ls` ran before the redirect flushed).
+  - Forward test clock: day 1 = 2026-10-18. Earliest verdict on the 30-day rule
+    2026-11-17; the 2,000-leg bar for a proven +4% needs about 65 days (2026-12-22) at the
+    observed 30 qualifying band legs a day.
+
 ## 6. Doc & knowledge topology
 
 - `CLAUDE.md` (root) - architecture + commands + invariants; authoritative for any harness.
@@ -791,3 +818,4 @@ the shown bet). Sources: `docs/research/`.
   backups, the stop -> deploy -> start -> `.HALT` order, the pgrep self-match trap, ssh
   throttling on the new host).
 - 2026-10-16: §5 append: local Docker warehouse (oddspro-db :3307), full production pull, PM deploy, chunked live algorithm backfill and its outside verification.
+- 2026-10-18: §5 append: sharp-anchored shadow confirmed live by byte comparison, host queries through the app connection, detached reference sweep, forward-test clock.
