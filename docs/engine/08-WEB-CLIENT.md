@@ -453,6 +453,13 @@ a manual "Sync settings" row plus a throttled (30s) tab-focus `syncNow` (the 202
 filters+slips sync spec: push-if-dirty runs FIRST, so a focus event can never clobber fresh
 local edits); the sync cursor is user-tagged and excluded from config snapshots both ways.
 
+**Clear cache & reload** (Settings footer) removes `appVersion.js`'s `keysToClear` set: every
+`oddspro.*` key except `NEVER_PRUNE` (session token, sync cursor, visitor id, maintenance
+cache). Signed in, it then force-pushes the emptied prefs (`resetPrefs` in
+`SessionProvider.jsx`) before reloading, so every synced device adopts the defaults on its
+next pull. Until 2026-10-18 it wiped the session too: the user was signed out, and the next
+sign-in pulled the server copy straight back (column order included), undoing the reset.
+
 **Config export/import** (`web/src/configSnapshot.js`): Settings-footer buttons write/read a
 gzip `.oddspro` snapshot (a versioned envelope covering all `oddspro.*` keys except transient
 per-date selections) for moving configuration between dev and prod.

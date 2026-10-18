@@ -198,6 +198,9 @@ export default function SessionProvider({ children }) {
         // Manual "Sync now" (avatar/overflow menus): push if dirty, else pull
         // if the server moved. -> { action: 'push'|'pull'|'none'|'error' }
         syncPrefs: async () => (user?.id ? syncNow(user.id) : { action: 'none' }),
+        // "Clear cache" reset: force-push the (just wiped) local prefs so every
+        // device adopts the defaults on its next pull.
+        resetPrefs: async () => (user?.id ? pushPrefs(user.id, { force: true }) : { action: 'none' }),
         // Re-hydrate from the server (e.g. after an out-of-band change).
         refresh: async () => {
             try {
