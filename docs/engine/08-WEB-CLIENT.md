@@ -281,7 +281,8 @@ safeSelection 35 ms, JSON.parse 81 ms). The heat came from DOM, GPU and storage 
   once. Lite devices skip the localStorage seed entirely (hydrate removes any old one), keep 3
   days in the LRU instead of 8, and skip the neighbour-day prefetch. The server's warm keeper
   already answers each day from its memo, so a lite visit simply fetches.
-- `DataTable` mounts the first `ROW_PAGE` (60) sorted rows and appends 60 more whenever the
+- `DataTable` mounts the first `ROW_PAGE` (60) sorted rows (in 20-row steps since the
+  day-change render pass below) and appends 60 more whenever the
   reader scrolls within 800px of the container's bottom, checked inside the existing
   `onScroll` handler (no IntersectionObserver: it never fires in a pane that is not painting
   frames). A "Showing N of M rows. Show more" row is the manual fallback. Sorting, counts,
@@ -348,6 +349,48 @@ chapter 01 (`/api/records?lean=1`, `/api/records/detail/:matchId`, the memoised
   Every App derivation on the lean body (selection stamp, column availability, risk gate,
   footer ledger, and the order/Safe/Top picks it now skips) costs under 3 ms in Node, so the
   remaining blocked time is React render, DOM and GC for the table, not data processing.
+
+**Day-change render (2026-10-18):** what blocked the main thread after the payload work.
+A React profiling build plus Chrome traces of the 2026-10-16 to 10-17 click split it:
+two full table re-renders BEFORE the data lands (the date click and the loading dim; every
+row got a new object because `stampSelection` re-stamped against the new day's selection
+Set), then one commit mounting 60 new rows x ~40 cells. Tested and refuted as the top cost:
+per-cell `Tooltip` instances (replacing all 1,812 with plain spans moved nothing measurable),
+`toLocaleString` in cell titles (244 calls cost about 1 ms), the per-column `rows.some`
+presence scan, a remount on `scrollKey` (rows are keyed by `match_id`; a new day is new keys
+anyway), and forced layout in the scroll-restore layout effect (about 13 ms). What scales
+is the cells mounted in one commit: at 40 columns and 4x CPU the longest task was 1,204 ms
+(about 540 ms JS, 249 ms style, 415 ms layout), with 507 ms of paint in the next frame.
+- **Memoised rows.** `DataTable`'s body is `TableRow` (`React.memo`), fed only stable
+  references or primitives: `pinned` is memoised on a content key of its columns (`columns`
+  re-derives with every `rows`), `links`/`openTip`/the select toggle are stable, magic rank
+  and score are passed as numbers, and a `minute` prop stands in for the clock the fixture
+  cell reads (its link dies at kickoff). `stampSelection` (`web/src/filterValues.js`) now
+  returns the same stamped object for a row whose `select` flag did not change, so a new
+  selection Set no longer re-renders unchanged rows. A selection toggle re-renders just the
+  toggled row.
+- **Progressive first page.** A fresh page mounts `ROW_FIRST` (20) rows, more than a phone
+  viewport holds, then grows to `ROW_PAGE` (60) in 20-row transition steps after each
+  commit paints; the memoised rows keep each step to the new rows. The reset waits for the
+  NEW day's rows (the click changes `scrollKey` before its data lands), so the dimmed old
+  day under the spinner is never touched. The end state is the same 60 rows and the same
+  "Showing 60 of N" fallback; scroll paging and Show more still add 60 at a time.
+- **Measured** with the lag probe at 375x812 in a Chromium with touch emulation (so
+  `LITE_DEVICE` is on) and 4x CPU throttle, baseline (`main` f652854) and fix served side by
+  side and alternated A, B, B, A so host load hits both; 6 runs each, medians:
+
+  | Columns | Build | Blocked | Longest gap |
+  |---|---|---|---|
+  | 9 (default) | before / after, profiling build | 1,775 / 1,078 ms | 884 / 337 ms |
+  | 9 (default) | before / after, production build | 2,424 / 1,344 ms | 1,284 / 552 ms |
+  | 40 to 53 (31 markets) | before / after, production build | 2,819 / 2,778 ms | 1,541 / 869 ms |
+
+  The longest gap fell in 15 of the 18 pairs. At the wide column set the total does not fall: each
+  20-row step re-lays out the whole auto-width table, so the work is split, not removed. In
+  the app's own pane (hidden, no throttle, default columns) the same probe read 457 / 229 /
+  135 ms blocked with a longest gap of 190 / 116 / 77 ms. The first 60 rows render
+  byte-identical HTML before and after (75,461 characters on 2026-10-17). The next lever is
+  the per-cell style and layout cost at wide column sets, not React.
 
 ## Auth, session and the admin panel
 

@@ -425,6 +425,19 @@ test('stampSelection sets select by match_id and never mutates the source', () =
     assert.deepEqual(stampSelection(rows, [2]).map(r => r.select), [false, true, false]);
 });
 
+test('stampSelection keeps an unchanged row referentially equal across calls', () => {
+    const rows = [{ match_id: 1 }, { match_id: 2 }];
+    const a = stampSelection(rows, new Set([1]));
+    const b = stampSelection(rows, new Set([1])); // a new Set, same membership
+    assert.equal(b[0], a[0]);
+    assert.equal(b[1], a[1]);
+    const c = stampSelection(rows, new Set([2])); // both flags flip
+    assert.notEqual(c[0], a[0]);
+    assert.deepEqual(c.map(r => r.select), [false, true]);
+    assert.equal(stampSelection(rows, new Set([2]))[1], c[1]);
+    assert.equal('select' in rows[0], false); // source still untouched
+});
+
 test('applySelectionHide drops checked rows only when hide is on', () => {
     const rows = stampSelection([{ match_id: 1 }, { match_id: 2 }], new Set([1]));
     assert.deepEqual(applySelectionHide(rows, true).map(r => r.match_id), [2]);
