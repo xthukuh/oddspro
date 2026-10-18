@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, useTransition } from 'react';
-import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors } from './api.js';
+import { fetchColumns, fetchMagicSort, fetchRecords, fetchRefreshStatus, startRefresh, fetchDailyVisitors, clearRecordDetails } from './api.js';
 import { startTracking, track, setTrackingSuspended } from './track.js';
 import { EV, onOff } from './trackEvents.js';
 import { shouldReloadForJob } from './freshness.js';
@@ -10,7 +10,8 @@ import { maintenanceStateAt } from '../../src/db/maintenance-rules.js';
 import MaintenanceOverlay from './MaintenanceOverlay.jsx';
 import useOutsideDismiss from './useOutsideDismiss.js';
 import { getTheme, setTheme } from './theme.js';
-import { availableColumnKeys } from './columns.js';
+import { availableColumnKeys, requestedMarkets } from './columns.js';
+import { rowsForFixtures } from './ordering.js';
 import { recordsCacheKey, makeLruCache } from './recordsCache.js';
 import { hydrateRecordsCache, persistRecordsCache } from './recordsPersist.js';
 import { LITE_DEVICE } from './device.js';
@@ -504,6 +505,15 @@ export default function App() {
         const valid = new Set(catalog.markets.map(c => c.key));
         return keys.filter(k => valid.has(k));
     }, [marketKeys, catalog]);
+    // The lean records request's market list (2026-10-18): the enabled columns
+    // plus anything the sort chain or a filter reads. Built from the raw
+    // persisted state, not the catalog-validated selection, so it is the same
+    // string before and after the catalog loads (no double fetch); the server
+    // validates and canonicalises it.
+    const marketsReq = useMemo(
+        () => requestedMarkets(marketKeys, sortChain, filters),
+        [marketKeys, sortChain, filters],
+    );
     const selectedStats = useMemo(() => {
         const keys = statKeys ?? catalog?.stats.filter(c => c.default).map(c => c.key) ?? [];
         if (!catalog) return keys;
@@ -580,16 +590,26 @@ export default function App() {
     // are omitted so the controls honestly reflect the day). Recomputes on
     // date/refresh via `result`.
     const available = useMemo(
-        () => availableColumnKeys(visibleData, catalog),
-        [visibleData, catalog],
+        () => availableColumnKeys(visibleData, catalog, result?.market_keys),
+        [visibleData, catalog, result],
     );
     // Safe picks are day-level over the whole loaded selection (result.data),
     // NOT the filtered rows - other toggles/filters must not change who wins
     // the per-day cap, and the footer count stays honest. One representative
     // row per fixture; the table filters by api_id membership.
+    // Server-ranked fast path (2026-10-18): the lean body's `ranked.safe` is
+    // this exact selection, computed once on the server over the same rows
+    // with the same served policy. Used as delivered unless this browser's
+    // inputs differ: local Safe overrides, or a hide/keep-selection cut
+    // (visibleData then differs from the loaded rows the server saw).
+    const ranked = result?.ranked ?? null;
+    const wholeDay = visibleData === numberedData;
+    const hasSafeOverrides = Object.keys(safeOverrides ?? {}).length > 0;
     const safePicks = useMemo(
-        () => safeSelection(visibleData, cal, effectiveSafe),
-        [visibleData, cal, effectiveSafe],
+        () => (ranked?.safe && wholeDay && !hasSafeOverrides
+            ? rowsForFixtures(visibleData, ranked.safe)
+            : safeSelection(visibleData, cal, effectiveSafe)),
+        [ranked, wholeDay, hasSafeOverrides, visibleData, cal, effectiveSafe],
     );
     // Sure-bets picks: the day's top-10 by calibrated leg prob over the WHOLE
     // loaded selection - same day-level scope as safePicks, so other toggles/
@@ -609,10 +629,16 @@ export default function App() {
     const canSureBets = !!session?.features?.sure_bets;
     const canFutureDates = !!session?.features?.future_dates;
     const canDailySlip = !!session?.features?.daily_multibet;
-    const surePicks = useMemo(
-        () => (canSureBets ? sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS) : []),
-        [canSureBets, visibleData, cal],
-    );
+    // Same fast path as safePicks: ranked.sure is sureBetsSelection's output
+    // with each row named by api_id.
+    const surePicks = useMemo(() => {
+        if (!canSureBets) return [];
+        if (ranked?.sure && wholeDay) {
+            const byId = new Map(rowsForFixtures(visibleData, ranked.sure.map(e => e.api_id)).map(r => [r.api_id, r]));
+            return ranked.sure.filter(e => byId.has(e.api_id)).map(({ api_id, ...e }) => ({ row: byId.get(api_id), ...e }));
+        }
+        return sureBetsSelection(visibleData, cal, DEFAULT_SURE_BETS);
+    }, [canSureBets, ranked, wholeDay, visibleData, cal]);
     // Known bookmakers come from the catalog; null selection = all visible.
     // The fallback MUST be a stable reference (module-level EMPTY_PROVIDERS,
     // not a fresh `[]`): a new array each render would change the
@@ -723,7 +749,7 @@ export default function App() {
         // The session token is part of the query identity (Phase 8): the same
         // date returns a different tier (guest redacted vs full) depending on
         // the bearer, so login/logout/session-expiry must refetch.
-        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}|${session?.token ?? ''}`;
+        const queryKey = `${date || 'all'}|${serverFiltersKey}|${showCompleted}|${JSON.stringify(reqProviders)}|${refreshTick}|${session?.token ?? ''}|${marketsReq}`;
         if (lastQueryRef.current === queryKey) return;
         lastQueryRef.current = queryKey;
         const current = () => lastQueryRef.current === queryKey;
@@ -736,6 +762,7 @@ export default function App() {
             completed: showCompleted,
             providers: reqProviders,
             token: session?.token ?? '',
+            markets: marketsReq,
         });
         // Paint from cache first. A revisited date must never show the loading
         // dim: we still revalidate below, and the server answers 304 with an
@@ -753,8 +780,11 @@ export default function App() {
         // Silent background reloads (auto-refresh landed new data) skip the
         // loading dim - the table just updates in place. So does a cache hit.
         if (!silentRef.current && !cached) setLoading(true);
-        fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders })
+        fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders, markets: marketsReq })
             .then(res => {
+                // A new body may carry a sign-in or reviews written since:
+                // per-row details are re-read on the next popover open.
+                clearRecordDetails();
                 recordsCache.set(cacheKey, res);
                 persistRecordsCache(recordsCache, cacheKey, { primary: true });
                 if (current()) { setResult(res); setError(null); setSignInNeeded(false); }
@@ -771,7 +801,7 @@ export default function App() {
                 else setError(String(e.message ?? e));
             })
             .finally(() => { if (current()) { silentRef.current = false; setLoading(false); } });
-    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, maintActive]);
+    }, [date, serverFiltersKey, refreshTick, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, maintActive, marketsReq]);
 
     // Quietly warm the neighbouring days so the first chevron click is instant
     // too, not just the second visit. Strictly best effort: a prefetch failure
@@ -792,9 +822,10 @@ export default function App() {
                 completed: showCompleted,
                 providers: reqProviders,
                 token: session?.token ?? '',
+                markets: marketsReq,
             });
             if (recordsCache.has(key)) return;
-            fetchRecords({ date: day, filters: serverFilters, completed: showCompleted, providers: reqProviders })
+            fetchRecords({ date: day, filters: serverFilters, completed: showCompleted, providers: reqProviders, markets: marketsReq })
                 .then(res => { if (!cancelled) { recordsCache.set(key, res); persistRecordsCache(recordsCache, key); } })
                 .catch(() => {});
         };
@@ -802,7 +833,7 @@ export default function App() {
         // is actually looking at.
         const id = setTimeout(() => { warm(PREV_DATE); warm(NEXT_DATE); }, 400);
         return () => { cancelled = true; clearTimeout(id); };
-    }, [date, loading, maintActive, serverFiltersKey, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, PREV_DATE, NEXT_DATE, MIN_DATE, MAX_DATE]);
+    }, [date, loading, maintActive, serverFiltersKey, showCompleted, providerKeys, selectedProviders, providers.length, session?.token, PREV_DATE, NEXT_DATE, MIN_DATE, MAX_DATE, marketsReq]);
 
     // Auto-dismiss the error banner after 3s (it's also manually closable).
     // A new error resets the timer; clearing on unmount avoids a stray setState.
@@ -1178,10 +1209,22 @@ export default function App() {
     const openHelp = () => { track(EV.HELP_OPEN); setShowHelp(true); };
     const openSettings = () => { track(EV.SETTINGS_OPEN); setShowSettings(true); };
     const navDate = (d, how) => { track(EV.CALENDAR_NAV, how); changeDate(d); };
-    const exportSelection = () => {
-        const records = stampedData.filter(r => r.select);
-        if (!records.length) return;
-        track(EV.CSV_EXPORT, records.length);
+    // The CSV promises every market, and lean rows carry only the enabled
+    // columns, so the export re-reads the date in the full shape (one request
+    // on an explicit action) and keeps the selected match_ids. If that read
+    // fails, the loaded rows still export, with the columns they carry.
+    const exportSelection = async () => {
+        const picked = stampedData.filter(r => r.select);
+        if (!picked.length) return;
+        track(EV.CSV_EXPORT, picked.length);
+        const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
+        let records = picked;
+        try {
+            const full = await fetchRecords({ date: date || 'all', filters: serverFilters, completed: showCompleted, providers: reqProviders });
+            const ids = new Set(picked.map(r => r.match_id));
+            const fullRows = (full?.data ?? []).filter(r => ids.has(r.match_id));
+            if (fullRows.length === picked.length) records = fullRows;
+        } catch { /* keep the loaded rows */ }
         const csv = buildRecordCsv(records, catalog);
         const blob = new Blob([String.fromCharCode(0xFEFF) + csv], { type: 'text/csv;charset=utf-8' }); // BOM helps Excel detect UTF-8
         const url = URL.createObjectURL(blob);
@@ -1438,6 +1481,7 @@ export default function App() {
                     columnOrder={columnOrder}
                     chain={activeChain}
                     cal={cal}
+                    ranked={ranked}
                     onSort={onSort}
                     loading={loading || showPending}
                     linkProviders={linkProviders}

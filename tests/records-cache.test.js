@@ -165,3 +165,7 @@ test('prioritizeEntries is total: no/unknown primary is a no-op', () => {
 test('PERSIST_KEY stays in the oddspro.* namespace the exclusion lists cover', () => {
     assert.equal(PERSIST_KEY, 'oddspro.recordsCache');
 });
+
+test('recordsCacheKey separates market selections (lean bodies differ)', () => {
+    assert.notEqual(recordsCacheKey({ ...base, markets: 'default' }), recordsCacheKey({ ...base, markets: '1X,O 2.5' }));
+});

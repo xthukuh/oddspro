@@ -5,9 +5,10 @@
 // column (Score / Tip / Magic, colour-coded) pins left only while the real Tip
 // column is scrolled out of view.
 
-import { useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sortValue } from '../sortValues.js';
-import { orderRows } from '../ordering.js';
+import { orderRows, rankedApplies, orderByRanked, rankedScores } from '../ordering.js';
+import { fetchRecordDetail } from '../api.js';
 // Shared pure scorer (also used server-side) - vite's fs.allow covers the
 // out-of-root import; one implementation, no client/server drift.
 import { scoreTip, STRATEGIES, pickView, tipMarketLabel } from '../../../src/db/magic-rules.js';
@@ -139,6 +140,27 @@ function _h2hTitle(row) {
     return lines.join('\n');
 }
 
+// A lean row (2026-10-18) arrives without h2h_meetings; the list is read
+// from /api/records/detail when the tooltip opens (Tooltip mounts its
+// content only while open), so a day's 1,600 meeting lists never ship.
+// Offered only where the row shows meetings happened.
+const _hasMeetings = row => (row.h2h_count ?? 0) > 0 || /[1-9]/.test(String(row.h2h ?? ''));
+function H2hMeetings({ row }) {
+    const [list, setList] = useState(null);
+    useEffect(() => {
+        let on = true;
+        fetchRecordDetail(row.match_id)
+            .then(d => { if (on) setList(d?.h2h_meetings ?? []); })
+            .catch(() => { if (on) setList([]); });
+        return () => { on = false; };
+    }, [row.match_id]);
+    if (list == null) return 'Loading meetings...';
+    return _h2hTitle({ ...row, h2h_meetings: list }) ?? 'No meetings on record';
+}
+const _h2hCellTitle = row => (row.h2h_meetings === undefined
+    ? (_hasMeetings(row) ? <H2hMeetings row={row} /> : null)
+    : _h2hTitle(row));
+
 // Per-column cell tooltips: advantageous context for the value, kept short.
 // Interactive inner elements (fixture link, tip span, hot badge) carry their
 // own titles, which win on direct hover.
@@ -179,8 +201,8 @@ const CELL_TITLES = {
     away_rank: row => (row.away_rank != null ? `${row.away_team ?? 'Away'} - current league rank` : null),
     home_form: row => (row.home_form ? `${row.home_team ?? 'Home'} - ${HEADER_META.home_form.info}` : null),
     away_form: row => (row.away_form ? `${row.away_team ?? 'Away'} - ${HEADER_META.away_form.info}` : null),
-    h2h: _h2hTitle,
-    h2h_count: _h2hTitle,
+    h2h: _h2hCellTitle,
+    h2h_count: _h2hCellTitle,
     home_goals_h2h: row => (row.home_goals_h2h ? HEADER_META.home_goals_h2h.info : null),
     away_goals_h2h: row => (row.away_goals_h2h ? HEADER_META.away_goals_h2h.info : null),
     home_goals_oth: row => (row.home_goals_oth ? HEADER_META.home_goals_oth.info : null),
@@ -222,6 +244,8 @@ function _cellTitle(row, col, marketMap) {
                 ? 'Home / Away - post-match statistic'
                 : null;
     const hint = _sortHint(row, col);
+    // A lazy (element) title stands alone; no hint key has one.
+    if (base != null && typeof base === 'object') return base;
     return [base, hint].filter(Boolean).join('\n') || undefined;
 }
 
@@ -514,7 +538,7 @@ function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
 }
 
 export default function DataTable({
-    catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, onSort, loading, linkProviders, scrollKey,
+    catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, ranked = null, onSort, loading, linkProviders, scrollKey,
     visibleBase = null, selection, onToggleSelect, bulk, noPin = false,
     filterCount = 0, onClearFilters,
 }) {
@@ -582,10 +606,12 @@ export default function DataTable({
     // "Prioritize Selected" (bulk menu) floats checked rows to the top of the
     // final order (orderRows has no pin concept); a stable partition so both
     // groups keep their sorted order and a newly-checked row rises automatically.
+    // The default chain takes the server's delivered order (the lean body's
+    // `ranked`, src/db/ranked-rules.js) as is; any other chain is scored here.
     const sorted = useMemo(() => {
-        const s = orderRows(rows, chain, columns, cal);
+        const s = rankedApplies(chain, ranked) ? orderByRanked(rows, ranked) : orderRows(rows, chain, columns, cal);
         return bulk?.prioritizeSelected ? prioritizeSelectedRows(s) : s;
-    }, [rows, chain, columns, cal, bulk?.prioritizeSelected]);
+    }, [rows, chain, columns, cal, ranked, bulk?.prioritizeSelected]);
 
     // Displayed row number per row: live position in the sorted order, or the
     // frozen load-order anchor (`_no`) when "pin position" is on (so re-sorting
@@ -605,14 +631,16 @@ export default function DataTable({
         if (!primaryMagicId) return null;
         const label = STRATEGIES.find(s => s.id === primaryMagicId)?.label ?? primaryMagicId;
         const info = new Map(); // api_id -> { rank, score } | null
+        // The server already scored the ranked strategy for every row.
+        const delivered = ranked?.strategy === primaryMagicId && Array.isArray(ranked.order) ? rankedScores(ranked) : null;
         let n = 0;
         for (const row of sorted) {
             if (info.has(row.api_id)) continue;
-            const score = scoreTip(row, primaryMagicId, cal);
+            const score = delivered?.has(row.match_id) ? delivered.get(row.match_id) : scoreTip(row, primaryMagicId, cal);
             info.set(row.api_id, score == null ? null : { rank: ++n, score });
         }
         return { label, info };
-    }, [primaryMagicId, cal, sorted]);
+    }, [primaryMagicId, cal, sorted, ranked]);
 
     // While magic is active a synthetic score column sits immediately left
     // of Tip (ephemeral: not in the catalog, order persistence or settings).

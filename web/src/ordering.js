@@ -45,3 +45,44 @@ export function orderRows(rows, chain, columns, cal) {
         return 0;
     });
 }
+
+// --- Server-ranked fast path (2026-10-18) ------------------------------------
+// The lean /api/records body carries `ranked` (src/db/ranked-rules.js): the
+// default strategy's order and scores plus the Safe / Top picks memberships,
+// computed once on the server with this same scorer. The browser renders
+// them as delivered and falls back to orderRows / safeSelection whenever its
+// inputs differ from the server's.
+
+// True when the chain is exactly the server-ranked strategy, so the
+// delivered order IS what orderRows would compute.
+export function rankedApplies(chain, ranked) {
+    return !!ranked && Array.isArray(ranked.order) && Array.isArray(chain)
+        && chain.length === 1 && chain[0]?.type === 'magic' && chain[0].id === ranked.strategy;
+}
+
+// `rows` (any subset of the ranked body's rows) in the delivered order. A
+// stable sort over the server order restricted to a subset is that subset in
+// the same sequence, so this equals orderRows(rows, chain) for that chain.
+// Rows the order does not know (none, in practice) keep their place at the end.
+export function orderByRanked(rows, ranked) {
+    const pos = new Map(ranked.order.map((id, i) => [id, i]));
+    const known = [], rest = [];
+    for (const r of rows) (pos.has(r.match_id) ? known : rest).push(r);
+    known.sort((a, b) => pos.get(a.match_id) - pos.get(b.match_id));
+    return rest.length ? [...known, ...rest] : known;
+}
+
+// match_id -> delivered strategy score, for the magic column.
+export function rankedScores(ranked) {
+    const m = new Map();
+    ranked.order.forEach((id, i) => m.set(id, ranked.scores?.[i] ?? null));
+    return m;
+}
+
+// The first loaded row per canonical fixture - the row safeSelection and
+// sureBetsSelection themselves keep - for each delivered api_id, in order.
+export function rowsForFixtures(rows, apiIds) {
+    const first = new Map();
+    for (const r of rows) if (!first.has(r.api_id)) first.set(r.api_id, r);
+    return apiIds.map(id => first.get(id)).filter(Boolean);
+}

@@ -29,16 +29,24 @@
 
 import { config } from './config.js';
 import { effective } from './settings.js';
-import { queryRecords, columnCatalogFromMeta } from './db/records.js';
+import { columnCatalogFromMeta, marketSelection } from './db/records.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
-import { magicSortCached } from './magic.js';
+import { magicSortCached, magicSortKey } from './magic.js';
 import { warehouseVersion } from './meta.js';
 import { accessFromUser } from './db/access-rules.js';
-import { queryCacheKey } from './db/cache-rules.js';
+import { featureMap } from './db/feature-rules.js';
+import { rankedAllow, leanRecordsKey, leanRecordsBody } from './records-lean.js';
 import { warmDates, warmPassDue, recordsWarmTargets, summarizeWarmPass } from './db/warm-rules.js';
 import { _dtime } from './utils.js';
 
 const TICK_MS = 5_000;
+
+// What a pass is due on: the warehouse version, plus the inputs of the ranked
+// and magic-sort slots that are not in the data (today's calibration landing,
+// a new day, an admin SAFE_* edit - all carried by magicSortKey). Without the
+// second half, the lean records slots warmed while the calibration was still
+// computing would only be replaced on the next age pass, minutes later.
+const warmVersion = () => `${warehouseVersion()}|${magicSortKey()}`;
 
 const state = {
     cache: null,
@@ -55,25 +63,33 @@ const state = {
 // warmed slots are byte-for-byte the ones real requests will hit. Duplicate
 // tiers (premium guest == signed-in 'full') collapse in recordsWarmTargets.
 function reachableTiers() {
-    if (!config.AUTH_ENABLED) return [{ tier: 'full', canFuture: true, access: null }];
+    if (!config.AUTH_ENABLED) return [{ tier: 'full', canFuture: true, access: null, allow: rankedAllow(null) }];
     const opts = { guestPremium: effective('GUEST_PREMIUM'), guestExcept: effective('GUEST_PREMIUM_EXCEPT') };
     const slim = !effective('API_DETAILS');
-    return [accessFromUser({ role: 'user' }, opts), accessFromUser(null, opts)].map(access => ({
-        tier: !access.fullDetail ? 'guest' : (slim ? 'slim' : 'full'),
-        canFuture: access.canFuture,
-        access,
-    }));
+    return [{ role: 'user' }, null].map(user => {
+        const access = accessFromUser(user, opts);
+        return {
+            tier: !access.fullDetail ? 'guest' : (slim ? 'slim' : 'full'),
+            canFuture: access.canFuture,
+            access,
+            // The ranked block's gates, resolved exactly as the route does.
+            allow: rankedAllow(featureMap(user, opts)),
+        };
+    });
 }
 
 // The pass target list: /api/columns first (the SPA boot needs the catalog),
 // then /api/records with today leading (the slot the next visitor hits),
-// then the ledger scans. Each target's `key` is EXACTLY the route's memo key
-// - the default SPA request carries only date + per_page=all, everything
-// else absent - so a warmed slot is a guaranteed memo hit, never a near-miss.
+// then the ledger scans, then /api/magic-sort. Each target's `key` is EXACTLY
+// the route's memo key - the default SPA request (since 2026-10-18) is the
+// LEAN one: date + per_page=all + lean=1 + the catalog's default market
+// columns, everything else absent - so a warmed slot is a guaranteed memo
+// hit, never a near-miss. The legacy full shape (machine consumers, ?lean
+// absent) is no longer warmed: no browser asks for it.
 function buildTargets() {
     const todayIso = _dtime(new Date()).slice(0, 10);
     const tiers = reachableTiers();
-    const accessByTier = new Map(tiers.map(t => [t.tier, t.access]));
+    const byTier = new Map(tiers.map(t => [t.tier, t]));
     const slimDetails = !effective('API_DETAILS');
     const dates = warmDates(todayIso, effective('WARM_DATES_BACK'), effective('WARM_DATES_AHEAD'));
     const targets = [{
@@ -98,25 +114,30 @@ function buildTargets() {
         loader: () => columnCatalogFromMeta(),
     }];
     for (const { date, tier } of recordsWarmTargets({ dates, todayIso, tiers })) {
+        const { access, allow } = byTier.get(tier);
         targets.push({
-            key: queryCacheKey('/api/records', { date, tier, per_page: 'all' }),
+            key: leanRecordsKey({ day: date, tier, markets: 'default', allow, params: { per_page: 'all' } }),
             label: `/api/records ${date} ${tier}`,
-            loader: () => queryRecords({
+            loader: async () => leanRecordsBody({
                 date,
                 per_page: 'all',
                 sort: [],
                 filters: [],
                 completed: true,
                 providers: null,
-                access: accessByTier.get(tier),
-                markets: null,
+                access,
+                markets: (await marketSelection('default')).allow,
                 slimDetails,
-            }),
+            }, allow),
         });
     }
     targets.push(
         { key: '/api/hotpicks', label: '/api/hotpicks', loader: () => hotpicksSummary() },
         { key: '/api/performance', label: '/api/performance', loader: () => performanceSummary() },
+        // Last: on a cold boot it awaits the day's calibration (the early
+        // non-awaited kickoff in runPass started it), and nothing behind it
+        // should wait on that.
+        { key: magicSortKey(), label: '/api/magic-sort', loader: () => magicSortCached() },
     );
     return targets;
 }
@@ -124,12 +145,13 @@ function buildTargets() {
 async function runPass(reason) {
     state.running = true;
     const startedMs = Date.now();
-    const versionAtStart = warehouseVersion();
-    // The magic-sort day memo is not part of the response cache (its safe
-    // policy is late-read per response, M6) but its ~25s cold replay is the
-    // worst first-visitor stall in the app. Kick it off WITHOUT awaiting -
-    // it must not block the records warm behind it; magicSortCached shares
-    // one in-flight promise per day, so repeated pass-time calls are free.
+    const versionAtStart = warmVersion();
+    // The magic-sort day memo feeds two warmed slots (its own body, last in
+    // the list, and the lean records' ranked block) and its cold compute is
+    // the worst first-visitor stall in the app (287.9 s measured locally
+    // before the leg cells moved to meta). Kick it off WITHOUT awaiting - it
+    // must not block the records warm behind it; magicSortCached shares one
+    // in-flight promise per day, so repeated pass-time calls are free.
     magicSortCached()
         .then(() => { state.lastMagicError = null; })
         .catch(e => {
@@ -172,7 +194,7 @@ function tick() {
     const reason = warmPassDue({
         running: state.running,
         lastRunAt: state.lastRunAt,
-        version: warehouseVersion(),
+        version: warmVersion(),
         lastVersion: state.lastVersion,
         nowMs: Date.now(),
         maxAgeMs,

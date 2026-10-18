@@ -294,6 +294,61 @@ safeSelection 35 ms, JSON.parse 81 ms). The heat came from DOM, GPU and storage 
 - The footer betting ledger (`displayedSummary`) is memoised in App instead of recomputed on
   every render.
 
+**Server-cached payloads (2026-10-18):** the browser renders what the server has already
+computed and cached, and fetches per-row reasoning only when a reader opens it. Server side:
+chapter 01 (`/api/records?lean=1`, `/api/records/detail/:matchId`, the memoised
+`/api/magic-sort`).
+- **Lean records.** `fetchRecords` sends `lean=1&markets=<requestedMarkets()>`
+  (`web/src/columns.js`): the enabled market columns plus every key the sort chain or the
+  filter tree could read (leaf `key`/`col`, and every quoted literal in an expression, since
+  expressions read `$row["O 2.5"]`). An untouched selection sends `default`, built from the
+  raw persisted state, so the request string is identical before and after the catalog loads
+  and lands on the slot the warm keeper keeps hot. Rows carry only those markets and a compact
+  `tip_breakdown`; the body's `market_keys` feeds `availableColumnKeys`, so the Settings picker
+  and filter fields still list every market the day carries. Enabling a market refetches with
+  it (one request, a cold slot on the server). The records cache key and `recordsCacheKey`
+  carry the market string, and `PERSIST_FORMAT` is 2 so an old full-shape seed is dropped.
+- **Lazy detail.** `fetchRecordDetail(matchId)` (`web/src/api.js`, memoised per match until
+  the next records body lands) supplies what lean rows leave out. The H2H tooltip mounts an
+  `H2hMeetings` reader only when it opens (the `Tooltip` component mounts content only while
+  open), offered where `h2h_count` or the W-D-L summary shows meetings happened.
+  `TipPopover` lays the full breakdown, gate audit and AI reviews over the row on open; note
+  it has no entry point in the table since the 2026-10-16 change removed the stats-tip
+  column, so that path is exercised only by the build.
+- **CSV export** promises every market, so `exportSelection` re-reads the date in the full
+  legacy shape (no `lean`) and exports the selected `match_id`s from it, falling back to the
+  loaded rows if that read fails. Verified: 365 columns, 132 filled values in a row.
+- **Delivered order and memberships.** The body's `ranked` block (`src/db/ranked-rules.js`)
+  is the default `banker` order and scores plus the Safe and Top picks memberships, computed
+  once per server memo slot with the same shared scorer. `DataTable` uses
+  `orderByRanked` whenever `rankedApplies(chain, ranked)` (the chain is exactly the ranked
+  strategy) and reads the magic column's scores from it; `App` maps `ranked.safe` /
+  `ranked.sure` back to the first loaded row per fixture (`rowsForFixtures`), exactly the row
+  the selection functions keep. The browser computes itself only when its inputs differ: any
+  other sort chain, local Safe overrides, a hide/keep-selection cut, or `ranked: null` (the
+  day's calibration still computing on the server). Parity was checked on real data: for
+  2026-10-16/17/18 the delivered order equals `orderRows` over the lean rows, whole day and
+  a subset, for the `sure`, `value`, `target` and `agreement` strategies, and the delivered
+  Safe set equals `safeSelection` over the full rows; lean rows score identically to full
+  rows in `scoreTip` (six strategies), `safeQualifies`, `hasSufficientStats` and `legPicks`
+  on all 1,600 rows of 2026-10-17. Locally no row carries a post-2026-10-16 Pick yet, so the
+  Top picks and `banker` paths are covered by the offline tests (`tests/ranked-rules.test.js`).
+- **Measured** on 2026-10-17 (1,600 rows) at 375x812, same day change 2026-10-16 to 10-17,
+  an event-loop lag probe summing main-thread gaps over 50 ms for 8 s (the pane was hidden,
+  so frame-timing observers report nothing):
+
+  | Measure | Before | After |
+  |---|---|---|
+  | `/api/records` body | 7,792,707 B | 2,456,703 B |
+  | on the wire (gzip) | 885,756 B | 248,485 B |
+  | `JSON.parse` in the page | 108 to 174 ms | 32 ms |
+  | main thread blocked (3 runs) | 658 / 982 / 854 ms | 726 / 650 / 664 ms |
+  | longest single gap | 254 to 446 ms | 369 to 390 ms |
+
+  Every App derivation on the lean body (selection stamp, column availability, risk gate,
+  footer ledger, and the order/Safe/Top picks it now skips) costs under 3 ms in Node, so the
+  remaining blocked time is React render, DOM and GC for the table, not data processing.
+
 ## Auth, session and the admin panel
 
 **v1.1.0 web:** `web/src/auth/*` - `SessionProvider` + `AuthGate` render sign-in/sign-up/

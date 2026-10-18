@@ -110,8 +110,11 @@ export function marketGroupLabel(group) {
 //            top-level row field (season, ranks, form, h2h, rolling goals) -
 //            same presence test DataTable uses to drop empty columns.
 // Base fields are always available, so callers gate only markets/stats.
-export function availableColumnKeys(rows, catalog) {
-    const markets = new Set();
+//   marketKeys (optional): the lean body's `market_keys` - every catalog
+//            market the day carries, including columns the lean rows were
+//            not sent (2026-10-18), so the picker still offers them.
+export function availableColumnKeys(rows, catalog, marketKeys = null) {
+    const markets = new Set(Array.isArray(marketKeys) ? marketKeys : []);
     const stats = new Set();
     const statKeys = catalog?.stats?.map(c => c.key) ?? [];
     for (const r of rows ?? []) {
@@ -124,4 +127,34 @@ export function availableColumnKeys(rows, catalog) {
         }
     }
     return { markets, stats };
+}
+
+// The `markets` parameter for a lean /api/records request (2026-10-18): the
+// enabled market columns plus every key the sort chain or the filter tree
+// could read off a row, because a lean row carries only the markets asked
+// for. 'default' stands for the catalog's default columns (the reader never
+// changed the selection), so this needs no catalog and the request is
+// identical before and after the catalog loads. Over-inclusion is harmless:
+// the server drops any key that is not a catalog market and canonicalises
+// the rest, so 'default' plus a stats key still lands on the warmed slot.
+// Expression nodes reference columns as quoted strings ($row["O 2.5"]), so
+// every quoted literal in an expression counts.
+const _QUOTED = /"((?:\\.|[^"\\])*)"|'((?:\\.|[^'\\])*)'/g;
+export function requestedMarkets(marketKeys, chain, filters) {
+    const keys = new Set(Array.isArray(marketKeys) ? marketKeys : ['default']);
+    for (const e of Array.isArray(chain) ? chain : []) if (e?.type === 'column' && e.key) keys.add(e.key);
+    const walk = node => {
+        if (!node) return;
+        if (Array.isArray(node)) { node.forEach(walk); return; }
+        if (node.enabled === false) return;
+        if (node.type === 'group') { walk(node.items); return; }
+        if (node.type === 'expr') {
+            for (const m of String(node.expr ?? '').matchAll(_QUOTED)) keys.add(m[1] ?? m[2]);
+            return;
+        }
+        if (node.key) keys.add(node.key);
+        if (node.col) keys.add(node.col);
+    };
+    walk(filters);
+    return [...keys].filter(Boolean).sort().join(',');
 }

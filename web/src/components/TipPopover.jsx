@@ -1,4 +1,5 @@
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import { fetchRecordDetail } from '../api.js';
 import { safeQualifies, tipMarketLabel } from '../../../src/db/magic-rules.js';
 import { useShowDetails } from '../details.js';
 import { Z } from '../zLayers.js';
@@ -156,9 +157,27 @@ function Blend({ name, prob, weight, note }) {
     );
 }
 
-export default function TipPopover({ row, x, y, catalog, cal, onClose }) {
+export default function TipPopover({ row: baseRow, x, y, catalog, cal, onClose }) {
     // Session-aware: build flag AND signed-in (guests get redacted rows anyway)
     const showDetails = useShowDetails();
+    // A lean row (2026-10-18) carries a compact tip_breakdown and none of the
+    // popover-only fields; the full set is read for this one row on open and
+    // laid over it. Until it lands the popover renders from the compact row.
+    const lean = baseRow.hot_signals === undefined;
+    const [detail, setDetail] = useState(null);
+    useEffect(() => {
+        if (!lean) return undefined;
+        let on = true;
+        fetchRecordDetail(baseRow.match_id).then(d => { if (on) setDetail(d); }).catch(() => {});
+        return () => { on = false; };
+    }, [lean, baseRow.match_id]);
+    const row = useMemo(() => (detail ? {
+        ...baseRow,
+        tip_breakdown: detail.tip_breakdown ?? baseRow.tip_breakdown,
+        hot_signals: detail.hot_signals,
+        hot_review: detail.hot_review,
+        tip_ai_review: detail.tip_ai_review,
+    } : baseRow), [baseRow, detail]);
     useEffect(() => {
         const key = e => {
             if (e.key === 'Escape') onClose();
