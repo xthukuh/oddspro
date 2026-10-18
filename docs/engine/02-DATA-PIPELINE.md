@@ -352,6 +352,46 @@ REPLACEs them from live.
 B/row). The true moved share is one query away:
 `SELECT SUM(changes)/SUM(markets) FROM odds_observations WHERE kind='update'`.
 
+## Pinnacle reference odds (2026-10-18)
+
+API-Football relays Pinnacle (bookmaker 4), the sharpest book it carries. Research on
+2026-10-18 found our walk-forward calibration converges on the Kenyan price, so the only
+external information that predicts beyond it is Pinnacle's line (chapter 05 "Sharp-anchored
+Pick shadow"). API-Football **purges odds about 7 days after a fixture**: a line that is not
+captured here is gone, so the capture runs every day.
+
+| Piece | What it does |
+|---|---|
+| `src/apisports.js#fetchBookmakerOdds` | `GET /odds?date=D&bookmaker=4` (paged, ~10 fixtures a page, ~75 pages on a busy Saturday) or `GET /odds?fixture=ID&bookmaker=4`; the normal `_getPage` quota floor and per-minute pacing (`src/db/rate-rules.js`) |
+| `src/apisports-odds.js` (pure, zod) | `buildReferenceRows`: bet 1 Match Winner Home/Draw/Away to `1`/`X`/`2`, bet 5 Goals Over/Under at the 1.5 / 2.5 / 3.5 lines to `O 2.5`/`U 2.5` and so on; quarter and whole lines, halves and every other bet ignored; the API `update` stamp converted to EAT wall clock; one bad item skipped and counted, never thrown |
+| `src/reference-odds.js` | persistence, the kickoff freeze, the due moments, the shadow build and settle |
+| `reference_odds` (migration `20261018000001_reference_odds`) | one row per (fixture, bookmaker, market, upstream `update` stamp): `price`, `source_updated_at`, `captured_at`, `source` (full / due / cli); FK `ON DELETE CASCADE` to `fixtures` |
+
+**Append-only, pre-kickoff only.** Rows are inserted with `INSERT IGNORE` on the unique
+`(fixture_id, bookmaker_id, market, source_updated_at)`, so a re-capture of an unchanged line
+writes nothing and a moved line adds rows; nothing is ever updated or deleted. Rows are kept
+only for fixtures we hold whose **canonical** `fixtures.kickoff` is still ahead (checked
+immediately before the insert), the same freeze rule as the odds history.
+
+**When it runs.** The full sweep pages today..+2 after the daily multibet step, one guarded
+unit per date (`reference odds <date> (Pinnacle)`), then builds the shadow per date
+(`anchored picks <date> (shadow)`). The writer tick fetches one fixture at its **T-3h and
+T-1h** moments (`planReferenceDue` in `src/db/anchor-rules.js`: due while now is within
+`ODDS_DUE_LEAD_MINUTES` either side of the moment and nothing was captured since its window
+opened; capped by `ODDS_DUE_MAX_PER_TICK`; correlated upcoming fixtures only) right after the
+odds due lane, under the same yield rule, and rebuilds the shadow for the touched days. A
+fixture without a line is remembered in memory for 4 hours so it is not refetched every tick.
+Cost: about 75 requests on a busy day for the sweep plus about 2 per correlated fixture, well
+inside the Ultra plan's 75k/day. Switch: `REFERENCE_ODDS_ENABLED` (Admin -> Settings, live).
+CLI: `node src/index.js reference [date]`.
+
+Parser check against the research capture (`tmp/pin/pin.ndjson`, 295 real pages,
+2026-10-11..10-17): 2,890 items, 0 skipped, 2,734 complete 1X2 lines, every one devigging to
+exactly 1.
+
+**Sync.** `reference_odds` (canonical) and `anchored_picks` (derived) are in
+`scripts/lib/sync-rules.js` `SYNC_TABLES`, windowed by fixture kickoff.
+
 ## Market taxonomy (M2) and the column catalog
 
 `src/markets.js` is the canonical, fixed odds-market registry: 1, X, 2, 1X, X2, 12, and U/O

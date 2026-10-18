@@ -178,6 +178,47 @@ A full-slip comparison on identical days kept the shipped slip as headline (only
 positive 95% interval and it publishes every day; the stats-only slip found a slip on about
 half the days).
 
+**Sharp-anchored Pick shadow (2026-10-18).** Our calibration hits exactly what it claims and
+converges on the Kenyan price, so every leg in the 1.50-2.20 band returns about -6% flat.
+The one lever found prices the Kenyan book against Pinnacle's devigged line (chapter 02
+"Pinnacle reference odds"). Over 1,933 fixtures 2026-10-11..10-17, band 1.50-2.20, legs whose
+best Kenyan price x Pinnacle fair probability reached 1.00 returned +8.0% (n 271), 1.02
++19.8% (n 133), 1.04 +30.8% (n 75), against -6.4% for every leg. Seven days is suggestive,
+not proof, so the strategy runs as a **shadow**: stored, settled and reported, never shown,
+never part of the live Pick or the daily card.
+
+The pure rules live in `src/db/anchor-rules.js` (named so they never collide with the retired
+Sharp 4x `sharp-rules.js`); the shell is `src/reference-odds.js`. Per fixture:
+
+1. Evidence gate: both teams need >= 10 finished games in the last 400 days, else the
+   fixture is dropped silently.
+2. Pinnacle devig, multiplicative per complete group (1/X/2 and each O/U pair at 1.5, 2.5,
+   3.5): fair_i = (1/p_i) / sum (1/p_j); the newest upstream `update` stamp is used.
+3. Kenyan price = the best provider price (each provider's lowest listing, the tip-book
+   convention), in canonical orientation (1 and 2 swap on `matches.sides_swapped`).
+4. Eligible when the price is 1.50-2.20 and ratio = price x fair >= 1.02; **strong** at
+   >= 1.04. Never O 0.5 (outside the vocabulary). The fixture's leg is its highest ratio.
+
+**Daily card**: the day's top 3 by ratio, strong first, one per game, scored as singles.
+Membership is committed at each leg's kickoff: committed legs keep their slots, only the open
+slots are re-chosen from games still upcoming (`selectAnchorCard`), so no card decision uses
+information from after the kickoff it commits.
+
+**Storage** (`anchored_picks`, one row per eligible fixture): market, Kenyan price and
+provider, Pinnacle price, fair probability, ratio, strong, on_card, the line's stamp. Rows of
+upcoming fixtures are re-derived on every build (the sweep, then each T-3h / T-1h capture);
+an upcoming row that stops being eligible or moves to another day is removed; a kicked-off
+row stands. `settleAnchoredPicks` (light pass tail and the sweep) writes
+outcome/score/settled_at once from canonical finals; terminal-without-play or 7 days without
+a final voids.
+
+**Forward report**: `node scripts/report-anchored.js [--from d] [--to d] [--days] [--json
+out.json]` (read-only) prints per-day pool and card legs, then pool / strong / card totals
+(hit vs Pinnacle's claim, flat ROI +- standard error, lower 95%) and the **pass bar on the
+pool**: 30 forward days, >= 400 legs, ROI > 0 with lower 95% > -2%, hit within 2 points of
+Pinnacle's claim (`anchorPassBar`). The pool carries the bar because only it can reach 400
+legs in 30 days; the card is reported alongside.
+
 **One selection, live and backfill.** `composeCard` (Top picks + slip + shadow from loaded
 data) and `cardLegs` (the stored records) are the single definition `buildDailySlip` and
 `scripts/backfill-algo.js` both call. The backfill recomputes only derived rows for past days

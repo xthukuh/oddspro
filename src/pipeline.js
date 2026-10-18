@@ -7,6 +7,7 @@ import { updatePrematchSnapshots } from './prematch.js';
 import { updateHotPicks } from './hotpicks.js';
 import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
+import { referenceEnabled, captureReferenceDate, buildAnchoredPicks, settleAnchoredPicks } from './reference-odds.js';
 import { makeStepGuard, summarizeSteps, summarizeTimings, hasDataBearingSuccess, hasOddsSaveData } from './db/auto-rules.js';
 import { setMeta } from './meta.js';
 import { _date, _dtime, debugLog } from './utils.js';
@@ -36,6 +37,8 @@ function _stampOddsHeartbeat(counts) {
 
 // `npm run start` sweeps today plus this many future days by default
 const DEFAULT_DAYS_AHEAD = 3;
+// Pinnacle reference capture window: today plus this many days.
+const REFERENCE_DAYS = 2;
 
 // Full ingestion pipeline (default `npm run start` action). Step order is
 // chosen to minimize server hits:
@@ -50,7 +53,11 @@ const DEFAULT_DAYS_AHEAD = 3;
 //   9. pre-match snapshots - needs local history (8) and fresh standings (7);
 //   10. API predictions (fetch-once) - the hot-pick boost/veto signal;
 //   11. hot picks - needs snapshots (9), predictions (10) and fresh odds (3-4);
-//   12. AI enrichment (M4.1, collection only, off by default) - the anchored
+//   12. daily multibet slip (settle + build today's card);
+//   13. Pinnacle reference odds for today..+2 (one guarded unit per date) and
+//       the Sharp-anchored Pick shadow built from them (needs fresh odds 3-4
+//       and the link 5); off with REFERENCE_ODDS_ENABLED;
+//   14. AI enrichment (M4.1, collection only, off by default) - the anchored
 //       call needs the tip hot picks (11) just wrote, so this MUST run last.
 //
 // Task 1 (2026-08-19 durability pass round 2, docs/research/2026-08-19-odds-
@@ -73,7 +80,11 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
     const dates = [...Array(days_ahead + 1)].map((_, i) =>
         _dtime(new Date(today.getFullYear(), today.getMonth(), today.getDate() + i)).substring(0, 10)
     );
-    const totalSteps = 3 * dates.length + 10; // dates.length x (fixtures + betpawa + betika) + 10 single-shot phases
+    // API-Football keeps odds ~7 days, and Pinnacle's lines for day +3 and
+    // beyond are thin, so the reference capture covers today..+2 only.
+    const refDates = referenceEnabled() ? dates.slice(0, REFERENCE_DAYS + 1) : [];
+    // dates.length x (fixtures + betpawa + betika) + 10 single-shot phases + refDates x (capture + shadow)
+    const totalSteps = 3 * dates.length + 10 + 2 * refDates.length;
     let step = 0;
     const pipelineStarted = Date.now();
     let stepStarted = pipelineStarted;
@@ -150,6 +161,20 @@ export async function runStartPipeline(days_ahead_ = null, onStep = null, should
         console.debug(`[+] dailyslip: ${dsSettle.settled} settled; today ${ds.frozen ? 'frozen'
             : ds.noSlip ? 'NO SLIP' : `${ds.slip.mood} card, ${ds.slip.picks} picks${ds.slip.slip_odds != null ? ` + ${ds.slip.slip_odds}x slip` : ', no slip'}`}.`);
     });
+
+    // Pinnacle reference odds + the Sharp-anchored Pick shadow. Per date, so
+    // one date's failure (a quota floor, a bad page) costs only that date.
+    for (const dt of refDates) {
+        const rc = await guardStep(`reference odds ${dt} (Pinnacle)`, () => captureReferenceDate(dt, { source: 'full' }));
+        if (rc) console.debug(`[+] reference ${dt}: ${rc.items} items, ${rc.lines} lines for ${rc.fixtures} upcoming fixtures (${rc.skipped} skipped).`);
+    }
+    for (const dt of refDates) {
+        const ap = await guardStep(`anchored picks ${dt} (shadow)`, async () => {
+            if (dt === refDates[0]) await settleAnchoredPicks();
+            return buildAnchoredPicks(dt);
+        });
+        if (ap) console.debug(`[+] anchored ${dt}: ${ap.eligible} eligible of ${ap.with_line} with a line (${ap.strong} strong), card ${ap.card}.`);
+    }
 
     const e = await guardStep('AI enrichment (upcoming correlated fixtures; collection only)', () => enrichFixtures());
     if (e) console.debug(`[+] enrich: ${e.fixtures} fixtures, ${e.written} insights, ${e.errors} errors.`);

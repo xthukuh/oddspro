@@ -266,6 +266,10 @@ const EnvSchema = z.object({
     ODDS_DUE_LEAD_MINUTES: z.coerce.number().min(1).max(60).default(5),
     ODDS_DUE_MAX_PER_TICK: z.coerce.number().int().min(1).max(200).default(40),
     ODDS_DUE_DURING_SWEEP: boolStr('1'),
+    // Pinnacle reference odds (src/reference-odds.js, 2026-10-18): the daily
+    // /odds capture in the sweep, the T-3h / T-1h fetches on the writer tick
+    // and the Sharp-anchored Pick shadow built from them.
+    REFERENCE_ODDS_ENABLED: boolStr('1'),
     // A stretch with no finished refresh run longer than this is proposed as
     // an odds outage. Counts MISSING RUNS, not missing odds: an idle-skip pass
     // still records an `ok` run, so a quiet night is never a gap. Nine missed

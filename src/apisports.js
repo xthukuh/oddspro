@@ -10,6 +10,7 @@ import { isRetryableApiError } from './db/net-rules.js';
 import { buildEventRows } from './apisports-events.js';
 import { buildStandingRows } from './apisports-standings.js';
 import { buildFixtureItemRows } from './apisports-fixtures.js';
+import { PINNACLE_BOOKMAKER_ID } from './apisports-odds.js';
 
 // Bookmaker times are EAT - fetch fixtures in the same wall-clock timezone
 const TIMEZONE = 'Africa/Nairobi';
@@ -610,6 +611,18 @@ export async function fetchApisportsPredictions() {
         tick(len);
     }, effective('ENRICH_CONCURRENCY'));
     return { ...counts, quota_remaining: apisportsQuotaRemaining() };
+}
+
+// --- reference odds (Pinnacle, bookmaker 4) ---
+
+// Raw /odds items for one bookmaker, by date (paged, ~10 fixtures a page,
+// ~75 pages on a busy Saturday) or by one fixture id (the due-queue moments).
+// Same quota floor and per-minute pacing as every other call (_getPage).
+// Parsing and row shaping live in the pure src/apisports-odds.js; persistence
+// and the kickoff freeze in src/reference-odds.js.
+export async function fetchBookmakerOdds({ date = null, fixture = null, bookmaker = PINNACLE_BOOKMAKER_ID } = {}) {
+    if (!date === !fixture) throw new TypeError('fetchBookmakerOdds needs exactly one of date or fixture');
+    return _get('/odds', fixture ? { fixture, bookmaker } : { date, bookmaker, timezone: TIMEZONE });
 }
 
 // --- standings (replace per league+season) ---

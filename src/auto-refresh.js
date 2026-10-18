@@ -24,6 +24,7 @@ import { bumpWarehouseVersion, getMeta, refreshMetaMemo, setMeta, warehouseVersi
 import { columnCatalog } from './db/records.js';
 import { recordRun, runDetector, pruneRuns } from './notices.js';
 import { runDueRefresh, sweepTargets, dueLaneEnabled } from './odds-due.js';
+import { runReferenceDue, settleAnchoredPicks } from './reference-odds.js';
 import { sweepStepAllowsDue } from './db/odds-history-rules.js';
 
 // In-process auto-refresh: the always-on server (`npm run serve`) keeps the
@@ -461,6 +462,9 @@ export async function lightRefresh(onStep = null, shouldCancel = null) {
     const ds = await guardStep('daily-slip settle', () => settleDailySlips());
     if (ds) summary.daily_slips_settled = ds.settled;
 
+    const as = await guardStep('anchored-pick settle', () => settleAnchoredPicks());
+    if (as?.settled) summary.anchored_settled = as.settled;
+
     const us = await guardStep('user-slip settle', () => settleUserSlips());
     if (us) summary.user_slips_settled = us.settled;
 
@@ -509,8 +513,23 @@ function _sweepAllowsDue() {
 }
 
 async function runDueLane({ duringSweep = false } = {}) {
-    if (!dueLaneEnabled()) return;
     const shouldStop = () => (duringSweep ? !_sweepAllowsDue() : refreshJob.running);
+    await _runOddsDue(shouldStop, duringSweep);
+    // Pinnacle T-3h / T-1h captures (src/reference-odds.js): writes only
+    // reference_odds and the never-shown anchored_picks shadow, so it shares
+    // the lane's yield rule but not its ODDS_DUE_ENABLED gate.
+    if (shouldStop()) return;
+    try {
+        const r = await runReferenceDue({ shouldStop });
+        if (r && r.skipped) _log(`reference due fetched=${r.fetched} lines=${r.lines} skipped=${r.skipped}`);
+    } catch (e) {
+        console.error('[reference due] failed:', e?.message ?? e);
+        _log(`reference due ERROR ${String(e?.message ?? e)}`);
+    }
+}
+
+async function _runOddsDue(shouldStop, duringSweep) {
+    if (!dueLaneEnabled()) return;
     try {
         const s = await runDueRefresh({ shouldStop });
         // Logged only when something is worth reading: a busy slate makes a

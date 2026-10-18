@@ -8,6 +8,7 @@ import { updateHotPicks, performanceSummary } from './hotpicks.js';
 import { drainAiReviews } from './ai-worker.js';
 import { buildDailySlip, settleDailySlips } from './daily-slip.js';
 import { enrichFixtures } from './enrich.js';
+import { captureReferenceDate, buildAnchoredPicks, settleAnchoredPicks } from './reference-odds.js';
 import { exportRecords } from './export.js';
 import { backfillGeo } from './geo.js';
 import { sendSms, smsBalance, smsDelivery } from './sms/index.js';
@@ -122,6 +123,27 @@ import { haltRequested, HALT_FILE } from './halt.js';
         else if (r.noSlip) console.debug(`[+] dailyslip ${r.date}: NO SLIP (fewer than the minimum qualifying legs among ${r.fixtures} fixtures).`);
         else console.debug(`[+] dailyslip ${r.date}: ${r.slip.mood.toUpperCase()} card, ${r.slip.picks} picks`
             + `${r.slip.slip_odds != null ? ` + ${r.slip.slip_odds}x slip` : ', no slip'}.`);
+        return;
+    }
+
+    // Pinnacle reference odds (API-Football bookmaker 4) for one date (default
+    // today..+2), then settle + rebuild the Sharp-anchored Pick shadow for
+    // those dates. Bills ~1 request per 10 fixtures; idempotent (an unchanged
+    // line is a no-op, kicked-off fixtures are never written).
+    if (action === 'reference') {
+        const base = _date(value);
+        const dates = (value ? [0] : [0, 1, 2]).map(i =>
+            _dtime(new Date(base.getFullYear(), base.getMonth(), base.getDate() + i)).substring(0, 10));
+        for (const dt of dates) {
+            const c = await captureReferenceDate(dt, { source: 'cli' });
+            console.debug(`[+] reference ${dt}: ${c.items} items, ${c.lines} lines for ${c.fixtures} upcoming fixtures (${c.skipped} skipped, ${c.skipped_closed} already kicked off).`);
+        }
+        const s = await settleAnchoredPicks();
+        if (s.settled) console.debug(`[+] anchored: settled ${s.settled} shadow leg(s).`);
+        for (const dt of dates) {
+            const a = await buildAnchoredPicks(dt);
+            console.debug(`[+] anchored ${dt}: ${a.eligible} eligible of ${a.with_line} with a line (${a.strong} strong), card ${a.card}.`);
+        }
         return;
     }
 

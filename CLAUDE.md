@@ -68,6 +68,9 @@ node src/index.js prematch          # upsert pre-match snapshots for upcoming co
 node src/index.js predictions       # API-Football /predictions for upcoming correlated fixtures (fetch-once)
 node src/index.js hotpicks          # settle + recompute over-2.5 hot picks + tips (rules + optional AI adjudication/review)
 node src/index.js enrich            # M4.1: 3-call AI enrichment for upcoming correlated fixtures (collection only)
+node src/index.js reference [date]  # Pinnacle (API-Football bookmaker 4) reference odds for the date (default
+                                    # today..+2) + settle/rebuild the Sharp-anchored Pick shadow (chapter 05)
+node scripts/report-anchored.js     # read-only forward report of that shadow vs its pass bar
 node src/index.js aireview          # drain pending hot/tip AI verdicts once (the serve process runs this every 60s
                                     # in-process via src/ai-worker.js; cron-only hosts run it after the sweep)
 node scripts/ai-scorecard.js        # read-only per-model-tag AI health (chapter 06 "Instruments")
@@ -222,6 +225,7 @@ client and server cannot drift.
 - `src/magic.js` - the thin knex loader behind `GET /api/magic-sort` (`settledTipRows`, the resolved `safe` policy, the per-day memo).
 - `src/db/pick-rules.js` + `src/picks.js` - the Pick (one obvious tip per game, 1.50-2.20, the residual-calibrated most likely market; stored in `tip_banker_*` since 2026-10-16), its walk-forward calibrator cached daily in `meta.pick_cells`, the Top-3 picks selection and the day score. Replay: `scripts/replay-picks.js`.
 - `src/daily-slip.js` - the Daily MultiBet builder (`buildDailySlip` v3: the day's top 3 Picks as singles, scored per day) and the walk-forward leg-cell calibrator (`loadCalibrator`, still behind `/api/magic-sort`'s `leg_cells`).
+- `src/reference-odds.js` + `src/apisports-odds.js` + `src/db/anchor-rules.js` - Pinnacle reference capture (sweep today..+2, T-3h/T-1h due moments, append-only `reference_odds`) and the Sharp-anchored Pick SHADOW (`anchored_picks`, never shown): devig, ratio >= 1.02 gate, kickoff-committed top-3 card, settle. Report: `scripts/report-anchored.js`.
 - `src/db/mine-rules.js` + `scripts/mine-patterns.js` - the read-only pattern mine, its anti-false-positive controls and its closed class vocabulary.
 
 **AI layers** (detail: `docs/engine/06-AI.md`)

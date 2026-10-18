@@ -39,6 +39,10 @@ flowchart TD
     I --> J["12 AI enrichment (optional, collection only - needs step 11's tip)"]
 ```
 
+Between hot picks and enrichment sit the daily multibet step and, since 2026-10-18, the
+Pinnacle reference capture for today..+2 plus the Sharp-anchored Pick shadow build, one
+guarded unit per date each (`REFERENCE_ODDS_ENABLED`; chapters 02 and 05).
+
 Step 12 runs last **by design**: the anchored enrichment call must see the tip step 11 just
 wrote. Enrichment is full-sweep-only (a cost boundary, not an oversight - the web refresh
 button can fire far more often than the daily sweep, and enrichment bills real per-fixture AI
@@ -874,6 +878,7 @@ cache.
 | `NOTICE_DEGRADED_MIN_FAILS` / `NOTICE_DEGRADED_WINDOW_MINUTES` | 3 / 60 | degraded notice: min chained data-bearing misses / chain window (minutes) before one is proposed |
 | `ODDS_HISTORY_ENABLED` / `ODDS_TARGET_MAX_LAG_MINUTES` | on / 15 | the odds change log, observation ledger and target snapshots (chapter 02); a target last looked at further back than the tolerance is stored `lagged` |
 | `ODDS_DUE_ENABLED` / `ODDS_DUE_LEAD_MINUTES` / `ODDS_DUE_MAX_PER_TICK` / `ODDS_DUE_DURING_SWEEP` | on / 5 / 40 / on | the due-queue lane (below); the last lets it run during the sweep's allow-listed enrichment steps |
+| `REFERENCE_ODDS_ENABLED` | on | Pinnacle reference capture (sweep today..+2, T-3h / T-1h on the writer tick) and the Sharp-anchored Pick shadow (chapters 02, 05); not a regime knob |
 | `WATCHDOG_STALE_MINUTES` / `WATCHDOG_QUIET_STALE_MINUTES` / `WATCHDOG_ALERT_AFTER` / `WATCHDOG_RESTART_COOLDOWN_MINUTES` | 45 / 240 / 3 / 30 | `scripts/collection-watchdog.js`: stale floors (busy slate / quiet slate), SMS after N consecutive stale runs, one restart per cooldown |
 | `WATCHDOG_FULL_SWEEP_GRACE_MINUTES` | 480 | the watchdog reports `busy` (no restart, no SMS) while the writer's `job_state` meta beacon (`src/auto-refresh.js#startJob`, cleared when the job ends) shows a full sweep younger than this; past it a dead writer trips `stale` as before |
 | `HEALTH_SNAPSHOT_AT` / `HEALTH_SNAPSHOT_SMS` | `13:20` EAT / on | the daily health snapshot (`src/health.js`): EAT time, `off`/blank disables; one SMS on RED. `OPS_ALERT_PHONE` (`.env`, optional) overrides the admin phone as the alert recipient |
