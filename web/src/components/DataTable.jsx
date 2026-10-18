@@ -5,7 +5,7 @@
 // column (Score / Tip / Magic, colour-coded) pins left only while the real Tip
 // column is scrolled out of view.
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { memo, startTransition, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { sortValue } from '../sortValues.js';
 import { orderRows, rankedApplies, orderByRanked, rankedScores } from '../ordering.js';
 import { fetchRecordDetail } from '../api.js';
@@ -44,6 +44,9 @@ const PROVIDER_STYLE = {
 const ROW_TINTS = ['bg-surface', 'bg-surface-2'];
 // Rows mounted per lazy-render page (see the rowLimit block in DataTable).
 const ROW_PAGE = 60;
+// Rows mounted in the first commit of a fresh page, then the fill step (see
+// the progressive first page note in DataTable).
+const ROW_FIRST = 20;
 
 // Header abbreviations (space) + definitions (header tooltip). Column keys
 // missing here keep their catalog label and get the sort hint only.
@@ -493,9 +496,9 @@ function _marketCell(row, key) {
 }
 
 // Magic column cell: the row's rank under the active strategy + its raw
-// score (strategies keep their native scales - no fake percentages).
-function _magicCell(row, meta) {
-    const m = meta?.info.get(row.api_id);
+// score (strategies keep their native scales - no fake percentages). `m` is
+// the row's { rank, score } entry from magicMeta (null/undefined = none).
+function _magicCell(m) {
     if (!m) return <span className="text-label-3">-</span>;
     return <span className="tabular-nums whitespace-nowrap">#{m.rank} · {m.score.toFixed(3)}</span>;
 }
@@ -505,7 +508,7 @@ function _magicCell(row, meta) {
 // the main Tip pick (accent link, click opens the popover), and the active magic
 // rank (dim). Replaces the separate Score/Tip/Magic pinned duplicates; the real
 // columns (with runners-up + independent sort) still scroll in place.
-function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
+function _summaryCell(row, { scoreHasData, hasMagic, magic }) {
     const hasScore = scoreHasData && !!row.score;
     let total = null;
     if (hasScore) {
@@ -532,17 +535,83 @@ function _summaryCell(row, { scoreHasData, magicMeta, openTip }) {
                     return <span className={`font-semibold ${cls}`}>{tipMarketLabel(p.market)} @ {p.price.toFixed(2)}{_tick(p.outcome)}</span>;
                 })()}
             </div>
-            {magicMeta && <div className="text-label-3">{_magicCell(row, magicMeta)}</div>}
+            {hasMagic && <div className="text-label-3">{_magicCell(magic)}</div>}
         </div>
     );
 }
+
+// One body row. Memoised, and fed only stable references or primitives, so a
+// DataTable re-render that leaves a row's inputs alone (the loading dim, a
+// selection change elsewhere, the scroll-pin state) skips the row's ~40 cells
+// entirely. A `minute` prop (unused in the body, compared by memo) stands in
+// for the clock the fixture cell reads (its link dies at kickoff, and
+// kickoffs fall on the minute), so a row still re-renders as the minute turns.
+const TableRow = memo(function TableRow({
+    row, pinned, tintCls, no, hasMagic, magicRank, magicScore, scoreHasData, links, openTip, onToggleSelect, marketCatalog,
+}) {
+    const magic = magicRank != null ? { rank: magicRank, score: magicScore } : null;
+    return (
+        <tr
+            // Opaque bg fallback MUST match the pinned cell's fallback below
+            // (both 'bg-surface') so a tint-less row can't bleed the app
+            // background through the gap beside the left-pinned columns.
+            className={`group border-b border-hairline ${tintCls ?? 'bg-surface'} hover:bg-fill`}
+        >
+            {pinned.map(col => {
+                const isSelect = col.group === 'select';
+                const isSummary = col.group === 'summary';
+                const content = isSelect ? (
+                    <input
+                        type="checkbox"
+                        aria-label="Select row"
+                        checked={!!row.select}
+                        onChange={() => onToggleSelect(row.match_id)}
+                        className="accent-accent h-4 w-4 cursor-pointer"
+                    />
+                ) : isSummary ? _summaryCell(row, { scoreHasData, hasMagic, magic })
+                    : col.key === 'no' ? (
+                    <span className="text-label-3 tabular-nums">{no ?? ''}</span>
+                ) : col.key === 'magic' ? _magicCell(magic)
+                    : col.group === 'market' ? _marketCell(row, col.key)
+                    : _cell(row, col, links, openTip);
+                const cellTitle = (isSelect || isSummary) ? undefined : _cellTitle(row, col, marketCatalog);
+                // Tip & fixture own their tap actions (popover / link) and
+                // keep their native titles; every other cell routes its
+                // hidden-content title through the touch-friendly Tooltip.
+                const wrap = cellTitle && col.key !== 'tip' && col.key !== 'fixture';
+                return (
+                    <td
+                        key={col.pin ? `pin:${col.key}` : col.key}
+                        title={wrap ? undefined : cellTitle}
+                        style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
+                        // Sticky cells keep their OPAQUE row tint at all times;
+                        // the hover fill is LAYERED over it (a translucent
+                        // gradient), never swapped in as the bg-color - otherwise
+                        // the hovered cell goes translucent and scrolling content
+                        // bleeds through the pinned column.
+                        className={`${isSummary ? 'px-2' : 'px-2.5'} py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
+                            ? `sticky z-10 ${tintCls ?? 'bg-surface'} group-hover:[background-image:linear-gradient(var(--color-fill),var(--color-fill))] shadow-[inset_-1px_0_0_var(--separator-2)]`
+                            : ''}`}
+                    >
+                        {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}
+                    </td>
+                );
+            })}
+        </tr>
+    );
+});
 
 export default function DataTable({
     catalog, rows, marketKeys, statKeys, columnOrder, chain, cal, ranked = null, onSort, loading, linkProviders, scrollKey,
     visibleBase = null, selection, onToggleSelect, bulk, noPin = false,
     filterCount = 0, onClearFilters,
 }) {
-    const links = new Set(linkProviders ?? []);
+    // Stable references for the memoised rows (TableRow): a fresh Set or
+    // callback per render would re-render every row on every render.
+    const links = useMemo(() => new Set(linkProviders ?? []), [linkProviders]);
+    const toggleRef = useRef(onToggleSelect);
+    toggleRef.current = onToggleSelect;
+    const toggleSelect = useCallback(id => toggleRef.current?.(id), []);
     // Base/synthetic column visibility (R27b/R28a): null = all shown.
     const baseVisible = key => !visibleBase || visibleBase.has(key);
     const showSelect = baseVisible('select');
@@ -557,11 +626,11 @@ export default function DataTable({
 
     // Tip justification popover, anchored at the click point (one at a time)
     const [tipPop, setTipPop] = useState(null); // { row, x, y } | null
-    const openTip = (row, e) => {
+    const openTip = useCallback((row, e) => {
         e.stopPropagation();
         track(EV.TIP_POPOVER, row.tip_market);
         setTipPop({ row, x: e.clientX, y: e.clientY });
-    };
+    }, []);
 
     // Column pipeline: assemble + apply the drag order, drop enabled-but-
     // empty market/stat columns (base columns always show).
@@ -740,12 +809,33 @@ export default function DataTable({
     // row - only the DOM is paged. A date/server-filter change (scrollKey)
     // starts again at one page; a silent background refresh keeps the depth the
     // reader already scrolled to, so the restored scroll position stays valid.
-    const [rowLimit, setRowLimit] = useState(ROW_PAGE);
+    //
+    // Progressive first page (2026-10-18): one commit of 60 new rows x ~40
+    // cells was the longest main-thread block of a day change (measured: it
+    // scales with the cells mounted, not with any per-cell component). So a
+    // fresh page mounts ROW_FIRST rows - more than a phone viewport holds -
+    // and grows to ROW_PAGE in ROW_FIRST steps, each a transition rendered
+    // after the previous commit painted. The memoised TableRow keeps every
+    // step to the new rows only. The reset waits for the NEW rows (a date
+    // click changes scrollKey before its data lands), so the dimmed old day
+    // under the spinner is never touched.
+    const [rowLimit, setRowLimit] = useState(ROW_FIRST);
     const limitKeyRef = useRef(scrollKey);
+    const resetPendingRef = useRef(false);
+    const limitRowsRef = useRef(rows);
     if (limitKeyRef.current !== scrollKey) {
         limitKeyRef.current = scrollKey;
-        if (rowLimit !== ROW_PAGE) setRowLimit(ROW_PAGE);
+        resetPendingRef.current = true;
     }
+    if (resetPendingRef.current && limitRowsRef.current !== rows) {
+        resetPendingRef.current = false;
+        if (rowLimit !== ROW_FIRST) setRowLimit(ROW_FIRST);
+    }
+    limitRowsRef.current = rows;
+    useEffect(() => {
+        if (loading || rowLimit >= ROW_PAGE || rowLimit >= sorted.length) return;
+        startTransition(() => setRowLimit(n => (n < ROW_PAGE ? Math.min(n + ROW_FIRST, ROW_PAGE) : n)));
+    }, [loading, rowLimit, sorted.length]);
     const shownRows = useMemo(() => sorted.slice(0, rowLimit), [sorted, rowLimit]);
     const hasMoreRows = rowLimit < sorted.length;
     // Appended from the existing onScroll handler (no observer): one
@@ -765,11 +855,20 @@ export default function DataTable({
     const summaryCol = summaryPinned
         ? { key: 'pin-summary', group: 'summary', pin: true, left: showSelect ? SELECT_W : 0, width: undefined }
         : null;
-    const pinned = [
+    const pinnedNow = [
         ...(selectCol ? [selectCol] : []),
         ...(summaryCol ? [summaryCol] : []),
         ...displayColumns,
     ];
+    // Same columns -> same array: `columns` re-derives whenever `rows` does
+    // (the presence scan), so without this content key every memoised row
+    // would see a "new" column list on every data reload.
+    const pinnedSig = pinnedNow.map(c => `${c.key}\u0001${c.label}\u0001${c.group}\u0001${c.pin ? 1 : 0}\u0001${c.left ?? ''}\u0001${c.width ?? ''}`).join('\u0002');
+    const pinned = useMemo(() => pinnedNow, [pinnedSig]);
+
+    // Primitive per-row inputs for TableRow (see its comment).
+    const hasMagic = magicMeta != null;
+    const minute = Math.floor(Date.now() / 60000);
 
     // Check-all state over the currently displayed rows (R28).
     const selCount = sorted.reduce((n, r) => n + (r.select ? 1 : 0), 0);
@@ -870,54 +969,22 @@ export default function DataTable({
                 </thead>
                 <tbody>
                     {shownRows.map(row => (
-                        <tr
+                        <TableRow
                             key={row.match_id}
-                            // Opaque bg fallback MUST match the pinned cell's fallback below
-                            // (both 'bg-surface') so a tint-less row can't bleed the app
-                            // background through the gap beside the left-pinned columns.
-                            className={`group border-b border-hairline ${tint.get(row.api_id) ?? 'bg-surface'} hover:bg-fill`}
-                        >
-                            {pinned.map(col => {
-                                const isSelect = col.group === 'select';
-                                const isSummary = col.group === 'summary';
-                                const content = isSelect ? (
-                                    <input
-                                        type="checkbox"
-                                        aria-label="Select row"
-                                        checked={!!row.select}
-                                        onChange={() => onToggleSelect?.(row.match_id)}
-                                        className="accent-accent h-4 w-4 cursor-pointer"
-                                    />
-                                ) : isSummary ? _summaryCell(row, { scoreHasData, magicMeta, openTip })
-                                    : col.key === 'no' ? (
-                                    <span className="text-label-3 tabular-nums">{noByRow.get(row.match_id) ?? ''}</span>
-                                ) : col.key === 'magic' ? _magicCell(row, magicMeta)
-                                    : col.group === 'market' ? _marketCell(row, col.key)
-                                    : _cell(row, col, links, openTip);
-                                const cellTitle = (isSelect || isSummary) ? undefined : _cellTitle(row, col, marketCatalog);
-                                // Tip & fixture own their tap actions (popover / link) and
-                                // keep their native titles; every other cell routes its
-                                // hidden-content title through the touch-friendly Tooltip.
-                                const wrap = cellTitle && col.key !== 'tip' && col.key !== 'fixture';
-                                return (
-                                    <td
-                                        key={col.pin ? `pin:${col.key}` : col.key}
-                                        title={wrap ? undefined : cellTitle}
-                                        style={col.pin ? { left: col.left, width: col.width, minWidth: col.width, maxWidth: col.width } : undefined}
-                                        // Sticky cells keep their OPAQUE row tint at all times;
-                                        // the hover fill is LAYERED over it (a translucent
-                                        // gradient), never swapped in as the bg-color - otherwise
-                                        // the hovered cell goes translucent and scrolling content
-                                        // bleeds through the pinned column.
-                                        className={`${isSummary ? 'px-2' : 'px-2.5'} py-1.5 ${col.group === 'market' ? 'text-center tabular-nums' : ''} ${isSelect ? 'text-center' : ''} ${col.pin
-                                            ? `sticky z-10 ${tint.get(row.api_id) ?? 'bg-surface'} group-hover:[background-image:linear-gradient(var(--color-fill),var(--color-fill))] shadow-[inset_-1px_0_0_var(--separator-2)]`
-                                            : ''}`}
-                                    >
-                                        {wrap ? <Tooltip content={cellTitle}>{content}</Tooltip> : content}
-                                    </td>
-                                );
-                            })}
-                        </tr>
+                            row={row}
+                            pinned={pinned}
+                            tintCls={tint.get(row.api_id)}
+                            no={noByRow.get(row.match_id)}
+                            hasMagic={hasMagic}
+                            magicRank={magicMeta?.info.get(row.api_id)?.rank}
+                            magicScore={magicMeta?.info.get(row.api_id)?.score}
+                            scoreHasData={scoreHasData}
+                            links={links}
+                            openTip={openTip}
+                            onToggleSelect={toggleSelect}
+                            marketCatalog={marketCatalog}
+                            minute={minute}
+                        />
                     ))}
                     {hasMoreRows && (
                         <tr>

@@ -186,10 +186,21 @@ export function applyRiskGate(rows, cfg) {
 // Row selection (the "Select" checkbox column): stamp each row's `select`
 // boolean from the persisted id set (keyed by stable match_id), so the Select
 // column, the Select filter field ($row['select']) and the hide-cut all read
-// one field. Returns new row objects (never mutates the fetched data).
+// one field. Returns new row objects (never mutates the fetched data), but a
+// row whose `select` did not change comes back as the SAME stamped object as
+// last time: a new selection Set (every day change makes one) then leaves the
+// unchanged rows referentially equal, so the table's memoised rows skip them.
+const _stamped = new WeakMap(); // source row -> last stamped copy
 export function stampSelection(rows, selectedIds) {
     const ids = selectedIds instanceof Set ? selectedIds : new Set(selectedIds ?? []);
-    return (rows ?? []).map(r => ({ ...r, select: ids.has(r.match_id) }));
+    return (rows ?? []).map(r => {
+        const select = ids.has(r.match_id);
+        const prev = _stamped.get(r);
+        if (prev && prev.select === select) return prev;
+        const out = { ...r, select };
+        _stamped.set(r, out);
+        return out;
+    });
 }
 
 // "With Selected → Hide selection": drop checked rows from every record view
