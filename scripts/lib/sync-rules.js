@@ -86,8 +86,12 @@ export const SYNC_TABLES = [
     { name: 'fixture_prematch', cls: 'canonical', dateWhere: fixtureIdWindow },
     { name: 'fixture_api_predictions', cls: 'canonical', dateWhere: fixtureIdWindow },
     { name: 'fixture_ai_insights', cls: 'canonical', dateWhere: fixtureIdWindow },
+    // Pinnacle reference lines (2026-10-18): upstream data that API-Football
+    // purges after ~7 days, so the live copy is the only one - canonical.
+    { name: 'reference_odds', cls: 'canonical', dateWhere: fixtureIdWindow },
     { name: 'fixture_predictions', cls: 'derived', dateWhere: fixtureIdWindow },
     { name: 'daily_slips', cls: 'derived', dateWhere: slipDateWindow },
+    { name: 'anchored_picks', cls: 'derived', dateWhere: fixtureIdWindow },
 ];
 
 // Build the ordered pull plan. `tables` null/empty = every SYNC_TABLES entry;

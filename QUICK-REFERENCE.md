@@ -53,6 +53,7 @@ Semantics authority: `CLAUDE.md` `## Commands` (names duplicated here, annotatio
 | `stats` / `standings` / `history` / `prematch` / `predictions` | deep data (fetch-once) |
 | `hotpicks` | settle + recompute picks/tips (bills NO AI) |
 | `dailyslip [date]` | settle + build the Daily MultiBet card - the day's top 3 Picks, read from `fixture_predictions`, so run it after `hotpicks` (freezes at first pick kickoff) |
+| `reference [date]` | Pinnacle reference odds for the date (default today..+2), then settle + rebuild the Sharp-anchored Pick shadow (BILLED, about 1 request per 10 fixtures; kicked-off fixtures never written) |
 | `aireview` | drain pending AI verdicts once |
 | `enrich` | AI enrichment (BILLED; full-sweep-only) |
 | `performance` | flat-stake ROI / hit-rate report |
@@ -84,6 +85,12 @@ print `below 1.50: 0` and claimed within about a point of hit. Build the extract
 Sharp procedure below (host extract, then `sharp-prep.js`). The daily 2-leg 2.5x slip:
 `node scripts/replay-slips.js [file]` replays it and the alternative designs through the
 production `selectSlip` (read-only; `DUMP=<file.json>` writes the per-day rows).
+Sharp-anchored Pick shadow (2026-10-18; chapter 05): `node scripts/report-anchored.js
+[--from d] [--to d] [--days] [--json out.json]` prints the forward per-day legs, hit vs
+Pinnacle's claim, flat ROI +- SE and the pass bar (30 days, >= 400 legs, ROI > 0 with lower
+95% > -2%, hit within 2 points of the claim). Read-only. Capture runs daily by itself
+(sweep + T-3h/T-1h); upstream purges odds after about 7 days, so never leave
+`REFERENCE_ODDS_ENABLED` off for long.
 Backfill past days with the current algorithm: `node scripts/backfill-algo.js --dry-run`,
 then `--yes` (writes `tmp/backfill-algo-<stamp>.json` first; undo with `--restore <file>
 --yes`). Local DB for analysis: Docker `oddspro-db` on 127.0.0.1:3307 (`.env` DB_PORT=3307,
