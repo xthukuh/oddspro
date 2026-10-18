@@ -5,6 +5,7 @@ import { parseFilterList } from './filter-csv.js';
 import { redactRecordForRole, stripDetails, isCoarseKey, CONFIDENCE_STEP } from './access-rules.js';
 import { getMeta } from '../meta.js';
 import { coverageFor } from '../notices.js';
+import { leanRecord, resolveMarketSelection } from './lean-rules.js';
 
 // Read-side query layer over the warehouse for Phase 6 visualization.
 // Serves both the `export` CSV action and the :3001 API. Only correlated
@@ -111,6 +112,23 @@ const COL_OPS = { eq: '=', ne: '<>', gt: '>', gte: '>=', lt: '<', lte: '<=' };
 // serve process computes it at boot + every 30s via the A5 catalog warm.
 // `?markets=all` on /api/records bypasses the gate per request.
 let _pivotAllowed = null;
+// The catalog's default-enabled market keys (same lifecycle as _pivotAllowed):
+// what a fresh browser shows, so the lean `markets=default` slot resolves to
+// them and the warm keeper can warm exactly that slot.
+let _pivotDefaults = null;
+const _setCatalogGates = markets => {
+    _pivotAllowed = new Set(markets.map(c => c.key));
+    _pivotDefaults = new Set(markets.filter(c => c.default).map(c => c.key));
+};
+
+// Parse a request's `markets` parameter against the live catalog gates
+// (pure rules in lean-rules.js). The route keys its memo on `canonical`.
+// Loads the catalog first when no gate is set yet (the boot window before
+// the warm keeper's first pass), or 'default' would resolve to no columns.
+export async function marketSelection(param) {
+    if (!_pivotAllowed) await columnCatalogFromMeta();
+    return resolveMarketSelection(param, _pivotAllowed, _pivotDefaults);
+}
 
 // Catalog scan batch size: type_names per odds_markets aggregate query.
 //
@@ -169,7 +187,7 @@ export async function columnCatalog() {
     // not per raw (type_name,name,handicap) tuple.
     const marketRows = await _marketCoverageRows();
     const markets = discoverMarketColumns(marketRows); // already carries sortable/filterable
-    _pivotAllowed = new Set(markets.map(c => c.key));
+    _setCatalogGates(markets);
     return {
         providers: providers.map(p => p.provider),
         base: Object.keys(BASE_FIELDS).map(key => ({ key, sortable: true, filterable: true })),
@@ -193,7 +211,7 @@ export async function columnCatalog() {
 // call this rather than columnCatalog() directly.
 export async function columnCatalogFromMeta() {
     const stored = await getMeta('column_catalog');
-    if (stored?.markets) { _pivotAllowed = new Set(stored.markets.map(c => c.key)); return stored; }
+    if (stored?.markets) { _setCatalogGates(stored.markets); return stored; }
     return columnCatalog(); // first boot ever / meta empty: compute (writer will persist on its next ok)
 }
 
@@ -291,8 +309,13 @@ function _coerceList(key, value, op) {
 //   providers: array limiting rows to those bookmakers (default: all)
 //   per_page: 'all' disables pagination (the web table shows a whole date)
 //   markets: 'all' pivots every stored non-filter-only market key (the
-//   pre-trim behavior); default gates the pivot on the catalog allow-list
-export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null, markets = null, slimDetails = false } = {}) {
+//   pre-trim behavior); default gates the pivot on the catalog allow-list; a
+//   Set pivots only those keys (the lean web path, see marketSelection) and
+//   the body then lists every catalog key the day carries as `market_keys`,
+//   so the Settings picker still offers columns that were not shipped
+//   lean: drop the popover-only fields and compact tip_breakdown per row
+//   (src/db/lean-rules.js); the full row is GET /api/records/detail/:id
+export async function queryRecords({ date = null, page = 1, per_page = 50, sort = [], filters = [], completed = true, providers = null, access = null, markets = null, slimDetails = false, lean = false } = {}) {
     const unpaged = per_page === 'all';
     page = unpaged ? 1 : Math.max(1, Number(page) || 1);
     per_page = unpaged ? 0 : Math.min(500, Math.max(1, Number(per_page) || 50));
@@ -378,27 +401,11 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     // bounds the hostile case; `truncated` tells the caller it was applied.
     if (!unpaged) query.offset((page - 1) * per_page).limit(per_page);
     else query.limit(MAX_UNPAGED);
-    const rows = await query
-        .select(
-            'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
-            'm.updated_at', 'm.completed_at',
-            'm.home_team_name', 'm.away_team_name',
-            'm.home_score_fulltime', 'm.away_score_fulltime', 'm.sides_swapped',
-            'l.name as league_name', 'l.country as league_country',
-            'f.status', 'f.elapsed', 'f.season', 'f.round', 'f.league_id', 'f.kickoff',
-            'f.home_team_id', 'f.away_team_id',
-            'th.name as api_home', 'ta.name as api_away',
-            'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
-            'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
-            'fp.ai_review as hot_ai_review',
-            'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
-            'fp.tip_breakdown', 'fp.tip_skip_reason', 'fp.tip_ai_verdict', 'fp.tip_ai_reason',
-            'fp.tip_ai_review',
-            'fp.tip_banker_market', 'fp.tip_banker_price', 'fp.tip_banker_prob',
-            'fp.tip_banker_cal', 'fp.tip_banker_outcome',
-        );
+    const rows = await query.select(RECORD_COLUMNS);
 
-    const hydrated = await _hydrate(rows, markets === 'all' ? null : _pivotAllowed);
+    const subset = markets instanceof Set;
+    const marketKeys = subset ? new Set() : null;
+    const hydrated = await _hydrate(rows, markets === 'all' ? null : (subset ? markets : _pivotAllowed), marketKeys);
     // Redacted tiers (guests) lose the internal reasoning per row - pure
     // redactRecordForRole; full tiers (and access:null callers - the CLI/CSV
     // export and AUTH_ENABLED=0 installs) get the rows untouched.
@@ -406,11 +413,15 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
     // confidence quantizing) for the remaining full-detail web tiers. CLI/CSV
     // and machine-bearer callers pass access:null AND slimDetails:false, so
     // data consumers always get complete rows.
-    const data = access && !access.fullDetail
+    const tiered = access && !access.fullDetail
         ? hydrated.map(r => redactRecordForRole(r, access.role))
         : (slimDetails && access ? hydrated.map(stripDetails) : hydrated);
+    // Lean runs after the tier's redaction, so it can only remove data.
+    const data = lean ? tiered.map(leanRecord) : tiered;
     return {
         data,
+        ...(marketKeys ? { market_keys: [...marketKeys].sort() } : {}),
+        ...(lean ? { lean: true } : {}),
         total: Number(total),
         page,
         per_page: unpaged ? data.length : per_page,
@@ -422,6 +433,60 @@ export async function queryRecords({ date = null, page = 1, per_page = 50, sort 
         // about which day this response is about (see the dayKey comment).
         coverage: date ? coverageFor(dayKey) : { status: 'ok', confirmed: true, notices: [] },
         ...(unpaged && Number(total) > MAX_UNPAGED ? { truncated: true, limit: MAX_UNPAGED } : {}),
+    };
+}
+
+// The one select list behind a record row (queryRecords and recordDetail),
+// so a detail read can never disagree with the row it extends.
+const RECORD_COLUMNS = [
+    'm.id as match_id', 'f.id as api_id', 'm.provider', 'm.start_time', 'm.match_url',
+    'm.updated_at', 'm.completed_at',
+    'm.home_team_name', 'm.away_team_name',
+    'm.home_score_fulltime', 'm.away_score_fulltime', 'm.sides_swapped',
+    'l.name as league_name', 'l.country as league_country',
+    'f.status', 'f.elapsed', 'f.season', 'f.round', 'f.league_id', 'f.kickoff',
+    'f.home_team_id', 'f.away_team_id',
+    'th.name as api_home', 'ta.name as api_away',
+    'fp.hot', 'fp.score as hot_score', 'fp.outcome as hot_outcome',
+    'fp.ai_reason as hot_ai_reason', 'fp.signals as hot_signals',
+    'fp.ai_review as hot_ai_review',
+    'fp.tip_market', 'fp.tip_price', 'fp.tip_confidence', 'fp.tip_outcome',
+    'fp.tip_breakdown', 'fp.tip_skip_reason', 'fp.tip_ai_verdict', 'fp.tip_ai_reason',
+    'fp.tip_ai_review',
+    'fp.tip_banker_market', 'fp.tip_banker_price', 'fp.tip_banker_prob',
+    'fp.tip_banker_cal', 'fp.tip_banker_outcome',
+];
+
+// The fields a lean row leaves out, for ONE match: what TipPopover and the
+// H2H tooltip read when they open (GET /api/records/detail/:matchId). Same
+// select, same hydrate, same tier redaction as queryRecords, so a tier sees
+// exactly what its full /api/records row would carry, never more. `day` (the
+// row's EAT day) lets the route apply the guest date gate. Null when the
+// match does not exist or is not correlated.
+export async function recordDetail(matchId, { access = null, slimDetails = false } = {}) {
+    const row = await db('matches as m')
+        .join('fixtures as f', 'f.id', 'm.fixture_id')
+        .join('leagues as l', 'l.id', 'f.league_id')
+        .leftJoin('teams as th', 'th.id', 'f.home_team_id')
+        .leftJoin('teams as ta', 'ta.id', 'f.away_team_id')
+        .leftJoin('fixture_predictions as fp', 'fp.fixture_id', 'f.id')
+        .where('m.id', matchId)
+        .first([...RECORD_COLUMNS, db.raw("DATE_FORMAT(m.start_time, '%Y-%m-%d') as day")]);
+    if (!row) return null;
+    const [hydrated] = await _hydrate([row], _pivotAllowed);
+    const r = access && !access.fullDetail
+        ? redactRecordForRole(hydrated, access.role)
+        : (slimDetails && access ? stripDetails(hydrated) : hydrated);
+    return {
+        match_id: r.match_id,
+        api_id: r.api_id,
+        day: row.day,
+        tip_breakdown: r.tip_breakdown ?? null,
+        hot_signals: r.hot_signals ?? null,
+        hot_review: r.hot_review ?? null,
+        tip_ai_review: r.tip_ai_review ?? null,
+        h2h_meetings: r.h2h_meetings ?? [],
+        h2h_count: r.h2h_count ?? null,
     };
 }
 
@@ -455,7 +520,9 @@ function _h2hMeetings(h2h, r, homeName, awayName) {
 // present, live standings/H2H derivation otherwise) and fixture statistics.
 // `allowed` (Set|null): catalog market-key allow-list gating the pivot -
 // null pivots everything non-filter-only (CLI / pre-catalog / markets=all).
-async function _hydrate(rows, allowed = null) {
+// `seen` (Set|null): collects every catalog-allowed key present on the day,
+// including keys outside `allowed` - the lean body's market_keys.
+async function _hydrate(rows, allowed = null, seen = null) {
     if (!rows.length) return [];
     const matchIds = rows.map(r => r.match_id);
     const fixtureIds = [...new Set(rows.map(r => r.api_id))];
@@ -478,6 +545,7 @@ async function _hydrate(rows, allowed = null) {
         if (!o.is_stale) freshCounts.set(o.match_id, (freshCounts.get(o.match_id) ?? 0) + 1);
         const m = canonicalMarket(o);
         if (m.columnizable === 'filter-only') continue;
+        if (seen && (!_pivotAllowed || _pivotAllowed.has(m.key))) seen.add(m.key);
         // Catalog gate (perf): keys the UI can never offer stay out of the
         // payload; SQL sort/filter on them still works via marketIdentity.
         if (allowed && !allowed.has(m.key)) continue;

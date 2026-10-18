@@ -40,6 +40,10 @@ issue covered ~10k fixtures and ~7M rows, which the shared live host killed ever
 ("lost connection during query", the error behind the 2026-08-19 full-sweep failure) and
 which peaked at 1.5 GB RSS where it did run. Chunking keeps the output byte-identical
 (sha-verified) at a 443 MB peak, and live carried `leg_cells` for the first time that day.
+Since 2026-10-18 the `/api/magic-sort` copy is built once per EAT day and kept in
+`meta.leg_cells` (`src/magic.js#todaysLegCells`, the `pick_cells` idiom), because this load
+was 261 s of a 288 s cold request locally and every restart or extra instance repeated it;
+the cells are the same walk-forward export, only stored (chapter 01, "Serve behavior notes").
 
 ## The 11 strategies
 

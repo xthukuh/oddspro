@@ -15,7 +15,7 @@
 // Total by contract: a default parameter only fires on `undefined`, so the
 // null case is coalesced explicitly rather than left to destructuring.
 export function recordsCacheKey(input) {
-    const { date, filtersKey, completed, providers, token } = input ?? {};
+    const { date, filtersKey, completed, providers, token, markets } = input ?? {};
     const p = Array.isArray(providers) ? [...providers].sort().join(',') : '';
     return [
         date ?? 'all',
@@ -23,6 +23,9 @@ export function recordsCacheKey(input) {
         completed === false ? '0' : '1',
         p,
         token ?? '',
+        // The lean body carries only the requested market columns (2026-10-18),
+        // so two market selections are two different bodies.
+        markets ?? '',
     ].join('|');
 }
 
@@ -67,7 +70,9 @@ export function makeLruCache(max = 8) {
 export const PERSIST_KEY = 'oddspro.recordsCache';
 // Bump when the /api/records payload shape changes incompatibly - a seed
 // written by an older deploy is then discarded instead of rendered.
-export const PERSIST_FORMAT = 1;
+// 2 (2026-10-18): lean rows (requested markets only, compact tip_breakdown,
+// popover fields fetched on demand) plus the server's `ranked` block.
+export const PERSIST_FORMAT = 2;
 
 // Move the entry the user is actually VIEWING to the front of the pack
 // order. Without this, the neighbour-day prefetch (which lands AFTER the main

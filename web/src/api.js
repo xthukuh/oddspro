@@ -82,14 +82,40 @@ export async function fetchColumns() {
 //   date: 'YYYY-MM-DD' | 'all'; filters: [{key, op, value|col}]
 //   completed: false hides concluded games (settings toggle)
 //   providers: subset of visible bookmakers (settings multi-select)
-export async function fetchRecords({ date, filters, completed, providers }) {
+// `markets` (a requestedMarkets() string) asks for the LEAN body (2026-10-18):
+// only those market columns, a compact tip_breakdown, the popover-only
+// fields left for fetchRecordDetail, plus the server's `ranked` block.
+// Omitted, the full legacy shape comes back (the CSV export uses it).
+export async function fetchRecords({ date, filters, completed, providers, markets = null }) {
     return _get('/api/records', {
         date,
         per_page: 'all',
         filters: filters?.length ? JSON.stringify(filters) : null,
         completed: completed === false ? 0 : null,
         providers: providers?.length ? providers.join(',') : null,
+        ...(markets != null ? { lean: 1, markets } : {}),
     });
+}
+
+// One row's detail for a lean row (TipPopover, the H2H tooltip):
+//   { match_id, api_id, day, tip_breakdown, hot_signals, hot_review,
+//     tip_ai_review, h2h_meetings, h2h_count }
+// Memoised per match until the next records body lands (App calls
+// clearRecordDetails then, so a sign-in or an AI review written since is
+// re-read); a failed read is dropped so the next open retries.
+const _detailMemo = new Map();
+export function clearRecordDetails() {
+    _detailMemo.clear();
+}
+export function fetchRecordDetail(matchId) {
+    const key = String(matchId);
+    let p = _detailMemo.get(key);
+    if (!p) {
+        p = _get(`/api/records/detail/${encodeURIComponent(key)}`);
+        p.catch(() => _detailMemo.delete(key));
+        _detailMemo.set(key, p);
+    }
+    return p;
 }
 
 // Today's unique visitors + page views for the status-bar badge:

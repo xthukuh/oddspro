@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { labelFor, availableColumnKeys, filterType, filterHint } from '../web/src/columns.js';
+import { labelFor, availableColumnKeys, filterType, filterHint, requestedMarkets } from '../web/src/columns.js';
 
 // Catalog shaped like GET /api/columns (stats slice only - labelFor reads it).
 const CATALOG = {
@@ -71,4 +71,28 @@ test('filterHint returns key, type and a working example expression', () => {
     assert.deepEqual(filterHint({ key: 'start_time', group: 'base' }),
         { key: 'start_time', type: 'date', example: "$row['start_time'] >= <timestamp>" });
     assert.equal(filterHint({}), null);
+});
+
+test('availableColumnKeys merges the lean body market_keys', () => {
+    const rows = [{ markets: { '1X': 1.4 }, markets_stale: {} }];
+    const { markets } = availableColumnKeys(rows, { stats: [] }, ['O 2.5', 'BTTS:yes']);
+    assert.deepEqual([...markets].sort(), ['1X', 'BTTS:yes', 'O 2.5']);
+});
+
+test('requestedMarkets: an untouched selection with no extras is default', () => {
+    assert.equal(requestedMarkets(null, [{ type: 'magic', id: 'banker' }], []), 'default');
+    assert.equal(requestedMarkets(null, [], null), 'default');
+});
+
+test('requestedMarkets adds sort-chain and filter keys, sorted and unique', () => {
+    const filters = { type: 'group', items: [
+        { type: 'expr', expr: `$row["O 1.5"] > 1.2 && $row['U 3.5'] < 2` },
+        { key: 'X', op: 'gt', value: 1, enabled: false },
+        { key: 'BTTS:no', op: 'gt', value: 1, col: 'O 2.5' },
+    ] };
+    assert.equal(
+        requestedMarkets(['O 2.5', '1X'], [{ type: 'column', key: 'BTTS:yes', dir: 'desc' }], filters),
+        '1X,BTTS:no,BTTS:yes,O 1.5,O 2.5,U 3.5',
+    );
+    assert.equal(requestedMarkets(null, [{ type: 'column', key: 'goals', dir: 'asc' }], []), 'default,goals');
 });

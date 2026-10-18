@@ -186,6 +186,7 @@ client and server cannot drift.
 - `src/meta.js`, `src/db/lease.js` + `src/db/lease-rules.js` - the cross-instance `meta` memo and the single-writer `GET_LOCK` lease that decides which instance schedules work.
 - `src/server.js` / `src/export.js` - the :3001 Express API (records, columns, magic-sort, refresh, auth, admin, beacons) and the CSV export action.
 - `src/http-cache.js` + `src/db/cache-rules.js`, `src/warm.js` + `src/db/warm-rules.js` - the version-keyed response memo and the warm keeper that precomputes it ahead of demand.
+- `src/records-lean.js` + `src/db/lean-rules.js` / `src/db/ranked-rules.js` - the lean `/api/records` body the SPA loads (requested markets only, compact breakdown, popover fields via `/api/records/detail/:matchId`) and its server-ranked default order plus Safe / Top picks, one memo key shared by route and warm keeper.
 - `src/notices.js` + `src/db/notice-rules.js` - data notices: `collection_runs` is the ledger, `data_notices` the published warnings, `/api/coverage` the machine surface.
 - `src/maintenance.js` + `src/db/maintenance-rules.js` - the scheduled-maintenance window, its 503 gate and the quiesce policy.
 - `src/health.js` + `src/health-collect.js` + `src/db/health-rules.js` - the writer-only daily production health snapshot (`health_snapshots`, `GET /api/admin/health/ledger|latest`); the collector and pure verdict are shared verbatim with the host cron `scripts/ops/prod-health.mjs`.

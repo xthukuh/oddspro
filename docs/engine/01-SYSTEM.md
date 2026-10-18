@@ -179,15 +179,41 @@ zero-import `src/db/auto-rules.js` and is offline-tested.
   the same ETag no matter which one is the writer), with a 10-minute TTL as the belt against
   out-of-process writers; a restart drops the memo. Concurrent misses share one in-flight
   compute, and a weak `If-None-Match` answers 304 with no body. `sendJson` is the stateless
-  ETag/304+gzip variant used by `/api/magic-sort`, whose `safe` policy is per-response fresh
-  by design. Browsers get `Cache-Control: no-cache` (always revalidate). Measured end to end:
+  ETag/304+gzip variant, now used only by `/api/magic-sort?refresh=1`. Browsers get
+  `Cache-Control: no-cache` (always revalidate). Measured end to end:
   cold 887 ms -> warm 68 ms, 916 KB -> 106 KB gzipped. `warm(key, loader, {maxAgeMs})`
   rebuilds an entry older than `maxAgeMs` even at the same version and reports `{computed}` -
   that is the warm keeper's lever for never letting an entry reach the TTL cold.
-  `?refresh=1` recomputes `/api/magic-sort` only.
+  `?refresh=1` recomputes `/api/magic-sort` only (summary and leg cells) and answers outside
+  the memo.
+- **`/api/magic-sort` is memoised (2026-10-18):** `src/magic.js#magicSortKey` keys the body on
+  the server day, the day summary's `generated_at` and the late-read `safe` policy, inside the
+  version-keyed `apiCache`; M6 still holds because an admin `SAFE_*` edit changes the key, so
+  the next request is a new slot rather than a cached old policy. The body is identical for
+  every caller (public route, no tier redaction; the methodology gate is the browser's own
+  render choice), so the key carries no tier. The cold cost was measured stage by stage on the
+  local warehouse: 287.9 s for the first request after boot, of which `loadCalibrator`'s
+  90-day `odds_markets` window was 261.2 s (settled ledger 3.5 s, replay 1.1 s, serialise
+  1 ms). The leg cells now follow the `pick_cells` idiom: built once per EAT day and kept in
+  `meta.leg_cells` as `{ day, cells }`, so a restart, another instance or the next day-memo
+  miss rehydrates them from one row. Across the day rollover the memo is
+  stale-while-revalidate: the first call of a new day starts the new compute and answers with
+  the previous day's summary until it lands (a cold boot has nothing stale and waits).
+  `magicSortReady()` is the non-blocking read the lean records body uses. Measured after the
+  change: the day compute with cells from meta is 3.4 s (from 287.9 s), the first request
+  after a restart answered in 77 ms because the boot warm pass had already built the slot,
+  and memo hits answer in 16 to 20 ms (the old stateless path took about 300 ms per request
+  to re-serialise and gzip). The one remaining full cell build is the first call of each EAT
+  day (about 4 to 6 minutes on the local warehouse), now off the request path.
 - **Warm keeper (`src/warm.js`, 2026-08-22):** every instance precomputes the memoized
-  payloads ahead of demand - /api/columns, /api/records for yesterday..today+`WARM_DATES_AHEAD`
-  per reachable access tier, /api/hotpicks, /api/performance, plus the magic-sort day memo.
+  payloads ahead of demand - /api/columns, the LEAN /api/records slot (since 2026-10-18; the
+  key comes from `src/records-lean.js#leanRecordsKey`, shared with the route) for
+  yesterday..today+`WARM_DATES_AHEAD` per reachable access tier, /api/hotpicks,
+  /api/performance and, last, the /api/magic-sort body (its loader awaits the day memo, which
+  the pass kicks off un-awaited at its start). The legacy full records shape is no longer
+  warmed: no browser asks for it. A pass is also due when `magicSortKey()` moves (the day's
+  calibration landing, a new day, a `SAFE_*` edit), because the lean slots embed a ranking
+  computed from it; `warmPassDue` compares `warehouse_version|magicSortKey`.
   A pass runs the moment `warehouse_version` moves (writer in-process, followers via the 5s
   meta poll) and again every `WARM_MAX_AGE_MINUTES` so a memo entry can never expire cold;
   passes are sequential (one query at a time - `DB_POOL_MAX` is 3 live) and never overlap.
@@ -453,8 +479,10 @@ the CSV export action of the same read layer.
 | Route | Notes |
 |---|---|
 | `GET /api/records` | `sort`/`filters` are JSON-encoded query params validated against the column registries - an unknown key or op is a 400 (ops `eq/ne/gt/gte/lt/lte/like/not-contains/in/not-in`, where `in`/`not-in` take a CSV-list value). `completed=0` hides concluded games, `providers=a,b` filters bookmakers, `per_page=all` returns the whole selection (the web table is unpaginated). `optionalAuth` + guest gating, tier-keyed cache slot |
+| `GET /api/records?lean=1&markets=` | the SPA's request since 2026-10-18 (`src/records-lean.js`, pure rules `src/db/lean-rules.js` + `src/db/ranked-rules.js`). `markets` is a CSV of market keys (the token `default` = the catalog's default columns); the server intersects it with the catalog allow-list, sorts it and canonicalises a default-equal set to `default`, so equal selections share one memo slot. Rows carry only those markets, a compact `tip_breakdown` (blend components, `samples`, two runners-up: everything the shared scorer, the table, the betslip and filter expressions read) and none of `hot_signals`/`hot_review`/`tip_ai_review`/`h2h_meetings`. The body adds `market_keys` (every catalog market the day carries, for the Settings picker), `lean: true` and `ranked` - the default `banker` order and scores plus the Safe (`safe_picks` gate) and Top picks (`sure_bets` gate) memberships, computed once per slot with the browser's own scorer; null while today's magic-sort summary is still computing. Lean runs after the tier's redaction, so it only ever removes data; the key carries the tier, the canonical markets, the ranked signature (calibration stamp + safe policy) and the two gates |
+| `GET /api/records/detail/:matchId` | the fields a lean row leaves out, for one match: full `tip_breakdown`, `hot_signals`, `hot_review`, `tip_ai_review`, `h2h_meetings`, `h2h_count` (`src/db/records.js#recordDetail`: the same select, hydrate and tier redaction as the list). A primary-key pre-read gives 404 for an unknown or uncorrelated match and the guest future-date 403 before the memo; its own 256-slot version-keyed memo keeps popover traffic from evicting the warmed table slots |
 | `GET /api/columns` | the discovered column catalog |
-| `GET /api/magic-sort` | backtest-ranked strategies + calibration (chapter 05) |
+| `GET /api/magic-sort` | backtest-ranked strategies + calibration (chapter 05). Memoised and warmed since 2026-10-18 (see "Serve behavior notes") |
 | `POST /api/refresh?date=` | starts the single-slot background `runDateRefresh` job. 409 while ANY job runs (parallel refreshes deadlock on delete+insert gap locks), `200 {fresh:true}` when the date was successfully refreshed inside `REFRESH_CACHE_MINUTES`, 429 on the manual cooldown |
 | `GET /api/refresh` | job state + freshness signal (`data_version`, `last_success`, `warm`, `notices`). The web polls it slowly (60s) for silent reloads and fast (2s) while a job runs |
 | `GET /api/hotpicks`, `GET /api/performance`, `GET /api/coverage` | summaries backed by `hotpicksSummary()`, `performanceSummary()`, `coveragePayload()` |

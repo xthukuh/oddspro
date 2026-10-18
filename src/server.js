@@ -3,7 +3,8 @@ import compression from 'compression';
 import { existsSync, createReadStream, statSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { config } from './config.js';
-import { queryRecords, columnCatalogFromMeta } from './db/records.js';
+import { queryRecords, columnCatalogFromMeta, marketSelection, recordDetail } from './db/records.js';
+import { rankedAllow, leanRecordsKey, leanRecordsBody } from './records-lean.js';
 import { startWarmKeeper, stopWarmKeeper, warmStatus } from './warm.js';
 import { hotpicksSummary, performanceSummary } from './hotpicks.js';
 import { dailySlipPayload, dailyTimelinePayload } from './daily-slip.js';
@@ -13,7 +14,7 @@ import { saveUserSlip, listUserSlips, getSlipByCode, deleteUserSlip } from './us
 import { createPat, listPats, revokePat, resolvePat } from './pats.js';
 import { renderedView, knownStrategy } from './view.js';
 import { oddsHistoryPayload } from './odds-history.js';
-import { magicSortCached } from './magic.js';
+import { magicSortCached, magicSortKey } from './magic.js';
 import { runDateRefresh } from './pipeline.js';
 import { refreshStatus, startJob, requestCancel, lastFreshAt, startAutoRefresh, stopAutoRefresh, refreshJob } from './auto-refresh.js';
 import { haltRequested, startHaltWatch, stopHaltWatch } from './halt.js';
@@ -520,11 +521,15 @@ function _json(value, fallback) {
 // the belt for out-of-process writers. Repeated hits skip queryRecords /
 // columnCatalog entirely and reuse the serialized+gzipped body; a matching
 // If-None-Match answers 304 with no body at all.
-// max 24: the warm keeper (src/warm.js) holds up to ~11 slots hot (columns +
-// records dates x tiers + hotpicks + performance); the rest is headroom for
-// filtered/paged user variants so demand traffic can't evict the warmed set.
+// max 32: the warm keeper (src/warm.js) holds up to ~12 slots hot (columns +
+// lean records dates x tiers + hotpicks + performance + magic-sort); a boot
+// briefly doubles the records share (slots warmed before the calibration
+// landed linger until evicted); the rest is headroom for filtered/paged user
+// variants so demand traffic can't evict the warmed set. A lean body is
+// 2.5 MB serialized (248 KB gzip) on a 1,600-row day, against 7.8 MB for
+// the full shape the old cap was sized for.
 const apiCache = makeJsonCache({
-    max: 24, ttlMs: 10 * 60_000,
+    max: 32, ttlMs: 10 * 60_000,
     version: () => warehouseVersion(),
 });
 
@@ -594,10 +599,7 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
         // distinct keys, each forcing a cold compute and evicting the bounded
         // LRU (including the keeper-warmed slots). Anything not listed here
         // is ignored by queryRecords, so it must not shard the cache either.
-        const key = queryCacheKey('/api/records', {
-            date: day, tier, page, per_page, sort, filters, completed, providers, markets,
-        });
-        await apiCache.send(req, res, key, () => queryRecords({
+        const queryArgs = {
             date: date === 'all' ? null : (date || new Date()),
             page,
             per_page: per_page === 'all' ? 'all' : per_page,
@@ -606,11 +608,70 @@ app.get('/api/records', optionalAuth, async (req, res, next) => {
             completed: completed !== '0', // ?completed=0 hides concluded games
             providers: providers ? String(providers).split(',').filter(Boolean) : null,
             access,
+            slimDetails,
+        };
+        // ?lean=1 (the SPA since 2026-10-18, src/records-lean.js): only the
+        // requested market columns, popover-only fields left for
+        // /api/records/detail/:matchId, and the default order plus Safe /
+        // Top picks precomputed. The market list is canonicalised (sorted,
+        // catalog-gated, 'default' for the catalog defaults) so equal
+        // selections share one slot.
+        if (req.query.lean === '1') {
+            const sel = await marketSelection(markets ?? 'default');
+            const allow = rankedAllow(access ? featureMap(req.user ?? null, featureOpts()) : null);
+            const key = leanRecordsKey({
+                day, tier, markets: sel.canonical, allow,
+                params: { page, per_page, sort, filters, completed, providers },
+            });
+            return await apiCache.send(req, res, key, () => leanRecordsBody({
+                ...queryArgs, markets: sel.canonical === 'all' ? 'all' : sel.allow,
+            }, allow));
+        }
+        const key = queryCacheKey('/api/records', {
+            date: day, tier, page, per_page, sort, filters, completed, providers, markets,
+        });
+        await apiCache.send(req, res, key, () => queryRecords({
+            ...queryArgs,
             // ?markets=all bypasses the catalog pivot allow-list (full pre-trim
             // payload); the req.query spread above already keys the cache on it.
             markets: markets === 'all' ? 'all' : null,
-            slimDetails,
         }));
+    } catch (e) {
+        next(e);
+    }
+});
+
+// GET /api/records/detail/:matchId - the fields a lean /api/records row
+// leaves out (full tip_breakdown, hot_signals, AI reviews, the H2H meeting
+// list), read when one row's popover or H2H tooltip opens. Same tier
+// resolution, redaction and guest date gate as /api/records, so a tier reads
+// exactly what its full row would carry. Memoised per match in its own
+// version-keyed cache, so popover traffic can never evict the warmed table
+// slots in apiCache.
+const detailCache = makeJsonCache({
+    max: 256, ttlMs: 10 * 60_000,
+    version: () => warehouseVersion(),
+});
+app.get('/api/records/detail/:matchId', optionalAuth, async (req, res, next) => {
+    try {
+        if (!/^\d{1,19}$/.test(String(req.params.matchId))) return res.status(400).json({ error: 'matchId must be a numeric match id.' });
+        const id = String(req.params.matchId);
+        const access = config.AUTH_ENABLED && !bearerMatches(req.get('authorization'), MACHINE_BEARERS)
+            ? accessFromUser(req.user, featureOpts())
+            : null;
+        const slimDetails = !effective('API_DETAILS');
+        const tier = access && !access.fullDetail ? 'guest' : (slimDetails && access ? 'slim' : 'full');
+        // One primary-key read answers both gates before the memo: an unknown
+        // or uncorrelated match is a 404, and a guest without future access
+        // gets the same 403 /api/records gives for that row's day.
+        const head = await db('matches as m').join('fixtures as f', 'f.id', 'm.fixture_id')
+            .where('m.id', id).first(db.raw("DATE_FORMAT(m.start_time, '%Y-%m-%d') as day"));
+        if (!head) return res.status(404).json({ error: 'No match with that id.' });
+        if (access && !access.canFuture && !guestDateAllowed(head.day, _dtime(new Date()).slice(0, 10))) {
+            return res.status(403).json({ error: 'Sign in to see upcoming games.', auth_required: true });
+        }
+        await detailCache.send(req, res, `/api/records/detail/${id}?tier=${tier}`,
+            () => recordDetail(id, { access, slimDetails }));
     } catch (e) {
         next(e);
     }
@@ -827,12 +888,16 @@ app.get('/api/performance', async (req, res, next) => {
 
 // GET /api/magic-sort - top tip-ranking strategies by 4-leg slip survival
 // (backtest over settled tips) + the live calibration the web table scores
-// today's rows with. Cached per day; ?refresh=1 recomputes. Deliberately NOT
-// response-memoized (its safe policy is late-read per response - M6); the
-// stateless sendJson still saves the wire via 304 + gzip.
+// today's rows with. Computed once per day (src/magic.js, leg cells kept in
+// meta) and, since 2026-10-18, response-memoized like /api/records: the key
+// (magicSortKey) carries the day, the summary's generation and the late-read
+// safe policy, so M6 still holds - an admin SAFE_* edit is a new slot on the
+// next request. The warm keeper warms that slot, so no visitor serializes or
+// waits. ?refresh=1 recomputes and answers fresh, outside the memo.
 app.get('/api/magic-sort', async (req, res, next) => {
     try {
-        await sendJson(req, res, await magicSortCached(req.query.refresh === '1'));
+        if (req.query.refresh === '1') return await sendJson(req, res, await magicSortCached(true));
+        await apiCache.send(req, res, magicSortKey(), () => magicSortCached());
     } catch (e) {
         next(e);
     }
