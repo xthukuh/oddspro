@@ -13,6 +13,7 @@ import { getTheme, setTheme } from './theme.js';
 import { availableColumnKeys } from './columns.js';
 import { recordsCacheKey, makeLruCache } from './recordsCache.js';
 import { hydrateRecordsCache, persistRecordsCache } from './recordsPersist.js';
+import { LITE_DEVICE } from './device.js';
 import { applyClientFilters, applyOneOfEach, applyOutcomeToggles, applyRiskGate, splitFilters, conditionCount, sanitizeFilters, stampSelection, applySelectionHide, applySelectionKeep, displayedSummary, unionSelectionIds, invertSelectionIds, selectSimilarIds, keepOneProviderIds } from './filterValues.js';
 import { safeSelection, sureBetsSelection, DEFAULT_SURE_BETS, STRATEGIES } from '../../src/db/magic-rules.js';
 import { tipHitSafe } from '../../src/db/tip-rules.js';
@@ -162,8 +163,9 @@ const EMPTY_PROVIDERS = [];
 const _today = () => new Date(new Date().setHours(13)).toISOString().substring(0, 10);
 
 // One cache for the tab's lifetime. Eight days of parsed rows is the honest
-// ceiling before this costs more memory than it saves in requests.
-const recordsCache = makeLruCache(8);
+// ceiling before this costs more memory than it saves in requests; a lite
+// device (phone, Data Saver) keeps three, since a busy day parses to tens of MB.
+const recordsCache = makeLruCache(LITE_DEVICE ? 3 : 8);
 // Seed from the previous visit (localStorage, best-effort) so a fresh tab
 // paints the table instantly instead of showing the loading spinner. Safe on
 // freshness: every cache hit still revalidates against the server below, and
@@ -661,6 +663,9 @@ export default function App() {
     // (result.data), NOT the client-filtered rows - the KPI reflects the day's
     // picks and stays stable when you filter or hide rows in the view.
     const dayRates = useMemo(() => _hitRates(visibleData), [visibleData]);
+    // Footer betting ledger over the shown rows: memoised so a keystroke or a
+    // hover state change no longer re-walks every row.
+    const betSummary = useMemo(() => displayedSummary(rows, betslipStake), [rows, betslipStake]);
     // Enabled providers in priority order (null persisted keys = all enabled).
     const selectedProviders = useMemo(() => {
         if (!providerKeys) return orderedProviders;
@@ -773,8 +778,10 @@ export default function App() {
     // is swallowed whole, never surfaces a banner, and never touches table
     // state. Bounded by the same limits the chevrons themselves enforce, so a
     // guest can never trigger a future-date 403 here.
+    // Lite devices skip it: two extra multi-MB parses per day change cost more
+    // heat and memory than the instant chevron saves.
     useEffect(() => {
-        if (!date || loading || maintActive) return;
+        if (LITE_DEVICE || !date || loading || maintActive) return;
         let cancelled = false;
         const reqProviders = providerKeys && selectedProviders.length < providers.length ? selectedProviders : null;
         const warm = day => {
@@ -1286,7 +1293,7 @@ export default function App() {
                 blur) so it reads as its own bar, separated from the content.
                 3 zones: logo (home->today) · date nav+calendar · actions
                 (collapse into a ⋯ menu below sm). */}
-            <header className="shrink-0 grid grid-cols-[auto_1fr_auto] sm:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 px-2.5 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-b border-separator shadow-sm relative z-40">
+            <header className="shrink-0 grid grid-cols-[auto_1fr_auto] sm:grid-cols-[1fr_auto_1fr] items-center gap-2 sm:gap-3 px-2.5 py-1.5 bg-nav/95 nav-glass border-b border-separator shadow-sm relative z-40">
                 <div className="flex items-center min-w-0">
                     <Logo onHome={() => changeDate(TODAY)} />
                 </div>
@@ -1458,9 +1465,9 @@ export default function App() {
                 // table re-renders): each displayed pick = one flat betslip-stake
                 // bet, one per fixture. Count, total odds, potential value, and the
                 // settled wins/losses/P-L.
-                const bet = displayedSummary(rows, betslipStake);
+                const bet = betSummary;
                 return (
-                    <footer className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 bg-nav/95 [backdrop-filter:blur(25px)_saturate(180%)] border-t border-separator text-[11px] text-label-2 tabular-nums z-20">
+                    <footer className="shrink-0 flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-1.5 bg-nav/95 nav-glass border-t border-separator text-[11px] text-label-2 tabular-nums z-20">
                         {/* Day KPIs - compact (percent only; fractions in tooltips).
                             One flex row, gap-spaced (no ragged "·" separators). */}
                         <div className="flex items-center gap-x-3">

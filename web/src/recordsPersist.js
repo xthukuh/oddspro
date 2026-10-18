@@ -8,6 +8,12 @@
 // either channel.
 
 import { packRecordsCache, unpackRecordsCache, prioritizeEntries, PERSIST_KEY } from './recordsCache.js';
+import { LITE_DEVICE } from './device.js';
+
+// Lite devices (phones, Data Saver) skip the seed entirely: a busy day is
+// ~8 MB of JSON, and stringifying/parsing that synchronously on the main
+// thread is a measured source of lag and heat. The server answers from its
+// warm cache, so a lite visit simply fetches.
 
 const MAX_AGE_MS = 12 * 3_600_000; // seeds older than this load fresh instead
 const DEBOUNCE_MS = 1_000;         // writes are ~MBs; coalesce bursts (prefetch)
@@ -24,6 +30,10 @@ let timer = null;
 // Seed the in-memory LRU from the previous visit. Called once at module
 // scope in App.jsx, before the first render.
 export function hydrateRecordsCache(cache) {
+    if (LITE_DEVICE) {
+        try { localStorage.removeItem(PERSIST_KEY); } catch { /* disabled storage */ }
+        return 0;
+    }
     try {
         const raw = localStorage.getItem(PERSIST_KEY);
         if (!raw) return 0;
@@ -43,6 +53,7 @@ export function hydrateRecordsCache(cache) {
 // `{primary: true}` from the MAIN fetch (the day on screen), never from the
 // neighbour prefetch; call with no key after a delete to persist the removal.
 export function persistRecordsCache(cache, key, { primary = false } = {}) {
+    if (LITE_DEVICE) return;
     if (key) {
         stamps.set(key, Date.now());
         if (primary) primaryKey = key;
