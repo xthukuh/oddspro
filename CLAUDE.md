@@ -71,6 +71,9 @@ node src/index.js enrich            # M4.1: 3-call AI enrichment for upcoming co
 node src/index.js reference [date]  # Pinnacle (API-Football bookmaker 4) reference odds for the date (default
                                     # today..+2) + settle/rebuild the Sharp-anchored Pick shadow (chapter 05)
 node scripts/report-anchored.js     # read-only forward report of that shadow vs its pass bar
+node scripts/ops/anchored-weekly.mjs
+                                    # weekly reading of that shadow from the workstation: runs the report on
+                                    # the live host over ssh, ledgers the result both ends (Monday task)
 node src/index.js aireview          # drain pending hot/tip AI verdicts once (the serve process runs this every 60s
                                     # in-process via src/ai-worker.js; cron-only hosts run it after the sweep)
 node scripts/ai-scorecard.js        # read-only per-model-tag AI health (chapter 06 "Instruments")

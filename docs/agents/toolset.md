@@ -744,8 +744,10 @@ the shown bet). Sources: `docs/research/`.
 - 2026-10-18 (PM) - **Sharp-anchored shadow confirmed live and the forward test started.**
   - The PR #21 backend (`src/reference-odds.js`, `src/db/anchor-rules.js`, migration
     `20261018000001_reference_odds`) shipped with the morning backend deploy; proof is a
-    byte comparison, not a memory: `sed 's/$//' <file> | md5sum` on the host against
-    `git show HEAD:<file> | sed 's/$//' | md5sum` locally (the host copies are CRLF), ten
+    byte comparison, not a memory: `sed 's/
+$//' <file> | md5sum` on the host against
+    `git show HEAD:<file> | sed 's/
+$//' | md5sum` locally (the host copies are CRLF), ten
     files identical. `knex_migrations` shows the migration at the 11:41:35Z boot.
   - The host `mariadb` client refused the `.env` credentials (`Access denied`, the shell
     mangles the password); query through the app's own connection instead, which is how the
@@ -767,6 +769,19 @@ the shown bet). Sources: `docs/research/`.
   - Forward test clock: day 1 = 2026-10-18. Earliest verdict on the 30-day rule
     2026-11-17; the 2,000-leg bar for a proven +4% needs about 65 days (2026-12-22) at the
     observed 30 qualifying band legs a day.
+
+- 2026-10-19 - **Weekly sharp-anchored shadow reading, verified end to end.**
+  `node scripts/ops/anchored-weekly.mjs` (repo root) runs `scripts/report-anchored.js --json`
+  on the host through `scripts/lib/remote.js` (one ssh call, BatchMode, the app's own
+  `~/nodevenv/oddspro-app-v1.4.0/22/bin/node` first, nvm as fallback), keeps the JSON at
+  `~/ops/anchored/report-<stamp>.json`, appends one line to `~/ops/anchored/ledger.ndjson`
+  (sent base64 as a command ARGUMENT, the idiom that survives the host's upload resets) and
+  to local `logs/anchored-ledger.ndjson`, writes `logs/anchored-last.txt`. First run
+  2026-10-18 15:32Z: report in 3 s, both ledgers appended, exit 0. Scheduled as the Claude
+  task `oddspro-weekly-anchored-report` (Mondays 09:20 local plus the dispatch delay, Sonnet subagent, writes
+  `monitor/anchored-<date>.md` under the project memory folder), a sibling of
+  `oddspro-weekly-health-digest`; no host crontab was touched (the pipeline form once wiped
+  it). The bar lives in `src/db/anchor-rules.js` and nothing in this routine moves it.
 
 ## 6. Doc & knowledge topology
 
@@ -819,3 +834,4 @@ the shown bet). Sources: `docs/research/`.
   throttling on the new host).
 - 2026-10-16: §5 append: local Docker warehouse (oddspro-db :3307), full production pull, PM deploy, chunked live algorithm backfill and its outside verification.
 - 2026-10-18: §5 append: sharp-anchored shadow confirmed live by byte comparison, host queries through the app connection, detached reference sweep, forward-test clock.
+- 2026-10-19: §5 append: weekly sharp-anchored shadow reading (script, ledgers both ends, Monday task).

@@ -91,6 +91,11 @@ Pinnacle's claim, flat ROI +- SE and the pass bar (30 days, >= 400 legs, ROI > 0
 95% > -2%, hit within 2 points of the claim). Read-only. Capture runs daily by itself
 (sweep + T-3h/T-1h); upstream purges odds after about 7 days, so never leave
 `REFERENCE_ODDS_ENABLED` off for long.
+Weekly reading of that shadow from the workstation: `node scripts/ops/anchored-weekly.mjs`
+(one ssh call runs the report on the host, keeps the JSON under `~/ops/anchored/`, appends a
+line to the host and local `anchored-ledger.ndjson`, prints the report and an `ANCHORED
+PASS|NOT YET` line; exit 1 = host unreadable). Scheduled Mondays 09:20 local (dispatch adds a few minutes) as the Claude
+task `oddspro-weekly-anchored-report`, sibling of the health digest.
 Backfill past days with the current algorithm: `node scripts/backfill-algo.js --dry-run`,
 then `--yes` (writes `tmp/backfill-algo-<stamp>.json` first; undo with `--restore <file>
 --yes`). Local DB for analysis: Docker `oddspro-db` on 127.0.0.1:3307 (`.env` DB_PORT=3307,
